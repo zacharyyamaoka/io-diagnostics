@@ -1,0 +1,6 @@
+{
+  "uuid": "io-diagnostics@bamrobotics",
+  "name": "IO diagnostics (prototype)",
+  "description": "Rack IO in Quick Settings: what is plugged in, what is on each bus, and whether it is healthy. Prototype: run only in tools/sandbox.sh.",
+  "shell-version": ["46"]
+}

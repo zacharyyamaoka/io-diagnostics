@@ -10,11 +10,12 @@
 # scratch HOME only. sandbox-driver@io-diagnostics turns on Shell's Eval in THIS shell only, so a
 # driver can open menus without synthetic clicks.
 #
-#   tools/sandbox.sh <driver.py> <scratch-parent-dir>
+#   tools/sandbox.sh <driver.py> <scratch-parent-dir> ["extension-uuid ..."]
 set -euo pipefail
 
 DRIVER=$(realpath -e "$1")
 PARENT=$(realpath -e "$2")
+EXTENSIONS=${3:-${IO_SANDBOX_EXTENSIONS:-}}
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(dirname "$HERE")
 SCR=$(mktemp -d "$PARENT/io-sandbox.XXXXXX")
@@ -26,12 +27,12 @@ mkdir -p "$SCR"/{home/.config/glib-2.0/settings,run,out} "$EXT_DIR"
 chmod 700 "$SCR/run"
 cp -r "$HERE/sandbox-driver@io-diagnostics" "$EXT_DIR/"
 ENABLED="'ubuntu-appindicators@ubuntu.com', 'sandbox-driver@io-diagnostics'"
-for uuid in ${IO_SANDBOX_EXTENSIONS:-}; do
+for uuid in $EXTENSIONS; do
   src=$(ls -d "$REPO"/prototypes/*/extension/"$uuid")
   cp -r "$src" "$EXT_DIR/"
   ENABLED="$ENABLED, '$uuid'"
 done
-printf "[org/gnome/shell]\nenabled-extensions=[%s]\ndisable-user-extensions=false\nwelcome-dialog-last-shown-version='999'\n" "$ENABLED" > "$SCR/home/.config/glib-2.0/settings/keyfile"
+printf "[org/gnome/shell]\nenabled-extensions=[%s]\ndisable-user-extensions=false\nwelcome-dialog-last-shown-version='999'\n\n[org/gnome/desktop/interface]\ncolor-scheme='prefer-dark'\ngtk-theme='Yaru-dark'\n" "$ENABLED" > "$SCR/home/.config/glib-2.0/settings/keyfile"
 
 DCONF="$HOME/.config/dconf/user"
 dconf_before=$(stat -c %Y "$DCONF" 2>/dev/null || echo none)

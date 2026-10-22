@@ -27,7 +27,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[4]))  # io-diagnostics r
 
 from contract.diagnostics import CHANGES, PASSIVE, TOUCHES, Reading, UsbMatch  # noqa: E402
 
-FIRMWARE_CACHE = Path.home() / ".cache" / "moteus-firmware"
+# WHY absolute, not Path.home(): sandboxes and services run with another HOME but read the same flash records.
+FIRMWARE_CACHE = Path("/home/bam/.cache/moteus-firmware")
 INVENTORY = Path("/archive/datasets/bam_rig/rack_inventory")
 DRIVER_PYPROJECT = Path("/home/bam/bam_ws/.claude/worktrees/traj-sim2real-rack/src/core/mdp/agent/actuators/moteus_servo/pyproject.toml")
 _RELEASE_ELF = re.compile(r"moteus-fw-(?P<version>[\d.]+)\+g(?P<hash>[0-9a-f]+)\.elf$")

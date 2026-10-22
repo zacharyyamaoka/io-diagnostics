@@ -1,4 +1,4 @@
-"""Smoke test: the sandbox shell starts, Eval works, and a screenshot of its top bar can be taken."""
+"""Smoke test: the sandbox shell starts, Eval works with quotes, and who owns notifications."""
 
 import sys
 import time
@@ -10,6 +10,8 @@ import shell  # noqa: E402
 time.sleep(3)
 shell.leave_overview()
 time.sleep(1)
-print("eval 1+1:", shell.shell_eval("1+1"))
+print("eval with quotes:", shell.shell_eval("(() => { const s = 'a' + \"b\"; return s; })()"))
 print("status area:", shell.status_keys())
+print("notification names:", [name for name in shell.bus_names() if "otif" in name])
+print("shell names:", [name for name in shell.bus_names() if "Shell" in name or "gnome" in name.lower()][:12])
 print("shot:", shell.grab("smoke.png"))
