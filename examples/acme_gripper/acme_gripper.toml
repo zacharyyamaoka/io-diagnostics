@@ -1,0 +1,5 @@
+name = "acme_gripper"
+command = ["{python}", "{here}/acme_gripper.py"]
+timeout_s = 10
+period_s = 30
+matches = ["usb:1234:5678"]

@@ -1,0 +1,47 @@
+# IO diagnostics plugin: the moteus_servo driver's own diagnostics (fdcanusb CAN-FD adapters, USB 0483:5740,
+# and the moteus boards on their bus). Boundary: docs/build-plan-v1.md "Plugin boundary". The host appends one
+# verb to `command`:
+#   describe | diagnose --device <id> | act --device <id> --action <name> [--node <CAN id>] --confirm <token>
+# and reads diagnostics-record/0 JSON lines (contract/record.py) from stdout. Paths are rooted at
+# $IO_DIAGNOSTICS_DEVICE_PATH (the device's own row): <row>/can is the bus, <row>/can/<id> each board.
+# Run by hand (passive: never opens the port):
+#   uv run --project <cwd> --extra hardware python -m moteus_servo.diagnostics diagnose --device 272813EF --passive
+
+name = "moteus_servo"
+description = "fdcanusb adapters + moteus boards: ids, identity, firmware vs latest, read-only config, can status, reply loss"
+
+# WHY disabled: diagnose talks to the bus (query frames + console reads, behind the port-holder check and the
+# rack bus lock). The orchestrator enables it for its one live run (`io-diagnostics serve --enable moteus_servo`);
+# the fixture plugin drives the UI meanwhile.
+enabled = false
+
+# WHY uv run in the driver's own project: moteus and pyserial live in the driver's env, never in io-diagnostics'.
+# WHY the worktree path: the plugin lives on bam_ws branch claude/traj-tracking-sim-to-real-a3da60 until it is
+# merged; then both paths become /home/bam/bam_ws/src/core/mdp/agent/actuators/moteus_servo.
+# The options before the verb are this installation's: the rack inventory (last-known ids per adapter, so a
+# silent board is named), the firmware release cache (update check), the rack bus lock, and the period that
+# every status promises as expected_period_s (keep it equal to period_s).
+command = [
+  "uv", "run", "--quiet",
+  "--project", "/home/bam/bam_ws/.claude/worktrees/traj-sim2real-rack/src/core/mdp/agent/actuators/moteus_servo",
+  "--extra", "hardware",
+  "python", "-m", "moteus_servo.diagnostics",
+  "--inventory", "/archive/datasets/bam_rig/rack_inventory",
+  "--firmware-cache", "/home/bam/.cache/moteus-firmware",
+  "--bus-lock", "/home/bam/.cache/rack-commissioning/bus.lock",
+  "--expected-period", "300",
+]
+cwd = "/home/bam/bam_ws/.claude/worktrees/traj-sim2real-rack/src/core/mdp/agent/actuators/moteus_servo"
+
+# Seconds per call. The plugin bounds its own bus check at 25 s (--timeout) and reports what it measured by
+# then. It asks one id per transaction (moteus 1.0.0 never bounds a reply from a real fdcanusb), so every
+# absent id of the 1-32 scan costs 50 ms: a dead bus ~1.6 s plus 0.3 s of re-asks per expected board, a healthy
+# 3-board bus about 3-6 s (scan, 20 query cycles, config + identity per board, can status). 45 s leaves room
+# for uv's start.
+timeout_s = 45
+
+# Seconds between diagnose calls per adapter. WHY 300: while the check runs it holds the rack bus lock, and an
+# experiment that finds the lock held refuses to start; rack_inventory already polls every ~180 s.
+period_s = 300
+
+matches = ["usb:0483:5740", "by-id:*fdcanusb*"]

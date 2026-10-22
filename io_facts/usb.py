@@ -27,7 +27,7 @@ class UsbDevice:
     manufacturer: str
     product: str
     serial: str  # the USB iSerial descriptor (NOT the RealSense SDK serial; see realsense plugins)
-    speed_mbps: int
+    speed_mbps: float  # 1.5 for low-speed devices (keyboards, mice), so never int()
     devnum: int
     plugged_at: str  # ISO time the kernel created the sysfs node
     ttys: tuple[str, ...] = ()
@@ -48,6 +48,13 @@ def _read(path: Path) -> str:
         return ""
 
 
+def _speed_mbps(text: str) -> float:
+    """sysfs ``speed`` in Mb/s (1.5 / 12 / 480 / 5000); integral speeds stay ints, so JSON still reads 480."""
+
+    value = float(text or 0)
+    return int(value) if value.is_integer() else value
+
+
 def _by_id_links() -> dict[str, list[str]]:
     """``{/dev/ttyACM0: [/dev/serial/by-id/usb-mjbots_fdcanusb_272813EF-if00]}``."""
 
@@ -58,9 +65,11 @@ def _by_id_links() -> dict[str, list[str]]:
 
 
 def _video_nodes_under(device_dir: Path) -> list[str]:
+    """Video nodes on this device's own interfaces: never a hub's (a hub owns no interface of the camera below)."""
+
     nodes = []
-    for entry in sorted(Path("/sys/class/video4linux").glob("video*")):
-        if str((entry / "device").resolve()).startswith(str(device_dir.resolve()) + "/"):
+    for entry in sorted(Path("/sys/class/video4linux").glob("video*"), key=lambda path: int(path.name[5:] or 0)):
+        if (entry / "device").resolve().parent == device_dir.resolve():  # device -> <port>:<config>.<interface>
             nodes.append(f"/dev/{entry.name}")
     return nodes
 
@@ -83,7 +92,7 @@ def list_usb_devices(sysfs_root: Path = SYSFS_USB) -> list[UsbDevice]:
                 manufacturer=_read(device_dir / "manufacturer"),
                 product=_read(device_dir / "product"),
                 serial=_read(device_dir / "serial"),
-                speed_mbps=int(_read(device_dir / "speed") or 0),
+                speed_mbps=_speed_mbps(_read(device_dir / "speed")),
                 devnum=int(_read(device_dir / "devnum") or 0),
                 plugged_at=plugged_at.isoformat(timespec="seconds"),
                 ttys=tuple(ttys),
@@ -92,6 +101,14 @@ def list_usb_devices(sysfs_root: Path = SYSFS_USB) -> list[UsbDevice]:
             )
         )
     return devices
+
+
+def devices(root: Path = Path("/")) -> list[dict]:
+    """USB buses and devices in the OS skeleton shape (docs/build-plan-v1.md); built in io_facts.skeleton."""
+
+    from .skeleton import usb_devices  # WHY lazy: skeleton imports this module
+
+    return usb_devices(root)
 
 
 def generic_fdcanusb_target() -> str | None:

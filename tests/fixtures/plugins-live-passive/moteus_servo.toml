@@ -1,0 +1,25 @@
+# The REAL moteus_servo plugin, passive: the same command as plugins.d/moteus_servo.toml, plus `--passive` after
+# `diagnose --device <id>` (sysfs, by-id, /proc holders, the rack inventory and firmware cache files: the bus is
+# never opened). Used by tests/test_integration.py and by hand:
+#   uv run --project /home/bam/io-diagnostics python /home/bam/io-diagnostics/io_diagnostics/cli.py once --plugins /home/bam/io-diagnostics/tests/fixtures/plugins-live-passive
+# WHY enabled here and not in plugins.d: diagnose_args pins every run of this declaration to passive, and
+# passive_guard.py refuses (exit 2) any diagnose without --passive or any act, independently of the host.
+
+name = "moteus_servo"
+description = "moteus_servo, passive only (--passive): adapter presence, holders, last-known boards, firmware cache"
+command = [
+  "{python}", "{here}/passive_guard.py",  # WHY: refuses anything but describe / diagnose --passive, host bug or not
+  "uv", "run", "--quiet",
+  "--project", "/home/bam/bam_ws/.claude/worktrees/traj-sim2real-rack/src/core/mdp/agent/actuators/moteus_servo",
+  "--extra", "hardware",
+  "python", "-m", "moteus_servo.diagnostics",
+  "--inventory", "/archive/datasets/bam_rig/rack_inventory",
+  "--firmware-cache", "/home/bam/.cache/moteus-firmware",
+  "--bus-lock", "/home/bam/.cache/rack-commissioning/bus.lock",
+  "--expected-period", "300",
+]
+diagnose_args = ["--passive"]
+cwd = "/home/bam/bam_ws/.claude/worktrees/traj-sim2real-rack/src/core/mdp/agent/actuators/moteus_servo"
+timeout_s = 60
+period_s = 300
+matches = ["usb:0483:5740", "by-id:*fdcanusb*"]

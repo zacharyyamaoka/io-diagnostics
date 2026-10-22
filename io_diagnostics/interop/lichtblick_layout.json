@@ -1,0 +1,31 @@
+{
+ "configById": {
+  "DiagnosticSummary!iodiagnostics": {
+   "minLevel": 0,
+   "pinnedIds": [],
+   "hardwareIdFilter": "",
+   "topicToRender": "/diagnostics",
+   "sortByLevel": true,
+   "secondsUntilStale": 5
+  },
+  "DiagnosticStatusPanel!iodiagnostics": {
+   "topicToRender": "/diagnostics",
+   "collapsedSections": [],
+   "selectedHardwareId": "moteus:22fb62f0",
+   "selectedName": "CAN 15: driver",
+   "splitFraction": 0.5,
+   "secondsUntilStale": 5
+  }
+ },
+ "globalVariables": {},
+ "userNodes": {},
+ "playbackConfig": {
+  "speed": 1
+ },
+ "layout": {
+  "first": "DiagnosticSummary!iodiagnostics",
+  "second": "DiagnosticStatusPanel!iodiagnostics",
+  "direction": "row",
+  "splitPercentage": 52
+ }
+}

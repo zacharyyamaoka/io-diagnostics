@@ -1,0 +1,21 @@
+# The REAL intel_rgbd plugin, passive: the same command as plugins.d/intel_rgbd.toml, plus `--passive` after
+# `diagnose --device <id>` (sysfs and /proc only: the SDK is never imported, no camera node is opened). Used by
+# tests/test_integration.py and by hand:
+#   uv run --project /home/bam/io-diagnostics python /home/bam/io-diagnostics/io_diagnostics/cli.py once --plugins /home/bam/io-diagnostics/tests/fixtures/plugins-live-passive
+# WHY enabled here and not in plugins.d: diagnose_args pins every run of this declaration to passive, and
+# passive_guard.py refuses (exit 2) any diagnose without --passive or any act, independently of the host.
+
+name = "intel_rgbd"
+description = "intel_rgbd, passive only (--passive): USB serial, USB link, video nodes, holders; the SDK is never asked"
+command = [
+  "{python}", "{here}/passive_guard.py",  # WHY: refuses anything but describe / diagnose --passive, host bug or not
+  "uv", "run", "--quiet",
+  "--project", "/home/bam/bam_ws/.claude/worktrees/traj-sim2real-rack/src/core/mdp/agent/sensors/intel_rgbd",
+  "--extra", "real",
+  "python", "-m", "intel_rgbd.diagnostics",
+]
+diagnose_args = ["--passive"]
+cwd = "/home/bam/bam_ws/.claude/worktrees/traj-sim2real-rack/src/core/mdp/agent/sensors/intel_rgbd"
+timeout_s = 60
+period_s = 60
+# matches come from the plugin's describe (usb 8086:0b*), as in plugins.d

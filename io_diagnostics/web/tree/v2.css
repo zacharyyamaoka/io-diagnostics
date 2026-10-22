@@ -1,0 +1,91 @@
+/* Tree proposal v2 — "Notion toggle" (io_diagnostics/web/tree/v2.js).
+   Everything is scoped under .t2 / t2-* so several proposals can share one page; colours fall back to app.css's
+   tokens (--warn, --error, --stale, --unknown, --accent-soft) so the tree also works on a bare page. */
+.t2 {
+  --t2-indent: 16px;                  /* one nesting step; the guides are drawn on this pitch */
+  --t2-text: #c4c7cd;                 /* connected rows: normal grey text, not white (rule 5) */
+  --t2-icon: #858a93;
+  --t2-off: #585b63;                  /* not connected: the whole row greyed out (rule 5) */
+  --t2-off-icon: #4a4d54;
+  --t2-id: #686c75;
+  --t2-guide: rgba(255, 255, 255, .075);
+  --t2-guide-on: rgba(255, 255, 255, .2);
+  --t2-hover: rgba(255, 255, 255, .045);
+  --t2-sel: var(--accent-soft, rgba(138, 124, 240, .16));
+  --t2-warn: var(--warn, #e8a92c);
+  --t2-error: var(--error, #e5534b);
+  --t2-stale: var(--stale, #8d8fa6);
+  --t2-unknown: var(--unknown, #9a8fc4);
+  --t2-knock: #62656d;                /* a knock-on problem: drawn, but subdued (counted once, at its cause) */
+  padding: 4px 0 18px;
+  font: 13px/1.4 var(--sans, Inter, Ubuntu, "Segoe UI", system-ui, sans-serif);
+  color: var(--t2-text);
+  outline: none;
+  user-select: none;
+}
+
+/* ---- row: guides · lead (icon ⇄ chevron) · name ········ pill · id · status ------------------------------------ */
+.t2-row {
+  position: relative; display: flex; align-items: center; height: 26px;
+  margin: 0 6px; padding: 0 8px 0 4px; border-radius: 6px;
+  cursor: pointer; white-space: nowrap;
+}
+.t2-row:hover { background: var(--t2-hover); }
+.t2-row.t2-sel { background: var(--t2-sel); color: #f1f1f3; }
+.t2-row.t2-sel .t2-ic { color: #cdd0d6; }
+.t2:focus-visible .t2-row.t2-sel { box-shadow: inset 0 0 0 1px rgba(138, 124, 240, .6); }
+
+.t2-guides { display: flex; align-self: stretch; flex: none; }
+.t2-guides i { position: relative; width: var(--t2-indent); }
+/* 8px = the centre of the parent's 18px lead box, so a guide drops straight from its parent's icon */
+.t2-guides i::before { content: ""; position: absolute; top: 0; bottom: 0; left: 8px; border-left: 1px solid var(--t2-guide); }
+.t2-guides i.on::before { border-left-color: var(--t2-guide-on); }
+.t2-guides i.part::before { border-left-style: dotted; }
+
+.t2-lead { position: relative; flex: none; width: 18px; height: 18px; margin-right: 7px; display: grid; place-items: center; border-radius: 4px; }
+.t2-ic, .t2-chev { fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; }
+.t2-ic { width: 16px; height: 16px; stroke-width: 1.7; color: var(--t2-icon); }
+.t2-chev { display: none; width: 14px; height: 14px; stroke-width: 2.3; color: #b9bcc4; transition: transform .12s ease; }
+.t2-row.t2-open .t2-chev { transform: rotate(90deg); }
+/* Notion: hovering a row that has children swaps its type icon for the toggle; keyboard focus does the same */
+.t2-row.t2-parent:hover .t2-ic, .t2:focus-visible .t2-row.t2-parent.t2-sel .t2-ic { display: none; }
+.t2-row.t2-parent:hover .t2-chev, .t2:focus-visible .t2-row.t2-parent.t2-sel .t2-chev { display: block; }
+.t2-row.t2-parent .t2-lead:hover { background: rgba(255, 255, 255, .1); }
+@media (hover: none) { /* touch: no hover, so the toggle stays visible on parents */
+  .t2-row.t2-parent .t2-ic { display: none; }
+  .t2-row.t2-parent .t2-chev { display: block; }
+}
+
+.t2-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.t2-fill { flex: 1 0 10px; }
+.t2-id {
+  flex: 0 3 auto; min-width: 0; max-width: 140px; margin-left: 8px; overflow: hidden; text-overflow: ellipsis;
+  color: var(--t2-id); font: 11.5px/1 var(--mono, "JetBrains Mono", "Ubuntu Mono", ui-monospace, monospace);
+}
+
+/* ---- status: a SHAPE on the far right, only for problems (rule 3, rule 4) -------------------------------------- */
+.t2-status { flex: none; width: 16px; height: 16px; margin-left: 10px; display: grid; place-items: center; }
+.t2-shape { width: 14px; height: 14px; }
+.t2 .t2-warn { color: var(--t2-warn); }
+.t2 .t2-error { color: var(--t2-error); }
+.t2 .t2-stale { color: var(--t2-stale); }
+.t2 .t2-unknown { color: var(--t2-unknown); }
+.t2 .t2-status.t2-knock { color: var(--t2-knock); }
+
+/* ---- the folded-problems pill: only on a COLLAPSED parent with problems inside ("2 ▲") ------------------------- */
+.t2-pill {
+  flex: none; display: inline-flex; align-items: center; gap: 8px; height: 18px; margin-left: 8px; padding: 0 7px;
+  border-radius: 999px; background: rgba(255, 255, 255, .055); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .06);
+  font: 600 11px/1 var(--mono, "JetBrains Mono", "Ubuntu Mono", ui-monospace, monospace);
+}
+.t2-seg { display: inline-flex; align-items: center; gap: 4px; }
+.t2-seg b { font-weight: 600; color: #b3b6bd; }
+.t2-mini { width: 11px; height: 11px; }
+
+/* ---- not connected: fully grey; the problem shape keeps its colour so the chip's count matches what you see ----- */
+.t2-row.t2-off { color: var(--t2-off); }
+.t2-row.t2-off .t2-ic, .t2-row.t2-off .t2-id { color: var(--t2-off-icon); }
+.t2-row.t2-knocked .t2-name { color: #8d9098; }
+
+.t2-row.t2-hit .t2-name { color: #fff; text-decoration: underline; text-decoration-color: var(--accent, #8a7cf0); text-underline-offset: 3px; }
+.t2-empty { padding: 16px; color: var(--muted, #9a9ea6); }

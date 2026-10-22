@@ -1,0 +1,111 @@
+/* Tree proposal v1 — "Quiet IDE tree" (io_diagnostics/web/tree/v1.js). Every class is t1-* so it can sit inside
+   web/index.html beside app.css without either sheet touching the other's rows. Colours read app.css's tokens
+   with the same values as fallbacks. */
+.t1-tree {
+  --t1-indent: 12px;               /* keep equal to INDENT_PX in v1.js */
+  --t1-row-h: 24px;
+  --t1-text: #c9ccd2;              /* connected = normal grey text (rule 5) */
+  --t1-icon: #8f939b;
+  --t1-id: #6c7079;
+  --t1-off: #55585f;               /* not connected = fully greyed (rule 5) */
+  --t1-guide: rgba(255, 255, 255, .07);
+  --t1-hover: #2a2b31;
+  --t1-sel: rgba(138, 124, 240, .17);
+  --t1-sel-line: rgba(138, 124, 240, .55);
+  --t1-warn: var(--warn, #e8a92c);
+  --t1-error: var(--error, #e5534b);
+  --t1-stale: var(--stale, #8d8fa6);
+  --t1-unknown: var(--unknown, #9a8fc4);
+  --t1-ink: #1b1c1f;               /* the mark knocked out of a filled shape */
+  font: 13px/1.4 var(--sans, Inter, Ubuntu, "Segoe UI", system-ui, sans-serif);
+  color: var(--t1-text);
+  user-select: none;
+  padding-bottom: 12px;
+}
+
+/* ---- header: entity count, then independent causes as the same shapes -------------------- */
+.t1-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; height: 34px; padding: 0 12px 0 14px; color: var(--t1-id); font-size: 11px; text-transform: uppercase; letter-spacing: .6px; }
+.t1-head .t1-num { color: var(--t1-icon); margin-left: 4px; }
+.t1-counts { display: inline-flex; gap: 12px; align-items: center; text-transform: none; letter-spacing: 0; font-size: 12px; color: var(--t1-text); }
+.t1-count { display: inline-flex; gap: 5px; align-items: center; font-variant-numeric: tabular-nums; }
+.t1-count .t1-shape { width: 13px; height: 13px; }
+.t1-quiet { color: var(--t1-id); }
+
+/* ---- rows --------------------------------------------------------------------------------- */
+.t1-rows { outline: none; }
+.t1-row { position: relative; display: flex; align-items: center; gap: 6px; height: var(--t1-row-h); padding: 0 10px 0 calc(6px + var(--t1-d) * var(--t1-indent)); cursor: default; white-space: nowrap; }
+.t1-row:hover { background: var(--t1-hover); }
+.t1-row.t1-sel { background: var(--t1-sel); }
+.t1-rows:focus-visible .t1-row.t1-sel { box-shadow: inset 0 0 0 1px var(--t1-sel-line); }
+
+/* indent guides: VS Code's "render indent guides: onHover" — one hairline per ancestor, only while pointing at the tree */
+.t1-guides { position: absolute; top: 0; bottom: 0; left: 14px; width: calc(var(--t1-d) * var(--t1-indent)); pointer-events: none; opacity: 0; transition: opacity .15s;
+  background: linear-gradient(to right, var(--t1-guide) 1px, transparent 1px) 0 0 / var(--t1-indent) 100% repeat-x; }
+.t1-tree:hover .t1-guides { opacity: 1; }
+
+/* chevron gutter (rule 1): reserved space, invisible until the pointer is over the tree; full on the hovered row */
+.t1-chev { width: 16px; height: 16px; flex: none; display: inline-flex; align-items: center; justify-content: center; color: #8f939b; opacity: 0; transition: opacity .12s; cursor: pointer; border-radius: 3px; }
+.t1-chev svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; transition: transform .12s; }
+.t1-chev.t1-open svg { transform: rotate(90deg); }
+.t1-chev.t1-leaf { cursor: default; }
+.t1-tree:hover .t1-chev, .t1-rows:focus-visible .t1-chev { opacity: .4; }
+.t1-row:hover .t1-chev, .t1-row.t1-sel .t1-chev { opacity: 1; }
+.t1-chev:not(.t1-leaf):hover { background: rgba(255, 255, 255, .08); color: #d5d8dd; }
+
+/* type icon + name together (rule 2) */
+.t1-ic { width: 16px; height: 16px; flex: none; fill: none; stroke: var(--t1-icon); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.t1-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--t1-text); }
+.t1-row.t1-sel .t1-name { color: #f1f2f4; }
+.t1-row.t1-sel .t1-ic { stroke: #b9bcc4; }
+.t1-name mark { background: rgba(138, 124, 240, .35); color: inherit; border-radius: 2px; }
+
+/* ids muted on the right; the full value is in the row's tooltip (the ellipsis is explicit) */
+.t1-id { margin-left: auto; padding-left: 12px; color: var(--t1-id); font: 11.5px/1 var(--mono, "JetBrains Mono", "Ubuntu Mono", ui-monospace, monospace); flex: 0 1 auto; max-width: 42%; overflow: hidden; text-overflow: ellipsis; min-width: 2ch; }
+
+/* status slot at the far right (rules 2-4): fixed width so ids line up; empty on OK rows */
+.t1-st { width: 18px; flex: none; display: inline-flex; align-items: center; justify-content: center; margin-left: 6px; }
+.t1-row:not(:has(.t1-id)) .t1-st { margin-left: auto; }
+.t1-mark { position: relative; display: inline-flex; }
+.t1-shape { width: 14px; height: 14px; flex: none; display: block; }
+.t1-shape .t1-fill { fill: currentColor; stroke: currentColor; stroke-width: .6; stroke-linejoin: round; }
+.t1-shape .t1-ink { fill: none; stroke: var(--t1-ink); stroke-width: 1.7; stroke-linecap: round; }
+.t1-shape .t1-ink-dot { fill: var(--t1-ink); }
+.t1-shape .t1-line { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.t1-shape .t1-dot { fill: currentColor; }
+.t1-shape.t1-warn { color: var(--t1-warn); }
+.t1-shape.t1-error { color: var(--t1-error); }
+.t1-shape.t1-stale { color: var(--t1-stale); }
+.t1-shape.t1-unknown { color: var(--t1-unknown); }
+
+/* the quiet hint (rule 6): a small dot, never a shape, and only where the cause is hidden (a collapsed branch).
+   An open branch shows its cause below, so its hint waits one step away: a hollow ring on hover or selection. */
+.t1-hint { width: 6px; height: 6px; border-radius: 50%; display: block; background: currentColor; opacity: .85; }
+.t1-hint.t1-open { background: transparent; box-shadow: inset 0 0 0 1.3px currentColor; width: 7px; height: 7px; opacity: 0; transition: opacity .12s; }
+.t1-row:hover .t1-hint.t1-open, .t1-row.t1-sel .t1-hint.t1-open { opacity: .6; }
+.t1-hint.t1-warn, .t1-badge.t1-warn { color: var(--t1-warn); }
+.t1-hint.t1-error, .t1-badge.t1-error { color: var(--t1-error); }
+.t1-hint.t1-stale, .t1-badge.t1-stale { color: var(--t1-stale); }
+.t1-hint.t1-unknown, .t1-badge.t1-unknown { color: var(--t1-unknown); }
+/* own problem AND something worse below: a badge dot on the shape's corner */
+.t1-badge { position: absolute; right: -3px; top: -3px; width: 6px; height: 6px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 1.5px var(--panel, #222327); }
+.t1-row:hover .t1-badge { box-shadow: 0 0 0 1.5px var(--t1-hover); }
+.t1-badge.t1-open { opacity: 0; transition: opacity .12s; }
+.t1-row:hover .t1-badge.t1-open, .t1-row.t1-sel .t1-badge.t1-open { opacity: 1; }
+
+/* problem rows: the name takes a muted tint of its level (VS Code's decorated file name); stale reads as "old" */
+.t1-row.t1-lv-error .t1-name { color: #ee9a94; }
+.t1-row.t1-lv-warn .t1-name { color: #e2c27e; }
+.t1-row.t1-lv-stale .t1-name { color: #9a9ea6; }
+
+/* knock-on (explained by a failed ancestor, counted once there): subdued name and a grey shape */
+.t1-row.t1-knock .t1-name { color: #8a8e96; }
+.t1-mark.t1-subdued .t1-shape { color: #6f727a; }
+
+/* a grouping row with nothing under it (e.g. an empty USB bus): present but quieter */
+.t1-row.t1-empty .t1-name { color: #8a8e96; }
+
+/* not connected (rule 5): icon, name and id fully greyed; a real problem on it keeps its shape's colour */
+.t1-row.t1-off .t1-name, .t1-row.t1-off .t1-id { color: var(--t1-off); }
+.t1-row.t1-off .t1-ic { stroke: var(--t1-off); }
+
+.t1-row.t1-hit .t1-name { color: #f1f2f4; }

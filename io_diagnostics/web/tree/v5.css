@@ -1,0 +1,122 @@
+/* Tree proposal v5 — "Columns tree" (io_diagnostics/web/tree/v5.js). Dark theme from web/app.css; every colour falls
+   back to the same value so the renderer also stands alone. Colour is spent on problems only (rule 4/5). */
+.v5 {
+  --v5-name: #c6c9cf;          /* connected: normal grey text */
+  --v5-strong: var(--text, #e4e5e7);
+  --v5-icon: #959aa3;
+  --v5-quiet: #858993;         /* the aligned columns: present, never loud */
+  --v5-dim: #5d6168;
+  --v5-off: #54575e;           /* not connected / nothing plugged in: fully greyed */
+  --v5-hover: #2a2b31;
+  --v5-sel: var(--accent-soft, rgba(138, 124, 240, .16));
+  --v5-accent: var(--accent, #8a7cf0);
+  --v5-error: var(--error, #e5534b);
+  --v5-warn: var(--warn, #e8a92c);
+  --v5-stale: var(--stale, #8d8fa6);
+  --v5-unknown: var(--unknown, #9a8fc4);
+  --v5-mono: var(--mono, "JetBrains Mono", "Ubuntu Mono", ui-monospace, monospace);
+  container: v5 / inline-size;
+  min-height: 100%;
+  padding-bottom: 12px;
+  font: 13px/1.4 var(--sans, Inter, Ubuntu, "Segoe UI", system-ui, sans-serif);
+  color: var(--v5-name);
+  outline: none;
+  user-select: none;
+}
+.v5-empty { padding: 16px; color: var(--muted, #9a9ea6); }
+
+/* ---- one grid for the header and every row: that is what makes the columns line up ------------------------- */
+.v5-grid {
+  /* narrow (the 470 px tree pane): name · port · status shape and message */
+  --v5-cols: minmax(0, 1fr) 56px minmax(0, 140px);
+  display: grid;
+  grid-template-columns: var(--v5-cols);
+  column-gap: 10px;
+  align-items: center;
+  padding-right: 12px;
+}
+.v5-c { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.v5-c-id, .v5-c-rate, .v5-c-seen, .v5-c-fw { display: none; }
+@container v5 (min-width: 600px) {
+  .v5-grid { --v5-cols: minmax(0, 1fr) 56px 124px 72px minmax(0, 190px); }
+  .v5-c-id, .v5-c-seen { display: block; }
+}
+@container v5 (min-width: 840px) {
+  .v5-grid { --v5-cols: minmax(190px, 1fr) 58px 132px 84px 72px 150px minmax(0, 1fr); }
+  .v5-c-rate, .v5-c-fw { display: block; }
+}
+@container v5 (min-width: 1120px) {
+  .v5-grid { --v5-cols: minmax(240px, 1fr) 62px 136px 88px 76px 156px minmax(240px, 1.2fr); }
+}
+
+/* ---- header ------------------------------------------------------------------------------------------------ */
+.v5-head {
+  position: sticky; top: 0; z-index: 2;
+  height: 30px;
+  background: var(--panel, #222327);
+  border-bottom: 1px solid var(--border, #36383e);
+  color: var(--muted, #9a9ea6);
+  font-size: 10.5px; font-weight: 600; letter-spacing: .6px; text-transform: uppercase;
+}
+.v5-head .v5-c-name { padding-left: 12px; }
+.v5-head .v5-c-status { display: flex; align-items: center; gap: 10px; overflow: visible; }
+.v5-tallies { margin-left: auto; display: inline-flex; gap: 10px; align-items: center; font-family: var(--v5-mono); font-size: 11px; letter-spacing: 0; text-transform: none; font-weight: 500; }
+.v5-tally { display: inline-flex; align-items: center; gap: 3px; color: var(--v5-strong); }
+
+/* ---- rows -------------------------------------------------------------------------------------------------- */
+.v5-row { height: 26px; cursor: default; }
+.v5-row:hover { background: var(--v5-hover); }
+.v5-row.sel { background: var(--v5-sel); box-shadow: inset 2px 0 0 var(--v5-accent); }
+.v5:focus-visible .v5-row.sel { box-shadow: inset 2px 0 0 var(--v5-accent), inset 0 0 0 1px rgba(138, 124, 240, .45); }
+
+.v5-c-name { display: flex; align-items: center; gap: 7px; }
+.v5-name { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.v5-row.p-error .v5-name, .v5-row.p-warn .v5-name, .v5-row.p-stale .v5-name, .v5-row.p-unknown .v5-name { color: var(--v5-strong); }
+
+/* Rule 1: the chevron lives in the type icon's box and swaps in on hover (Notion), so it costs no column. */
+.v5-twisty { position: relative; flex: none; width: 18px; height: 18px; border-radius: 4px; }
+.v5-twisty .v5-ic, .v5-twisty .v5-chev { position: absolute; inset: 1.5px; width: 15px; height: 15px; transition: opacity .08s, transform .1s; }
+.v5-ic { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; color: var(--v5-icon); }
+.v5-chev { fill: none; stroke: currentColor; stroke-width: 2.3; stroke-linecap: round; stroke-linejoin: round; color: #d3d5da; opacity: 0; }
+.v5-twisty.has { cursor: pointer; }
+.v5-twisty.has.open .v5-chev { transform: rotate(90deg); }
+.v5-row:hover .v5-twisty.has .v5-ic { opacity: 0; }
+.v5-row:hover .v5-twisty.has .v5-chev { opacity: 1; }
+.v5-twisty.has:hover { background: #3a3b42; }
+
+/* the quiet columns */
+.v5-val { font-family: var(--v5-mono); font-size: 11.5px; color: var(--v5-quiet); }
+.v5-dim { font-family: var(--v5-mono); font-size: 11px; color: var(--v5-dim); }
+.v5-head .v5-dim { font-family: inherit; text-transform: none; letter-spacing: 0; font-weight: 400; }
+.v5-port { font-family: var(--v5-mono); font-size: 11.5px; color: var(--v5-quiet); cursor: pointer; padding: 1px 3px; margin-left: -3px; border-radius: 4px; }
+.v5-port:hover { color: var(--v5-strong); background: #3a3b42; }
+.v5-row.sel-port .v5-port { color: var(--v5-strong); background: rgba(138, 124, 240, .3); }
+.v5-upd { font-family: var(--v5-mono); font-size: 11.5px; color: #e9c47e; }
+
+/* ---- status: shapes, in the last column, only when not OK (rules 2-4) --------------------------------------- */
+.v5-c-status { display: flex; align-items: center; gap: 6px; }
+.v5-shape { flex: none; width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.v5-shape .v5-fill { fill: currentColor; fill-opacity: .2; }
+.v5-shape.v5-small { width: 12px; height: 12px; stroke-width: 2.2; }
+.v5-l-error { color: var(--v5-error); }
+.v5-l-warn { color: var(--v5-warn); }
+.v5-l-stale { color: var(--v5-stale); }
+.v5-l-unknown { color: var(--v5-unknown); }
+.v5-msg { min-width: 0; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; }
+.v5-t-error { color: #f0938d; }
+.v5-t-warn { color: #e9c47e; }
+.v5-t-stale { color: #b8bacd; }
+.v5-t-unknown { color: #c4bbec; }
+.v5-c-rate .v5-t-error, .v5-c-rate .v5-t-warn, .v5-c-seen .v5-t-stale { font-family: var(--v5-mono); font-size: 11.5px; }
+/* knock-on: explained by a failed ancestor — one cause, so grey, never colour */
+.v5-shape.v5-knock { color: var(--v5-dim); }
+.v5-knock-t { color: var(--v5-quiet); }
+/* Rule 6: the worst-below rollup is a small, faint hint, only on a closed branch */
+.v5-hint { display: inline-flex; align-items: center; gap: 4px; min-width: 0; flex: 0 1 auto; color: var(--v5-dim); font-size: 11.5px; }
+.v5-hint > span { overflow: hidden; text-overflow: ellipsis; }
+.v5-hint .v5-shape { opacity: .75; }
+.v5-msg + .v5-hint { margin-left: 4px; }
+
+/* Rule 5: not connected (an empty port, an offline goodbye, a bus with nothing on it) = the whole row greyed */
+.v5-row.off .v5-name, .v5-row.off .v5-ic, .v5-row.off .v5-val, .v5-row.off .v5-dim, .v5-row.off .v5-port { color: var(--v5-off); }
+.v5-row.off .v5-msg { opacity: .7; }

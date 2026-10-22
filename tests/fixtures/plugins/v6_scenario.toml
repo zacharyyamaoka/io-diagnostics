@@ -1,0 +1,10 @@
+# Fixture plugin: the driver side of V6's three recorded frames, replayed through the host's real plugin runner.
+# Used by `io-diagnostics serve|once --fixture F1|F2|F3` (the host sets IO_DIAGNOSTICS_FIXTURE). Never touches hardware.
+name = "v6_scenario"
+description = "V6 frames F1 18:11 plug · F2 18:25 bus busy · F3 19:02 after restart (driver side, recorded)"
+command = ["{python}", "{here}/v6_scenario.py"]
+timeout_s = 10
+# WHY 2 s: the replayed D405 streams promise a 1 s period, and STALE needs max(3 x 1 s, 5 s) of silence
+period_s = 2
+replay = true
+matches = ["usb:0483:5740", "usb:8086:0b5b"]

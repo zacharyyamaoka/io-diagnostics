@@ -1,12 +1,33 @@
 [project]
 name = "io-diagnostics"
 version = "0.0.1"
-description = "Babble round 1: five top-bar directions for a sensor/actuator IO registry (prototype only)"
+description = "IO diagnostics: one host that shows every plugged sensor, actuator and bus (OS skeleton + driver plugins) as one tree"
 requires-python = ">=3.12"
 dependencies = []
 
+[project.scripts]
+# The one command (serve | tray | once --json): uv run --project /home/bam/io-diagnostics io-diagnostics serve
+io-diagnostics = "io_diagnostics.cli:main"
+
+# WHY a build backend: uv installs [project.scripts] only for a packaged project. Editable, so the checkout IS the
+# code that runs; the record contract and the passive layer ship beside the host as top-level packages.
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["io_diagnostics", "contract", "io_facts"]
+
 [dependency-groups]
 dev = ["pytest>=8"]
+# Lane C interop (io_diagnostics/interop): foxglove-sdk serves /diagnostics to Lichtblick/Foxglove, rosbags writes
+# ROS 2 CDR + the ros2msg schema, websockets is the stock client in tests. A group, so the record contract stays
+# stdlib-only: uv run --project /home/bam/io-diagnostics --group dev --group interop pytest ...
+interop = [
+    "foxglove-sdk>=0.30",
+    "rosbags>=0.11",
+    "websockets>=14",
+]
 # V4 (registry contract) uses pytest's own plugin manager, pluggy, as its stock plugin system.
 v4 = ["pluggy>=1.5"]
 
