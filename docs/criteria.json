@@ -1,0 +1,107 @@
+{
+  "_frozen": "2026-10-21, before any variant was designed or built. Folded in Zach's two mid-round constraints (plugins for any manufacturer; always within reach and small) before freezing. Do not edit after variants exist; amend visibly instead.",
+  "outcome": "Plug a sensor, actuator or bus adapter into the rack PC and see it appear in the top bar within seconds: what it is, what is on it (bus ids) and whether it is healthy, without ever disturbing hardware an experiment is using.",
+  "requirements": [
+    {
+      "id": "fr1",
+      "name": "Plug it in, see it appear",
+      "weight": 20,
+      "why": "Zach's literal ask: \"I just want to plug stuff in and see it pop up.\" Today's 28B3A25D flapped four times on port 1-7 in 17 s before settling on 1-5, so a pop-up per USB enumeration is noise.",
+      "passCondition": "Within about 2 s of a settled plug the device appears on the top-bar surface with a notice that takes no focus; a flapping device yields one coalesced notice; unplug and re-enumeration are visible too.",
+      "anchors": {
+        "1": "The device shows up only when the surface is next opened or polled, or every enumeration fires its own pop-up.",
+        "3": "It appears promptly, but the notice is generic or a flap produces several notices.",
+        "5": "One specific, coalesced notice (\"28B3A25D plugged, 0 boards answer\") within seconds; unplug and the D405's 4 s drop are visible as events."
+      }
+    },
+    {
+      "id": "fr2",
+      "name": "New device types are plugins",
+      "weight": 25,
+      "why": "Zach, mid-round 2026-10-21: \"It should be easy to extend with any new sensors from any manufacturer in the future, so it should likely follow a plugin-like system.\"",
+      "passCondition": "Adding a new manufacturer's device type (worked example: Robotiq 2F-85 on its FTDI USB-RS485 adapter, Modbus id 9) is one plugin unit implementing a small contract (passive match, children, health), discovered without editing the core or the UI; the UI renders it generically and the hardware gate is inherited, not re-implemented.",
+      "anchors": {
+        "1": "A new device type needs edits to the core or the UI.",
+        "3": "One plugin unit, but the UI or the gating needs per-type work, or the contract shuts out vendor tools (one language, one process).",
+        "5": "One small unit, zero core or UI edits, gating inherited, proven by a test that drops it in and sees the device discovered."
+      }
+    },
+    {
+      "id": "fr3",
+      "name": "Always within reach, one calm answer",
+      "weight": 20,
+      "why": "Zach, mid-round: \"something always within reach and small\"; a standalone app only as what the small surface opens. His calm-UI rule: the first screen answers \"is it OK, what needs me?\" and detail is pulled, not pushed.",
+      "passCondition": "The top-bar presence stays small and quiet when all is well, shows an exception cue when something needs him, and one click gives a first screen whose headline answers OK / what needs me, with ids and detail one more click deeper.",
+      "anchors": {
+        "1": "A dense first screen, or a separate app is the primary surface.",
+        "3": "A small top-bar presence, but the first screen pushes everything at once or the cue is ambiguous.",
+        "5": "A quiet icon, a clear exception cue, the headline answer first and detail by progressive disclosure."
+      }
+    },
+    {
+      "id": "fr4",
+      "name": "Truthful bus health",
+      "weight": 20,
+      "why": "Health has layers and contention. 28B3A25D's adapter is fine while its bus is dead (error-passive, nobody ACKs); CAN 15 is quiet at idle but trips fault 33 on bridge enable; a busy bus is not a broken bus.",
+      "passCondition": "Each bus shows the ids that answer (against the expected count when known); adapter, bus and node health are separate (err/warn/tdc, fault codes with names and when they occur); every value carries its source and age (live, last known from the inventory, reported by the running experiment, or blocked by a named holder).",
+      "anchors": {
+        "1": "One undifferentiated status, or a stale value shown as live.",
+        "3": "Ids and faults are shown, but the layers merge or provenance is partial.",
+        "5": "Adapter, bus and node are separate; CAN 15's fault is named with when it occurs; blocked shows who holds the bus plus the last known value and its age."
+      }
+    },
+    {
+      "id": "fr5",
+      "name": "Names other tools can use",
+      "weight": 5,
+      "why": "Inferred (from the coordinator, not Zach): /dev/fdcanusb now points at the newest adapter, the dead bus, so scripts that default to it go wrong. The rack session runner could resolve adapters by serial instead.",
+      "passCondition": "Serial-keyed identity with the by-id path, the /dev/fdcanusb trap surfaced, and a machine-readable snapshot a script can read.",
+      "anchors": {
+        "1": "Only tty names.",
+        "3": "Serial-keyed and the trap is shown, but there is no machine-readable output.",
+        "5": "Serial-keyed, trap surfaced, and a versioned machine-readable snapshot that a real example script consumes."
+      }
+    },
+    {
+      "id": "fr6",
+      "name": "Stock parts, small to keep alive",
+      "weight": 10,
+      "why": "Zach's off-the-shelf-first rule: reuse GNOME's own UI, AppIndicator, libnotify, udev, the repo's detection code and the Claude Hub tray where they fit. Every always-on process or shell extension is maintenance and upgrade risk.",
+      "passCondition": "Thin glue over stock parts, few new always-on processes, low risk of breaking his session on a GNOME upgrade.",
+      "anchors": {
+        "1": "A bespoke stack with shell-crash or upgrade risk and new daemons.",
+        "3": "Mostly stock, with one notable custom piece.",
+        "5": "Thin glue over stock parts, at most one small process, upgrade-safe."
+      }
+    }
+  ],
+  "hardGates": [
+    {
+      "id": "g1",
+      "name": "Never steals focus",
+      "why": "No window raise and no app activation. A plug-in pop-up must be a non-focus-stealing notification or a top-bar cue (enforced on his machine by the no-focus-steal hook)."
+    },
+    {
+      "id": "g2",
+      "name": "Never interferes with hardware in use",
+      "why": "Detection is passive by default (sysfs, /dev/serial/by-id, USB descriptors, /proc). An active check (a CAN query, a camera open) runs only when no process holds the port AND the rack bus lock is free; it is query-only with an outer timeout. \"Blocked because the bus is busy\" is a shown state, not an error."
+    },
+    {
+      "id": "g3",
+      "name": "Prototype only",
+      "why": "Nothing installed system-wide, no change to his GNOME settings, no shell extension enabled in his session, no udev rules. Prototypes run from the repo or render in the gallery."
+    }
+  ],
+  "invariants": [
+    "Top-bar first: a small presence that is always within reach; any larger window is only what it opens.",
+    "Same fixture in every variant: today's real plug of 28B3A25D (4 flaps, then settled), the per-bus id lists, a blocked health check, CAN 15's fault 33, 28B3A25D's dead bus, the /dev/fdcanusb trap, and a Robotiq 2F-85 added through a plugin.",
+    "Passive detection only in this round: no CAN adapter or camera is opened (the orchestrator is running rack experiments on them).",
+    "Reuse the repo's detection code (find_port_holders, camera_holders, the inventory snapshot, moteus_find_ids / can_bus_triage for the gated active path) rather than rewriting it."
+  ],
+  "axes": [
+    {"name": "Top-bar surface", "values": ["GNOME Quick Settings menu", "AppIndicator menu + notifications", "Claude Hub popover", "one-line label opening a dashboard", "drift badge opening a station board"]},
+    {"name": "Primary object", "values": ["device", "event", "adapter row", "registry document", "expected-vs-present slot"]},
+    {"name": "Plugin model", "values": ["declarative manifest matchers", "single-file Python class", "any-language executable (monitoring-plugin exit codes)", "packaged entry points with hook specs", "resource + driver split"]},
+    {"name": "Health depth", "values": ["passive + on-demand check", "passive + one gated check on plug", "passive + last known from the rack's own snapshots", "requested and arbitrated by a daemon", "scheduled golden check when the lock is free"]}
+  ]
+}
