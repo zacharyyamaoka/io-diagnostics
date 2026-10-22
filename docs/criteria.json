@@ -1,5 +1,46 @@
 {
   "_frozen": "2026-10-21, before any variant was designed or built. Folded in Zach's two mid-round constraints (plugins for any manufacturer; always within reach and small) before freezing. Do not edit after variants exist; amend visibly instead.",
+  "name": "IO diagnostics",
+  "amendments": [
+    {
+      "id": "A1",
+      "when": "2026-10-21 ~18:15, folded in BEFORE the freeze",
+      "source": "Zach, mid-round",
+      "quote": "It should be easy to extend with any new sensors from any manufacturer in the future, so it should likely follow a plugin-like system. ... I want something always within reach and small.",
+      "effect": "fr2 (plugins, 25%) and fr3 (always within reach, 20%) were written from this; a standalone app only as what the top-bar surface opens."
+    },
+    {
+      "id": "A2",
+      "when": "2026-10-21 ~19:00, AFTER the freeze, before any variant was finished (one host was half-built and was rebuilt on this)",
+      "source": "Zach, evening design direction",
+      "quote": "For each of our sensors we are already building associated digital models, drivers, Python SDKs, etc. We can just leverage the exact same code. ... simple things like reset, view the configuration, etc. You plug in a device and want to see that it's plugged in, what its ID is, what its version is, whether a software update is needed... just checking basic communications, comms speed, etc. We don't need any complex robot control software.",
+      "weights": "unchanged",
+      "changes": {
+        "fr2": {
+          "name": "Drivers bring their own diagnostics",
+          "passCondition": "The plugin IS the device's own driver/SDK package (moteus_servo, intel_rgbd, obsbot_ptz_camera) exposing a small diagnostics entry point; IO diagnostics only discovers devices and calls it. Adding a manufacturer = adding that entry point plus a USB matcher to its driver package: zero host or UI edits, no parallel per-device code, the hardware gate inherited.",
+          "anchors": {
+            "1": "Per-device code lives in IO diagnostics, duplicating what the driver already knows.",
+            "3": "Drivers expose it, but the host still needs per-type glue or UI work, or the contract shuts out non-Python vendor tools.",
+            "5": "A driver entry point plus a matcher, nothing else; proven by a test that points the host at a driver and sees it discovered."
+          }
+        },
+        "fr4": {
+          "name": "Truthful diagnostics before the stack runs",
+          "passCondition": "Per device: presence, identity and ids, firmware and driver version, update available, read-only config, and a comms check (latency, loss, bus error counters, link speed); adapter, bus and node kept separate; every value carries its source and age; blocked shows who holds the port or the lock.",
+          "anchors": {
+            "1": "One undifferentiated status, or a stale value shown as live.",
+            "3": "Identity and comms are shown, but versions, update or config are missing, or provenance is partial.",
+            "5": "Every item is present with provenance; adapter, bus and node separated; CAN 15's fault named with when it occurs; blocked says who and shows the last known value with its age."
+          }
+        },
+        "g2": {
+          "addition": "Reset and config writes are the only state-changing actions: explicit, per device, user-initiated, confirmed, and still gated (never while the port is held or the rack bus lock is taken). Nothing does motion or control."
+        }
+      },
+      "fixture": "Adds the post-restart frame (~19:00): 272813EF present with no board answering (motor supply off), 28B3A25D gone, both D405s present. The 18:11-18:25 frames stay as the other states."
+    }
+  ],
   "outcome": "Plug a sensor, actuator or bus adapter into the rack PC and see it appear in the top bar within seconds: what it is, what is on it (bus ids) and whether it is healthy, without ever disturbing hardware an experiment is using.",
   "requirements": [
     {
