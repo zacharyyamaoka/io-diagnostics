@@ -1,0 +1,35 @@
+# V5 "Station board": the One Dof Test Rack declared as slots (board-farm pattern: the station is
+# permanent, the device under test swaps). Each slot names the driver whose diagnostics it uses
+# and what should be there. Drift = expected vs present. Nothing here is detected: it is declared.
+
+station = "One Dof Test Rack"
+
+[[slot]]
+name = "Bus A (GIM43 plate)"
+driver = "moteus_servo.diagnostics:DIAGNOSTICS"
+match = { vid = "0483", pid = "5740", serial = "272813EF" }
+expect = { ids = [1, 14, 15], firmware = "1.1.2" }
+
+[[slot]]
+name = "Bus B (big plates)"
+driver = "moteus_servo.diagnostics:DIAGNOSTICS"
+match = { vid = "0483", pid = "5740", serial = "28B3A25D" }
+expect = { count = 4 }
+
+[[slot]]
+name = "Near camera"
+driver = "intel_rgbd.diagnostics:DIAGNOSTICS"
+match = { vid = "8086", pid = "0b5b", serial = "130523071221" }
+expect = { link = "USB 3.2 Gen 1" }
+
+[[slot]]
+name = "Far camera"
+driver = "intel_rgbd.diagnostics:DIAGNOSTICS"
+match = { vid = "8086", pid = "0b5b", serial = "219323070276" }
+expect = { link = "USB 3.2 Gen 1" }
+
+# Adding the OBSBOT: its driver's diagnostics.py, plus these 4 lines.
+[[slot]]
+name = "Cell monitor PTZ"
+driver = "obsbot_ptz_camera.diagnostics:DIAGNOSTICS"
+match = { vid = "3564" }

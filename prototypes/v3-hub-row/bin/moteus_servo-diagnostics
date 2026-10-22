@@ -1,0 +1,7 @@
+#!/usr/bin/python3
+# Stand-in for the console script an install creates from the driver's [project.scripts].
+import sys
+sys.path[:0] = ['/home/bam/io-diagnostics', '/home/bam/io-diagnostics/drivers_proposed/moteus_servo/src']
+from moteus_servo.diagnostics import DIAGNOSTICS
+from contract.cli import run
+raise SystemExit(run(DIAGNOSTICS))

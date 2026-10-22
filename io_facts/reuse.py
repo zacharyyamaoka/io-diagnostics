@@ -30,6 +30,20 @@ class Imported:
 
 
 def _import_from(module: str, attribute: str, search_paths: list[Path]) -> Imported:
+    # WHY set aside same-named packages: a proposed driver module on sys.path (a moteus_servo
+    # namespace package holding only diagnostics.py) would shadow the real moteus_servo that
+    # config_probe imports; the gate would then say "unknown" for every adapter.
+    shadowed = {name: sys.modules.pop(name) for name in list(sys.modules)
+                if name.split(".")[0] in ("moteus_servo", "bam_rack_twin")}
+    try:
+        return _import_first(module, attribute, search_paths)
+    finally:
+        for name in [name for name in sys.modules if name.split(".")[0] in ("moteus_servo", "bam_rack_twin")]:
+            sys.modules.pop(name, None)
+        sys.modules.update(shadowed)
+
+
+def _import_first(module: str, attribute: str, search_paths: list[Path]) -> Imported:
     for path in search_paths:
         if not path.is_dir():
             continue
@@ -49,6 +63,7 @@ def port_holders_function() -> Imported:
     """``config_probe.find_port_holders``: ``pid COMMAND`` of every process with the port open."""
 
     for root in (WORKTREE, MAIN):
+        # the real package must win over any proposed-driver namespace package already on sys.path
         sys.path.insert(0, str(root / MOTEUS_SRC))
         try:
             found = _import_from("config_probe", "find_port_holders", [root / MOTEUS_UTILS])

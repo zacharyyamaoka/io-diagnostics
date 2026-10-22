@@ -1,0 +1,6 @@
+{
+  "uuid": "sandbox-driver@io-diagnostics",
+  "name": "IO sandbox driver (test only)",
+  "description": "Turns on Shell Eval inside the throwaway Xvfb shell started by tools/sandbox.sh. Never installed in a real session.",
+  "shell-version": ["46"]
+}

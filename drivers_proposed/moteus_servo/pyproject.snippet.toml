@@ -1,0 +1,9 @@
+# Lines this driver's pyproject.toml gains (only the direction you pick needs its lines)
+
+# V3 hub row: the CLI the hub spawns
+[project.scripts]
+moteus_servo-diagnostics = "moteus_servo.diagnostics:main"
+
+# V4 registry: the entry point the registry discovers
+[project.entry-points."io_diagnostics.drivers"]
+moteus_servo = "moteus_servo.diagnostics:DIAGNOSTICS"

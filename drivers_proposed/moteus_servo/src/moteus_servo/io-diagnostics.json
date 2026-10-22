@@ -1,0 +1,12 @@
+{
+ "name": "moteus_servo",
+ "title": "moteus servo bus",
+ "usb": [
+  {
+   "vid": "0483",
+   "pid": "5740"
+  }
+ ],
+ "icon": "bus",
+ "entry": "moteus_servo.diagnostics:DIAGNOSTICS"
+}

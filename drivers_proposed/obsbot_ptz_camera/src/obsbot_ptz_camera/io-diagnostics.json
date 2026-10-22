@@ -1,0 +1,11 @@
+{
+ "name": "obsbot_ptz_camera",
+ "title": "OBSBOT PTZ camera",
+ "usb": [
+  {
+   "vid": "3564"
+  }
+ ],
+ "icon": "camera",
+ "entry": "obsbot_ptz_camera.diagnostics:DIAGNOSTICS"
+}

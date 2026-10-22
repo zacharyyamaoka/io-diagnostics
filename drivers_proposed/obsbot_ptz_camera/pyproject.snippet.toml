@@ -1,0 +1,9 @@
+# Lines this driver's pyproject.toml gains (only the direction you pick needs its lines)
+
+# V3 hub row: the CLI the hub spawns
+[project.scripts]
+obsbot_ptz_camera-diagnostics = "obsbot_ptz_camera.diagnostics:main"
+
+# V4 registry: the entry point the registry discovers
+[project.entry-points."io_diagnostics.drivers"]
+obsbot_ptz_camera = "obsbot_ptz_camera.diagnostics:DIAGNOSTICS"

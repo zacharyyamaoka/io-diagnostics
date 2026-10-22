@@ -1,0 +1,2 @@
+[io_diagnostics.drivers]
+obsbot_ptz_camera = obsbot_ptz_camera.diagnostics:DIAGNOSTICS

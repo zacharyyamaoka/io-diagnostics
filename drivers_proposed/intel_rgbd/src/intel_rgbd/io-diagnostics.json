@@ -1,0 +1,16 @@
+{
+ "name": "intel_rgbd",
+ "title": "RealSense camera",
+ "usb": [
+  {
+   "vid": "8086",
+   "pid": "0b5b"
+  },
+  {
+   "vid": "8086",
+   "pid": "0b07"
+  }
+ ],
+ "icon": "camera",
+ "entry": "intel_rgbd.diagnostics:DIAGNOSTICS"
+}

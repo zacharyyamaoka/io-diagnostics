@@ -21,15 +21,15 @@ def _fdcanusb_28b3() -> UsbDevice:
                      by_id=("/dev/serial/by-id/usb-mjbots_fdcanusb_28B3A25D-if00",), simulated=True)
 
 
-def _robotiq_ftdi() -> UsbDevice:
-    robotiq = fixture.scenario()["new_plugin_device"]
-    return UsbDevice(port=robotiq["port"], vid="0403", pid="6015", manufacturer="FTDI", product="USB <-> RS-485",
-                     serial=robotiq["serial"], speed_mbps=12, devnum=9, plugged_at="2026-10-21T18:13:05",
-                     ttys=("/dev/ttyUSB0",), by_id=(f"/dev/serial/by-id/usb-FTDI_USB_-_RS-485_{robotiq['serial']}-if00-port0",),
-                     simulated=True)
+def _obsbot() -> UsbDevice:
+    """The worked "add a device type" example (A2): its driver exists, the camera is not plugged in."""
+
+    return UsbDevice(port="7-1.2", vid="3564", pid="fef4", manufacturer="Remo Tech Co., Ltd.", product="OBSBOT Tiny 4K",
+                     serial="RMOWAFCB3A2", speed_mbps=480, devnum=10, plugged_at="2026-10-21T19:02:10",
+                     video_nodes=("/dev/video12", "/dev/video13"), simulated=True, extra={"bcd_device": "1.00"})
 
 
-def demo_devices(include_robotiq: bool = True) -> list[UsbDevice]:
+def demo_devices(include_robotiq: bool = False, include_obsbot: bool = True, include_28b3: bool = True) -> list[UsbDevice]:
     scenario = fixture.scenario()
     devices = []
     for device in list_usb_devices():
@@ -39,18 +39,15 @@ def demo_devices(include_robotiq: bool = True) -> list[UsbDevice]:
         if camera:
             device = dataclasses.replace(device, extra={"sdk_serial": camera["sdk_serial"]})
         devices.append(device)
-    if not any(device.serial == "28B3A25D" for device in devices):
+    if include_28b3 and not any(device.serial == "28B3A25D" for device in devices):
         devices.append(_fdcanusb_28b3())
-    if include_robotiq:
-        devices.append(_robotiq_ftdi())
+    if include_obsbot:
+        devices.append(_obsbot())
     return sorted(devices, key=lambda device: device.port)
 
 
 def known_state() -> dict[str, dict]:
-    """``{usb serial: last known state}``: adapters, cameras and the Robotiq, from the fixture."""
+    """``{usb serial: last known state}``: adapters and cameras, from the fixture."""
 
     scenario = fixture.scenario()
-    known = {**scenario["adapters"], **scenario["cameras"]}
-    robotiq = scenario["new_plugin_device"]
-    known[robotiq["serial"]] = {"modbus_ids": robotiq["ids"], "source": robotiq["source"]}
-    return known
+    return {**scenario["adapters"], **scenario["cameras"]}

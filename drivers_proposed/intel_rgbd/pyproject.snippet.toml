@@ -1,0 +1,9 @@
+# Lines this driver's pyproject.toml gains (only the direction you pick needs its lines)
+
+# V3 hub row: the CLI the hub spawns
+[project.scripts]
+intel_rgbd-diagnostics = "intel_rgbd.diagnostics:main"
+
+# V4 registry: the entry point the registry discovers
+[project.entry-points."io_diagnostics.drivers"]
+intel_rgbd = "intel_rgbd.diagnostics:DIAGNOSTICS"

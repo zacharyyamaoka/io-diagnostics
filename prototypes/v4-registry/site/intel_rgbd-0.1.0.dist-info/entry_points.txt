@@ -1,0 +1,2 @@
+[io_diagnostics.drivers]
+intel_rgbd = intel_rgbd.diagnostics:DIAGNOSTICS
