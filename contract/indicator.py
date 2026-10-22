@@ -81,7 +81,11 @@ class Indicator:
     def _item(self, spec: dict) -> Gtk.MenuItem:
         if spec.get("sep"):
             return Gtk.SeparatorMenuItem()
-        item = Gtk.MenuItem(label=spec["text"])
+        # WHY a leading "_" mnemonic: ubuntu-appindicators unescapes labels with a NON-global
+        # label.replace(/_([^_])/, '$1') (dbusMenu.js:723, GNOME 46), so a plain label showed
+        # "rotor_to__output__ratio" (measured). A leading mnemonic absorbs that one replace and the
+        # authored text, underscores included, renders exactly as written.
+        item = Gtk.MenuItem.new_with_mnemonic("_" + spec["text"])
         item.set_sensitive(spec.get("enabled", bool(spec.get("action") or spec.get("children"))))
         if spec.get("children"):
             submenu = Gtk.Menu()
