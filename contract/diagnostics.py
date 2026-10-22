@@ -45,6 +45,25 @@ class UsbMatch:
         return device.vid == self.vid and (not self.pid or device.pid == self.pid)
 
 
+@dataclass(frozen=True)
+class Action:
+    """A utility the DRIVER registers (printer-driver style); the host only shows it and the driver runs it.
+
+    ``preconditions`` are ``(check, text)`` pairs from a small vocabulary the host can evaluate
+    passively: ``port_free``, ``bus_lock_free``, ``camera_free``, ``board_answers``, ``update_available``.
+    ``confirm`` may use ``{name}``, ``{id}``, ``{serial}``, ``{latest}``, filled in by the host.
+    """
+
+    name: str  # "run_comms_check", "clear_faults", "reset", "update_firmware", "identify"
+    title: str  # the button label
+    description: str
+    danger: str  # "query" (reads only) / "interrupts" (drops the device for a moment) / "changes" (writes state)
+    scope: str  # "device" (the USB device) or "node" (one board on its bus)
+    confirm: str
+    preconditions: tuple[tuple[str, str], ...] = ()
+    kind: str = CHANGES
+
+
 @runtime_checkable
 class DeviceDiagnostics(Protocol):
     """Implemented by ``<driver package>/diagnostics.py``. Five reads and one confirmed action."""
@@ -64,6 +83,8 @@ class DeviceDiagnostics(Protocol):
     def reset(self, device, *, confirm: bool) -> Reading: ...  # the only state change in scope
 
     def nodes(self, device) -> list[str]: ...  # device nodes the gate checks for holders
+
+    # optional: ``actions: tuple[Action, ...]``; a button exists only if its driver registered it
 
 
 @dataclass

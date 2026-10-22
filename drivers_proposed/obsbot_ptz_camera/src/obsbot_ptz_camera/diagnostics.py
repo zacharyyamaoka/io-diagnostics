@@ -21,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 
-from contract.diagnostics import CHANGES, PASSIVE, TOUCHES, Reading, UsbMatch  # noqa: E402
+from contract.diagnostics import CHANGES, PASSIVE, TOUCHES, Action, Reading, UsbMatch  # noqa: E402
 
 READ_ONLY_CONTROLS = ("brightness", "contrast", "saturation", "sharpness", "white_balance_automatic", "auto_exposure", "focus_automatic_continuous")
 
@@ -31,6 +31,12 @@ class ObsbotDiagnostics:
     matches = (UsbMatch("3564"),)
     kinds = {"identity": PASSIVE, "versions": PASSIVE, "config": TOUCHES, "comms": PASSIVE, "reset": CHANGES}
     camera = False
+    actions = (
+        Action("run_comms_check", "Check control latency", "Round-trip a read of one UVC control; control ioctls do not "
+               "contend with a video stream.", "query", "device", "Read one control on {name} and time the round trip.", (), TOUCHES),
+        Action("reset", "Reset image controls…", "ImageControls.neutral(): image controls only, never pan, tilt or zoom.",
+               "changes", "device", "Reset brightness, contrast, white balance and exposure on {name} to neutral? Pan, tilt and zoom are untouched."),
+    )
 
     def nodes(self, device) -> list[str]:
         return list(device.video_nodes)

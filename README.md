@@ -14,6 +14,7 @@ The comparison: `reports/io-diagnostics-babble-2026-10-21.html` (rebuild: `docs/
 | `contract/` | `DeviceDiagnostics` protocol, host-owned gate, confirmed+gated reset, generic views, menus, AppIndicator renderer |
 | `drivers_proposed/` | The `diagnostics.py` each driver would gain (copies; bam_ws untouched) + per-direction binding files |
 | `prototypes/v1..v5` | Quick Settings extension · Plug Journal tray · Hub row · Registry contract · Station board |
+| `prototypes/v6-converged` | The converged layout (`docs/converged-design-2026-10-22.md`): entity tree + detail, table mode, activity log, top-bar chip; `dashboard.py` serves it (stdlib), `shoot.js` takes the proof shots |
 | `tools/sandbox.sh` | Throwaway GNOME Shell 46 on Xvfb (scratch HOME, keyfile settings, private D-Bus) for real renders |
 
 Nothing here opens a CAN adapter or camera: every device-touching call is gated and, this round, disabled.

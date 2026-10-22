@@ -21,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 
-from contract.diagnostics import CHANGES, PASSIVE, TOUCHES, Reading, UsbMatch  # noqa: E402
+from contract.diagnostics import CHANGES, PASSIVE, TOUCHES, Action, Reading, UsbMatch  # noqa: E402
 
 DRIVER_PYPROJECT = Path("/home/bam/bam_ws/.claude/worktrees/traj-sim2real-rack/src/core/mdp/agent/sensors/intel_rgbd/pyproject.toml")
 USB_GENERATION = {480: "USB 2", 5000: "USB 3.2 Gen 1", 10000: "USB 3.2 Gen 2"}
@@ -32,6 +32,19 @@ class RealSenseDiagnostics:
     matches = (UsbMatch("8086", "0b5b"), UsbMatch("8086", "0b07"))  # D405, D435
     kinds = {"identity": PASSIVE, "versions": TOUCHES, "config": TOUCHES, "comms": PASSIVE, "reset": CHANGES}
     camera = True
+    _free = (("camera_free", "No other process streams this camera (camera_holders)"),)
+    actions = (
+        Action("run_comms_check", "Run frame check", "Stream 2 s of depth + colour and compare the frame rate with "
+               "the profile's 30 Hz; reads the USB descriptor type.", "query", "device",
+               "Stream 2 s from {name} and measure frame rate. Opening a camera another process streams would kill that stream.",
+               _free, TOUCHES),
+        Action("reset", "Hardware reset…", "RealSenseCamera.hardware_reset(): the camera re-enumerates and EVERY option "
+               "reverts to its default (per the driver README).", "interrupts", "device",
+               "Hardware-reset {name}? It drops off USB for about 3 s and every option returns to default.", _free),
+        Action("update_firmware", "Update firmware…", "Flash the recommended firmware (camera_info.recommended_firmware_version).",
+               "changes", "device", "Flash firmware {latest} onto {name}? Takes about 1 min; do not unplug.",
+               (("update_available", "Recommended firmware is newer than installed"),) + _free),
+    )
 
     def nodes(self, device) -> list[str]:
         return list(device.video_nodes)

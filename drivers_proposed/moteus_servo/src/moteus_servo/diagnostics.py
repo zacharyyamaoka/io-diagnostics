@@ -25,7 +25,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[4]))  # io-diagnostics root (prototype only)
 
-from contract.diagnostics import CHANGES, PASSIVE, TOUCHES, Reading, UsbMatch  # noqa: E402
+from contract.diagnostics import CHANGES, PASSIVE, TOUCHES, Action, Reading, UsbMatch  # noqa: E402
 
 # WHY absolute, not Path.home(): sandboxes and services run with another HOME but read the same flash records.
 FIRMWARE_CACHE = Path("/home/bam/.cache/moteus-firmware")
@@ -61,11 +61,32 @@ def flash_records() -> dict[int, dict]:
     return newest
 
 
+_PORT = (("port_free", "No other process has the adapter open (find_port_holders)"),
+         ("bus_lock_free", "Rack bus lock free (no experiment running)"))
+
+
 class MoteusDiagnostics:
     name = "moteus_servo"
     matches = (UsbMatch("0483", "5740"),)
     kinds = {"identity": PASSIVE, "versions": PASSIVE, "config": TOUCHES, "comms": TOUCHES, "reset": CHANGES}
     uses_rack_lock = True
+    # WHY no "identify": moteus has no blink/LED command; a button exists only for what the board can do.
+    actions = (
+        Action("run_comms_check", "Run comms check", "Addressed id scan 1-126 (moteus_find_ids) + bus health and reply "
+               "latency (can_bus_triage). Query-only: no board changes mode.", "query", "device",
+               "Query ids 1-126 on {name} and read bus health. No board changes mode; takes about 4 s.", _PORT, TOUCHES),
+        Action("clear_faults", "Clear faults", "Send stop (mode 0); moteus clears a latched fault on stop.", "changes", "node",
+               "Send stop to CAN {id}. A latched fault clears; the motor stays unpowered.",
+               _PORT + (("board_answers", "CAN {id} answers on the bus"),)),
+        Action("reset", "Reset board…", "Sends d reboot: the board restarts and is back on the bus in about 1 s.", "interrupts", "node",
+               "Reboot CAN {id}? It drops off the bus for about 1 s; any session using it fails.",
+               _PORT + (("board_answers", "CAN {id} answers on the bus"),)),
+        Action("update_firmware", "Update firmware…", "Flash the latest stable moteus firmware with config backup, "
+               "restore and checksum (the update-moteus-firmware flow).", "changes", "node",
+               "Flash moteus firmware {latest} onto CAN {id} ({serial})? Config is backed up and restored; the board reboots.",
+               (("update_available", "A newer release is in the firmware cache"),) + _PORT
+               + (("board_answers", "CAN {id} answers on the bus"),)),
+    )
 
     def nodes(self, device) -> list[str]:
         return list(device.by_id or device.ttys)
