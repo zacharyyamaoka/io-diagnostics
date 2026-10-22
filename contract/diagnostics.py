@@ -19,9 +19,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from io_facts import gate  # noqa: E402
 
-PASSIVE = "passive"  # sysfs / by-id / files: safe while an experiment runs
-TOUCHES = "touches"  # talks to the device: only through the gate, query-only
-CHANGES = "changes"  # reset / config write: explicit, per device, confirmed, AND gated
+# WHY re-exported, not defined here: Action and the gate classes are part of the diagnostics record standard
+# (docs/diagnostics-record-v0.md), so there is one definition; drivers keep importing them from this module.
+from contract.record import CHANGES, PASSIVE, TOUCHES, Action  # noqa: E402,F401
 
 
 @dataclass
@@ -43,25 +43,6 @@ class UsbMatch:
 
     def accepts(self, device) -> bool:
         return device.vid == self.vid and (not self.pid or device.pid == self.pid)
-
-
-@dataclass(frozen=True)
-class Action:
-    """A utility the DRIVER registers (printer-driver style); the host only shows it and the driver runs it.
-
-    ``preconditions`` are ``(check, text)`` pairs from a small vocabulary the host can evaluate
-    passively: ``port_free``, ``bus_lock_free``, ``camera_free``, ``board_answers``, ``update_available``.
-    ``confirm`` may use ``{name}``, ``{id}``, ``{serial}``, ``{latest}``, filled in by the host.
-    """
-
-    name: str  # "run_comms_check", "clear_faults", "reset", "update_firmware", "identify"
-    title: str  # the button label
-    description: str
-    danger: str  # "query" (reads only) / "interrupts" (drops the device for a moment) / "changes" (writes state)
-    scope: str  # "device" (the USB device) or "node" (one board on its bus)
-    confirm: str
-    preconditions: tuple[tuple[str, str], ...] = ()
-    kind: str = CHANGES
 
 
 @runtime_checkable
