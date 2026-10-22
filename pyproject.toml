@@ -1,0 +1,14 @@
+[project]
+name = "io-diagnostics"
+version = "0.0.1"
+description = "Babble round 1: five top-bar directions for a sensor/actuator IO registry (prototype only)"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest>=8"]
+# V4 (registry contract) uses pytest's own plugin manager, pluggy, as its stock plugin system.
+v4 = ["pluggy>=1.5"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
