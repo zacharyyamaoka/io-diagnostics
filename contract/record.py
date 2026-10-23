@@ -98,7 +98,14 @@ STANDARD_ACTIONS = {
     "stop_all": "Stop all",
     "set_id": "Change CAN id…",
     "open_console": "Open console",
+    "identify": "Identify",
 }
+# WHY: "Identify" means one thing on every driver (show which physical thing this row is, harmlessly), but how it
+# shows itself is the driver's, and the person should read it before pressing: a motor wiggles, a camera takes a
+# snapshot. So these names keep their label and may add the way in brackets: "Identify (wiggle)". Every other
+# standard name must carry its label exactly.
+QUALIFIED_ACTIONS = frozenset({"identify"})
+_QUALIFIER = re.compile(r"^ \([a-z][a-z ]*\)$")
 
 # PascalCase, optionally qualified ("MoteusFault.33"): K8s reason / Redfish MessageKey style, at most 64 chars
 # (ros2_medkit's limit for fault codes, which maps 1:1 to its UPPER_SNAKE).
@@ -499,7 +506,14 @@ def validate(record) -> list[str]:
             problems.append(f"{where}: danger {record.danger!r} must be one of {DANGERS}")
         label = STANDARD_ACTIONS.get(record.name)
         if label is not None and record.title != label:
-            problems.append(f"{where}: a standard action's title must be its label {label!r}, got {record.title!r}")
+            qualified = (
+                record.name in QUALIFIED_ACTIONS
+                and record.title.startswith(label)
+                and _QUALIFIER.match(record.title[len(label):]) is not None
+            )
+            if not qualified:
+                how = f" (or the label plus the way in brackets, like '{label} (wiggle)')" if record.name in QUALIFIED_ACTIONS else ""
+                problems.append(f"{where}: a standard action's title must be its label {label!r}{how}, got {record.title!r}")
         if record.kind not in (PASSIVE, TOUCHES, CHANGES):
             problems.append(f"{where}: kind {record.kind!r} must be passive, touches or changes")
     else:
@@ -902,7 +916,7 @@ class FaultManager:
 
 
 __all__ = [
-    "SCHEMA", "RECORD_VERSION", "CAUSED_BY_KEY", "CAUSED_BY_SEPARATOR", "STANDARD_ACTIONS", "UNKNOWN", "OK", "WARN", "ERROR", "STALE", "LEVELS", "RANK", "ROS_LEVEL", "FROM_ROS_LEVEL", "MODES",
+    "SCHEMA", "RECORD_VERSION", "CAUSED_BY_KEY", "CAUSED_BY_SEPARATOR", "STANDARD_ACTIONS", "QUALIFIED_ACTIONS", "UNKNOWN", "OK", "WARN", "ERROR", "STALE", "LEVELS", "RANK", "ROS_LEVEL", "FROM_ROS_LEVEL", "MODES",
     "STALE_FACTOR", "STALE_FLOOR_S", "EVENT_SEVERITIES", "PENDING", "CONFIRMED", "HEALED", "CLEARED",
     "FAULT_STATUSES", "IDENTITY_KEYS", "PASSIVE", "TOUCHES", "CHANGES", "DANGERS",
     "KeyValue", "Measurement", "DiagnosticStatus", "Action", "Entity", "Event", "Fault",

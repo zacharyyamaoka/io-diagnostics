@@ -18,6 +18,7 @@ command = [
   "--bus-lock", "/home/bam/.cache/rack-commissioning/bus.lock",
   "--expected-period", "300",
   "--loaded-ids", "1",
+  "--deployment-record", "/home/bam/bam_ws/.claude/worktrees/traj-sim2real-rack/src/dev/bam_rack_twin/records/one-dof-test-rack/deployment.json",
   "--moteus-tool", "/home/bam/.local/bin/moteus_tool",
 ]
 diagnose_args = ["--passive"]

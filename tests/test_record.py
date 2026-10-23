@@ -414,7 +414,17 @@ def test_a_standard_name_must_carry_its_label_and_any_danger():
     assert validate(Action("calibrate", "Run calibration…", "", "changes", "device", "")) == []  # danger is per driver
     [problem] = validate(Action("reboot", "Reset…", "", "interrupts", "node", ""))
     assert "title must be its label 'Reboot…'" in problem
-    assert validate(Action("identify", "Blink the LED", "", "query", "node", "")) == []  # non-standard: any title
+    assert validate(Action("blink_led", "Blink the LED", "", "query", "node", "")) == []  # non-standard: any title
+
+
+def test_identify_may_carry_its_way_in_brackets_and_no_other_standard_name_may():
+    for title in ("Identify", "Identify (wiggle)", "Identify (snapshot)", "Identify (blink)"):
+        assert validate(Action("identify", title, "", "moves", "node", "")) == [], title
+    for title in ("Identify…", "Identify(wiggle)", "Identify (Wiggle)", "Identify yourself", "Identify ()", "Blink"):
+        [problem] = validate(Action("identify", title, "", "moves", "node", ""))
+        assert "title must be its label 'Identify'" in problem and "(wiggle)" in problem, title
+    [problem] = validate(Action("reboot", "Reboot (soft)", "", "interrupts", "node", ""))  # only identify is qualified
+    assert "title must be its label 'Reboot…'" in problem
 
 
 def test_stock_round_trip_is_still_the_identity_beside_v0_1_records():

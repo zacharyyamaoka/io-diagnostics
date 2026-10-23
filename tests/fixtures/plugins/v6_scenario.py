@@ -47,7 +47,8 @@ def plan(action: str, serial: str, node: int | None, camera: bool, new_id: int |
         sdk = {"check_comms": "rs.context().query_devices() + camera_info (no stream)",
                "check_firmware": "camera_info: firmware_version, recommended_firmware_version",
                "calibrate": "auto_calibrated_device.run_on_chip_calibration()",
-               "reset": "RealSenseCamera.hardware_reset()"}
+               "reset": "RealSenseCamera.hardware_reset()",
+               "identify": "pipeline.start (one colour stream), keep the 16th frame, save a JPEG under ~/.cache/robotdx/identify/"}
         if action == "update_firmware":
             return [{"purpose": "flash the recommended image", "runs": "subprocess",
                      "argv": ["rs-fw-update", "-s", serial, "-f", "~/.cache/intel_rgbd/firmware/Signed_Image_UVC_5_16_0_1.bin"]}]
@@ -79,6 +80,17 @@ def plan(action: str, serial: str, node: int | None, camera: bool, new_id: int |
         "reset": [{"purpose": f"query CAN {node}, then d reset", "runs": "in-process", "argv": [], "sends": ["query", "d reset"]}],
         "set_id": [{"purpose": f"5 UUID reads of CAN {node}, one query of the new id, then reassign", "runs": "subprocess",
                     "argv": ["python3", "utils/moteus_reassign_id.py", "--target", target, "--new", str(new_id)]}],
+        "identify": ([{"purpose": f"query: CAN {node} answers, mode 0, no fault", "runs": "in-process", "argv": [], "sends": ["query frame"]},
+                      {"purpose": "config interlock: read the safety keys back, compare with the deployment record and check the ratio",
+                       "runs": "in-process", "argv": [], "sends": ["tel stop", "conf get (read-only)"]},
+                      {"purpose": "wiggle, aborting on a fault, a limiter code, a lost reply, overspeed or travel", "runs": "in-process", "argv": [],
+                       "sends": ["set_position about the start: +-5 degrees at the joint output, 3 cycles at 1 Hz, 50 commands/s",
+                                 "maximum_torque <= 0.5 N.m at the joint, velocity_limit <= 0.25 rev/s, watchdog_timeout 0.25 s",
+                                 "stop (mode 0), always, whatever ends the wiggle"]}]
+                     if node is not None else
+                     [{"purpose": "find the boards: addressed scan of ids 1-32 and the expected ids (1,14,15)", "runs": "in-process", "argv": [],
+                       "sends": ["query frames, one id per transaction"]},
+                      {"purpose": "then each board that answers, in CAN-id order, 1.5 s apart: query, config interlock, wiggle, stop", "runs": "in-process", "argv": []}]),
         "stop_all": [{"purpose": "scan ids 1-32 and the expected ids, then stop every board that answers", "runs": "subprocess",
                       "argv": ["python3", "utils/moteus_with_targets.py", tool, "-t", "1,14,15", "--stop"]}],
         "open_console": [{"purpose": "open tview on the boards that answer, detached", "runs": "detached",
@@ -128,7 +140,7 @@ def act(args, frame: dict, now: float) -> int:
              hardware_id=device.get("hardware_id", ""), node=args.node, danger=action.get("danger"), scope=action.get("scope"),
              command_kind="argv", command=command, steps=steps,
              preconditions=[{"check": check, "text": string.Formatter().vformat(text, (), fill),
-                             "state": "the person confirms it" if check in ("joint_free", "target_in_view") else "fixture: as recorded"}
+                             "state": "the person confirms it" if check in ("joint_free", "joint_clear", "joints_clear", "target_in_view") else "fixture: as recorded"}
                             for check, text in action.get("preconditions") or []],
              confirm=confirm, token=token, token_state="valid" if valid else ("wrong" if args.confirm else "missing"),
              message=f"dry run (fixture {args.frame}): {action.get('title')} would run {' '.join(command) or 'in-process'}; nothing ran")

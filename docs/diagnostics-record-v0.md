@@ -435,8 +435,10 @@ how a reader tells.
     driver: the same standard name can be `query` on one device and `moves` on another.
   - `STANDARD_ACTIONS`: the standard action names → the host's label, as data (`check_comms` "Check
     communication", `check_firmware`, `update_firmware`, `calibrate`, `update_config`, `clear_faults`, `reboot`,
-    `stop_all`, `set_id`, `open_console`). `validate(Action)` flags a standard name whose `title` differs from its
-    label. A non-standard name is allowed and is not checked.
+    `stop_all`, `set_id`, `open_console`, `identify`). `validate(Action)` flags a standard name whose `title`
+    differs from its label. A non-standard name is allowed and is not checked.
+  - `QUALIFIED_ACTIONS` (`identify`): a name in it may add the way in brackets to its label ("Identify (wiggle)",
+    "Identify (snapshot)"); the validator accepts the label or the label plus one lower-case bracket.
 - **How v0.1 is signalled: the schema string does not change.**
   - Every line still says `"schema": "diagnostics-record/0"`. Rule 8 already allows a new string enum value under
     the same number, and v0.1 adds only values (one identity key, one danger) and a table.
