@@ -45,6 +45,15 @@ keeps ONE `<cmd> follow --device <id> [diagnose_args]` per matched device alive 
 - **Stop:** the host kills the process group (SIGKILL) on stop or when the device leaves; a follower must hold
   nothing that needs a clean exit. `plugins/computer` follows at 1 Hz (docs/api-v1.md `/api/v1/plugins` → `follow`).
 
+**`probe`, an optional on-connect verb (additive, 2026-10-23; Zach: "each device tells diagnostics what to do").** A
+plugin may declare in `describe` `"probe": {"timeout_s": 30}` (or `true`). The host's service then runs
+`<cmd> probe --device <id> [diagnose_args]` once per connection (first match, host start, re-enumeration) in place of
+that connection's first diagnose, starts the periodic diagnose / follow `period_s` after it, and runs it again when it
+ended blocked (`PortBusy` / `BusLockHeld`): ~1 s after the last holder pid exits, plus a 10/20/40 s backoff capped at
+`period_s`, inside the `exclusive` queue. The driver says what it found in its own `Found` / `Probed` / `ProbeBlocked`
+events; the host derives none. The contract, with the standard codes and the safety rule (query-only): `docs/probe-on-connect.md`;
+the host side: `io_diagnostics/probe.py`, `Host._probed`, `tests/test_probe.py`.
+
 ## Lanes (disjoint write sets)
 - A **UI polish** — io_diagnostics/web/* (moved from prototypes/v6-converged/web) per decision 3; screenshots.
 - B **Discovery sources** — io_facts/{pci,netdev,tty,v4l}.py + tests with sysfs fixtures; merge into the tree as

@@ -328,7 +328,7 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
   | `level` | `LevelChanged`: "<check>: ok → error (Code: message)", stale included | the history store (each status's effective level) | `status`, `from`, `to`, `status_code` |
   | `fault` | `FaultConfirmed`, `FaultHealed`, `FaultCleared` | the host's `FaultManager` | `fault`, `occurrence` |
   | `boot` | `Booted`, `ShutDown` | the kernel log, `journalctl --list-boots` | `devices` |
-  | `plugin` | anything a plugin sends, e.g. `NoAck`, `PortHeld` | the plugin | as sent |
+  | `plugin` | anything a plugin sends, e.g. `NoAck`, `PortHeld`, and a probing driver's `Found`, `Probed`, `ProbeBlocked` (docs/probe-on-connect.md) | the plugin | as sent |
 
 - `id` is the event's **stable** id; `provisional` is `true` while only udev has said it. A plug is
   `usb:<port>:<devnum>:add`, an unplug `...:remove` (the kernel's device number, which udev reports as `DEVNUM`), so
@@ -424,6 +424,28 @@ plugins and across one plugin's devices; a due job whose group is busy waits its
 never failed for it. Both rack drivers declare `"rack-bus"`, because each takes the rack bus lock with
 `flock LOCK_NB` and would otherwise fail its sibling with `BusLockHeld`. `next_due_s` stays `0.0` while a job waits
 for its group.
+
+**The on-connect probe** (additive, 2026-10-23; contract: `docs/probe-on-connect.md`): a plugin whose `describe` has
+`"probe": {"timeout_s": 30}` (or `true` = its own `timeout_s`) gets `<command> probe --device <id> [diagnose_args]`
+ONCE PER CONNECTION in place of that connection's first diagnose: when its device is first matched (plugged in, or
+present when the host starts) and again when its kernel device number changes (re-enumeration). The periodic diagnose
+(`period_s`) or follow starts `period_s` (follow: its period) after the probe; **a probe never runs on the period**. A
+plugin without `probe` keeps diagnose-on-connect. The probe's records are applied exactly like diagnose's; its `last_run`
+and `outcome` are the same, and it honours `exclusive`. The host derives NO device-specific event (no found / lost from
+diffing entities): the driver writes its own `Found` / `Probed` / `ProbeBlocked` events, and they appear in
+`/api/v1/activity` as they are, `type` `plugin`, `source` the plugin's name when the event names none.
+- The device row's `<plugin>: plugin run` check reads `probed 15:12:31 · 3.1 s` (OK), or while blocked UNKNOWN with the
+  holder's code (`PortBusy` / `BusLockHeld`) and the driver's `ProbeBlocked` sentence (the host words it itself,
+  "tview has the port (pid 78183) · RobotDx probes again when it closes", when the driver sent none), plus the value
+  `blocked_by`.
+- **Blocked** = a status of the probe's records with code `PortBusy` or `BusLockHeld`. Its holders are read from the
+  status's `port_holders` / `holders` / `lock_holders` value, else from the sentence after "held by", as `"pid program"`
+  entries separated by ", " (the program name is derived from `/proc/<pid>/cmdline` when the plugin says only `python3`).
+  The host then probes again **0.5 s after the last holder pid has exited** (it reads `/proc/<pid>/stat` about once a
+  second, no subprocess; a zombie or a reused pid counts as gone: measured 1.0-1.3 s from exit to the probe starting) and,
+  for holders it cannot watch, on a backoff of 10, 20, 40 s ... never beyond `period_s`. A blocked probe never turns into
+  the periodic diagnose; a probe that crashed or timed out is not repeated (its row says so, and the periodic diagnose
+  goes on).
 
 **Monitoring Plugins checks** (`kind` `"check"`, round 3: "CLI as the seam"; plugins.d/README.md "Checks"): any
 command speaking the Monitoring Plugins API is a diagnostic, no code needed. It has no `matches`; `attach` names its

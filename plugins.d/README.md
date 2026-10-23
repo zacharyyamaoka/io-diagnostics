@@ -71,7 +71,18 @@ host, the host adds its own `USB/PCIe links` line there.
 <command> describe                                → one JSON object: {name, version, schema, matches, actions[, record_version, expected]}
 <command> diagnose --device <id>                  → JSON lines, one contract.record v0 record each
 <command> act --device <id> --action <n> [--node N] [--confirm <token>] [--dry-run]   → JSON lines (the result)
+<command> probe --device <id>                     → optional; the same JSON lines, once per connection (below)
 ```
+
+**`probe` (optional).** A driver that declares `"probe": {"timeout_s": 30}` (or `true`) in `describe` is probed ONCE per
+connection, in place of that connection's first `diagnose`: when it is plugged in (or present at host start) and on every
+re-enumeration. The periodic `diagnose` (or `follow`) starts `period_s` after the probe; a probe never runs on the period.
+It prints what `diagnose` prints, plus the driver's OWN events, `Found` (a sub-device answered), `Probed` (one summary,
+last) and `ProbeBlocked` (it could not talk to the device); the host adds no event about a device itself. A probe that ends
+with a `PortBusy` / `BusLockHeld` status carrying its holders as `"pid program"` is run again ~1 s after the last holder
+exits (and on a 10/20/40 s backoff capped at `period_s`), inside the `exclusive` queue. A probe is query-only (danger
+`query`) and bounded by its `timeout_s`. A plugin without `probe` keeps diagnose-on-connect. Contract:
+`docs/probe-on-connect.md`.
 
 `act` runs only through `io-diagnostics act --path <entity path> --action <n> [--node N] [--confirm T] [--dry-run]`,
 never on a schedule and never over HTTP in v1. The host refuses everything but `--dry-run` when stdin is not a TTY

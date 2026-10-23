@@ -24,6 +24,7 @@ from io_diagnostics import API, FIXTURE_PLUGINS_DIR, PLUGINS_DIR
 from io_diagnostics import activity as activity_module
 from io_diagnostics import expected as expected_module
 from io_diagnostics import history as history_module
+from io_diagnostics import probe as probe_module
 from io_diagnostics import settings as settings_module
 from io_diagnostics import tree
 from io_diagnostics.faults import Faults
@@ -32,7 +33,7 @@ from io_diagnostics.runner import (RUNNER_SOURCE, RUNNING, Follower, Gates, Job,
                                    describe, follow_period, follow_status, host_status, rebase, run_act, run_check,
                                    run_plugin)
 
-from contract.record import (OK, RANK, RECORD_VERSION, SCHEMA, STALE, STALE_FACTOR, STALE_FLOOR_S, WARN, Action,
+from contract.record import (OK, RANK, RECORD_VERSION, SCHEMA, STALE, STALE_FACTOR, STALE_FLOOR_S, UNKNOWN, WARN, Action,
                              DiagnosticStatus, Entity, Event, KeyValue, Measurement, effective_level, from_dict, to_dict)
 
 HOST_SOURCE = "io_diagnostics.host"
@@ -379,8 +380,15 @@ class Host:
     def __init__(self, *, plugins_dir: Path = PLUGINS_DIR, clock: Clock | None = None, os_source=None,
                  fixture: dict | None = None, plugin_env: dict[str, str] | None = None, enable: tuple[str, ...] = (),
                  state_file: Path | None = None, expected_file: Path | None = None, settings_file: Path | None = None,
-                 history_window_s: float | None = None, follow_backoff_s: tuple[float, float] | None = None):
+                 history_window_s: float | None = None, follow_backoff_s: tuple[float, float] | None = None,
+                 recheck_poll_s: float | None = None, recheck_settle_s: float | None = None,
+                 recheck_backoff_s: float | None = None):
         self.plugins_dir = Path(plugins_dir)
+        # WHY settable: the defaults are the product (probe.py: holders' pids every 1 s, 0.5 s settle, 10 s first
+        # backoff); a test of the backoff alone shortens the last
+        self.recheck_poll_s = recheck_poll_s if recheck_poll_s is not None else probe_module.POLL_S
+        self.recheck_settle_s = recheck_settle_s if recheck_settle_s is not None else probe_module.SETTLE_S
+        self.recheck_backoff_s = recheck_backoff_s if recheck_backoff_s is not None else probe_module.BACKOFF_FIRST_S
         self.follow_backoff_s = follow_backoff_s  # None: runner.FOLLOW_BACKOFF_S (tests make it short)
         self.clock = clock or Clock()
         self.os = os_source or LiveOs()
@@ -501,6 +509,10 @@ class Host:
                 key = (spec.name, str(device.get("id")))
                 job = self.jobs.get(key) or Job(spec, device, layer.device_paths[str(device.get("id"))])
                 job.device, job.device_path = device, layer.device_paths[str(device.get("id"))]
+                devnum = (device.get("attrs") or {}).get("devnum")
+                if job.connection is not None and devnum is not None and devnum != job.connection:
+                    job.probed, job.blocked, job.next_due = False, None, 0.0  # unplugged and back between two refreshes
+                job.connection = devnum if devnum is not None else job.connection
                 wanted[key] = job
             gone = [key for key in self.jobs if key not in wanted]
             self.jobs = wanted
@@ -707,20 +719,25 @@ class Host:
             return self._run_check(job)
         with self.lock:
             entity = self.layer.entities.get(job.device_path)
+        timeout_s = self._probe_timeout(job)
+        probing = timeout_s is not None and not job.probed  # the connection's first run is its probe, in place of a diagnose
         outcome = run_plugin(job.spec, job.device, job.device_path, self.clock.now, self._job_env(job),
-                             hardware_id=entity.hardware_id if entity else "")
+                             hardware_id=entity.hardware_id if entity else "", verb="probe" if probing else "diagnose",
+                             timeout_s=timeout_s if probing else None)
         self._absorb(job, outcome)
 
     def _absorb(self, job: Job, outcome: RunOutcome, follower: Follower | None = None) -> None:
         """One diagnose run, or one follow line, into the job's cache, the fault memory and the history."""
 
         now = self.clock.now()
+        blocked = self._probed(job, outcome) if follower is None and outcome.verb == "probe" else None
         with self.lock:
             fresh_statuses, fresh_events = job.cache.apply(outcome, received=now)
             hardware_id = self.layer.entities.get(job.device_path).hardware_id if job.device_path in self.layer.entities else ""
             previous = job.cache.host_status
             if follower is None:
-                job.cache.host_status = host_status(job.spec, outcome, hardware_id, now)
+                job.cache.host_status = self._probe_status(job, outcome, blocked, hardware_id, now) if outcome.verb == "probe" \
+                    else host_status(job.spec, outcome, hardware_id, now)
                 job.last = outcome
             else:
                 status = follow_status(job.spec, follower, hardware_id, now)
@@ -739,6 +756,74 @@ class Host:
         if observed or fresh_events:
             self.notify("plugin")
 
+    # --- the on-connect probe (docs/probe-on-connect.md) -------------------------------------------------------------
+    def _probe_timeout(self, job: Job) -> float | None:
+        """The job's plugin's declared probe time limit, or None: it declares none, so connect runs a diagnose."""
+
+        if job.spec.kind != "driver":
+            return None
+        return probe_module.probe_timeout(self.describes.get(job.spec.name), job.spec.timeout_s)
+
+    def _probed(self, job: Job, outcome: RunOutcome) -> probe_module.Blocked | None:
+        """Note how a probe ended and schedule what follows; the blocked state, or None.
+
+        - Blocked (``PortBusy`` / ``BusLockHeld``): probe again when the last holder exits, or on the backoff.
+        - Otherwise (also crashed or timed out: the row says so, and a probe that failed is not hammered): this
+          connection is probed; the periodic diagnose (or follow) starts ``period_s`` after it.
+
+        WHY the schedule is the job's ``next_due``: probing again is just making the job due, and the scheduler takes the
+        ``exclusive`` group's turn as it does for any due job."""
+
+        previous = job.blocked
+        found = probe_module.blocked_by(outcome.records)
+        job.blocked = found
+        if found is None:
+            job.probed = True
+            follow_s = follow_period(self.describes.get(job.spec.name))
+            job.next_due = time.monotonic() + (follow_s if follow_s is not None else job.spec.period_s)
+            return None
+        found.attempts = previous.attempts + 1 if previous else 1
+        found.retry_at = time.monotonic() + probe_module.backoff_s(found.attempts, job.spec.period_s, self.recheck_backoff_s)
+        job.next_due = found.retry_at  # a holder's exit makes it sooner still
+        if probe_module.holders_gone(found):  # it let go while the probe ran
+            self._release(job, found)
+        return found
+
+    def _probe_status(self, job: Job, outcome: RunOutcome, blocked: probe_module.Blocked | None, hardware_id: str,
+                      now: float) -> DiagnosticStatus:
+        """The device row's plugin-run check after a probe: ``probed 15:12:31 · 3.1 s``, or the ProbeBlocked sentence
+        (UNKNOWN with the holder's code: nothing was checked, and nothing says it is fine)."""
+
+        status = host_status(job.spec, outcome, hardware_id, now)
+        if blocked is not None:
+            retry_s = blocked.retry_at - time.monotonic()
+            values = (*status.values, KeyValue("blocked_by", ", ".join(f"{holder.program} (pid {holder.pid})"
+                                                                         for holder in blocked.holders) or "unknown"))
+            return dataclasses.replace(status, level=UNKNOWN, code=blocked.code, values=values,
+                                       message=probe_module.blocked_sentence(blocked, retry_s))
+        if outcome.outcome == "ok":
+            at = activity_module.iso(outcome.started + outcome.duration_s, self.utc_offset_s) or ""
+            return dataclasses.replace(status, message=f"probed {at[11:19]} · {outcome.duration_s:.1f} s")
+        return status
+
+    def _release(self, job: Job, blocked: probe_module.Blocked) -> None:
+        """Every holder is gone: probe again after the settle."""
+
+        blocked.released = time.monotonic()
+        job.next_due = min(job.next_due, blocked.released + self.recheck_settle_s)
+
+    def _recheck_loop(self) -> None:
+        """About once a second, a ``/proc/<pid>/stat`` read per watched holder (no subprocess): the last one gone makes
+        its job due."""
+
+        while not self._stop.wait(self.recheck_poll_s):
+            with self.lock:
+                jobs = list(self.jobs.values())
+            for job in jobs:
+                blocked = job.blocked
+                if blocked is not None and not job.running and blocked.released is None and probe_module.holders_gone(blocked):
+                    self._release(job, blocked)
+
     def _sync_followers(self) -> None:
         """One follower per job whose plugin's describe declares ``follow`` (started by ``start``, never by ``once``);
         a job that went away (its device left) stops its follower."""
@@ -751,7 +836,7 @@ class Host:
             self.followers.pop(key).stop()
         for key, job in jobs.items():
             period = follow_period(self.describes.get(job.spec.name)) if job.spec.kind == "driver" else None
-            if period is None or key in self.followers:
+            if period is None or key in self.followers or self._awaiting_probe(job):
                 continue
             entity = self.layer.entities.get(job.device_path)
 
@@ -763,10 +848,21 @@ class Host:
             self.followers[key] = follower
             follower.start()
 
-    def scheduled_jobs(self) -> list[Job]:
-        """What the scheduler runs: every job but the followed ones, and the checks."""
+    def _awaiting_probe(self, job: Job) -> bool:
+        """A followed job whose plugin probes on connect: it is followed only once its probe is done and one follow
+        period has passed ("start follow ``period_s`` after the probe"); until then the scheduler runs the probe."""
 
-        return [job for key, job in self.jobs.items() if key not in self.followers] + list(self.check_jobs.values())
+        return self._probe_timeout(job) is not None and (not job.probed or time.monotonic() < job.next_due)
+
+    def scheduled_jobs(self) -> list[Job]:
+        """What the scheduler runs: every job but the followed ones, and the checks. A probed job of a following plugin
+        is about to be followed, not diagnosed."""
+
+        def followed(key, job) -> bool:
+            return key in self.followers or (job.probed and job.spec.kind == "driver"
+                                             and follow_period(self.describes.get(job.spec.name)) is not None)
+
+        return [job for key, job in self.jobs.items() if not followed(key, job)] + list(self.check_jobs.values())
 
     def _run_check(self, job: Job) -> None:
         """Run one Monitoring Plugins check; its one status lands on the entity it attaches to (``attach``)."""
@@ -832,6 +928,7 @@ class Host:
         self.refresh()  # after the scheduler exists: the first refresh starts the followers, so they never run a diagnose
         self._scheduler.start()
         threading.Thread(target=self._refresh_loop, name="io-refresh", daemon=True).start()
+        threading.Thread(target=self._recheck_loop, name="io-recheck", daemon=True).start()
         threading.Thread(target=self.describe_all, name="io-describe", daemon=True).start()
         # WHY the OS source decides: only a live machine has a udev to listen to (a fixture or a fake machine has none)
         command = getattr(self.os, "udev_command", None)
@@ -891,7 +988,10 @@ class Host:
             for job in self.jobs.values():
                 device_path = self.layer.device_paths.get(str(job.device.get("id")))
                 if device_path:
-                    events += [dataclasses.replace(event, path=absolute(event.path, device_path)) for event in job.cache.events.values()]
+                    # WHY the plugin as source when it names none: the driver's own Found / Probed / ProbeBlocked go to the
+                    # log as they are (docs/probe-on-connect.md); the host adds no event about a device itself
+                    events += [dataclasses.replace(event, path=absolute(event.path, device_path), source=event.source or job.spec.name)
+                               for event in job.cache.events.values()]
         events = [event for event in events if event.stamp is None or event.stamp <= now]
         events.sort(key=lambda event: (event.stamp or 0.0, event.seq or 0), reverse=True)
         return View(now, layer, merged, rows, events, self.faults.open_by_path(), setup, checks)

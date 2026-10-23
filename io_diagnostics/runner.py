@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from io_diagnostics.plugins import PluginSpec
+from io_diagnostics.probe import Blocked
 
 from contract.record import (ERROR, OK, SCHEMA, UNKNOWN, WARN, DiagnosticStatus, Entity, Event, KeyValue, Measurement,
                              from_dict, validate)
@@ -199,6 +200,7 @@ class RunOutcome:
     problems: list[str]  # contract.record.validate notes on kept records
     stderr_tail: str
     message: str
+    verb: str = "diagnose"  # diagnose | probe
 
     def summary(self) -> dict:
         return {"started": self.started, "duration_s": round(self.duration_s, 3), "outcome": self.outcome,
@@ -282,15 +284,24 @@ def plugin_env(spec: PluginSpec, device: dict, device_path: str, now: float, ext
 
 
 def run_plugin(spec: PluginSpec, device: dict, device_path: str, now: Callable[[], float],
-               extra_env: dict[str, str] | None = None, hardware_id: str = "") -> RunOutcome:
-    """Run ``diagnose`` once for one device. Never raises for anything the plugin does. ``hardware_id`` is the OS
-    row's repeatable id (default: the skeleton dict's), used to re-root a plugin that builds its own paths."""
+               extra_env: dict[str, str] | None = None, hardware_id: str = "", verb: str = "diagnose",
+               timeout_s: float | None = None) -> RunOutcome:
+    """Run ``diagnose`` (or the on-connect ``probe``, docs/probe-on-connect.md; same records, its own time limit) once
+    for one device. Never raises for anything the plugin does. ``hardware_id`` is the OS row's repeatable id
+    (default: the skeleton dict's), used to re-root a plugin that builds its own paths."""
+
+    return dataclasses.replace(_run_verb(spec, device, device_path, now, extra_env, hardware_id, verb,
+                                         timeout_s or spec.timeout_s), verb=verb)
+
+
+def _run_verb(spec: PluginSpec, device: dict, device_path: str, now: Callable[[], float],
+              extra_env: dict[str, str] | None, hardware_id: str, verb: str, timeout_s: float) -> RunOutcome:
 
     hardware_id = hardware_id or str((device.get("attrs") or {}).get("hardware_id") or "")
 
     started = now()
     clock = time.monotonic()
-    argv = [*spec.command, "diagnose", "--device", str(device.get("id", "")), *spec.diagnose_args]
+    argv = [*spec.command, verb, "--device", str(device.get("id", "")), *spec.diagnose_args]
     returncode = None
     stdout = stderr = ""
     try:
@@ -301,7 +312,7 @@ def run_plugin(spec: PluginSpec, device: dict, device_path: str, now: Callable[[
     except OSError as error:
         return _outcome(spec, device, device_path, started, time.monotonic() - clock, "not_started", None, Parsed(), [],
                         "", f"could not start: {type(error).__name__}: {error}")
-    stdout, stderr, timed_out = _communicate(process, spec.timeout_s, f"{spec.name} diagnose {device.get('id', '')}")
+    stdout, stderr, timed_out = _communicate(process, timeout_s, f"{spec.name} {verb} {device.get('id', '')}")
     returncode = process.returncode
     duration = time.monotonic() - clock
     parsed, problems = _records(spec, stdout or "", device_path, hardware_id)
@@ -309,7 +320,7 @@ def run_plugin(spec: PluginSpec, device: dict, device_path: str, now: Callable[[
     last_line = tail.splitlines()[-1] if tail else ""
     if timed_out:
         return _outcome(spec, device, device_path, started, duration, "timeout", returncode, parsed, problems, tail,
-                        f"no answer within {spec.timeout_s:g} s: killed; its last records age toward STALE")
+                        f"no answer within {timeout_s:g} s: killed; its last records age toward STALE")
     if returncode != 0:  # the records it printed before failing are still kept; the row says it failed
         how = f"killed by signal {-returncode}" if returncode is not None and returncode < 0 else f"exited {returncode}"
         return _outcome(spec, device, device_path, started, duration, "crashed", returncode, parsed, problems, tail,
@@ -681,6 +692,9 @@ class Job:
     last: RunOutcome | None = None
     next_due: float = 0.0  # time.monotonic()
     running: bool = False
+    probed: bool = False  # this connection's probe has run and was not blocked (docs/probe-on-connect.md)
+    blocked: Blocked | None = None  # the latest probe found its port or bus held: who, and when it is probed again
+    connection: Any = None  # the device's kernel device number when the probe last ran: a new one is a re-enumeration
 
     @property
     def key(self) -> tuple[str, str]:
