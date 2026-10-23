@@ -36,8 +36,12 @@ command = [
   "--firmware-cache", "/home/bam/.cache/moteus-firmware",
   "--bus-lock", "/home/bam/.cache/rack-commissioning/bus.lock",
   "--expected-period", "300",
+  "--loaded-ids", "1",
+  "--moteus-tool", "/home/bam/.local/bin/moteus_tool",
 ]
 cwd = "/home/bam/bam_ws/.claude/worktrees/traj-sim2real-rack/src/core/mdp/agent/actuators/moteus_servo"
+# WHY --loaded-ids 1: CAN 1's joint has a hard stop and a gravity load, so its calibrate confirm says so.
+# WHY an absolute --moteus-tool: the host's PATH may not include ~/.local/bin (pipx's moteus_tool lives there).
 
 # Seconds per call. The plugin bounds its own bus check at 25 s (--timeout) and reports what it measured by
 # then. It asks one id per transaction (moteus 1.0.0 never bounds a reply from a real fdcanusb), so every
@@ -45,9 +49,9 @@ cwd = "/home/bam/bam_ws/.claude/worktrees/traj-sim2real-rack/src/core/mdp/agent/
 # 3-board bus about 3-6 s (scan, 20 query cycles, config + identity per board, can status). 45 s leaves room
 # for uv's start.
 timeout_s = 45
-# Seconds per act call, never used by diagnose. WHY 900: a firmware update backs up the config, flashes, verifies
-# and restores, longer than any diagnose; calibration spins the rotor for ~30-60 s.
-act_timeout_s = 900
+# Seconds per act call, never used by diagnose. WHY 1800: a firmware update backs up the config, downloads,
+# flashes, verifies and restores (the driver allows it up to 1800 s); calibration spins the rotor for up to 600 s.
+act_timeout_s = 1800
 
 # Seconds between diagnose calls per adapter. WHY 300: while the check runs it holds the rack bus lock, and an
 # experiment that finds the lock held refuses to start; rack_inventory already polls every ~180 s.

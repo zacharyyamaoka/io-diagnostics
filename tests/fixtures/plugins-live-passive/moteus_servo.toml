@@ -17,6 +17,8 @@ command = [
   "--firmware-cache", "/home/bam/.cache/moteus-firmware",
   "--bus-lock", "/home/bam/.cache/rack-commissioning/bus.lock",
   "--expected-period", "300",
+  "--loaded-ids", "1",
+  "--moteus-tool", "/home/bam/.local/bin/moteus_tool",
 ]
 diagnose_args = ["--passive"]
 cwd = "/home/bam/bam_ws/.claude/worktrees/traj-sim2real-rack/src/core/mdp/agent/actuators/moteus_servo"
