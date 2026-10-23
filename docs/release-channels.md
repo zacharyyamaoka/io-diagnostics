@@ -12,7 +12,7 @@ This file holds the WHY for `stable-preview.json`, which JSON cannot carry.*
 | **Preview** | http://127.0.0.1:8821/ | `cli.py serve` straight from the main checkout (`main` as it is now), restarted by the runtime whenever its Python or a plugin declaration changes |
 | **Agent lanes** | `sps dev` in a worktree | the same `serve` from that worktree, on a lane port (5400–5499) |
 
-- The floating chip (top-left, over the page's own top-bar mock) on every channel: Stable shows Open Preview and Roll
+- The floating chip (bottom-right, just above the status bar) on every channel: Stable shows Open Preview and Roll
   Stable Back; Preview shows Make Stable.
 - The dock icon (`~/.local/share/applications/robotdiagnostics.desktop`, written by `sps install-desktop`): click =
   Stable; right-click = Open Preview (live — what agents are changing), Make Preview Stable, Roll Stable Back.
@@ -73,10 +73,10 @@ stop --all` change what Zach uses: Zach's calls, never an agent's.
 - `snapshot.exclude`: `docs/`, `reports/`, `tests/`, `prototypes/`, `brand/`, `out/`: nothing the running app reads,
   so a docs or report commit does not make the chip say "Stable is behind", and `reports/` (≈190 MB of media) never
   goes into a release.
-- `chip.position: top-left`, measured (elementFromPoint over the chip's rectangle at 1400×900 and 1280×720): the
-  default bottom-right covered the Prototype selects (`#detail-layout`, `#utility-menu`), top-right the page's own tray
-  chip button; top-left and bottom-left covered no control, and top-left only hides the top-bar mock's "Activities"
-  label where bottom-left would hide "Last update N s ago".
+- `chip.position: bottom-right` with `chip.avoid: ["footer.statusbar"]` (Zach, 2026-10-23: "move the stable preview
+  switching to the bottom right corner"). WHY avoid: at bottom-right the chip sat on the Prototype selects
+  (`#detail-layout`, `#utility-menu`) and the skin bar; `avoid` makes it float just above the status bar (§10.10).
+  The earlier pick was top-left (measured: no control under it), replaced at his request.
 
 ## The login service
 

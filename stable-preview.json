@@ -4,28 +4,76 @@
   "icon": "brand/placeholder/robotdiagnostics.svg",
   "stable": {
     "port": 8820,
-    "build": [["/bin/cp", "-R", "io_diagnostics/web", ".sps-site"]],
+    "build": [
+      [
+        "/bin/cp",
+        "-R",
+        "io_diagnostics/web",
+        ".sps-site"
+      ]
+    ],
     "output": ".sps-site",
     "spa": false,
-    "env": {"PATH": "{home}/.local/bin:/usr/local/bin:/usr/bin:/bin", "PYTHONUNBUFFERED": "1"},
+    "env": {
+      "PATH": "{home}/.local/bin:/usr/local/bin:/usr/bin:/bin",
+      "PYTHONUNBUFFERED": "1"
+    },
     "processes": [
       {
         "name": "app",
         "port": 8822,
-        "command": ["/usr/bin/python3", "{source}/io_diagnostics/cli.py", "tray", "--port", "{port}"],
+        "command": [
+          "/usr/bin/python3",
+          "{source}/io_diagnostics/cli.py",
+          "tray",
+          "--port",
+          "{port}"
+        ],
         "health": "/api/v1/health",
-        "env": {"IO_DIAGNOSTICS_PAGE_ORIGINS": "http://127.0.0.1:{ports.web} http://localhost:{ports.web}"}
+        "env": {
+          "IO_DIAGNOSTICS_PAGE_ORIGINS": "http://127.0.0.1:{ports.web} http://localhost:{ports.web}"
+        }
       }
     ],
-    "proxy": {"/api/": "app"}
+    "proxy": {
+      "/api/": "app"
+    }
   },
   "preview": {
     "port": 8821,
-    "command": ["/usr/bin/python3", "{checkout}/io_diagnostics/cli.py", "serve", "--port", "{port}"],
+    "command": [
+      "/usr/bin/python3",
+      "{checkout}/io_diagnostics/cli.py",
+      "serve",
+      "--port",
+      "{port}"
+    ],
     "health": "/api/v1/health",
-    "env": {"PATH": "{home}/.local/bin:/usr/local/bin:/usr/bin:/bin", "PYTHONUNBUFFERED": "1"},
-    "watch": ["io_diagnostics/**/*.py", "io_facts/**/*.py", "contract/**/*.py", "plugins.d/*.toml"]
+    "env": {
+      "PATH": "{home}/.local/bin:/usr/local/bin:/usr/bin:/bin",
+      "PYTHONUNBUFFERED": "1"
+    },
+    "watch": [
+      "io_diagnostics/**/*.py",
+      "io_facts/**/*.py",
+      "contract/**/*.py",
+      "plugins.d/*.toml"
+    ]
   },
-  "snapshot": {"exclude": ["docs/", "reports/", "tests/", "prototypes/", "brand/", "out/"]},
-  "chip": {"position": "top-left"}
+  "snapshot": {
+    "exclude": [
+      "docs/",
+      "reports/",
+      "tests/",
+      "prototypes/",
+      "brand/",
+      "out/"
+    ]
+  },
+  "chip": {
+    "position": "bottom-right",
+    "avoid": [
+      "footer.statusbar"
+    ]
+  }
 }
