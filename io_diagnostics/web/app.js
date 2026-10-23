@@ -48,9 +48,6 @@ const S = {
   setup: null,         // the Expected setup edit being confirmed / saved: {path, op, phase, reason, rig, result}
   modalHtml: '',
   why: new Map(),      // entity path -> {checks: [{name, level, message, lines, evidence}], message, at}: what_to_check
-  attOpen: new Set(),  // attention items whose checklist the viewer opened (the first one is open unless closed)
-  attClosed: new Set(),
-  attHtml: '',
   detailHtml: '',
   chip: params.get('chip') === '1',
   lastOk: 0,
@@ -1560,10 +1557,12 @@ async function saveSetup() {
 
 // ------------------------------------------------------------------- what to check (plain words) ----
 // A status whose cause has a checklist carries the value `what_to_check` (numbered lines, newline-separated, in the
-// order to check them; moteus_servo docs/io_diagnostics_actions.md, the host's ExpectedAbsent rows). The page's top
-// attention line and the detail panel show the plain-words reason and those lines, as authored.
-// WHY at the top: when boards don't answer, "motor supply on? XT30 splitter? CAN cable? CAN ground?" is the thing
-// Zach needs first (Daily Note 2026-10-22: "I plug it in and now I need it to run").
+// order to check them; moteus_servo docs/io_diagnostics_actions.md, the host's ExpectedAbsent rows). The detail panel
+// shows the plain-words reason and those lines, as authored.
+// WHY not a list over the panes as well: Zach (2026-10-23) "Please get rid of this activity stream here at the top...
+// If I want to see this then I could go to the activity screen." A problem is its row's mark, the tray chip, the
+// entity's "What to check" and the Activity screen; the page's first selection is the worst cause, so its checklist
+// is still the first thing on screen.
 function whyOf(detail) {
   return ((detail && detail.checks) || []).filter((check) => PROBLEM.has(check.effective_level)).map((check) => {
     const values = Object.fromEntries((check.values || []).map((value) => [value.key, value.value]));
@@ -1573,7 +1572,7 @@ function whyOf(detail) {
   }).filter(Boolean);
 }
 
-// /api/v1/node for a path whose checklist the page shows (attention items, the selection's problem parts); cached,
+// /api/v1/node for a path whose checklist the page shows (the selection's problem parts); cached,
 // refreshed when the item's message changes or every 5 s.
 function wantWhy(path, message = '') {
   const known = S.why.get(path);
@@ -1586,29 +1585,6 @@ function wantWhy(path, message = '') {
 
 const whyLines = (why) => `<div class="why-lines">${why.lines.map((line) => `<div>${esc(line)}</div>`).join('')}</div>`
   + (why.evidence ? `<div class="why-ev">kernel evidence: ${esc(why.evidence)}</div>` : '');
-
-// The top attention line: every independent cause the API lists (summary.attention), worst first, each with its
-// plain-words reason; the first one's checklist open, the others one click away. Hidden when nothing needs you.
-function renderAttention() {
-  const element = $('attention');
-  const items = S.data.summary.attention || [];
-  if (!items.length) { element.hidden = true; element.innerHTML = ''; return; }
-  for (const item of items.slice(0, 6)) wantWhy(item.path, item.message);
-  const rows = items.slice(0, 4).map((item, at) => {
-    const checks = (S.why.get(item.path) || {}).checks || [];
-    const why = checks.find((check) => check.message === item.message) || checks[0];
-    const open = why && (at === 0 ? !S.attClosed.has(item.path) : S.attOpen.has(item.path));
-    const where = item.device && item.device.path !== item.path ? `${item.device.name} › ${item.name}` : item.name;
-    const toggle = why ? `<button class="att-more" data-att="${esc(item.path)}" aria-expanded="${Boolean(open)}">${open ? 'hide' : `what to check · ${why.lines.length}`}</button>` : '';
-    return `<div class="att-item lv-${esc(item.level)}" data-att-item="${esc(item.path)}"><div class="att-line"><span class="att-st">${shape(item.level, item.level)}</span>`
-      + `<a class="att-where" data-go="${esc(item.path)}">${esc(where)}</a><span class="att-msg" title="${esc(item.message)}">${esc(item.message)}</span>${toggle}</div>`
-      + `${open ? whyLines(why) : ''}</div>`;
-  }).join('');
-  const rest = items.length > 4 ? `<div class="att-rest">+${items.length - 4} more · the chip lists every one</div>` : '';
-  const html = `${rows}${rest}`;
-  element.hidden = false;
-  if (html !== S.attHtml) { element.innerHTML = html; S.attHtml = html; }
-}
 
 // The detail panel's "What to check": the selection's own checklists, then its folded parts' (the CAN bus folded
 // into its adapter), each with the plain-words reason.
@@ -1660,8 +1636,8 @@ function render() {
   $('clock').textContent = S.data.clock.iso ? `${S.data.clock.iso.slice(5, 10)}  ${S.data.clock.time}` : '—';
   const fixture = S.data.fixture;
   $('mode').textContent = fixture ? `Replay ${fixture.name} · ${fixture.label} (recorded)` : `Live · ${S.data.host.name}`;
-  $('story').textContent = fixture ? fixture.story : `${S.data.summary.devices} devices · ${S.data.host.sources.filter((s) => s.state === 'used').map((s) => s.name).join(', ')}`;
   const skipped = S.data.host.sources.filter((s) => s.state === 'skipped');
+  $('sources').hidden = !skipped.length;
   $('sources').innerHTML = skipped.map((s) => `<span class="tag simulated" title="${esc(s.note)}">${esc(s.name)} skipped</span>`).join('');
   document.querySelectorAll('#views button').forEach((b) => b.classList.toggle('on', b.dataset.view === S.view));
   const treeView = S.view === 'tree';
@@ -1685,7 +1661,6 @@ function render() {
   $('search').disabled = noSearch;
   $('search').placeholder = noSearch ? `No search in ${S.variant} · try Table` : 'Search entities, ids, ports…';
   $('search').closest('.search').classList.toggle('off', noSearch);
-  renderAttention();
   // WHY drawn through a layout's ctx.draw: an unchanged detail is not rewritten every second (selection, focus, scroll)
   renderDetail(byPath);
   renderChip();
@@ -1785,13 +1760,6 @@ document.addEventListener('click', (event) => {
   if (t.closest('[data-setup-confirm]')) { saveSetup(); return undefined; }
   if (t.closest('[data-setup-cancel]') || t.closest('[data-setup-close]')) { S.setup = null; return render(); }
   if (t.closest('[data-setup-reason]') || t.closest('[data-setup-rig]')) return undefined;
-  const att = t.closest('[data-att]');
-  if (att) {
-    const key = att.dataset.att;
-    const first = ((S.data && S.data.summary.attention) || [])[0];
-    if (first && first.path === key) { if (S.attClosed.has(key)) S.attClosed.delete(key); else S.attClosed.add(key); } else if (S.attOpen.has(key)) S.attOpen.delete(key); else S.attOpen.add(key);
-    return render();
-  }
   const row = t.closest('[data-key]');
   if (row && S.view === 'table') {
     // the selected row again folds the inspector (unless pinned); any other row slides it in on that row

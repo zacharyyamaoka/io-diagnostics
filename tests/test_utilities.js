@@ -8,10 +8,11 @@
 // press anything unless /api/v1/plugins lists only the fixture plugin v6_scenario (which never touches hardware: its
 // act answers from the recording). Checks:
 //   defaults     a fresh browser: structure p1, tree v6, skin claude, mode follows the OS; a remembered choice wins
-//   attention    the top line states each cause's plain words and the first one's numbered what_to_check
+//   attention    no list over the panes (Zach, 2026-10-23): the toolbar meets the panes, and each cause the API lists
+//                is a marked tree row whose click shows its message in the detail
 //   why          the detail panel shows what_to_check for the selection and for a folded part (the CAN bus)
 //   absent       an expected-but-absent device (ExpectedAbsent, injected into /state and /node) is a row in every
-//                structure, on the attention line with its checklist and kernel evidence
+//                structure, whose detail shows its checklist and kernel evidence
 //   utilities    the printer-utility card: icon + title + description per action, Checks first, Maintenance, Motion
 //                (set apart), More; every click is a dry run (POST /api/v1/act dry_run) showing argv, steps,
 //                preconditions and the confirm text; a query runs with one more click and shows its result; moves
@@ -162,7 +163,7 @@ async function main() {
       const fresh = await page.evaluate(() => ({ structure: S.structure, variant: S.variant, skin: document.documentElement.dataset.skin, mode: document.documentElement.dataset.mode, pref: S.mode,
         layout: S.layout, menu: S.menu, sort: S.sort }));
       // round 3.5: the default skin is stock shadcn/ui (round 3 had Bare Metal = contrast); the layout d0 (the first
-      // selection is the attention line's CAN bus, not the Computer) and the menu u0; sort by status
+      // selection is the worst cause's CAN bus, not the Computer) and the menu u0; sort by status
       check(`defaults (OS ${scheme})`, fresh.structure === 'p1' && fresh.variant === 'v6' && fresh.skin === 'shadcn' && fresh.mode === scheme && fresh.pref === 'auto'
         && fresh.layout === 'd0' && fresh.menu === 'u0' && fresh.sort === 'status', fresh);
       // round 3.5: shadcn is the default skin, in light and dark following the OS (above), linked by index.html itself
@@ -233,24 +234,25 @@ async function main() {
       if (request.url().endsWith('/api/v1/act') && request.method() === 'POST') posts.push({ body: JSON.parse(request.postData() || '{}'), headers: request.headers() });
     });
 
-    // ---- the attention line
+    // ---- no list over the panes (Zach, 2026-10-23: "get rid of this activity stream here at the top"): the toolbar
+    // meets the panes, and every cause the API lists (summary.attention) is a marked tree row whose detail states it
     await open(page, base);
-    await page.waitForFunction(() => document.querySelector('#attention .why-lines'), null, { timeout: 15000 });
-    const attention = await page.evaluate(() => {
-      const first = document.querySelector('#attention .att-item');
-      return { hidden: document.getElementById('attention').hidden, where: first.querySelector('.att-where').textContent, message: first.querySelector('.att-msg').textContent,
-        lines: [...first.querySelectorAll('.why-lines > div')].map((line) => line.textContent), items: document.querySelectorAll('#attention .att-item').length,
-        shape: Boolean(first.querySelector('.att-st .shape')), top: Math.round(document.getElementById('attention').getBoundingClientRect().top),
-        mainTop: Math.round(document.getElementById('main').getBoundingClientRect().top) };
-    });
-    check('attention: plain words + numbered checks', !attention.hidden && /28B3A25D CAN bus/.test(attention.where) && /error-passive/.test(attention.message)
-      && attention.lines.length === 4 && /^1\. Motor supply on/.test(attention.lines[0]) && /^4\. CAN ground/.test(attention.lines[3]) && attention.shape
-      && attention.top < attention.mainTop, attention);
-    const box = await page.locator('#attention').boundingBox();
-    await page.screenshot({ path: path.join(SHOTS, 'integration-attention.png'), clip: { x: 0, y: 0, width: VIEWPORT.width, height: Math.min(VIEWPORT.height, box.y + box.height + 230) } });
-    await page.click('#attention .att-item:nth-child(2) .att-where');
-    await page.waitForTimeout(600);
-    check('attention: a cause opens its row', await page.evaluate(() => S.sel && S.sel.endsWith('/can/15/driver')), await page.evaluate(() => S.sel));
+    const top = await page.evaluate(() => ({ attention: Boolean(document.getElementById('attention')), story: Boolean(document.getElementById('story')),
+      sourcesHidden: document.getElementById('sources').hidden, toolbar: Math.round(document.querySelector('.toolbar').getBoundingClientRect().bottom),
+      main: Math.round(document.getElementById('main').getBoundingClientRect().top),
+      items: S.data.summary.attention.map((item) => ({ path: item.path, message: item.message, key: S.built.byEntity.get(item.path) })) }));
+    const reached = [];
+    for (const item of top.items) {
+      const selector = `.t6-row[data-t6-path="${item.key}"]`;
+      const mark = await page.evaluate((sel) => Boolean(document.querySelector(`${sel} .t6-st .t6-mark`)), selector);
+      if (mark) {
+        await page.click(selector);
+        await page.waitForFunction(({ key, message }) => S.sel === key && document.getElementById('detail').textContent.includes(message), item, { timeout: 10000 }).catch(() => {});
+      }
+      reached.push({ path: item.path, mark, detail: await page.evaluate(({ key, message }) => S.sel === key && document.getElementById('detail').textContent.includes(message), item) });
+    }
+    check('no attention list; each cause on its row', !top.attention && !top.story && top.sourcesHidden && Math.abs(top.main - top.toolbar) <= 1
+      && reached.length >= 4 && reached.every((item) => item.mark && item.detail), { ...top, items: undefined, reached: reached.filter((item) => !item.mark || !item.detail), causes: reached.length });
 
     // ---- what to check in the detail panel: the adapter whose CAN bus is folded into it (p1)
     await open(page, base, SECOND);
@@ -502,9 +504,10 @@ async function main() {
     });
     await page.route(`**/api/v1/node?path=${encodeURIComponent(ABSENT)}`, (route) => route.fulfill({ json: ABSENT_DETAIL }));
     await open(page, base);
-    await page.waitForFunction(() => /data cable/.test(document.getElementById('attention').textContent), null, { timeout: 15000 });
-    const absentLine = await page.evaluate(() => document.querySelector('#attention .att-item').textContent);
-    check('absent: on the attention line with its checks', /fdcanusb 28B3A25D/.test(absentLine) && /1\. A data cable/.test(absentLine) && /kernel evidence: never/.test(absentLine), absentLine.slice(0, 200));
+    await page.click(`.t6-row[data-t6-path="${await page.evaluate((entity) => S.built.byEntity.get(entity), ABSENT)}"]`);
+    await page.waitForFunction(() => /data cable/.test((document.querySelector('.sec.why') || {}).textContent || ''), null, { timeout: 15000 }).catch(() => {});
+    const absentWhy = await page.evaluate(() => ({ title: (document.querySelector('.d-title') || {}).textContent || '', why: (document.querySelector('.sec.why') || {}).textContent || '' }));
+    check('absent: its row\'s What to check', /fdcanusb 28B3A25D/.test(absentWhy.title) && /1\. A data cable/.test(absentWhy.why) && /kernel evidence: never/.test(absentWhy.why), { title: absentWhy.title, why: absentWhy.why.slice(0, 200) });
     const inEvery = [];
     for (const structure of ['p0', 'p1', 'p2', 'p3', 'p4', 'p5']) {
       // p3 is off the Group by picker (round 3) but its file still loads: switch to it in the page

@@ -45,9 +45,8 @@ button { font: inherit; color: inherit; }
 .search { display: flex; align-items: center; gap: 6px; background: var(--io-field); border: 1px solid var(--io-border); border-radius: var(--io-radius); padding: 4px 8px; width: 300px; color: var(--io-muted); }
 .search input { background: transparent; border: 0; outline: 0; color: var(--io-text); flex: 1; font: inherit; }
 .search input::placeholder { color: var(--io-faint); }
-.storyline { display: flex; gap: 16px; align-items: center; padding: 6px 12px; border-bottom: 1px solid var(--io-border); color: var(--io-muted); font-size: 12px; flex: none; }
-.storyline #story { flex: 1; min-width: 0; }
-.legend { display: flex; gap: 6px; flex: none; }
+.sourceline { display: flex; gap: 6px; align-items: center; padding: 6px 12px; border-bottom: 1px solid var(--io-border); flex: none; }
+.sourceline[hidden] { display: none; }
 
 /* the two panes and the sash between them (round 3): Tree view = the tree's width (--tree-w) is the dragged one, the
    detail takes the rest; Table view = the inspector's width (--insp-w), folded to 0 until a row opens it (.insp-open).
@@ -359,20 +358,7 @@ table.grid tr.subrow .sub { padding-left: calc(28px + var(--d) * var(--io-indent
 table.grid td.xcol { color: var(--io-muted); font-size: 12px; }
 table.grid td.mono.xcol { font-size: 11.5px; }
 
-/* ---- the attention line: each independent cause, its plain-words reason, its numbered what_to_check ------------- */
-.attention { flex: none; max-height: 40vh; overflow: auto; border-bottom: 1px solid var(--io-border); background: var(--io-surface); padding: 4px 12px 6px; }
-.attention[hidden] { display: none; }
-.att-item { padding: 3px 0; }
-.att-item + .att-item { border-top: 1px solid var(--io-border-soft); }
-.att-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.att-st { flex: none; width: 16px; display: inline-flex; justify-content: center; }
-.att-where { flex: none; color: var(--io-text-strong); font-weight: 600; cursor: pointer; text-decoration: var(--io-link-decoration); }
-.att-where:hover { text-decoration: underline; }
-.att-msg { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--io-text); }
-.att-more { flex: none; border: 1px solid var(--io-border); background: var(--io-control); border-radius: var(--io-radius-sm); padding: 1px 8px; cursor: pointer; color: var(--io-muted); font-size: 11.5px; }
-.att-more:hover { background: var(--io-control-hover); color: var(--io-text); }
-.att-item .why-lines { margin: 4px 0 4px 24px; }
-.att-rest { color: var(--io-faint); font-size: 11.5px; padding: 3px 0 0 24px; }
+/* ---- what to check (the detail panel): each cause's plain-words reason, its numbered what_to_check -------------- */
 .why-lines { display: grid; gap: 2px; font-size: 12.5px; color: var(--io-text); }
 .why-ev { margin-top: 4px; color: var(--io-muted); font-size: 11.5px; font-family: var(--io-font-mono); }
 .sec.why .why-item + .why-item { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--io-border-soft); }
