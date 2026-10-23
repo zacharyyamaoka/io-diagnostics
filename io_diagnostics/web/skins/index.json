@@ -1,12 +1,12 @@
 {
-  "about": "Skins (docs/round2-seams.md). One entry per skin, pre-listed; the page loads only entries with ready=true. A skin lane writes skins/<id>.css and flips ONLY its own entry's ready to true (entries are blank-line separated so parallel lanes merge cleanly).",
-  "default": "claude",
+  "about": "Skins (docs/round2-seams.md). One entry per skin, pre-listed; the page loads only entries with ready=true. A skin lane writes skins/<id>.css and flips ONLY its own entry's ready to true (entries are blank-line separated so parallel lanes merge cleanly). Round 3: the Skin picker lists the `primary` entries first (the default first), every other ready skin under \"More skins\".",
+  "default": "contrast",
   "skins": [
     {"id": "claude", "name": "Claude", "file": "claude.css", "ready": true},
 
     {"id": "obsidian", "name": "Obsidian", "file": "obsidian.css", "ready": true},
 
-    {"id": "notion", "name": "Notion", "file": "notion.css", "ready": true},
+    {"id": "notion", "name": "Pretty", "file": "notion.css", "ready": true, "primary": true},
 
     {"id": "terminal", "name": "Terminal", "file": "terminal.css", "ready": true},
 
@@ -22,7 +22,7 @@
 
     {"id": "linear", "name": "Linear", "file": "linear.css", "ready": true},
 
-    {"id": "contrast", "name": "High contrast", "file": "contrast.css", "ready": true},
+    {"id": "contrast", "name": "Bare Metal", "file": "contrast.css", "ready": true, "primary": true},
 
     {"id": "bare-1", "name": "Bare Metal 1 (stub)", "file": "bare-1.css", "ready": true},
 

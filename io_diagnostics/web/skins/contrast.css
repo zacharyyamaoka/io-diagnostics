@@ -1,4 +1,5 @@
-/* Skin 11 · High contrast — WCAG AAA: pure white / pure black surfaces, every text token >= 7:1 on every surface it
+/* Skin 11 · Bare Metal (was "High contrast"; the default skin since round 3 — Zach, 2026-10-23: "bare metal ...
+ * terminal but still readable", one step above unstyled; the picker calls it Bare Metal) — WCAG AAA: pure white / pure black surfaces, every text token >= 7:1 on every surface it
  * sits on, problem fills >= 4.5:1 so the four shapes read without their colour, a saturated focus colour, and a
  * light mode that prints (white paper, black ink, no tinted panes).
  * Defines every BASE token of web/tokens.css for both modes, and overrides the derived tokens whose 10-15 % tints

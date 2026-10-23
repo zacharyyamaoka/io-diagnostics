@@ -1,4 +1,5 @@
-/* Skin 3 · Notion — Notion's restraint: warm near-black text rgb(55 53 47) on white, light-grey hover, 4px radius,
+/* Skin 3 · Notion, listed as "Pretty" (with Bare Metal one of the two default skins since round 3, Zach
+ * 2026-10-23) — Notion's restraint: warm near-black text rgb(55 53 47) on white, light-grey hover, 4px radius,
  * no colour anywhere except status (the accent, links and focus are the text colour, not Notion's button blue).
  * Defines every BASE token of web/tokens.css for both modes; derived tokens come from tokens.css.
  * Published / observed values used: text #37352f, page #ffffff, sidebar #f7f7f5, divider #e9e9e7, grey background

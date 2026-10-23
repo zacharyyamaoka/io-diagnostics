@@ -9,6 +9,12 @@
 // light/dark switch live from the quiet control cluster at the bottom-right and persist in this browser.
 // The page owns the data, the selection, the detail panel, the table and the activity tab; a renderer owns its
 // own rows' drawing, expansion, keys and clicks.
+//
+// Round 3 (docs/round3-brief-2026-10-23.md, seams in docs/round2-seams.md §6): one View options popover beside the
+// search box (Group by = the structure, Sort by, the structure's toggles, tree style, skin, mode); resizable panes;
+// the Table's inspector folds away; the detail panel is drawn by a DETAIL LAYOUT (window.IODetailLayouts,
+// detail/*.js) and its utilities by a UTILITY MENU (window.IOUtilityMenus, utilities/*.js), both switched from the
+// temporary bottom-right Prototype picker.
 'use strict';
 
 const params = new URLSearchParams(location.search);
@@ -42,6 +48,15 @@ const S = {
   lastOk: 0,
   lastError: '',
   variant: null,       // the tree proposal drawing the Tree view (set by setupSwitcher)
+  sort: 'status',      // View options' Sort by: status | name | change (view/core.js sortRows)
+  pickable: [],        // the structure ids View options' Group by lists (manifest `group`, in `pick` order)
+  vo: false,           // the View options popover is open
+  inspOpen: false,     // the Table's inspector, opened by a row click (folds away again)
+  inspPinned: false,   // ... or pinned open (the toolbar toggle, `]`)
+  layout: null,        // the detail layout drawing the detail panel (detail/*.js)
+  menu: null,          // the utility menu drawing the Utilities section (utilities/*.js)
+  closed: new Set(),   // detail section ids the viewer folded (remembered per section)
+  actFilter: 'all',    // the activity log's filter: all | faults
 };
 const RANK = { ok: 0, warn: 1, unknown: 2, stale: 3, error: 4 };
 const PROBLEM = new Set(['warn', 'unknown', 'stale', 'error']);
@@ -64,6 +79,13 @@ const PREFS = {
   skin: 'io-diagnostics.skin',
   mode: 'io-diagnostics.mode',
   toggles: 'io-diagnostics.structure-toggles',
+  sort: 'io-diagnostics.sort',
+  treeWidth: 'io-diagnostics.pane.tree',
+  inspectorWidth: 'io-diagnostics.pane.inspector',
+  inspectorPinned: 'io-diagnostics.inspector-pinned',
+  layout: 'io-diagnostics.detail-layout',
+  menu: 'io-diagnostics.utility-menu',
+  sections: 'io-diagnostics.detail-sections',
 };
 function readPref(key) {
   try { return localStorage.getItem(key); } catch (_) { return null; }
@@ -116,7 +138,8 @@ function loadScript(src) {
 }
 
 // WHY p1: Zach's "fdcanusb → Moteus c1 · CAN 15" (entities, transport as columns, a Ports toggle one click away)
-const DEFAULTS = { skin: 'claude', structure: 'p1', variant: 'v6' };
+// WHY contrast ("Bare Metal"): Zach, 2026-10-23: "one step above unstyled", the default of the two (Pretty = Notion)
+const DEFAULTS = { skin: 'contrast', structure: 'p1', variant: 'v6', sort: 'status', layout: 'd0', menu: 'u0' };
 const darkQuery = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
 
 // <html data-skin data-mode>: the skin's tokens for the mode. Auto follows the OS until the viewer picks one.
@@ -239,9 +262,10 @@ function renderTreePane() {
   }
 }
 
-// ------------------------------------------------------------------ the bottom-right controls ----
-// One quiet cluster (Zach: never make him edit a URL flag): structure (+ its own toggles), tree style, skin,
-// Auto / Light / Dark. Every choice switches live and persists.
+// -------------------------------------------------------------------------------- View options ----
+// One sliders button beside the search box opens one popover (Zach, 2026-10-23: like Claude Transcripts' filter panel):
+// Group by (the structure), Sort by, the structure's own toggles, then tree style, skin and Auto / Light / Dark. Every
+// choice switches live and persists (never a URL flag). The bottom-right keeps only the temporary Prototype picker.
 function setupSwitcher() {
   const ids = variantIds();
   const stored = storedVariant();
@@ -254,15 +278,23 @@ function setupSwitcher() {
   picker.addEventListener('change', () => switchVariant(picker.value));
 }
 
-function setupStructures(manifestDefault) {
-  const ids = IOView.structureIds();
+// Group by lists the structures the manifest names (`group`, in `pick` order); one marked picker=false (p3) keeps its
+// file loaded for the seams but is no choice, and a remembered choice that is no longer listed falls back to the default.
+function setupStructures(manifest) {
+  const registered = IOView.structureIds();
+  const entries = new Map(manifest.entries.map((entry) => [entry.id, entry]));
+  const listed = (id) => !entries.has(id) || entries.get(id).picker !== false;
+  const pick = (id) => (entries.has(id) && entries.get(id).pick !== undefined ? entries.get(id).pick : 50);
+  const ids = registered.filter(listed).sort((a, b) => pick(a) - pick(b));
+  S.pickable = ids;
   const stored = readPref(PREFS.structure);
-  const fallback = ids.includes(manifestDefault) ? manifestDefault : ids.includes(DEFAULTS.structure) ? DEFAULTS.structure : ids[0] || null;
+  const fallback = ids.includes(manifest.default) ? manifest.default : ids.includes(DEFAULTS.structure) ? DEFAULTS.structure : ids[0] || null;
   S.structure = ids.includes(stored) ? stored : fallback;
   try { S.toggles = JSON.parse(readPref(PREFS.toggles) || '{}') || {}; } catch (_) { S.toggles = {}; }
   const picker = $('structure');
-  picker.innerHTML = ids.map((id) => `<option value="${esc(id)}" title="${esc(window.IOStructures[id].description || '')}">`
-    + `${esc(id)} · ${esc(window.IOStructures[id].name || id)}</option>`).join('');
+  const groupName = (id) => (entries.get(id) && entries.get(id).group) || window.IOStructures[id].name || id;
+  picker.innerHTML = ids.map((id) => `<option value="${esc(id)}" title="${esc(`${id} · ${window.IOStructures[id].name || id} — ${window.IOStructures[id].description || ''}`)}">`
+    + `${esc(groupName(id))}</option>`).join('');
   picker.value = S.structure || '';
   picker.addEventListener('change', () => {
     if (!window.IOStructures[picker.value]) return;
@@ -272,7 +304,35 @@ function setupStructures(manifestDefault) {
     renderToggles();
     render();
   });
+  const sort = $('sort');
+  const storedSort = readPref(PREFS.sort);
+  S.sort = IOView.SORTS.includes(storedSort) ? storedSort : DEFAULTS.sort;
+  sort.value = S.sort;
+  sort.addEventListener('change', () => { if (!IOView.SORTS.includes(sort.value)) return; S.sort = sort.value; writePref(PREFS.sort, S.sort); render(); });
   renderToggles();
+}
+
+// The newest activity event per entity path (Sort by "Last change"): view/core.js reads it as options.changes.
+function changesOf(act) {
+  const changes = {};
+  for (const event of (act && act.events) || []) {
+    if (event.path && typeof event.stamp === 'number' && !(changes[event.path] >= event.stamp)) changes[event.path] = event.stamp;
+  }
+  return changes;
+}
+
+function setViewOptions(open) {
+  S.vo = open;
+  $('view-options').hidden = !open;
+  $('vo-btn').setAttribute('aria-expanded', String(open));
+  $('vo-btn').classList.toggle('on', open);
+}
+// the button's dot: something in the popover differs from the defaults (Claude Transcripts marks its filter the same way)
+function renderViewOptionsDot() {
+  const structure = window.IOStructures[S.structure] || {};
+  const chosen = S.toggles[S.structure] || {};
+  const toggled = (structure.toggles || []).some((toggle) => toggle.key in chosen && Boolean(chosen[toggle.key]) !== Boolean(toggle.default));
+  $('vo-btn').classList.toggle('changed', S.structure !== (S.pickable.includes(DEFAULTS.structure) ? DEFAULTS.structure : S.pickable[0]) || S.sort !== DEFAULTS.sort || toggled);
 }
 
 // the active structure's own toggles (e.g. p0 "Parts as rows"), as quiet check chips in the cluster
@@ -287,8 +347,8 @@ function renderToggles() {
   const structure = window.IOStructures[S.structure] || {};
   const options = structureOptions();
   // a toggle with `when` shows only while it means something (P2's Empty ports: Connections only)
-  $('structure-toggles').innerHTML = (structure.toggles || []).filter((toggle) => IOView.toggleShown(toggle, options)).map((toggle) => `<label class="ctl-check" title="${esc(toggle.title || toggle.label)}">`
-    + `<input type="checkbox" data-opt="${esc(toggle.key)}"${options[toggle.key] ? ' checked' : ''}>${esc(toggle.label)}</label>`).join('');
+  $('structure-toggles').innerHTML = (structure.toggles || []).filter((toggle) => IOView.toggleShown(toggle, options)).map((toggle) => `<label class="vo-row vo-switch" title="${esc(toggle.title || toggle.label)}">`
+    + `<span class="vo-label">${esc(toggle.label)}</span><input type="checkbox" role="switch" data-opt="${esc(toggle.key)}"${options[toggle.key] ? ' checked' : ''}></label>`).join('');
 }
 function setToggle(key, value) {
   S.toggles[S.structure] = { ...(S.toggles[S.structure] || {}), [key]: value };
@@ -302,7 +362,11 @@ function setupSkins(manifestDefault) {
   const stored = readPref(PREFS.skin);
   S.skin = ids.includes(stored) ? stored : ids.includes(manifestDefault) ? manifestDefault : ids[0] || DEFAULTS.skin;
   const picker = $('skin');
-  picker.innerHTML = S.skins.map((skin) => `<option value="${esc(skin.id)}">${esc(skin.name || skin.id)}</option>`).join('');
+  // the two default skins first (Bare Metal, then Pretty), every other ready skin under "More skins"
+  const primary = S.skins.filter((skin) => skin.primary).sort((a, b) => (b.id === manifestDefault) - (a.id === manifestDefault));
+  const more = S.skins.filter((skin) => !skin.primary);
+  const option = (skin) => `<option value="${esc(skin.id)}">${esc(skin.name || skin.id)}</option>`;
+  picker.innerHTML = primary.map(option).join('') + (more.length ? `<optgroup label="More skins">${more.map(option).join('')}</optgroup>` : '');
   picker.value = S.skin;
   picker.addEventListener('change', () => { S.skin = picker.value; writePref(PREFS.skin, S.skin); applyTheme(); });
   const storedMode = readPref(PREFS.mode);
@@ -335,6 +399,109 @@ function switchVariant(id) {
   S.view = 'tree'; // a proposal only draws the Tree view: show the change at once
   render();
   $('left').scrollTop = scrollTops.get(id) || 0;
+}
+
+// ------------------------------------------------------------------------------------- panes ----
+// Every pane boundary drags (Zach, 2026-10-23; Settings/Memory/feedback_resizable_panels.md): the Tree view's
+// tree|detail sash sets the tree's width, the Table view's table|inspector sash the inspector's. Each width is
+// remembered in this browser, a double-click restores the default, and every pane keeps a minimum width. The arrow
+// keys move a focused sash by 16 px. WHY hand-rolled: the page is dependency-free (no bundler, no npm runtime).
+const PANES = {
+  tree: { pref: PREFS.treeWidth, variable: '--tree-w', fallback: 470, min: 280, other: 360 },        // other = the detail's minimum
+  table: { pref: PREFS.inspectorWidth, variable: '--insp-w', fallback: 460, min: 320, other: 420 },  // other = the table's minimum
+};
+const paneOf = () => (S.view === 'table' ? PANES.table : PANES.tree);
+function clampPane(pane, width) {
+  const total = $('main').getBoundingClientRect().width || window.innerWidth;
+  return Math.round(Math.max(pane.min, Math.min(width, total - pane.other - 6)));
+}
+function applyPanes() {
+  for (const pane of Object.values(PANES)) {
+    const stored = Number(readPref(pane.pref));
+    $('main').style.setProperty(pane.variable, `${clampPane(pane, stored > 0 ? stored : pane.fallback)}px`);
+  }
+}
+function setPane(pane, width, persist) {
+  const value = clampPane(pane, width);
+  $('main').style.setProperty(pane.variable, `${value}px`);
+  if (persist) writePref(pane.pref, String(value));
+  return value;
+}
+function setupPanes() {
+  const sash = $('sash');
+  let drag = null;
+  sash.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) return;
+    const pane = paneOf();
+    const rect = $('main').getBoundingClientRect();
+    drag = { pane, rect, id: event.pointerId };
+    sash.setPointerCapture(event.pointerId);
+    document.body.classList.add('resizing');
+    event.preventDefault();
+  });
+  sash.addEventListener('pointermove', (event) => {
+    if (!drag || event.pointerId !== drag.id) return;
+    // the tree grows to the right of the main area's left edge; the inspector grows to the left of its right edge
+    drag.width = setPane(drag.pane, drag.pane === PANES.tree ? event.clientX - drag.rect.left : drag.rect.right - event.clientX, false);
+  });
+  const end = (event) => {
+    if (!drag || event.pointerId !== drag.id) return;
+    if (drag.width !== undefined) setPane(drag.pane, drag.width, true);
+    drag = null;
+    document.body.classList.remove('resizing');
+  };
+  sash.addEventListener('pointerup', end);
+  sash.addEventListener('pointercancel', end);
+  sash.addEventListener('dblclick', () => {
+    const pane = paneOf();
+    try { localStorage.removeItem(pane.pref); } catch (_) { /* private mode */ }
+    setPane(pane, pane.fallback, false);
+  });
+  sash.addEventListener('keydown', (event) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    const pane = paneOf();
+    const now = parseFloat(getComputedStyle($('main')).getPropertyValue(pane.variable)) || pane.fallback;
+    const grow = (event.key === 'ArrowRight') === (pane === PANES.tree) ? 16 : -16;
+    setPane(pane, now + grow, true);
+    event.preventDefault();
+  });
+  window.addEventListener('resize', applyPanes);
+  applyPanes();
+}
+
+// The Table's inspector (Zach, 2026-10-23): folded by default so the table gets the full width; a row click slides
+// it in, a click back into the table (the selected row again, or the table's empty space), Escape or its close
+// button folds it; the toolbar toggle or `]` pins it open (remembered).
+const inspectorShown = () => S.inspPinned || S.inspOpen;
+function setInspector(open) { S.inspOpen = open; render(); }
+function setPinned(pinned) {
+  S.inspPinned = pinned;
+  S.inspOpen = pinned;
+  writePref(PREFS.inspectorPinned, pinned ? '1' : '0');
+  render();
+}
+
+// --------------------------------------------------------------------- the Prototype picker ----
+// TEMPORARY (Zach's rule: a variant gated for review gets a bottom-right drop-down, never a URL flag): the detail
+// layout (detail/*.js) and the utility menu (utilities/*.js) switch live and are remembered.
+const layouts = () => window.IODetailLayouts || {};
+const menus = () => window.IOUtilityMenus || {};
+const registryIds = (registry, prefix) => Object.keys(registry).filter((id) => registry[id] && typeof registry[id][prefix] === 'function')
+  .sort((a, b) => ((registry[a].order ?? 50) - (registry[b].order ?? 50)) || a.localeCompare(b));
+function setupPrototype(layoutDefault, menuDefault) {
+  const wire = (select, registry, method, pref, fallback, key) => {
+    const ids = registryIds(registry, method);
+    const stored = readPref(pref);
+    S[key] = ids.includes(stored) ? stored : ids.includes(fallback) ? fallback : ids[0] || null;
+    select.innerHTML = ids.map((id) => `<option value="${esc(id)}" title="${esc(registry[id].description || '')}">${esc(id)} · ${esc(registry[id].name || id)}</option>`).join('');
+    select.value = S[key] || '';
+    select.addEventListener('change', () => { if (!registry[select.value]) return; S[key] = select.value; writePref(pref, select.value); render(); });
+    return ids.length;
+  };
+  const shown = wire($('detail-layout'), layouts(), 'render', PREFS.layout, layoutDefault || DEFAULTS.layout, 'layout')
+    + wire($('utility-menu'), menus(), 'html', PREFS.menu, menuDefault || DEFAULTS.menu, 'menu');
+  $('proto-switch').hidden = shown < 3; // one layout and one menu: nothing to switch
+  try { S.closed = new Set(JSON.parse(readPref(PREFS.sections) || '[]')); } catch (_) { S.closed = new Set(); }
 }
 
 // ------------------------------------------------------- the page's own rows (table + fallback) --
@@ -445,112 +612,218 @@ function renderTable() {
 }
 
 // --------------------------------------------------------------------------- activity tab --
+// WHY the tag is neutral unless the event is a diagnostic: warn / error colours mean a true diagnostic result and
+// nothing else (Zach, 2026-10-23), so "plugged", "unplugged", "boot" read as plain words; an event the host logged
+// at warn / error (a fault confirmed, a bus going error-passive) takes its severity's tint.
 function eventRow(event) {
-  return `<div class="ev" data-go="${esc(event.path)}"><span class="t">${esc(event.time)}</span>`
+  const diagnostic = PROBLEM.has(event.severity);
+  return `<div class="ev${diagnostic ? ` sev-${esc(event.severity)}` : ''}" data-go="${esc(event.path)}"${diagnostic ? ' data-diagnostic' : ''}><span class="t">${esc(event.time)}</span>`
     + `<span><span class="kind ${esc(event.kind.replace(/ /g, '-'))}">${esc(event.kind)}</span></span><span class="p">${esc(event.port)}</span>`
     + `<span>${esc(event.message)}</span><span class="src" title="${esc(event.source)}">${esc(event.severity === 'info' ? '' : event.severity)}</span></div>`;
 }
+
+const isFaultEvent = (event) => /^Fault/.test(String(event.code || '')) || /^fault /.test(String(event.kind || ''));
+// The Activity view is one full-width log (Zach, 2026-10-23: two columns were "very busy"). The host's fault memory
+// is a filter of that log (its pending → confirmed → healed events, the memory's count above them); link health
+// moved to the Computer's detail (detail section "links").
 function renderActivity() {
   const act = S.act;
   if (!act) return '<div class="err muted">loading activity…</div>';
-  const lh = act.link_health.map((r) => `<tr data-go="${esc(r.path)}"><td title="${esc(r.edge)}">${esc(r.edge)}</td><td>${esc(r.kind)}</td><td>${esc(r.metric)}</td>`
-    + `<td title="${esc(r.value)}"><span class="lhst">${shape(r.level)}</span>${esc(r.value)}</td><td title="${esc(r.source)}">${esc(r.source)}</td></tr>`).join('');
-  const faults = act.faults.map((f) => `<tr data-go="${esc(f.path)}"><td title="${esc(f.path)}">${esc(f.name || f.path)}</td><td>${esc(f.code)}</td>`
-    + `<td>${pill(f.severity)}</td><td>${esc(f.status)}${f.active ? ' · active' : ''}</td><td>${f.occurrence_count}</td><td title="${esc(f.message)}">${esc(f.message)}</td></tr>`).join('');
-  return `<div class="act"><section><h2>Activity log <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">· ${act.events.length} events, newest first</span></h2>`
-    + (act.events.map(eventRow).join('') || '<div class="muted">No events yet.</div>') + '</section>'
-    + `<section><h2>Faults · the host's memory (pending → confirmed → healed)</h2><table class="lh"><colgroup><col style="width:24%"><col style="width:18%"><col style="width:70px"><col style="width:120px"><col style="width:40px"><col></colgroup>`
-    + `<thead><tr><th>Entity</th><th>Code</th><th>Severity</th><th>Status</th><th>#</th><th>Message</th></tr></thead><tbody>${faults || '<tr><td colspan="6" class="muted">none</td></tr>'}</tbody></table>`
-    + `<h2 style="margin-top:22px">Link health · the computer diagnoses its own wires</h2><table class="lh"><colgroup><col style="width:30%"><col style="width:60px"><col style="width:20%"><col><col style="width:22%"></colgroup>`
-    + `<thead><tr><th>Edge</th><th>Kind</th><th>Metric</th><th>Value</th><th>Source</th></tr></thead><tbody>${lh}</tbody></table></section></div>`;
+  const faults = S.actFilter === 'faults';
+  const events = faults ? act.events.filter(isFaultEvent) : act.events;
+  const active = act.faults.filter((fault) => fault.active).length;
+  const filter = `<div class="seg small act-filter" role="radiogroup" aria-label="Show">${[['all', 'All events'], ['faults', 'Faults']].map(([id, label]) => `<button data-act-filter="${id}" role="radio" aria-checked="${S.actFilter === id}" class="${S.actFilter === id ? 'on' : ''}">${label}</button>`).join('')}</div>`;
+  const memory = faults ? `<div class="act-note muted">The host's fault memory holds ${act.faults.length} fault${act.faults.length === 1 ? '' : 's'}${act.faults.length ? ` (${active} active)` : ''}: pending → confirmed → healed, as logged below.</div>` : '';
+  return `<div class="act"><section><h2>Activity log <span class="act-count">· ${events.length} ${faults ? 'fault events' : 'events'}, newest first</span>${filter}</h2>${memory}`
+    + (events.map(eventRow).join('') || `<div class="muted">${faults ? 'No fault events.' : 'No events yet.'}</div>`) + '</section></div>';
 }
 
 // --------------------------------------------------------------------------------- detail ----
-function kvCard(title, rows, opts = {}) {
+// The detail panel is drawn by the active DETAIL LAYOUT (window.IODetailLayouts[id], detail/*.js; d0 = sections top to
+// bottom). The page hands it the /api/v1/node JSON and a ctx of building blocks (docs/round2-seams.md §6): each
+// ctx.parts.<name>() returns one section's BODY ('' = nothing to show), ctx.section() wraps a body in a collapsible
+// header remembered per section id, ctx.draw() writes the panel only when it changed (focus and caret kept).
+const kv = (rows) => {
   const body = rows.filter(Boolean).map(([k, v]) => `<div class="k">${esc(k)}</div><div class="v">${v}</div>`).join('');
-  return `<div class="card ${opts.wide ? 'wide' : ''}"><h3>${opts.icon ? icon(opts.icon) : ''}${esc(title)}${opts.right ? `<span class="right">${opts.right}</span>` : ''}</h3><div class="kv">${body}</div></div>`;
+  return body ? `<div class="kv">${body}</div>` : '';
+};
+
+// One collapsible section. WHY sections and not a card grid: Zach, 2026-10-23: "the eye easily reads top to bottom
+// not in these grid patterns"; a folded header stays folded on every entity (per section id) until reopened.
+function section(id, title, body, opts = {}) {
+  if (!body) return '';
+  const open = !S.closed.has(id);
+  return `<section class="sec ${esc(id)}" data-sec="${esc(id)}"><h3 class="sec-h"><button class="sec-t" data-sec-toggle="${esc(id)}" aria-expanded="${open}">`
+    + `<svg class="ic sec-chev"><use href="#i-chev"/></svg><span>${esc(title)}</span></button>${opts.right ? `<span class="right">${opts.right}</span>` : ''}</h3>`
+    + `${open ? `<div class="sec-b">${body}</div>` : ''}</section>`;
+}
+function toggleSection(id) {
+  if (S.closed.has(id)) S.closed.delete(id); else S.closed.add(id);
+  writePref(PREFS.sections, JSON.stringify([...S.closed]));
+  render();
 }
 
-function checkCard(check) {
+// One diagnostic (a check) read top to bottom: name and level, the message, its values, the quiet received line.
+function checkBlock(check) {
   const values = check.values.map((v) => `<tr><td class="k">${esc(v.key)}</td><td>${esc(v.value)}</td></tr>`).join('');
   const measurements = check.measurements.map((m) => `<tr><td class="k">${esc(m.key)}</td><td>${shape(m.level)} ${esc(m.text)}</td></tr>`).join('');
   const timing = check.expected_period_s ? `every ${check.expected_period_s} s · STALE after ${check.stale_after_s} s` : 'event-driven (never stale)';
-  return `<div class="card check"><h3>${esc(check.name)}<span class="lvl">${pill(check.effective_level)}</span></h3>`
+  return `<div class="check"><div class="check-h"><span class="check-name">${esc(check.name)}</span><span class="lvl">${pill(check.effective_level)}</span></div>`
     + `<div class="msg">${esc(check.message || '—')}${check.code ? ` <span class="mono muted">${esc(check.code)}</span>` : ''}</div>`
     + (values || measurements ? `<table class="vt">${measurements}${values}</table>` : '')
     + `<div class="meta">received ${esc((check.received_iso || '').slice(11, 19) || '—')} · ${ago(check.age_s)} ago · ${esc(timing)}`
     + `${check.level !== check.effective_level ? ` · reported ${esc(check.level)}` : ''}<br>${esc(check.source)}</div></div>`;
 }
 
-// A structure's own grouping row (no entity): its members, each one click from its detail.
-function renderGroupDetail(row) {
-  const members = row.children.map((child) => `<div class="part-row" ${child.entity ? `data-go="${esc(child.entity)}"` : ''}>${icon(child.icon)}`
-    + `<span class="pname">${esc(child.label)}</span><span class="pmsg">${esc(child.message || '')}</span>${statusMark(child)}</div>`).join('');
-  return `<div class="d-head"><div class="d-title">${icon(row.icon)}<span>${esc(row.label)}</span></div>`
-    + `<div class="d-msg">${row.status.hint ? `${esc(row.status.hint.level)} below · ${esc(row.status.hint.message)}` : esc(row.message || 'grouping row')}</div></div>`
-    + `<div class="cards"><div class="card wide"><h3>Members · ${row.children.length}</h3>${members || '<div class="muted">none</div>'}</div></div>`;
+const partItem = (part) => `<div class="part-row" data-go="${esc(part.entity)}" title="${esc(part.name)}">${icon(part.icon)}`
+  + `<span class="pname">${esc(part.label)}</span><span class="pmsg">${esc(part.message)}</span>`
+  + `<span class="st${part.knock_on_of ? ' knock' : ''}">${shape(part.problem, part.message)}</span></div>`;
+
+// Link health (the computer diagnoses its own wires): the Computer's own section since round 3, on the host entity and
+// on a structure's "Computer" grouping row (P1).
+function linkHealthTable() {
+  const rows = (S.act && S.act.link_health) || [];
+  if (!rows.length) return '';
+  return `<table class="lh"><colgroup><col style="width:34%"><col style="width:52px"><col style="width:22%"><col><col style="width:20%"></colgroup>`
+    + '<thead><tr><th>Edge</th><th>Kind</th><th>Metric</th><th>Value</th><th>Source</th></tr></thead><tbody>'
+    + rows.map((r) => `<tr data-go="${esc(r.path)}"><td title="${esc(r.edge)}">${esc(r.edge)}</td><td>${esc(r.kind)}</td><td title="${esc(r.metric)}">${esc(r.metric)}</td>`
+      + `<td title="${esc(r.value)}"><span class="lhst">${shape(r.level)}</span>${esc(r.value)}</td><td title="${esc(r.source)}">${esc(r.source)}</td></tr>`).join('')
+    + '</tbody></table>';
 }
 
-// The folded parts of the selected row (view/core.js keeps them off the tree): each one click from its own detail.
-// A structure marks the transport layers it folded in (folded: 'path'): those are the row's connection, not its parts.
-function partsCard(row) {
-  if (!row || !row.parts || !row.parts.length) return '';
-  const item = (part) => `<div class="part-row" data-go="${esc(part.entity)}" title="${esc(part.name)}">${icon(part.icon)}`
-    + `<span class="pname">${esc(part.label)}</span><span class="pmsg">${esc(part.message)}</span>`
-    + `<span class="st${part.knock_on_of ? ' knock' : ''}">${shape(part.problem, part.message)}</span></div>`;
-  const path = row.parts.filter((part) => part.folded === 'path');
-  const parts = row.parts.filter((part) => part.folded !== 'path');
-  return (path.length ? `<div class="card wide"><h3>Connection (folded) · ${path.length}<span class="right muted">the layers this row is reached through, folded into it</span></h3>${path.map(item).join('')}</div>` : '')
-    + (parts.length ? `<div class="card wide"><h3>Parts · ${parts.length}<span class="right muted">composition (part_of), folded into this row</span></h3>${parts.map(item).join('')}</div>` : '');
+const HELPERS = { esc, icon, shape, pill, ago, kv, statusMark, eventRow, checkBlock };
+
+// What a detail layout draws from, for the current selection.
+function detailContext(byPath) {
+  const group = !S.sel && S.selKey && S.built && S.built.byKey.has(S.selKey) ? S.built.byKey.get(S.selKey) : null;
+  const node = group ? null : (byPath.get(S.sel) || S.data.tree);
+  const detail = node && S.node && S.node.node.path === node.path ? S.node : null;
+  // the row that stands for exactly this entity (not its owner, when the selection is a folded part)
+  const rowKey = node && S.built ? S.built.byEntity.get(node.path) : null;
+  const row = rowKey && S.built.byKey.get(rowKey).entity === node.path ? S.built.byKey.get(rowKey) : null;
+  const isComputer = Boolean((node && node.kind === 'host') || (group && /(^|:)computer$/.test(group.key)));
+  const parts = {
+    head() {
+      if (group) {
+        return `<div class="d-head"><div class="d-title">${icon(group.icon)}<span>${esc(group.label)}</span></div>`
+          + `<div class="d-msg">${group.status.hint ? `${esc(group.status.hint.level)} below · ${esc(group.status.hint.message)}` : esc(group.message || 'grouping row')}</div></div>`;
+      }
+      const title = row ? row.label : node.name;
+      const hint = node.hint ? `<span class="muted"> · below: <a class="link" data-go="${esc(node.hint.origin)}">${esc(node.rollup.origin_name)}</a> is ${esc(node.hint.level)}</span>` : '';
+      return `<div class="d-head"><div class="d-title">${icon(node.icon)}<span>${esc(title)}</span>${pill(node.level)}</div>`
+        + `<div class="d-msg">${esc(node.message || '—')}${hint}</div>`
+        + `<div class="d-path">${title !== node.name ? `${esc(node.name)} · ` : ''}${esc(node.path)}${node.hardware_id ? ` · ${esc(node.hardware_id)}` : ''}</div></div>`;
+    },
+    banners() {
+      if (!node) return '';
+      let html = '';
+      if (node.knock_on_of) {
+        const cause = byPath.get(node.knock_on_of);
+        html += `<div class="banner knock">↳ <span>Explained by <a class="link" data-go="${esc(node.knock_on_of)}">${esc(cause ? cause.name : node.knock_on_of)}</a> above: counted once, as that cause.</span></div>`;
+      }
+      if (node.stale) html += `<div class="banner stale">◷ <span><b>Stale:</b> nothing received for ${ago(node.age_s)} (expected every ${esc(node.expected_period_s)} s). The last values stay visible with their age.</span></div>`;
+      if (!node.connected) html += '<div class="banner osonly">Not connected.</div>';
+      return html;
+    },
+    whatToCheck: () => (detail ? whatToCheckBody(detail, row) : ''),
+    utilities: () => (detail ? renderUtilities(detail.actions, detail.node.path) : ''),
+    setup: () => (detail ? setupBody(detail) : ''),
+    status() {
+      if (!node) return '';
+      return kv([
+        ['shows', `${pill(node.level)} <span class="muted">${node.own.level === null ? 'grouping: worst below' : 'its own self-report'}</span>`],
+        ['worst below', node.rollup.level ? `${pill(node.rollup.level)} ${node.rollup.origin && node.rollup.origin !== node.path ? `<a class="link" data-go="${esc(node.rollup.origin)}">${esc(node.rollup.origin_name)}</a>` : ''}` : '<span class="muted">nothing reports</span>'],
+        Object.keys(node.rollup.counts).length ? ['causes below', Object.entries(node.rollup.counts).map(([l, n]) => `${n} ${l}`).join(' · ')] : null,
+        node.rollup.knock_on.length ? ['knock-on', `${node.rollup.knock_on.length} collapsed`] : null,
+        ['last received', node.age_s === null ? '<span class="muted">no records of its own</span>' : `${ago(node.age_s)} ago`],
+        ['owner', esc(node.owner || '—')],
+      ]);
+    },
+    identity() {
+      if (!node || !detail) return '';
+      const idRows = Object.entries(node.identity || {}).map(([k, v]) => [k.replace('_', ' '), esc(v)]);
+      const parent = detail.ancestors[detail.ancestors.length - 1];
+      if (parent) idRows.push([node.edge === 'part_of' ? 'part of' : 'via', `<a class="link" data-go="${esc(parent.path)}">${esc(parent.name)}</a>`]);
+      if (node.hardware_id) idRows.push(['hardware id', `<span class="mono">${esc(node.hardware_id)}</span>`]);
+      return kv(idRows);
+    },
+    // the layers this row is reached through (a structure marked them folded: 'path') and its composition parts
+    connection: () => ((row && row.parts) || []).filter((part) => part.folded === 'path').map(partItem).join(''),
+    parts: () => ((row && row.parts) || []).filter((part) => part.folded !== 'path').map(partItem).join(''),
+    checks: () => (detail ? detail.checks.map(checkBlock).join('') : ''),
+    faults() {
+      if (!detail || !detail.faults.length) return '';
+      return kv(detail.faults.map((f) => [f.code, `${pill(f.severity)} ${esc(f.status)}${f.active ? ' · active' : ''} · ${f.occurrence_count}× · ${esc(f.message)}`]));
+    },
+    events: () => (detail ? (detail.events.map(eventRow).join('') || '<div class="muted">No events.</div>') : ''),
+    links: () => (isComputer ? linkHealthTable() : ''),
+    members() {
+      if (!group) return '';
+      return group.children.map((child) => `<div class="part-row" ${child.entity ? `data-go="${esc(child.entity)}"` : ''}>${icon(child.icon)}`
+        + `<span class="pname">${esc(child.label)}</span><span class="pmsg">${esc(child.message || '')}</span>${statusMark(child)}</div>`).join('') || '<div class="muted">none</div>';
+    },
+  };
+  const counts = {
+    connection: ((row && row.parts) || []).filter((part) => part.folded === 'path').length,
+    parts: ((row && row.parts) || []).filter((part) => part.folded !== 'path').length,
+    checks: detail ? detail.checks.length : 0,
+    members: group ? group.children.length : 0,
+  };
+  return { node, detail, row, group, isComputer, counts, byPath, state: S.data, activity: S.act, view: S.view, parts, section,
+    isOpen: (id) => !S.closed.has(id), h: HELPERS, draw: drawDetail };
+}
+
+// Write the detail panel only when its HTML changed: the dry-run panel and the What to check list are read, not
+// glanced at (selection, focus and scroll stay). set_id's new-id box and Retire…'s reason box are rewritten with the
+// detail as the person types: keep the focus in it and the caret at its end (a number input has no selection API;
+// re-setting its value moves the caret there).
+// Make `from`'s children equal `to`'s, keeping every node that did not change: a hovered row keeps its hover and its
+// tooltip, an open text box its caret. WHY not innerHTML: the detail's ages ("2 s ago") change every second, and a
+// whole rewrite restarted a utility's hover tooltip each tick (it flickered, round 3).
+function morph(from, to) {
+  const old = [...from.childNodes];
+  const fresh = [...to.childNodes];
+  fresh.forEach((node, at) => {
+    const current = old[at];
+    if (!current) { from.appendChild(node); return; }
+    if (current.isEqualNode(node)) return;
+    if (current.nodeType === 3 && node.nodeType === 3) { current.nodeValue = node.nodeValue; return; }
+    if (current.nodeType === 1 && current.nodeName === node.nodeName && !(current instanceof SVGElement)) {
+      for (const { name } of [...current.attributes]) if (!node.hasAttribute(name)) current.removeAttribute(name);
+      for (const { name, value } of [...node.attributes]) if (current.getAttribute(name) !== value) current.setAttribute(name, value);
+      morph(current, node);
+      return;
+    }
+    from.replaceChild(node, current);
+  });
+  for (const extra of old.slice(fresh.length)) extra.remove();
+}
+
+function drawDetail(html) {
+  if (html === S.detailHtml) return;
+  const typing = document.activeElement && document.activeElement.matches('[data-util-newid], [data-setup-reason]')
+    ? (document.activeElement.matches('[data-setup-reason]') ? '[data-setup-reason]' : '[data-util-newid]') : null;
+  const next = document.createElement('div');
+  next.innerHTML = html;
+  morph($('detail'), next);
+  S.detailHtml = html;
+  const box = typing && $('detail').querySelector(typing);
+  if (box) { const typed = box.value; box.focus(); box.value = ''; box.value = typed; }
 }
 
 function renderDetail(byPath) {
-  if (!S.sel && S.selKey && S.built && S.built.byKey.has(S.selKey)) return renderGroupDetail(S.built.byKey.get(S.selKey));
-  const tnode = byPath.get(S.sel) || S.data.tree;
-  const detail = S.node && S.node.node.path === tnode.path ? S.node : null;
-  const node = tnode;
-  // the row that stands for exactly this entity (not its owner, when the selection is a folded part)
-  const rowKey = S.built ? S.built.byEntity.get(node.path) : null;
-  const ownRow = rowKey && S.built.byKey.get(rowKey).entity === node.path ? S.built.byKey.get(rowKey) : null;
-  const title = ownRow ? ownRow.label : node.name;
-  const hint = node.hint ? `<span class="muted"> · below: <a class="link" data-go="${esc(node.hint.origin)}">${esc(node.rollup.origin_name)}</a> is ${esc(node.hint.level)}</span>` : '';
-  let html = `<div class="d-head"><div class="d-title">${icon(node.icon)}<span>${esc(title)}</span>${pill(node.level)}</div>`
-    + `<div class="d-msg">${esc(node.message || '—')}${hint}</div>`
-    + `<div class="d-path">${title !== node.name ? `${esc(node.name)} · ` : ''}${esc(node.path)}${node.hardware_id ? ` · ${esc(node.hardware_id)}` : ''}</div></div>`;
-  if (node.knock_on_of) {
-    const cause = byPath.get(node.knock_on_of);
-    html += `<div class="banner knock">↳ <span>Explained by <a class="link" data-go="${esc(node.knock_on_of)}">${esc(cause ? cause.name : node.knock_on_of)}</a> above: counted once, as that cause.</span></div>`;
+  const ctx = detailContext(byPath);
+  const layout = layouts()[S.layout] || layouts()[DEFAULTS.layout];
+  if (!layout) {
+    drawDetail(`${ctx.parts.head()}<div class="d-body"><div class="err">No detail layout loaded (detail/*.js).</div></div>`);
+    return;
   }
-  if (node.stale) html += `<div class="banner stale">◷ <span><b>Stale:</b> nothing received for ${ago(node.age_s)} (expected every ${esc(node.expected_period_s)} s). The last values stay visible with their age.</span></div>`;
-  if (!node.connected) html += '<div class="banner osonly">Not connected.</div>';
-  html += '<div class="cards">';
-  if (!detail) return `${html}<div class="muted">loading…</div></div>`;
-  html += whatToCheckCard(detail, ownRow);
-  // the utilities right under the problem: what to check, then the buttons that check or fix it (printer style)
-  html += renderUtilities(detail.actions, detail.node.path);
-  html += setupCard(detail);
-  const status = [
-    ['shows', `${pill(node.level)} <span class="muted">${node.own.level === null ? 'grouping: worst below' : 'its own self-report'}</span>`],
-    ['worst below', node.rollup.level ? `${pill(node.rollup.level)} ${node.rollup.origin && node.rollup.origin !== node.path ? `<a class="link" data-go="${esc(node.rollup.origin)}">${esc(node.rollup.origin_name)}</a>` : ''}` : '<span class="muted">nothing reports</span>'],
-    Object.keys(node.rollup.counts).length ? ['causes below', Object.entries(node.rollup.counts).map(([l, n]) => `${n} ${l}`).join(' · ')] : null,
-    node.rollup.knock_on.length ? ['knock-on', `${node.rollup.knock_on.length} collapsed`] : null,
-    ['last received', node.age_s === null ? '<span class="muted">no records of its own</span>' : `${ago(node.age_s)} ago`],
-    ['owner', esc(node.owner || '—')],
-  ];
-  html += kvCard('Status', status);
-  const id = node.identity || {};
-  const parent = detail.ancestors[detail.ancestors.length - 1];
-  const idRows = Object.entries(id).map(([k, v]) => [k.replace('_', ' '), esc(v)]);
-  if (parent) idRows.push([node.edge === 'part_of' ? 'part of' : 'via', `<a class="link" data-go="${esc(parent.path)}">${esc(parent.name)}</a>`]);
-  if (node.hardware_id) idRows.push(['hardware id', `<span class="mono">${esc(node.hardware_id)}</span>`]);
-  html += kvCard('Identity', idRows);
-  html += partsCard(ownRow);
-  html += detail.checks.map(checkCard).join('');
-  if (detail.faults.length) {
-    html += kvCard('Faults', detail.faults.map((f) => [f.code, `${pill(f.severity)} ${esc(f.status)}${f.active ? ' · active' : ''} · ${f.occurrence_count}× · ${esc(f.message)}`]), { wide: true });
+  try {
+    layout.render($('detail'), ctx.detail, ctx);
+  } catch (error) {
+    console.error(`detail layout ${S.layout}:`, error);
+    drawDetail(`${ctx.parts.head()}<div class="d-body"><div class="err">detail layout ${esc(S.layout)} failed: ${esc(error)}</div></div>`);
   }
-  html += `<div class="card wide"><h3>Events · this row and below</h3>${detail.events.map(eventRow).join('') || '<div class="muted">No events.</div>'}</div>`;
-  return `${html}</div>`;
 }
 
 // ------------------------------------------------------------------ utilities (the action buttons) ----
@@ -588,7 +861,6 @@ const UTIL_ICONS = {
 };
 const utilIcon = (name) => `<svg class="u-ic" viewBox="0 0 24 24" aria-hidden="true">${UTIL_ICONS[STANDARD.has(name) ? name : 'more']}</svg>`;
 const plainTitle = (title) => String(title || '').replace(/…$/, '');
-const hhmmss = (ms) => new Date(ms).toTimeString().slice(0, 8);
 
 function utilityGroups(actions) {
   const order = (action) => (STANDARD.has(action.name) ? STANDARD_ORDER.indexOf(action.name) : STANDARD_ORDER.length);
@@ -670,7 +942,8 @@ function preconditionRows(action, answer) {
 }
 function preconditionsHtml(rows) {
   if (!rows.length) return '<div class="muted">No preconditions.</div>';
-  return `<ul class="pre">${rows.map((row) => `<li><span class="st ${esc(row.state)}">${{ pass: '✓', fail: '✗' }[row.state] || '?'}</span>`
+  // WHY muted when not met: a precondition is not a diagnostic; warn / error colours are reserved for those (round 3)
+  return `<ul class="pre">${rows.map((row) => `<li class="pre-${esc(row.state)}"><span class="st ${esc(row.state)}">${{ pass: '✓', fail: '✗' }[row.state] || '?'}</span>`
     + `<span>${esc(row.text)}</span><span class="why">${esc([row.detail, row.plugin ? `driver: ${row.plugin}` : ''].filter(Boolean).join(' · '))}</span></li>`).join('')}</ul>`;
 }
 
@@ -711,7 +984,9 @@ function resultHtml(util) {
 function dryRunPanel(action) {
   const util = S.util;
   const close = '<button class="btn" data-util-close>Close</button>';
-  if (util.phase === 'dry') return `<div class="u-panel"><div class="muted">Dry run · asking ${esc(action.owner)} what it would run…</div></div>`;
+  // asking / running: no panel and no live output; the row itself greys out with one quiet line ("Asking … what it would
+  // run…", "Checking communication… 3 s"; Zach, 2026-10-23), and the panel comes back with the result
+  if (util.phase === 'dry' || util.phase === 'running') return '';
   if (!util.dry) return `<div class="u-panel">${resultHtml(util)}<div class="u-foot">${close}</div></div>`;
   const result = util.dry.result || {};
   const answer = result.action_result || {};
@@ -725,8 +1000,7 @@ function dryRunPanel(action) {
   // the token's window runs on this computer's clock (a replay's clock shows the recorded time)
   const expires = `${Math.round((util.dry.window_s || 300) / 60)} min`;
   let foot;
-  if (util.phase === 'running') foot = `<span class="u-running">Running since ${esc(hhmmss(util.startedAt))}…</span>`;
-  else if (util.phase === 'done') foot = `<button class="btn" data-util-again>Dry run again</button>${close}`;
+  if (util.phase === 'done') foot = `<button class="btn" data-util-again>Dry run again</button>${close}`;
   else if (action.danger === 'query') foot = `<button class="btn primary query" data-util-run${runnable ? '' : ' disabled'}>Run ${esc(plainTitle(action.title))}</button>${close}`;
   else foot = `<button class="btn primary ${esc(action.danger)}" data-util-run${runnable ? '' : ' disabled'}>Continue…</button>${close}`;
   return `<div class="u-panel">`
@@ -742,30 +1016,63 @@ function dryRunPanel(action) {
     + `<div class="u-foot">${foot}</div></div>`;
 }
 
-function utilityRow(action, path) {
-  const active = S.util && S.util.path === S.sel && S.util.name === action.name;
-  const runnable = RUNNABLE.has(action.state);
-  const reason = action.state !== 'ready' && action.reason ? `<span class="u-reason">${esc(action.reason)}</span>` : '';
-  const danger = action.danger !== 'query' ? `<span class="danger ${esc(action.danger)}">${esc(action.danger)}</span>` : '';
-  // set_id names its new id in the row itself; its dry run stays disabled until the box holds a valid one
-  const needsId = action.name === 'set_id';
-  const waiting = needsId && newIdOf(path, action) === null;
-  const button = `<button class="u-btn" data-util="${esc(action.name)}"${waiting ? ' disabled' : ''} title="${waiting
-    ? 'Type the new CAN id (1-126) first' : `Dry run: show what ${esc(plainTitle(action.title))} would run`}">`
-    + `${utilIcon(action.name)}<span class="u-text"><span class="u-title">${esc(action.title)}</span>`
-    + `<span class="u-desc">${esc(action.description)}</span>${reason}</span>${danger}</button>`;
-  const newId = needsId ? `<label class="u-newid"><span>New id (1-126)</span><input type="number" min="1" max="126" step="1" inputmode="numeric"`
-    + ` data-util-newid value="${esc(S.newIds.get(path) ?? '')}" aria-label="New CAN id (1-126)"></label>` : '';
-  return `<div class="urow${active ? ' active' : ''}${runnable ? '' : ' blocked'}" data-util-row="${esc(action.name)}">`
-    + `${needsId ? `<div class="u-line">${button}${newId}</div>` : button}`
-    + `${active ? dryRunPanel(action) : ''}</div>`;
+// "Check communication" -> "Checking communication", "Run calibration…" -> "Running calibration", "Stop all" ->
+// "Stopping all": the busy line under a running utility (Zach's quiet "received 08:55:30 · 1 s ago" line, 2026-10-23)
+const DOUBLED = new Set(['stop', 'set', 'reset', 'run', 'plan', 'get']);
+function gerund(title) {
+  const [verb, ...rest] = plainTitle(title).split(' ');
+  if (!verb) return '';
+  const lower = verb.toLowerCase();
+  let ing;
+  if (DOUBLED.has(lower)) ing = `${verb}${verb.slice(-1)}ing`;
+  else if (/[^e]e$/i.test(verb)) ing = `${verb.slice(0, -1)}ing`;
+  else ing = `${verb}ing`;
+  return [ing, ...rest].join(' ');
+}
+
+// The ctx a utility menu draws from (window.IOUtilityMenus[id].html(ctx), docs/round2-seams.md §6). The page owns the
+// whole flow: a [data-util=<name>] click is always a dry run; the panel (ctx.panel) carries Run / Continue…, and
+// anything but a query runs only from the confirm modal (moves: its ticked box), with the dry run's token.
+function utilityContext(actions, path) {
+  const active = S.util && S.util.path === path ? S.util : null;
+  const isActive = (action) => Boolean(active && active.name === action.name);
+  const phase = (action) => (isActive(action) ? active.phase : 'idle');
+  return {
+    actions,
+    path,
+    owner: (actions[0] && actions[0].owner) || '',
+    active,
+    groups: utilityGroups(actions),
+    h: { esc, utilIcon, plainTitle, gerund, shape },
+    isActive,
+    phase,
+    runnable: (action) => RUNNABLE.has(action.state),
+    // set_id names its new id in the row itself; its dry run stays disabled until the box holds a valid one
+    needsId: (action) => action.name === 'set_id',
+    waiting: (action) => action.name === 'set_id' && newIdOf(path, action) === null,
+    newIdBox: (action) => (action.name === 'set_id' ? `<label class="u-newid"><span>New id (1-126)</span><input type="number" min="1" max="126" step="1" inputmode="numeric"`
+      + ` data-util-newid value="${esc(S.newIds.get(path) ?? '')}" aria-label="New CAN id (1-126)"></label>` : ''),
+    // the quiet line under a busy utility: '' when it is not asking or running
+    busy: (action) => {
+      const now = phase(action);
+      if (now === 'dry') return `Asking ${action.owner} what it would run…`;
+      if (now === 'running') return `${gerund(action.title)}… ${Math.max(0, Math.round((Date.now() - active.startedAt) / 1000))} s`;
+      return '';
+    },
+    panel: (action) => (isActive(action) ? dryRunPanel(action) : ''),
+  };
 }
 
 function renderUtilities(actions, path) {
   if (!actions || !actions.length) return '';
-  const groups = utilityGroups(actions).map((group) => `<div class="ugroup ugroup-${group.id}"><div class="ugroup-h">${esc(group.title)}</div>`
-    + `${group.items.map((action) => utilityRow(action, path)).join('')}</div>`).join('');
-  return `<div class="card wide utilities"><h3>Utilities<span class="right muted">${esc(actions[0].owner)} runs them · every click is a dry run first</span></h3>${groups}</div>`;
+  const menu = menus()[S.menu] || menus()[DEFAULTS.menu];
+  if (!menu) return '<div class="muted">No utility menu loaded (utilities/*.js).</div>';
+  try {
+    return menu.html(utilityContext(actions, path)) || '';
+  } catch (error) {
+    console.error(`utility menu ${S.menu}:`, error);
+    return `<div class="err">utility menu ${esc(S.menu)} failed: ${esc(error)}</div>`;
+  }
 }
 
 // The confirm modal for anything but a query: the danger repeated in words, the plugin's confirm text, what runs,
@@ -789,7 +1096,9 @@ function renderModal() {
     ? S.built.byKey.get(S.built.byEntity.get(util.path)).label : S.node.node.name;
   const html = `<div class="modal m-${esc(action.danger)}" role="dialog" aria-modal="true" aria-labelledby="m-title">`
     + `<header><h2 id="m-title">${esc(plainTitle(action.title))} · ${esc(label)}</h2><span class="danger ${esc(action.danger)}">${esc(action.danger)}</span></header>`
-    + `<div class="body"><div class="m-danger">${shape(moves ? 'error' : 'warn', action.danger)}<b>${esc(DANGER_WORDS[action.danger] || 'Needs your confirmation: its danger class is not one this page knows.')}</b></div>`
+    // WHY the utility's own icon, not a warn / error shape: those shapes mean a diagnostic result (round 3); moves gets
+    // the strongest NEUTRAL treatment instead (a heavy frame, the ticked box, an inverted button)
+    + `<div class="body"><div class="m-danger">${utilIcon(action.name)}<b>${esc(DANGER_WORDS[action.danger] || 'Needs your confirmation: its danger class is not one this page knows.')}</b></div>`
     + `<div class="confirm">${esc(answer.confirm || action.confirm)}</div>`
     + `${util.name === 'set_id' && util.newId !== null ? `<div class="m-newid">CAN ${esc(util.node)} → CAN ${esc(util.newId)}</div>` : ''}`
     + `<div class="m-runs">Runs <code>${esc(commandOf(answer) || 'in-process')}</code></div>`
@@ -842,15 +1151,14 @@ function setupPanel(setup, edit) {
     + `<button class="btn primary query" data-setup-confirm${ready && edit.phase !== 'saving' ? '' : ' disabled'}>${esc(SETUP_VERBS[edit.op])}</button></div></div>`;
 }
 
-function setupCard(detail) {
+function setupBody(detail) {
   const setup = detail && detail.setup;
   if (!setup) return '';
   const path = detail.node.path;
   const edit = S.setup && S.setup.path === path ? S.setup : null;
   const buttons = (SETUP_OPS[setup.role] || []).map((op) => `<button class="btn${edit && edit.op === op ? ' on' : ''}" data-setup="${op}"${setup.can[op] ? '' : ' disabled'} title="${esc(setup.confirm[op] || '')}">${esc(SETUP_TITLES[op])}</button>`).join('');
   const note = !setup.editable ? `<div class="s-line muted">${esc(setup.note || 'No rig file on this host (a replay without --expected): nothing to edit')}</div>` : '';
-  return `<div class="card wide setup"><h3>Expected setup<span class="right muted">the rig file, never the device</span></h3>`
-    + `${setupWhere(setup)}${note}<div class="s-actions">${buttons}</div>${edit ? setupPanel(setup, edit) : ''}</div>`;
+  return `${setupWhere(setup)}${note}<div class="s-actions">${buttons}</div>${edit ? setupPanel(setup, edit) : ''}`;
 }
 
 async function saveSetup() {
@@ -937,7 +1245,7 @@ function renderAttention() {
 
 // The detail panel's "What to check": the selection's own checklists, then its folded parts' (the CAN bus folded
 // into its adapter), each with the plain-words reason.
-function whatToCheckCard(detail, ownRow) {
+function whatToCheckBody(detail, ownRow) {
   const own = whyOf(detail).map((why) => ({ ...why, who: '' }));
   const parts = ((ownRow && ownRow.parts) || []).filter((part) => part.problem).flatMap((part) => {
     wantWhy(part.entity, part.message);
@@ -945,9 +1253,9 @@ function whatToCheckCard(detail, ownRow) {
   });
   const all = [...own, ...parts];
   if (!all.length) return '';
-  return `<div class="card wide why"><h3>What to check</h3>${all.map((why) => `<div class="why-item">`
+  return all.map((why) => `<div class="why-item">`
     + `<div class="why-head">${shape(why.level, why.level)}<b>${why.entity ? `<a class="link" data-go="${esc(why.entity)}">${esc(why.who)}</a> · ` : ''}${esc(why.name)}</b></div>`
-    + `<div class="why-msg">${esc(why.message)}</div>${whyLines(why)}</div>`).join('')}</div>`;
+    + `<div class="why-msg">${esc(why.message)}</div>${whyLines(why)}</div>`).join('');
 }
 
 // --------------------------------------------------------------------------- chip + modal ----
@@ -980,7 +1288,7 @@ function renderStatusbar() {
 function render() {
   if (!S.data) return;
   const byPath = index(S.data.tree);
-  S.built = IOView.build(S.data, S.structure, { ...structureOptions(), query: S.query });
+  S.built = IOView.build(S.data, S.structure, { ...structureOptions(), query: S.query, sort: S.sort, changes: changesOf(S.act) });
   $('clock').textContent = S.data.clock.iso ? `${S.data.clock.iso.slice(5, 10)}  ${S.data.clock.time}` : '—';
   const fixture = S.data.fixture;
   $('mode').textContent = fixture ? `Replay ${fixture.name} · ${fixture.label} (recorded)` : `Live · ${S.data.host.name}`;
@@ -989,7 +1297,15 @@ function render() {
   $('sources').innerHTML = skipped.map((s) => `<span class="tag simulated" title="${esc(s.note)}">${esc(s.name)} skipped</span>`).join('');
   document.querySelectorAll('#views button').forEach((b) => b.classList.toggle('on', b.dataset.view === S.view));
   const treeView = S.view === 'tree';
-  $('main').className = `main v-${S.view}${treeView && WIDE.has(S.variant) ? ' wide-tree' : ''}`;
+  const tableView = S.view === 'table';
+  $('main').className = `main v-${S.view}${treeView && WIDE.has(S.variant) ? ' wide-tree' : ''}${tableView && inspectorShown() ? ' insp-open' : ''}`;
+  $('insp-toggle').hidden = !tableView;
+  $('insp-toggle').setAttribute('aria-pressed', String(S.inspPinned));
+  $('insp-toggle').classList.toggle('on', S.inspPinned);
+  $('inspector').setAttribute('aria-hidden', String(tableView && !inspectorShown()));
+  $('insp-pin').setAttribute('aria-pressed', String(S.inspPinned));
+  $('insp-pin').classList.toggle('on', S.inspPinned);
+  renderViewOptionsDot();
   const legacy = treeView && isLegacy(S.variant);
   $('structure-switch').classList.toggle('dim', legacy);
   $('structure-switch').title = legacy ? `${S.variant} is a legacy style: it always draws the physical API tree` : 'Structure: what the rows are';
@@ -1002,19 +1318,8 @@ function render() {
   $('search').placeholder = noSearch ? `No search in ${S.variant} · try Table` : 'Search entities, ids, ports…';
   $('search').closest('.search').classList.toggle('off', noSearch);
   renderAttention();
-  const detailHtml = renderDetail(byPath);
-  // WHY compare: the dry-run panel and the What to check list are read, not glanced at; an unchanged detail is not
-  // rewritten every second (selection, focus and scroll stay)
-  if (detailHtml !== S.detailHtml) {
-    // set_id's new-id box and Retire…'s reason box are rewritten with the detail as the person types: keep the focus
-    // in it and the caret at its end (a number input has no selection API; re-setting its value moves the caret there)
-    const typing = document.activeElement && document.activeElement.matches('[data-util-newid], [data-setup-reason]')
-      ? (document.activeElement.matches('[data-setup-reason]') ? '[data-setup-reason]' : '[data-util-newid]') : null;
-    $('detail').innerHTML = detailHtml;
-    S.detailHtml = detailHtml;
-    const box = typing && $('detail').querySelector(typing);
-    if (box) { const typed = box.value; box.focus(); box.value = ''; box.value = typed; }
-  }
+  // WHY drawn through a layout's ctx.draw: an unchanged detail is not rewritten every second (selection, focus, scroll)
+  renderDetail(byPath);
   renderChip();
   renderModal();
   renderStatusbar();
@@ -1032,6 +1337,9 @@ function select(path) {
 // ------------------------------------------------------------------------------- events ----
 document.addEventListener('click', (event) => {
   const t = event.target;
+  // View options: its button toggles it, a click anywhere else closes it (and still does what it clicked)
+  if (t.closest('#vo-btn')) { setViewOptions(!S.vo); return; }
+  if (S.vo && !t.closest('#view-options')) setViewOptions(false);
   // a tree proposal handles its own clicks (selection reaches the page through onSelect); act only on the chip
   if (t.closest('.tree-pane')) { if (S.chip) { S.chip = false; render(); } return; }
   const toggle = t.closest('[data-toggle]');
@@ -1043,7 +1351,15 @@ document.addEventListener('click', (event) => {
   }
   const mode = t.closest('#mode-switch [data-mode]');
   if (mode) return setMode(mode.dataset.mode);
-  if (t.closest('#controls')) return; // the cluster's selects and check chips report through change events
+  // the popover's and the Prototype picker's selects and switches report through change events
+  if (t.closest('#controls') || t.closest('#view-options')) return;
+  if (t.closest('#insp-toggle')) return setPinned(!S.inspPinned);
+  if (t.closest('#insp-pin')) return setPinned(!S.inspPinned);
+  if (t.closest('#insp-close')) { S.inspPinned = false; writePref(PREFS.inspectorPinned, '0'); return setInspector(false); }
+  const sec = t.closest('[data-sec-toggle]');
+  if (sec) return toggleSection(sec.dataset.secToggle);
+  const filter = t.closest('[data-act-filter]');
+  if (filter) { S.actFilter = filter.dataset.actFilter; return render(); }
   const view = t.closest('[data-view]');
   if (view) { S.view = view.dataset.view; return render(); }
   if (t.closest('#chip')) { S.chip = !S.chip; return render(); }
@@ -1091,7 +1407,16 @@ document.addEventListener('click', (event) => {
     return render();
   }
   const row = t.closest('[data-key]');
+  if (row && S.view === 'table') {
+    // the selected row again folds the inspector (unless pinned); any other row slides it in on that row
+    if (row.dataset.key === selectedKey() && inspectorShown() && !S.inspPinned) return setInspector(false);
+    S.inspOpen = true;
+    onTreeSelect(row.dataset.key);
+    return render();
+  }
   if (row) { if (S.view === 'activity') S.view = 'tree'; onTreeSelect(row.dataset.key); return render(); }
+  // a click back into the table's empty space folds the inspector
+  if (S.view === 'table' && t.closest('#left') && S.inspOpen && !S.inspPinned) return setInspector(false);
   if (S.chip && !t.closest('#chip-pop')) { S.chip = false; render(); }
 });
 $('search').addEventListener('input', (event) => { S.query = event.target.value; render(); });
@@ -1116,24 +1441,40 @@ document.addEventListener('input', (event) => {
   render();
 });
 document.addEventListener('keydown', (event) => {
+  const typing = event.target.closest && event.target.closest('input, select, textarea, [contenteditable]');
+  // `]` pins the Table's inspector open (again: unpins and folds it), as VS Code toggles its secondary side bar
+  if (event.key === ']' && !typing && !event.ctrlKey && !event.metaKey && !event.altKey && S.view === 'table') {
+    setPinned(!S.inspPinned);
+    event.preventDefault();
+    return;
+  }
   if (event.key !== 'Escape') return;
+  // one layer at a time, innermost first: the confirm, the setup edit, the chip, View options, then the inspector
   if (S.util && S.util.phase === 'confirm') S.util.phase = 'shown';
-  if (S.setup && S.setup.phase === 'confirm') S.setup = null;
-  S.chip = false;
+  else if (S.setup && S.setup.phase === 'confirm') S.setup = null;
+  else if (S.chip) S.chip = false;
+  else if (S.vo) setViewOptions(false);
+  else if (S.view === 'table' && S.inspOpen && !S.inspPinned) S.inspOpen = false;
   render();
 });
 
 async function boot() {
   // index.html's inline script already set data-skin / data-mode from storage, so the first paint is right
-  const [skins, structures] = await Promise.all([readManifest('skins/index.json', 'skins'), readManifest('view/structure/index.json', 'structures')]);
-  S.skins = skins.entries.length ? skins.entries : [{ id: DEFAULTS.skin, name: 'Claude', file: 'claude.css' }];
+  const [skins, structures, detailLayouts, utilityMenus] = await Promise.all([readManifest('skins/index.json', 'skins'),
+    readManifest('view/structure/index.json', 'structures'), readManifest('detail/index.json', 'layouts'), readManifest('utilities/index.json', 'menus')]);
+  S.skins = skins.entries.length ? skins.entries : [{ id: DEFAULTS.skin, name: 'Bare Metal', file: 'contrast.css', primary: true }];
   await Promise.all([
     ...S.skins.map((skin) => loadStylesheet(`skins/${skin.file}`, skin.id)),
     ...structures.entries.map((entry) => loadScript(`view/structure/${entry.file}`)),
+    ...detailLayouts.entries.map((entry) => loadScript(`detail/${entry.file}`)),
+    ...utilityMenus.entries.map((entry) => loadScript(`utilities/${entry.file}`)),
   ]);
   setupSkins(skins.default);
-  setupStructures(structures.default);
+  setupStructures(structures);
   setupSwitcher();
+  setupPrototype(detailLayouts.default, utilityMenus.default);
+  S.inspPinned = readPref(PREFS.inspectorPinned) === '1';
+  setupPanes();
   tick();
   setInterval(tick, 1000);
 }

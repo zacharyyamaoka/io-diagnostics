@@ -11,11 +11,12 @@ touches `app.js`, `app.css`, `tokens.css`, `core.js`, a tree style or the tests.
 |---|---|
 | inline `<script>` in `<head>` | sets `<html data-skin data-mode>` from storage before the first paint |
 | `tokens.css` | the token list (BASE + DERIVED), system-colour fallbacks |
-| `skins/claude.css` | the default skin, linked statically (no flash); other ready skins load from `skins/index.json` |
+| `skins/contrast.css` | the default skin ("Bare Metal" since round 3; was Claude), linked statically (no flash); other ready skins load from `skins/index.json` |
 | `app.css`, `tree/v1..v6.css` | the page and the tree styles; colours only through tokens |
 | `view/core.js` | `window.IOView` + the registry `window.IOStructures` |
 | `tree/v1..v6.js` | `window.IOTreeRenderers` |
-| `app.js` | boot: reads both manifests, loads ready skins and structures, then polls `/api/v1/state` |
+| `app.js` | boot: reads the four manifests (skins, structures, `detail/index.json`, `utilities/index.json`), loads every ready file, then polls `/api/v1/state` |
+| `detail/<id>.js`, `utilities/<id>.js` | (round 3, §6) `window.IODetailLayouts`, `window.IOUtilityMenus`, loaded by app.js |
 
 Data flow every tick: `GET /api/v1/state` → `IOView.build(state, structureId, options)` → `{rows, byKey, byEntity, …}`
 → the active tree style (`consumes: 'rows'`) **and** the Table draw those rows. Nothing but the legacy styles v3–v5
@@ -226,19 +227,37 @@ Picker order: v6 (default), v1, v2, v3, v4, v5.
 - `<html data-skin="<id>" data-mode="light|dark" data-mode-pref="auto|light|dark">`.
 - localStorage (all wrapped in try/catch): `io-diagnostics.skin`, `io-diagnostics.mode` (`auto|light|dark`),
   `io-diagnostics.structure`, `io-diagnostics.tree-variant`, `io-diagnostics.structure-toggles`
-  (`{structureId: {key: bool}}`); v2 keeps its own `io-diagnostics.tree.v2.open`.
-- Controls (bottom-right `#controls`): `#structure`, `#structure-toggles [data-opt=<key>]`, `#tree-variant`,
-  `#skin`, `#mode-switch [data-mode=auto|light|dark]`. Never a URL flag. Defaults: structure p1, tree v6, skin claude,
-  mode follows the OS.
+  (`{structureId: {key: bool}}`); v2 keeps its own `io-diagnostics.tree.v2.open`. Round 3 adds `io-diagnostics.sort`
+  (`status|name|change`), `io-diagnostics.pane.tree` / `io-diagnostics.pane.inspector` (px), `io-diagnostics.inspector-pinned`
+  (`1|0`), `io-diagnostics.detail-layout`, `io-diagnostics.utility-menu`, `io-diagnostics.detail-sections` (the folded
+  section ids, a JSON list).
+- Controls (round 3): the **View options** popover `#view-options` (opened by `#vo-btn` beside the search box; a click
+  outside or Escape closes it) holds `#structure` (Group by), `#sort`, `#structure-toggles [data-opt=<key>]` (switch
+  rows), `#tree-variant`, `#skin` (the manifest's `primary` skins first, the rest in a "More skins" optgroup) and
+  `#mode-switch [data-mode=auto|light|dark]`. The bottom-right `#controls` keeps only the temporary Prototype picker
+  (`#detail-layout`, `#utility-menu`). Never a URL flag. Defaults: structure p1, sort status, tree v6, skin `contrast`
+  ("Bare Metal"), layout d0, menu u0, mode follows the OS. A test opens the popover before `selectOption` (the selects are
+  hidden until then): `tests/test_*.js` have a `pick(page, selector, value)` helper.
+- Panes (round 3): `#main` is `#left` · `#sash` (`role=separator`) · `#inspector` (`.insp-bar` with `#insp-pin`,
+  `#insp-close`, then `#detail`). Tree view: the sash sets `--tree-w` (default 470, min 280, the detail keeps 360). Table
+  view: it sets `--insp-w` (default 460, min 320, the table keeps 420); the inspector is folded (`#inspector` width 0) until a
+  row is clicked (`.main.insp-open`); the same row, the table's empty space, Escape or `#insp-close` fold it; `#insp-toggle`
+  (toolbar) or `]` pins it (`S.inspPinned`). Double-click a sash = its default; arrow keys move a focused sash 16 px.
 - Attention line `#attention` (under the story line): every `summary.attention` cause, worst first, `.att-where`
   (`device › name`, a link) + `.att-msg` (the plain words); the first one's `what_to_check` lines open
   (`.why-lines > div`, as authored), the others behind `[data-att]`. `S.why` caches each path's checklists from
-  `/api/v1/node` (`what_to_check`, `kernel_evidence`). The detail panel's first card is `.card.why` ("What to
-  check") for the selection and its folded problem parts.
-- Utilities: `.card.utilities > .ugroup.ugroup-{checks|maintenance|motion|more}` > `.urow` > `button.u-btn[data-util=<name>]`
-  (icon `svg.u-ic`, `.u-title`, `.u-desc`); a click dry-runs (`S.util`, `POST /api/v1/act`), the panel `.u-panel`
-  shows `.u-cmd`, `.u-steps`, `.pre`, `.confirm`, `.u-argv`; `[data-util-run]` runs a query or opens the modal
-  (`#modal .modal.m-<danger>`, `[data-util-tick]` for moves, `[data-util-confirm]`); the result is `.u-result`.
+  `/api/v1/node` (`what_to_check`, `kernel_evidence`). In d0 the detail's first section is `section.sec.why` ("What
+  to check") for the selection and its folded problem parts.
+- Utilities (u0, inside d0's `section.sec.utilities`): `.ugroup.ugroup-{checks|maintenance|motion|more}` > `.urow`
+  (`.busy` while asking / running, `.blocked` when not runnable) > `button.u-btn[data-util=<name>]` (icon `svg.u-ic`,
+  `.u-title`, one muted line `.u-busy` or `.u-reason`, the danger word `.danger`, the tooltip `.u-desc[role=tooltip]`);
+  a click dry-runs (`S.util`, `POST /api/v1/act`), the panel `.u-panel` shows `.u-cmd`, `.u-steps`, `.pre` (`li.pre-<state>`),
+  `.confirm`, `.u-argv`; `[data-util-run]` runs a query or opens the modal (`#modal .modal.m-<danger>`, `[data-util-tick]`
+  for moves, `[data-util-confirm]`); while it runs the panel is gone and the row is greyed; the result is `.u-result`.
+- Detail sections (d0): `section.sec.<id>[data-sec=<id>]` > `h3.sec-h` > `button.sec-t[data-sec-toggle=<id>]` (+ `.right`),
+  then `.sec-b` when open. A check is `#detail .check` (`.check-h`, `.msg`, `table.vt`, `.meta`). Link health is the
+  `links` section on the host entity (and on a structure's Computer group row); the Activity view is one column
+  (`.act .ev`, a diagnostic event `[data-diagnostic].sev-<level>`) with the `[data-act-filter=all|faults]` filter.
 - In-page: `window.IOView`; the page's state `S` is a top-level `const` (reach it as `S` from `page.evaluate`, not
   `window.S`): `S.built` is the last `IOView.build(...)` result the page drew (`rows`, `flat`, `byKey`, `byEntity`,
   `host`, `columns`, `options`), `S.structure`, `S.skin`, `S.mode`, `S.sel` (entity), `S.selKey` (group row).
@@ -277,12 +296,15 @@ ready structure (with Claude), in light and dark, for the v6 tree and the Table:
 | `labels` | a drawn name differs from the row's label, a part is a row, nothing is folded, or no `fdcanusb · …` label |
 
 | `contrast` | (every skin, both modes, with p1) a text token (text, text-strong, muted, faint, accent-text, the six level `-text`) under 4.5:1 on surface, surface-2, surface-alt or popover, or a problem shape (warn, error, stale, unknown) under 3:1 on surface or on the selected row — measured on the browser's own resolved tokens |
-| `table message` | the Table's Message column narrower than 240 px at 1600 px with the detail pane open (every structure, its extra columns included) |
+| `table message` | the Table's Message column narrower than 240 px at 1600 px with the detail pane open (every structure, its extra columns included; round 3: the gate clicks a row first, the inspector is folded until then) |
+| `warn-colours` | (round 3; the default skin, both modes) outside status marks (`.shape`, the top-bar chip) and true diagnostic rows / messages (`[data-diagnostic]`), an element computes to a warn / error / stale / unknown colour or its `-text` / `-soft` / `-line` tint: the Utilities section at rest, a moves dry run and its preconditions, its confirm modal, a blocked dry run, the activity log's non-diagnostic tags, View options and every control button (a gated colour that equals a neutral token in the skin is not distinguishable and not gated) |
 
 `--foundation` runs only the gates; `--mutate` proves the rulers fail (green names, pinned / hidden chevrons, a
-faint token too light / too dark, an unbounded table: `no-green`, `chevrons`, both views' `quiet-ok`, `contrast` for
-every skin and `table message` must fail). The per-style checks run on p0 (the physical tree they are about); the
-foundation gates run every structure with Claude and every skin with p1 (the default). Screenshots:
+faint token too light / too dark, an unbounded table, and a warn / error / stale / unknown token on a utility's reason,
+a danger word, a precondition, a primary button, a non-diagnostic activity tag and the View options button:
+`no-green`, `chevrons`, both views' `quiet-ok`, `contrast` for every skin, `table message` and `warn-colours` naming all
+six must fail). The per-style checks run on p0 (the physical tree they are about); the foundation gates run every
+Group by structure with the default skin and every skin with p1 (the default). Screenshots:
 `reports/media/round2/foundation-<tree|table>-<1811|1825>-<light|dark>.png` (a non-default combo is prefixed
 `foundation-<skin>-<structure>-…`).
 
@@ -294,8 +316,111 @@ foundation gates run every structure with Claude and every skin with p1 (the def
 fixture plugin is loaded): defaults, the attention line and the detail's What to check (incl. an injected
 ExpectedAbsent device in every structure), the Utilities card (groups, icons, dry run, the moves modal, a query's
 result), the server's refusals, and every seam above drawn. Screenshots `reports/media/round2/integration-*.png`.
+Round 3 adds: Group by's list and a remembered p3 falling back; u0's tooltip (hidden at rest, on hover, on keyboard
+focus), danger as a plain word, the busy row (a run held 2.6 s at the network: greyed, "Checking communication… N s",
+no panel, no live output); the **panes** (each sash dragged with the mouse, reloaded, measured; minimum widths; a
+double-click resets; the inspector folded, opened by a row, folded by the same row / Escape / the empty space / its close
+button, pinned by `]` and the toolbar toggle, remembered); screenshots `reports/media/round3/a-*-<light|dark>.png`.
+
+## 6. Round 3: detail layouts and utility menus (`web/detail/<id>.js`, `web/utilities/<id>.js`)
+
+*2026-10-23, lane R3-A. Spec: `docs/round3-brief-2026-10-23.md`.* Two registries, manifest-driven like skins and
+structures, so the proposal lanes each rewrite ONE file: `detail/index.json` (`d0` + stubs `d1`-`d5`) and
+`utilities/index.json` (`u0` + stubs `u1`-`u5`), every entry ready, blank-line separated. A lane rewrites only its own
+`<id>.js` and may rename only its own manifest line. The page loads every ready file at boot; the temporary bottom-right
+**Prototype** picker (`#detail-layout`, `#utility-menu`) switches both live and remembers them. Nothing else changes for a
+lane: the page keeps the data, the polling, the selection, the dry-run / confirm / token flow and the modal.
+
+### A detail layout
+
+```js
+'use strict';
+(function (root) {
+  root.IODetailLayouts = root.IODetailLayouts || {};
+  root.IODetailLayouts.d1 = {
+    name: 'Diagnostics first',      // the Prototype picker shows "d1 · <name>"
+    description: '…',               // its tooltip
+    order: 1,                       // picker order
+    // Called every second (and on every change). container = #detail; detail = GET /api/v1/node for the selection,
+    // or null while it loads and for a structure's grouping row (then ctx.group is set). Idempotent: draw through
+    // ctx.draw(html), which writes only what changed (hover, focus, caret and scroll survive).
+    render(container, detail, ctx) {
+      ctx.draw(`${ctx.parts.head()}<div class="d-body">${ctx.section('checks', 'Checks', ctx.parts.checks())}</div>`);
+    },
+  };
+})(typeof window !== 'undefined' ? window : globalThis);
+```
+
+`ctx` (built by `detailContext()` in app.js):
+
+| Field | What it is |
+|---|---|
+| `detail` | the `/api/v1/node` JSON (`node`, `ancestors`, `checks` [name, level, effective_level, message, code, values, measurements, received_iso, age_s, expected_period_s, stale_after_s, source], `actions`, `faults`, `events`, `setup`), or `null` |
+| `node` | the selection's node from `/api/v1/state` (always there for an entity: level, message, own, rollup, hint, knock_on_of, stale, connected, identity, hardware_id …) |
+| `row` | the active structure's row for exactly this entity (label, parts, status …; `null` for a folded part) |
+| `group` | a structure's own grouping row when one is selected (`node` and `detail` are `null`) |
+| `isComputer` | the host entity, or a structure's Computer group row (link health belongs there) |
+| `counts` | `{connection, parts, checks, members}` for section titles |
+| `state`, `activity`, `byPath`, `view` | `/api/v1/state`, `/api/v1/activity`, path → state node, `tree|table` (the Table's inspector is narrower) |
+| `parts.<name>()` | one section's BODY html, `''` when there is nothing to show: `head` (title, level, message, path — not a section), `banners` (knock-on, stale, not connected), `whatToCheck`, `utilities` (the active utility menu), `setup` (Expected setup + its three edits), `status`, `identity`, `connection` (folded transport layers), `parts` (composition), `checks` (every check as `.check`), `faults`, `events`, `links` (link health; `''` unless `isComputer`), `members` (a group row's members) |
+| `section(id, title, body, {right})` | the collapsible section (`section.sec.<id>`, `h3.sec-h` > `button[data-sec-toggle]`); `''` when body is `''`; folded state remembered per id across entities |
+| `isOpen(id)` | whether that section is open |
+| `h` | helpers: `esc`, `icon(name)`, `shape(level, title)` (the status shape; `''` for OK), `pill(level)`, `ago(seconds)`, `kv([[k, v]])` (a key/value grid, values are HTML), `statusMark(row)`, `eventRow(event)`, `checkBlock(check)` |
+| `draw(html)` | write the panel (only what changed) |
+
+Page hooks a layout's HTML may use: `[data-go=<entity path>]` selects an entity; `[data-sec-toggle=<id>]` folds a
+section; everything the parts emit carries its own hooks (utilities, setup). Classes: `.d-head`, `.d-body` (the compact
+reading width, `--io-detail-max`), `.sec`, `.kv`, `.vt`, `.check`, `.part-row`, `.banner`; colours only through tokens,
+warn / error colours only on diagnostics (the `warn-colours` gate).
+
+### A utility menu
+
+```js
+'use strict';
+(function (root) {
+  root.IOUtilityMenus = root.IOUtilityMenus || {};
+  root.IOUtilityMenus.u1 = {
+    name: 'Icons only', description: '…', order: 1,
+    html(ctx) {                      // → the Utilities section's body (a string); called whenever the detail draws
+      return ctx.actions.map((action) => `<button class="u-btn" data-util="${ctx.h.esc(action.name)}">…</button>${ctx.panel(action)}`).join('');
+    },
+  };
+})(typeof window !== 'undefined' ? window : globalThis);
+```
+
+`ctx` (built by `utilityContext()` in app.js):
+
+| Field | What it is |
+|---|---|
+| `actions` | the entity's actions from `/api/v1/node` (name, title, description, danger `query|interrupts|changes|moves`, state `ready|blocked|nothing_to_do|unknown`, reason, preconditions, confirm, owner, scope) |
+| `groups` | `[{id: checks|maintenance|motion|more, title, items}]`: the standard order (docs/actions-vocabulary-v0.1.md), empty groups dropped |
+| `path`, `owner`, `active` | the entity, the plugin that runs them, `S.util` when a utility of this entity is open (`{name, phase: dry|shown|confirm|running|done, dry, result, …}`) |
+| `isActive(action)`, `phase(action)` | whether this action is the open one; its phase (`idle` otherwise) |
+| `runnable(action)` | its state lets it run (`ready` / `unknown`) |
+| `needsId(action)`, `waiting(action)`, `newIdBox(action)` | set_id names its new CAN id in its row: the box html (`[data-util-newid]`); `waiting` = no valid id yet, so its button must stay disabled |
+| `busy(action)` | the quiet line while it is asked or runs ("Asking moteus_servo what it would run…", "Checking communication… 3 s"), else `''` |
+| `panel(action)` | the dry-run panel html when it is the open one (`''` while asking / running): what will run, steps, preconditions, the confirm text, Run / Continue…, the result |
+| `h` | `esc`, `utilIcon(name)` (`svg.u-ic`), `plainTitle(title)`, `gerund(title)`, `shape(level)` |
+
+The flow is the page's and is not optional: a `[data-util=<name>]` click is ALWAYS a dry run (`POST /api/v1/act`
+`dry_run`); Run (a query) and Continue… live in `ctx.panel()`; anything but a query runs only from the confirm modal
+(moves: its `[data-util-tick]` box), with the dry run's token. A menu must render `ctx.panel(action)` for the open
+action and keep set_id's button disabled while `ctx.waiting(action)`. Warn / error colours are reserved for diagnostics:
+danger is a word or an icon (`.danger.<danger>` is neutral in app.css).
 
 ## Decisions taken here (reversible)
+
+- (round 3) Sort by is stable at every level. A container row (a structure's grouping row, or the host's own row: P1's
+  Computer) stays last under Name and Last change; under Status a problem anywhere comes first. A rig row (kind `rig`,
+  the expected setup's summary) stays first under every sort. "Last change" = the newest `/api/v1/activity` event at the
+  row's entity, its parts or anything below it (the API has no per-entity change time); a row with none keeps the
+  structure's order after them.
+- (round 3) A stored structure that left Group by (p3) falls back to the default instead of being kept invisibly.
+- (round 3) The detail is patched node by node (`morph()` in app.js), not rewritten: its ages change every second and a
+  rewrite restarted u0's hover tooltip each tick.
+- (round 3) A utility's run result keeps a status shape when it failed (it is the outcome of a run, a status mark); its
+  frame and heading are neutral. A passing precondition keeps `--io-ok-text` (the one coloured OK, tokens.css).
+- (round 3) Tree style v5's fixed 56 % width is gone: the tree pane has one draggable width in every style.
 
 - (integration) The CAN bus in F1-F3 is now `part_of` its adapter, boards `via` the bus, as the live moteus plugin
   sends it (`tests/fixtures/plugins/live_shape.py`, idempotent; it also adds `what_to_check` and the standard action

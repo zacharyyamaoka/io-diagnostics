@@ -1,0 +1,17 @@
+{
+  "about": "Utility menus (docs/round2-seams.md §6): window.IOUtilityMenus[id].html(ctx) -> the Utilities section's HTML. One entry per menu, pre-listed; the page loads utilities/<file> only for entries with ready=true and lists every one that registered html() in the bottom-right Prototype picker. A proposal lane rewrites ONLY its own file (u1-u5 start as copies of u0) and may rename ONLY its own line (entries are blank-line separated so parallel lanes merge cleanly).",
+  "default": "u0",
+  "menus": [
+    {"id": "u0", "name": "Quiet list", "file": "u0.js", "ready": true},
+
+    {"id": "u1", "name": "Stub (= u0)", "file": "u1.js", "ready": true},
+
+    {"id": "u2", "name": "Stub (= u0)", "file": "u2.js", "ready": true},
+
+    {"id": "u3", "name": "Stub (= u0)", "file": "u3.js", "ready": true},
+
+    {"id": "u4", "name": "Stub (= u0)", "file": "u4.js", "ready": true},
+
+    {"id": "u5", "name": "Stub (= u0)", "file": "u5.js", "ready": true}
+  ]
+}

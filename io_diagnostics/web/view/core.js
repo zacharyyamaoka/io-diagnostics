@@ -297,6 +297,66 @@
     }
   }
 
+  // ------------------------------------------------------------------------------- sort ----
+  // View options' "Sort by" (round 3, Zach 2026-10-23), applied to every level of the rows a structure returned:
+  //   status  problems first: the worst of the row's own report, its folded part and its worst-below hint; a row whose
+  //           own report or part carries that level before one that only points below; else the structure's order
+  //   name    the label, numbers in order ("CAN 2" before "CAN 11")
+  //   change  the newest activity event at the row's entity, its parts or anything below it (options.changes:
+  //           {path: stamp}, from /api/v1/activity); rows with no event keep the structure's order after them
+  // Every sort is stable. WHY container rows last under name / change: a grouping row or the host's own row beside
+  // device rows is a structure's catch-all (P1's closed "Computer"); it stays at the end instead of landing between
+  // devices by its letter. WHY a rig row first under every sort: it is the expected setup's summary ("1-DOF test rack
+  // · 1/2 adapters · 3/4 boards", docs/expected-setup.md), the line read before the devices it counts.
+  const SORTS = ['status', 'name', 'change'];
+  const isContainer = (row) => !row.entity || row.kind === 'host';
+  const place = (row) => (row.kind === 'rig' ? -1 : 0);
+  const statusKey = (row) => {
+    const status = row.status || {};
+    const self = Math.max(rank(status.own), rank(status.part && status.part.level));
+    const below = rank(status.hint && status.hint.level);
+    return { worst: Math.max(self, below), self };
+  };
+  function changeOf(row, changes) {
+    if (row.changeAt !== undefined) return row.changeAt;
+    let newest = null;
+    const paths = [row.entity, ...(row.parts || []).map((part) => part.entity)].filter(Boolean);
+    for (const [path, stamp] of Object.entries(changes || {})) {
+      if (paths.some((own) => path === own || path.startsWith(`${own}/`)) && (newest === null || stamp > newest)) newest = stamp;
+    }
+    for (const child of row.children || []) {
+      const below = changeOf(child, changes);
+      if (below !== null && (newest === null || below > newest)) newest = below;
+    }
+    Object.defineProperty(row, 'changeAt', { value: newest, configurable: true }); // memo for this build only, not enumerable
+    return newest;
+  }
+  const byName = (a, b) => String(a.label).localeCompare(String(b.label), undefined, { numeric: true, sensitivity: 'base' });
+  function sortRows(rows, by, options = {}) {
+    if (!SORTS.includes(by)) return rows;
+    const order = new Map(rows.map((row, at) => [row, at]));
+    const keep = (a, b) => order.get(a) - order.get(b);
+    let compare;
+    if (by === 'status') {
+      compare = (a, b) => {
+        const [x, y] = [statusKey(a), statusKey(b)];
+        return (y.worst - x.worst) || ((y.self === y.worst) - (x.self === x.worst)) || keep(a, b);
+      };
+    } else if (by === 'name') {
+      compare = (a, b) => byName(a, b) || keep(a, b);
+    } else {
+      compare = (a, b) => {
+        const [x, y] = [changeOf(a, options.changes), changeOf(b, options.changes)];
+        if (x === null || y === null) return (x === null) - (y === null) || keep(a, b);
+        return (y - x) || keep(a, b);
+      };
+    }
+    const mixed = by !== 'status' && rows.some(isContainer) && rows.some((row) => !isContainer(row));
+    const sorted = [...rows].sort((a, b) => (place(a) - place(b)) || (mixed ? isContainer(a) - isContainer(b) : 0) || compare(a, b));
+    for (const row of sorted) row.children = sortRows(row.children || [], by, options);
+    return sorted;
+  }
+
   // toggles[].when: a toggle that only means something in one mode of its structure (P2's Empty ports, Connections
   // only). `when` is an option key (shown while that option is on) or a function(options) -> boolean.
   function toggleShown(toggle, options = {}) {
@@ -344,6 +404,7 @@
     let rows = structure ? finalize(structure.rows(state, opts) || []) : [];
     if (opts.query && !(structure && structure.handlesQuery)) rows = applyQuery(rows, opts.query);
     if (structure && structure.hintScope === 'children') dropLeafHints(rows);
+    if (opts.sort) rows = sortRows(rows, opts.sort, opts);
     const host = top.hosts[0] || null;
     return {
       structure: id,
@@ -357,9 +418,10 @@
   }
 
   const IOView = {
-    RANK, PROBLEM, DEFAULT_OPTIONS,
+    RANK, PROBLEM, DEFAULT_OPTIONS, SORTS,
     isGrouping, ownProblem, hintOf, labelOf, partLabel, partsOf, worstPart, childrenOf, isEmpty, topLevel,
     entityRow, groupRow, finalize, applyQuery, searchText, indexRows, defaultOptions, structureIds, build, toggleShown,
+    sortRows,
   };
   root.IOView = IOView;
   if (typeof module !== 'undefined' && module.exports) module.exports = IOView;

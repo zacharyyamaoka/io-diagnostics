@@ -43,7 +43,15 @@
 //               token >= 4.5:1 on surface, surface-2, surface-alt and popover; the problem shapes >= 3:1 on the
 //               surface and on the selected row (round 2 integration)
 //   message     the Table's Message column keeps >= MESSAGE_MIN px at 1600 px with the detail pane open, in every
-//               structure with its extra columns (Zach's screenshot showed "ME")
+//               structure with its extra columns (Zach's screenshot showed "ME"); round 3: the inspector is folded
+//               until a row is clicked, so the gate clicks one first
+//   warn-colours (round 3, default skin, light + dark) outside status marks and true diagnostic rows / messages, no
+//               element computes to a warn / error / stale / unknown colour or tint: the Utilities section at rest, a
+//               moves dry run with its preconditions, its confirm modal, a blocked dry run, the activity log's
+//               non-diagnostic tags, View options and every control button. --mutate paints each of those with a
+//               gated token (WARN_MUTATIONS) and the gate must name all six, in both modes
+// Round 3: Group by, tree style, skin and mode live in the View options popover (pick() opens it); the default skin is
+// the skin manifest's (Bare Metal); P3 left the Group by picker, so the foundation gates the picker's structures.
 'use strict';
 
 const fs = require('fs');
@@ -76,6 +84,17 @@ const MUTATION_CSS = '#tree-host [class*="-name"] { color: #5cb85c !important; }
   + ' html[data-mode="light"][data-skin] { --io-faint: #b8b8b8 !important; } html[data-mode="dark"][data-skin] { --io-faint: #4a4a4a !important; }'
   // the Message gate must fail when the table may squeeze it again
   + ' table.grid { min-width: 0 !important; }';
+// round 3: the warning-colour gate must fail when a utility's reason, a danger word, a precondition, a primary button,
+// a non-diagnostic activity tag or a View options control is painted with a warn / error / stale / unknown token
+const WARN_MUTATIONS = {
+  'u-reason': '.u-reason { color: var(--io-warn-text) !important; }',
+  danger: '.sec.utilities .danger { background: var(--io-error-soft) !important; }',
+  precondition: '.pre .st.unknown, .pre .st.fail { color: var(--io-warn-text) !important; }',
+  button: '.btn.primary { border-color: var(--io-error-line) !important; }',
+  'activity tag': '.ev:not([data-diagnostic]) .kind { background: var(--io-stale-soft) !important; }',
+  'view options': '.vo-btn { color: var(--io-unknown) !important; }',
+};
+const MUTATION_CSS_ALL = () => MUTATION_CSS + Object.values(WARN_MUTATIONS).join(' ');
 const MESSAGE_MIN = 240; // px: app.js keeps 280; a few px of padding / rounding below that still reads a sentence
 const CONTRAST = {
   text: ['--io-text', '--io-text-strong', '--io-muted', '--io-faint', '--io-accent-text', '--io-warn-text', '--io-error-text', '--io-stale-text',
@@ -217,8 +236,9 @@ function measureRows({ spec, nodes }) {
 
 // ------------------------------------------------------------------------------------------- checks ----
 const results = [];
-function check(frame, variant, name, ok, detail) {
-  results.push({ frame, variant, check: name, ok: Boolean(ok), detail });
+// `all`: the full evidence behind a truncated detail (the --mutate summary reads it), kept out of the printed line
+function check(frame, variant, name, ok, detail, all = null) {
+  results.push({ frame, variant, check: name, ok: Boolean(ok), detail, ...(all ? { all } : {}) });
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${frame} ${variant}  ${name.padEnd(9)}  ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`);
 }
 const ONLY_FOUNDATION = process.argv.includes('--foundation'); // skip the per-variant checks
@@ -252,7 +272,7 @@ async function runVariant(browser, base, frame, variant) {
       const style = document.createElement('style');
       style.textContent = css;
       document.head.appendChild(style);
-    }), MUTATION_CSS);
+    }), MUTATION_CSS_ALL());
   }
   const shoot = (options) => (MUTATE ? Promise.resolve() : page.screenshot(options));
   const errors = [];
@@ -263,7 +283,7 @@ async function runVariant(browser, base, frame, variant) {
     await page.goto(`${base}/`);
     await page.waitForFunction(() => document.querySelectorAll('#tree-variant option').length >= 6 && document.querySelector('.d-title'));
     const firstLoad = await page.evaluate(() => document.getElementById('tree-variant').value);
-    await page.selectOption('#tree-variant', variant);
+    await pick(page, '#tree-variant', variant);
     await waitForTree(page, spec);
     const live = await page.evaluate(() => document.querySelector('#tree-host > .tree-pane:not([hidden])').dataset.variant);
     await page.reload();
@@ -364,12 +384,12 @@ async function runVariant(browser, base, frame, variant) {
       await page.waitForFunction(({ name, nodePath }) => {
         const title = document.querySelector('.d-title span');
         const where = document.querySelector('.d-path');
-        return title && title.textContent === name && where && where.textContent.includes(nodePath) && document.querySelector('#detail .cards .card');
+        return title && title.textContent === name && where && where.textContent.includes(nodePath) && document.querySelector('#detail .d-body .sec');
       }, { name: label, nodePath: target.path }, { timeout: 6000 });
     } catch (_) { selectOk = false; }
     const picked = await page.evaluate(({ selector }) => {
       const row = document.querySelector(`#tree-host > .tree-pane:not([hidden]) ${selector}`);
-      return { selected: row && row.getAttribute('aria-selected'), title: (document.querySelector('.d-title span') || {}).textContent, cards: document.querySelectorAll('#detail .cards .card').length };
+      return { selected: row && row.getAttribute('aria-selected'), title: (document.querySelector('.d-title span') || {}).textContent, cards: document.querySelectorAll('#detail .d-body .sec').length };
     }, { selector: rowSelector });
     check(frame, variant, 'select', selectOk && picked.selected === 'true',
       `clicked "${target.name}" → detail "${picked.title}" (label "${label}") with ${picked.cards} cards · row aria-selected ${picked.selected}`);
@@ -430,6 +450,20 @@ function tokenList() {
 
 // The ids a manifest marks ready (skins/index.json, view/structure/index.json).
 const readyIds = (manifest, key) => (JSON.parse(fs.readFileSync(path.join(WEB, manifest), 'utf8'))[key] || []).filter((entry) => entry.ready).map((entry) => entry.id);
+// round 3: the default skin is the manifest's (Bare Metal = contrast); Group by lists the ready structures that are not
+// picker=false (P3 left the picker, its file stays: test_view_core.js still gates it)
+const DEFAULT_SKIN = JSON.parse(fs.readFileSync(path.join(WEB, 'skins', 'index.json'), 'utf8')).default;
+const pickerIds = () => (JSON.parse(fs.readFileSync(path.join(WEB, 'view', 'structure', 'index.json'), 'utf8')).structures || [])
+  .filter((entry) => entry.ready && entry.picker !== false).map((entry) => entry.id);
+// Group by, tree style, skin and mode live in the View options popover since round 3
+async function viewOptions(page) {
+  if (await page.evaluate(() => document.getElementById('view-options').hidden)) await page.click('#vo-btn');
+  await page.waitForSelector('#view-options:not([hidden])');
+}
+async function pick(page, selector, value) {
+  await viewOptions(page);
+  await page.selectOption(selector, value);
+}
 
 // Colour literals in declarations (comments stripped): hex, rgb()/hsl() and the common named colours.
 const NAMED = /\b(white|black|red|green|blue|gr[ae]y|orange|yellow|purple|pink|silver|navy|teal|maroon)\b/i;
@@ -588,6 +622,109 @@ function contrastMeasure({ text, panes, shapes, shapeOn }) {
   return { pairs: pairs.length, failing, unresolved, lowest: lowest ? `${lowest.fg} on ${lowest.bg} ${lowest.ratio.toFixed(2)}` : '' };
 }
 
+// ---------------------------------------------------------------------- the warning-colour gate ----
+// Round 3 (Zach, 2026-10-23: "reserve that color for annotating true diagnostics warning and errors and nothing
+// else"): outside the status marks (the shapes, the top-bar chip's level) and true diagnostic rows / messages (an
+// activity event the host logged at a problem severity carries data-diagnostic), no element may compute to a warn /
+// error / stale / unknown colour or one of its tints (-text, -soft, -line), measured on the browser's own resolved
+// tokens. A gated colour that equals a neutral token in this skin cannot be told apart and is not gated.
+// Runs in the page over one named scope: every shown element's text colour (where it has text), background, borders,
+// and an SVG's fill / stroke.
+function warnColours({ scope, selectors }) {
+  const probe = document.createElement('div');
+  document.body.appendChild(probe);
+  const parse = (value) => {
+    let m = String(value).match(/^rgba?\(([\d.]+)[ ,]+([\d.]+)[ ,]+([\d.]+)(?:[ ,/]+([\d.]+%?))?\)$/);
+    if (m) return [+m[1], +m[2], +m[3], m[4] === undefined ? 1 : (String(m[4]).endsWith('%') ? parseFloat(m[4]) / 100 : +m[4])];
+    m = String(value).match(/^color\(srgb ([\d.e-]+) ([\d.e-]+) ([\d.e-]+)(?: \/ ([\d.]+%?))?\)$/);
+    if (m) return [255 * m[1], 255 * m[2], 255 * m[3], m[4] === undefined ? 1 : (String(m[4]).endsWith('%') ? parseFloat(m[4]) / 100 : +m[4])];
+    return null;
+  };
+  const resolve = (token) => { probe.style.color = `var(${token})`; return parse(getComputedStyle(probe).color); };
+  const same = (a, b) => a && b && Math.abs(a[0] - b[0]) < 1.5 && Math.abs(a[1] - b[1]) < 1.5 && Math.abs(a[2] - b[2]) < 1.5 && Math.abs(a[3] - b[3]) < 0.02;
+  const levels = ['warn', 'error', 'stale', 'unknown'];
+  const gated = levels.flatMap((level) => ['', '-text', '-soft', '-line'].map((suffix) => `--io-${level}${suffix}`))
+    .map((token) => ({ token, value: resolve(token) })).filter((item) => item.value && item.value[3] > 0.01);
+  const neutral = ['--io-text', '--io-text-strong', '--io-muted', '--io-faint', '--io-off', '--io-icon', '--io-border', '--io-border-soft', '--io-hover',
+    '--io-selected', '--io-selected-line', '--io-control', '--io-control-hover', '--io-pressed', '--io-surface', '--io-surface-2', '--io-surface-alt',
+    '--io-field', '--io-popover', '--io-bg'].map(resolve);
+  const watch = gated.filter((item) => !neutral.some((value) => same(value, item.value)));
+  probe.remove();
+  const shown = (element) => {
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    return rect.width >= 1 && rect.height >= 1 && style.visibility !== 'hidden' && style.display !== 'none' && parseFloat(style.opacity) > 0.05;
+  };
+  const exempt = (element) => Boolean(element.closest('.shape, [data-diagnostic], #chip'));
+  const offenders = [];
+  let elements = 0;
+  const roots = selectors.flatMap((selector) => [...document.querySelectorAll(selector)]);
+  for (const root of roots) {
+    for (const element of [root, ...root.querySelectorAll('*')]) {
+      if (exempt(element) || !shown(element)) continue;
+      elements += 1;
+      const style = getComputedStyle(element);
+      const samples = [['background', style.backgroundColor]];
+      if ([...element.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim())) samples.push(['color', style.color]);
+      if (element instanceof SVGElement) {
+        if (style.fill && style.fill !== 'none') samples.push(['fill', style.fill]);
+        if (style.stroke && style.stroke !== 'none') samples.push(['stroke', style.stroke]);
+      }
+      for (const side of ['Top', 'Right', 'Bottom', 'Left']) if (parseFloat(style[`border${side}Width`]) > 0) samples.push([`border-${side.toLowerCase()}`, style[`border${side}Color`]]);
+      for (const [prop, value] of samples) {
+        const hit = watch.find((item) => same(parse(value), item.value));
+        if (hit) offenders.push(`${scope}: ${element.tagName.toLowerCase()}.${String(element.className && element.className.baseVal !== undefined ? element.className.baseVal : element.className).trim().replace(/\s+/g, '.')} ${prop} = ${hit.token}`);
+      }
+    }
+  }
+  return { scope, elements, watched: watch.length, offenders };
+}
+
+// Drives the page through every non-diagnostic surface the brief names and measures each: the Utilities section at
+// rest (blocked reasons, danger words), a moves dry run and its preconditions, its confirm modal, a blocked dry run's
+// banner, the activity log's non-diagnostic tags, View options and every control button. Returns one result per scope.
+async function warnGate(page, base) {
+  const CAN15 = 'host/usb1/port-1-3/usb-1-3/can/15';
+  const scopes = [];
+  const measure = async (scope, selectors) => scopes.push(await page.evaluate(warnColours, { scope, selectors }));
+  const controls = ['.toolbar button', '.toolbar select', '#controls', '.insp-bar', '.statusbar'];
+  await page.goto(`${base}/?sel=${encodeURIComponent(CAN15)}`);
+  await page.waitForSelector('.sec.utilities [data-util="calibrate"]', { timeout: 20000 });
+  await page.mouse.move(1590, 600);
+  await page.waitForTimeout(400);
+  await measure('utilities', ['.sec.utilities', '.sec.setup', '#detail button']);
+  await page.click('[data-util="calibrate"]');
+  await page.waitForSelector('.u-panel .pre', { timeout: 15000 });
+  await page.waitForTimeout(300);
+  await measure('dry run', ['.u-panel', '.sec.utilities']);
+  // the confirm modal opens only from a runnable dry run (F1: calibrate is; F2's busy bus blocks it, so F1 covers it)
+  if (await page.evaluate(() => { const run = document.querySelector('[data-util-run]'); return Boolean(run && !run.disabled); })) {
+    await page.click('[data-util-run]');
+    await page.waitForSelector('#modal:not([hidden]) .modal', { timeout: 5000 });
+    await measure('modal', ['#modal .modal']);
+    await page.click('[data-util-cancel]');
+  }
+  // a blocked utility (update_firmware: "up to date" = nothing_to_do): its dry run shows the blocked banner
+  await page.click('[data-util="update_firmware"]');
+  await page.waitForSelector('.u-panel .banner.blocked', { timeout: 15000 });
+  await measure('blocked dry run', ['.u-panel']);
+  await page.click('[data-util-close]');
+  await page.click('[data-view="activity"]');
+  await page.waitForSelector('.act .ev', { timeout: 6000 });
+  await measure('activity', ['.act .ev:not([data-diagnostic])', '.act h2', '.act-filter']);
+  await viewOptions(page);
+  await measure('view options', ['#view-options', ...controls]);
+  await page.keyboard.press('Escape');
+  await page.click('[data-view="table"]');
+  await page.waitForSelector('table.grid tbody tr');
+  await page.keyboard.press(']');
+  await page.waitForTimeout(450);
+  await measure('table chrome', controls);
+  await page.keyboard.press(']');
+  await page.click('[data-view="tree"]');
+  return scopes;
+}
+
 async function runFoundation(browser, base, frame) {
   const { all, base: baseTokens } = tokenList();
   // the OS says dark: Auto must follow it until a mode is picked
@@ -598,7 +735,7 @@ async function runFoundation(browser, base, frame) {
       const style = document.createElement('style');
       style.textContent = css;
       document.head.appendChild(style);
-    }), MUTATION_CSS);
+    }), MUTATION_CSS_ALL());
   }
   const errors = [];
   page.on('pageerror', (error) => errors.push(String(error)));
@@ -614,20 +751,21 @@ async function runFoundation(browser, base, frame) {
     const fresh = await page.evaluate(() => ({ mode: document.documentElement.dataset.mode, skin: document.documentElement.dataset.skin,
       variant: document.getElementById('tree-variant').value, structure: document.getElementById('structure').value,
       skins: [...document.querySelectorAll('#skin option')].map((o) => o.value), structures: [...document.querySelectorAll('#structure option')].map((o) => o.value) }));
-    check(frame, 'found', 'defaults', fresh.mode === 'dark' && fresh.skin === 'claude' && fresh.variant === 'v6' && fresh.structure === 'p1',
+    check(frame, 'found', 'defaults', fresh.mode === 'dark' && fresh.skin === DEFAULT_SKIN && fresh.variant === 'v6' && fresh.structure === 'p1',
       `fresh browser, OS dark: mode ${fresh.mode} (Auto), skin ${fresh.skin} of [${fresh.skins}], tree ${fresh.variant}, structure ${fresh.structure} of [${fresh.structures}]`);
     // every READY skin (with the default structure p1) and every READY structure (with the default skin): a lane that
     // flips its manifest line gets these gates without touching this file (docs/round2-seams.md)
-    const combos = [{ skin: 'claude', structure: 'p1' },
-      ...readyIds('view/structure/index.json', 'structures').filter((id) => id !== 'p1').map((structure) => ({ skin: 'claude', structure })),
-      ...readyIds('skins/index.json', 'skins').filter((id) => id !== 'claude').map((skin) => ({ skin, structure: 'p1' }))];
+    const combos = [{ skin: DEFAULT_SKIN, structure: 'p1' },
+      ...pickerIds().filter((id) => id !== 'p1').map((structure) => ({ skin: DEFAULT_SKIN, structure })),
+      ...readyIds('skins/index.json', 'skins').filter((id) => id !== DEFAULT_SKIN).map((skin) => ({ skin, structure: 'p1' }))];
     for (const combo of combos) {
-      const isDefault = combo.skin === 'claude' && combo.structure === 'p1';
+      const isDefault = combo.skin === DEFAULT_SKIN && combo.structure === 'p1';
       if (!isDefault) {
-        await page.selectOption('#skin', combo.skin);
-        await page.selectOption('#structure', combo.structure);
+        await pick(page, '#skin', combo.skin);
+        await pick(page, '#structure', combo.structure);
       }
       for (const mode of ['light', 'dark']) {
+        await viewOptions(page);
         await page.click(`#mode-switch [data-mode="${mode}"]`);
         await page.reload();
         await ready();
@@ -653,11 +791,14 @@ async function runFoundation(browser, base, frame) {
           check(frame, tag, `${label} labels`, m.labelMismatch.length === 0 && m.partRows === 0 && m.folded.length > 0 && m.labels.some((l) => /^fdcanusb · /.test(l)),
             `model · id rows: ${m.labels.slice(0, 4).join(' | ')} · parts folded into ${m.folded.length} rows, ${m.partRows} part rows${m.labelMismatch.length ? ` · mismatch ${m.labelMismatch.slice(0, 2).join(', ')}` : ''}`);
           if (view === 'table') {
+            // round 3: the inspector is folded until a row is clicked; the gate measures with it open
+            await page.locator('table.grid tbody tr[data-key] td.namecell .name').first().click();
+            await page.waitForTimeout(450);
             const widths = await page.evaluate(() => {
               const head = document.querySelector('table.grid th.msgcol');
               const left = document.getElementById('left').getBoundingClientRect();
               return { message: head ? Math.round(head.getBoundingClientRect().width) : 0, pane: Math.round(left.width),
-                detail: Math.round(document.getElementById('detail').getBoundingClientRect().width), columns: S.built.columns.map((column) => column.key) };
+                detail: Math.round(document.getElementById('inspector').getBoundingClientRect().width), columns: S.built.columns.map((column) => column.key) };
             });
             check(frame, tag, 'table message', widths.message >= MESSAGE_MIN && widths.detail > 0,
               `Message column ${widths.message} px (>= ${MESSAGE_MIN}) in a ${widths.pane} px pane beside a ${widths.detail} px detail pane · extra columns [${widths.columns}]`);
@@ -681,8 +822,15 @@ async function runFoundation(browser, base, frame) {
           }
           if (view === 'table') await page.click('[data-view="tree"]');
         }
+        if (isDefault) {
+          const scopes = await warnGate(page, base);
+          const offenders = scopes.flatMap((scope) => scope.offenders);
+          check(frame, tag, 'warn-colours', offenders.length === 0 && scopes.every((scope) => scope.elements > 0) && scopes[0].watched >= 8,
+            { scopes: scopes.map((scope) => `${scope.scope} ${scope.elements} el`).join(' · '), watched: scopes[0].watched, offenders: offenders.slice(0, 12) }, offenders);
+        }
       }
     }
+    await viewOptions(page);
     await page.click('#mode-switch [data-mode="auto"]');
     await page.waitForTimeout(200);
     const auto = await page.evaluate(() => ({ mode: document.documentElement.dataset.mode, stored: localStorage.getItem('io-diagnostics.mode') }));
@@ -725,11 +873,20 @@ async function main() {
     const caught = VARIANTS.filter((v) => ['no-green', 'chevrons'].every((name) => failed.some((r) => r.variant === v && r.check === name)));
     const quiet = ['tree ', 'table'].filter((view) => ['light', 'dark'].every((mode) => failed.some((r) => r.variant === `found-${mode}` && r.check === `${view} quiet-ok`)));
     const skins = readyIds('skins/index.json', 'skins');
-    const contrast = skins.filter((skin) => ['light', 'dark'].every((mode) => failed.some((r) => r.variant === (skin === 'claude' ? `found-${mode}` : `found-${skin}-p1-${mode}`) && r.check === 'contrast')));
+    const contrast = skins.filter((skin) => ['light', 'dark'].every((mode) => failed.some((r) => r.variant === (skin === DEFAULT_SKIN ? `found-${mode}` : `found-${skin}-p1-${mode}`) && r.check === 'contrast')));
     const message = ['light', 'dark'].filter((mode) => failed.some((r) => r.variant === `found-${mode}` && r.check === 'table message'));
+    // the warning-colour gate: every mutated surface (WARN_MUTATIONS) is named among the offenders, in both modes
+    const marks = { 'u-reason': /\.u-reason[.\s]/, danger: /\.danger[.\s]/, precondition: /span\.st\.(unknown|fail)[.\s]/, button: /\.btn\.primary/, 'activity tag': /^activity: span\.kind[.\s]/, 'view options': /^(view options|table chrome): (button\.vo-btn|svg\.ic)/ };
+    const warn = ['light', 'dark'].map((mode) => {
+      const result = failed.find((r) => r.variant === `found-${mode}` && r.check === 'warn-colours');
+      const offenders = result ? result.all || [] : [];
+      return Object.keys(WARN_MUTATIONS).filter((name) => offenders.some((text) => marks[name].test(text)));
+    });
+    const warnCaught = warn.every((names) => names.length === Object.keys(WARN_MUTATIONS).length);
     console.log(`\nmutation caught in ${caught.length}/${VARIANTS.length} variants (${caught.join(', ')}) · foundation quiet-ok caught for ${quiet.length}/2 views`
-      + ` · contrast caught for ${contrast.length}/${skins.length} skins · table message caught in ${message.length}/2 modes`);
-    process.exitCode = (ONLY_FOUNDATION || caught.length === VARIANTS.length) && quiet.length === 2 && contrast.length === skins.length && message.length === 2 ? 0 : 1;
+      + ` · contrast caught for ${contrast.length}/${skins.length} skins · table message caught in ${message.length}/2 modes`
+      + ` · warn-colours caught ${warn.map((names, at) => `${['light', 'dark'][at]} ${names.length}/${Object.keys(WARN_MUTATIONS).length} (${names.join(', ')})`).join(' · ')}`);
+    process.exitCode = (ONLY_FOUNDATION || caught.length === VARIANTS.length) && quiet.length === 2 && contrast.length === skins.length && message.length === 2 && warnCaught ? 0 : 1;
     return;
   }
   const report = { run: new Date().toISOString(), viewport: VIEWPORT, frames: FRAMES, variants: VARIANTS, passed: results.length - failed.length, failed: failed.length, results };

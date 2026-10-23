@@ -1,0 +1,17 @@
+{
+  "about": "Detail layouts (docs/round2-seams.md §6): window.IODetailLayouts[id].render(container, detail, ctx). One entry per layout, pre-listed; the page loads detail/<file> only for entries with ready=true and lists every one that registered render() in the bottom-right Prototype picker. A proposal lane rewrites ONLY its own file (d1-d5 start as copies of d0) and may rename ONLY its own line (entries are blank-line separated so parallel lanes merge cleanly).",
+  "default": "d0",
+  "layouts": [
+    {"id": "d0", "name": "Top to bottom", "file": "d0.js", "ready": true},
+
+    {"id": "d1", "name": "Stub (= d0)", "file": "d1.js", "ready": true},
+
+    {"id": "d2", "name": "Stub (= d0)", "file": "d2.js", "ready": true},
+
+    {"id": "d3", "name": "Stub (= d0)", "file": "d3.js", "ready": true},
+
+    {"id": "d4", "name": "Stub (= d0)", "file": "d4.js", "ready": true},
+
+    {"id": "d5", "name": "Stub (= d0)", "file": "d5.js", "ready": true}
+  ]
+}

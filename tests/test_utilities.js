@@ -24,8 +24,13 @@
 //   expected     (a second F1 server with its own temporary rig file, --expected) the rig row first with its counts and
 //                what is missing, the retired 28B3A25D a warn row with its reason, the Expected setup card's Retire…
 //                (reason first, Cancel writes nothing), Expect what's here and Forget rewriting the file
-// Screenshots: reports/media/round2/integration-*.png, expected-*.png. Exits 1 on any failed check. Nothing opens a
-// CAN adapter.
+//   round 3      (docs/round3-brief-2026-10-23.md) defaults skin contrast ("Bare Metal"), layout d0, menu u0, sort
+//                status; Group by's list and a remembered p3 falling back; u0's description tooltip (hover + keyboard
+//                focus), danger as a plain word, the greyed busy row with its quiet line; the panes: each sash dragged,
+//                reloaded and measured, minimum widths, double-click reset, the Table's inspector folding / unfolding /
+//                pinning (`]`, the toolbar toggle). Selects live in the View options popover: pick() opens it.
+// Screenshots: reports/media/round2/integration-*.png, expected-*.png, reports/media/round3/a-*-<light|dark>.png.
+// Exits 1 on any failed check. Nothing opens a CAN adapter.
 'use strict';
 
 const fs = require('fs');
@@ -37,6 +42,7 @@ const PLAYWRIGHT = process.env.IO_DIAG_PLAYWRIGHT || '/home/bam/aruco-studio/web
 const CHROME = '/usr/bin/google-chrome';
 const UV = '/home/bam/.local/bin/uv';
 const SHOTS = path.join(ROOT, 'reports', 'media', 'round2');
+const ROUND3 = path.join(ROOT, 'reports', 'media', 'round3');
 const VIEWPORT = { width: 1600, height: 1000 };
 const ADAPTER = 'host/usb1/port-1-3/usb-1-3';
 const CAN15 = `${ADAPTER}/can/15`;
@@ -74,6 +80,16 @@ async function ready(page, selector = '.t6-row') {
   await page.waitForFunction((sel) => typeof S !== 'undefined' && S.built && S.built.flat.some((row) => row.parts.length)
     && document.querySelector(sel) && document.querySelector('.d-title'), selector, { timeout: 30000 });
   await page.waitForTimeout(400);
+}
+
+// Round 3: Group by (#structure), the structure's toggles, tree style, skin and mode live in the View options popover.
+async function viewOptions(page) {
+  if (await page.evaluate(() => document.getElementById('view-options').hidden)) await page.click('#vo-btn');
+  await page.waitForSelector('#view-options:not([hidden])');
+}
+async function pick(page, selector, value) {
+  await viewOptions(page);
+  await page.selectOption(selector, value);
 }
 
 async function open(page, base, sel) {
@@ -127,14 +143,24 @@ async function main() {
       const context = await browser.newContext({ viewport: VIEWPORT, colorScheme: scheme });
       const page = await context.newPage();
       await open(page, base);
-      const fresh = await page.evaluate(() => ({ structure: S.structure, variant: S.variant, skin: document.documentElement.dataset.skin, mode: document.documentElement.dataset.mode, pref: S.mode }));
-      check(`defaults (OS ${scheme})`, fresh.structure === 'p1' && fresh.variant === 'v6' && fresh.skin === 'claude' && fresh.mode === scheme && fresh.pref === 'auto', fresh);
+      const fresh = await page.evaluate(() => ({ structure: S.structure, variant: S.variant, skin: document.documentElement.dataset.skin, mode: document.documentElement.dataset.mode, pref: S.mode,
+        layout: S.layout, menu: S.menu, sort: S.sort }));
+      // round 3: the default skin is Bare Metal (contrast); the layout d0 and the menu u0; sort by status
+      check(`defaults (OS ${scheme})`, fresh.structure === 'p1' && fresh.variant === 'v6' && fresh.skin === 'contrast' && fresh.mode === scheme && fresh.pref === 'auto'
+        && fresh.layout === 'd0' && fresh.menu === 'u0' && fresh.sort === 'status', fresh);
       if (scheme === 'light') {
-        await page.evaluate(() => { localStorage.setItem('io-diagnostics.structure', 'p3'); localStorage.setItem('io-diagnostics.skin', 'notion'); });
+        // round 3: p3 left the Group by picker, so a remembered p3 falls back to the default; p2 (Type) is remembered
+        await page.evaluate(() => { localStorage.setItem('io-diagnostics.structure', 'p2'); localStorage.setItem('io-diagnostics.skin', 'notion'); });
         await page.reload();
         await ready(page);
         const kept = await page.evaluate(() => ({ structure: S.structure, skin: document.documentElement.dataset.skin }));
-        check('a remembered choice wins', kept.structure === 'p3' && kept.skin === 'notion', kept);
+        check('a remembered choice wins', kept.structure === 'p2' && kept.skin === 'notion', kept);
+        await page.evaluate(() => { localStorage.setItem('io-diagnostics.structure', 'p3'); });
+        await page.reload();
+        await ready(page);
+        const dropped = await page.evaluate(() => ({ structure: S.structure, listed: [...document.querySelectorAll('#structure option')].map((o) => `${o.value}:${o.textContent}`) }));
+        check('Group by lists Devices · Type · Port · Bus · Physical; a remembered p3 falls back', dropped.structure === 'p1'
+          && dropped.listed.join() === 'p1:Devices,p2:Type,p4:Port,p5:Bus,p0:Physical', dropped);
       }
       await context.close();
     }
@@ -170,19 +196,19 @@ async function main() {
 
     // ---- what to check in the detail panel: the adapter whose CAN bus is folded into it (p1)
     await open(page, base, SECOND);
-    await page.waitForFunction(() => document.querySelector('.card.why .why-lines'), null, { timeout: 15000 });
-    const why = await page.evaluate(() => ({ head: document.querySelector('.card.why .why-head').textContent, lines: [...document.querySelectorAll('.card.why .why-lines > div')].map((d) => d.textContent),
-      connection: [...document.querySelectorAll('#detail .card h3')].map((h) => h.textContent).find((t) => /^Connection \(folded\)/.test(t)) || '' }));
+    await page.waitForFunction(() => document.querySelector('.sec.why .why-lines'), null, { timeout: 15000 });
+    const why = await page.evaluate(() => ({ head: document.querySelector('.sec.why .why-head').textContent, lines: [...document.querySelectorAll('.sec.why .why-lines > div')].map((d) => d.textContent),
+      connection: [...document.querySelectorAll('#detail .sec h3')].map((h) => h.textContent).find((t) => /^Connection \(folded\)/.test(t)) || '' }));
     check('why: a folded part\'s checklist on its owner', /CAN bus/.test(why.head) && why.lines.length === 4 && /^1\. Motor supply/.test(why.lines[0]), why);
     check('seams: folded layers say Connection (folded)', /28B3A25D CAN bus|Port 1-5/.test(await page.evaluate(() => document.getElementById('detail').textContent)) && Boolean(why.connection), why.connection);
 
     // ---- utilities on CAN 15: grouping, icons, the dry run of a moves action, its modal
     await open(page, base, CAN15);
-    await page.waitForSelector('.card.utilities .urow');
+    await page.waitForSelector('.sec.utilities .urow');
     const card = await page.evaluate(() => {
-      const groups = [...document.querySelectorAll('.card.utilities .ugroup')].map((group) => ({ id: group.className.replace('ugroup ugroup-', ''),
+      const groups = [...document.querySelectorAll('.sec.utilities .ugroup')].map((group) => ({ id: group.className.replace('ugroup ugroup-', ''),
         names: [...group.querySelectorAll('[data-util]')].map((button) => button.dataset.util) }));
-      const rows = [...document.querySelectorAll('.card.utilities .u-btn')].map((button) => ({ name: button.dataset.util, icon: button.querySelector('svg.u-ic').innerHTML,
+      const rows = [...document.querySelectorAll('.sec.utilities .u-btn')].map((button) => ({ name: button.dataset.util, icon: button.querySelector('svg.u-ic').innerHTML,
         title: button.querySelector('.u-title').textContent, desc: button.querySelector('.u-desc').textContent }));
       const motion = document.querySelector('.ugroup-motion');
       const style = motion && getComputedStyle(motion);
@@ -193,6 +219,25 @@ async function main() {
     check('utilities: groups and order', ids.join() === 'maintenance,motion,more' && card.groups[1].names.join() === 'calibrate' && card.groups[2].names.join() === 'reset'
       && card.groups[0].names.join() === 'update_firmware,update_config,clear_faults,set_id', card.groups);
     check('utilities: icon + title + description', card.rows.every((row) => row.icon && row.title && row.desc) && standardIcons.size === card.rows.length - 1, card.rows.map((row) => row.title));
+    // round 3 (u0): the description is a tooltip (hidden at rest, shown on hover and on keyboard focus); danger is a word
+    const tip = async () => page.evaluate(() => { const desc = document.querySelector('[data-util="update_firmware"] .u-desc'); const style = getComputedStyle(desc); return style.visibility === 'visible' && parseFloat(style.opacity) > 0.9; });
+    await page.mouse.move(5, 995);
+    await page.waitForTimeout(300);
+    const atRest = await tip();
+    await page.hover('[data-util="update_firmware"] .u-title');
+    await page.waitForTimeout(700);
+    const onHover = await tip();
+    await page.mouse.move(5, 995);
+    await page.waitForTimeout(300);
+    await page.focus('[data-util="update_firmware"]');
+    await page.keyboard.press('Shift+Tab');
+    await page.keyboard.press('Tab');
+    await page.waitForTimeout(400);
+    const onFocus = await tip();
+    await page.evaluate(() => document.activeElement.blur());
+    const words = await page.evaluate(() => [...document.querySelectorAll('.sec.utilities .u-btn .danger')].map((el) => `${el.textContent}:${getComputedStyle(el).backgroundColor}`));
+    check('utilities: description is a hover / focus tooltip', !atRest && onHover && onFocus, { atRest, onHover, onFocus });
+    check('utilities: danger is a plain word', words.length > 0 && words.every((word) => /^(interrupts|changes|moves):rgba\(0, 0, 0, 0\)$/.test(word)), words);
     check('utilities: motion set apart', card.motionBorder >= 1 && card.motionGap >= 6, { border: card.motionBorder, gap: card.motionGap });
     await page.click('[data-util="calibrate"]');
     await page.waitForSelector('.u-panel .u-cmd', { timeout: 15000 });
@@ -232,13 +277,30 @@ async function main() {
     // ---- a query: one more click, the result inline
     await open(page, base, ADAPTER);
     await page.waitForSelector('[data-util="check_comms"]');
-    const adapterGroups = await page.evaluate(() => [...document.querySelectorAll('.card.utilities .ugroup')].map((group) => group.className.replace('ugroup ugroup-', '')));
+    const adapterGroups = await page.evaluate(() => [...document.querySelectorAll('.sec.utilities .ugroup')].map((group) => group.className.replace('ugroup ugroup-', '')));
     check('utilities: checks come first', adapterGroups[0] === 'checks' && adapterGroups.join() === 'checks,maintenance', adapterGroups);
     await page.click('[data-util="check_comms"]');
     await page.waitForSelector('[data-util-run]');
     const runLabel = await page.textContent('[data-util-run]');
+    // round 3: the run is held 2.6 s at the network so the busy state can be read: the button greys out with one quiet
+    // line under its title, no live output anywhere
+    await page.route('**/api/v1/act', async (route) => {
+      if (!JSON.parse(route.request().postData() || '{}').dry_run) await new Promise((resolve) => setTimeout(resolve, 2600));
+      await route.continue();
+    });
     await page.click('[data-util-run]');
+    await page.waitForTimeout(1400);
+    const busy = await page.evaluate(() => {
+      const button = document.querySelector('[data-util="check_comms"]');
+      const row = button.closest('.urow');
+      return { disabled: button.disabled, busy: row.classList.contains('busy'), line: (row.querySelector('.u-busy') || {}).textContent || '',
+        title: getComputedStyle(row.querySelector('.u-title')).color, muted: getComputedStyle(document.documentElement).getPropertyValue('--io-muted').trim(),
+        stream: document.querySelectorAll('.u-panel .u-tail, .u-panel .u-records').length, foot: (document.querySelector('.u-panel .u-foot') || {}).textContent || '' };
+    });
+    check('busy: greyed, one quiet line, no live output', busy.disabled && busy.busy && /^Checking communication… \d+ s$/.test(busy.line) && busy.stream === 0
+      && !/Run|Close/.test(busy.foot), busy);
     await page.waitForSelector('.u-panel .u-result.ok', { timeout: 20000 });
+    await page.unroute('**/api/v1/act');
     await page.waitForTimeout(300);
     const query = await page.evaluate(() => ({ head: document.querySelector('.u-panel .u-result-h').textContent, records: document.querySelector('.u-panel .u-records').textContent,
       modalShown: !document.getElementById('modal').hidden }));
@@ -325,7 +387,9 @@ async function main() {
     check('absent: on the attention line with its checks', /fdcanusb 28B3A25D/.test(absentLine) && /1\. A data cable/.test(absentLine) && /kernel evidence: never/.test(absentLine), absentLine.slice(0, 200));
     const inEvery = [];
     for (const structure of ['p0', 'p1', 'p2', 'p3', 'p4', 'p5']) {
-      await page.selectOption('#structure', structure);
+      // p3 is off the Group by picker (round 3) but its file still loads: switch to it in the page
+      if (structure === 'p3') await page.evaluate(() => { S.structure = 'p3'; render(); });
+      else await pick(page, '#structure', structure);
       await page.waitForTimeout(400);
       inEvery.push(await page.evaluate((entity) => {
         const key = S.built.byEntity.get(entity);
@@ -335,23 +399,29 @@ async function main() {
     }
     check('absent: a warn row in every structure', inEvery.every((item) => item.row), inEvery);
     await page.unroute('**/api/v1/state');
-    await page.selectOption('#structure', 'p1');
+    await pick(page, '#structure', 'p1');
 
     // ---- the seams, drawn
     const seam = async (structure, toggles, selected) => {
       await page.evaluate(({ id, on }) => { localStorage.setItem('io-diagnostics.structure', id); localStorage.setItem('io-diagnostics.structure-toggles', JSON.stringify({ [id]: on })); }, { id: structure, on: toggles });
       await open(page, base, selected);
+      // p3 (the subtitle / suffix seams) is off the Group by picker since round 3: a remembered p3 falls back, so the
+      // test switches to it in the page; its file and the seams stay
+      if (structure === 'p3') {
+        await page.evaluate(() => { S.structure = 'p3'; render(); });
+        await page.waitForTimeout(500);
+      }
     };
     await seam('p3', { showPaths: true }, CAN15);
     const p3 = await page.evaluate((key) => { const row = document.querySelector(`.t6-row[data-t6-path="${key}"]`); return { suffix: (row.querySelector('.t6-suffix') || {}).textContent, sub: (row.nextElementSibling || {}).className, subText: (row.nextElementSibling || {}).textContent, id: (row.querySelector('.t6-id') || {}).textContent }; }, CAN15);
     check('seams: p3 subtitle + suffix, id kept', /CAN bus/.test(p3.suffix || '') && p3.sub === 't6-subline' && /Port 1-3/.test(p3.subText) && p3.id === 'ABoAQVQwUBUgOTNO', p3);
     const others = {};
     for (const [variant, prefix] of [['v1', 't1'], ['v2', 't2']]) {
-      await page.selectOption('#tree-variant', variant);
+      await pick(page, '#tree-variant', variant);
       await page.waitForTimeout(700);
       others[variant] = await page.evaluate(({ key, pre }) => { const row = document.querySelector(`.${pre}-row[data-${pre}-path="${key}"]`); return row ? { suffix: (row.querySelector(`.${pre}-suffix`) || {}).textContent, sub: (row.nextElementSibling || {}).className } : null; }, { key: CAN15, pre: prefix });
     }
-    await page.selectOption('#tree-variant', 'v6');
+    await pick(page, '#tree-variant', 'v6');
     check('seams: v1 / v2 draw suffix + subtitle', ['v1', 'v2'].every((v) => others[v] && /CAN bus/.test(others[v].suffix || '') && others[v].sub === `${v === 'v1' ? 't1' : 't2'}-subline`), others);
     await page.click('[data-view="table"]');
     await page.waitForSelector('table.grid tbody tr');
@@ -366,20 +436,21 @@ async function main() {
     check('seams: p5 bus words as the lead', /error-passive/.test(p5.lead || '') && /node/.test(p5.id || ''), p5);
     await seam('p2', {}, CAN15);
     const p2off = await page.evaluate(() => [...document.querySelectorAll('#structure-toggles [data-opt]')].map((box) => box.dataset.opt));
+    await viewOptions(page);
     await page.check('#structure-toggles [data-opt="connections"]');
     await page.waitForTimeout(300);
     const p2on = await page.evaluate(() => [...document.querySelectorAll('#structure-toggles [data-opt]')].map((box) => box.dataset.opt));
     check('seams: toggles[].when (p2 Empty ports)', p2off.join() === 'connections' && p2on.join() === 'connections,showEmpty', { p2off, p2on });
     await seam('p1', {}, CAN15);
-    await page.selectOption('#skin', 'terminal');
+    await pick(page, '#skin', 'terminal');
     await page.waitForTimeout(1300);
     const guides = await page.evaluate((key) => (document.querySelector(`.t6-row[data-t6-path="${key}"] .t6-guide`) || {}).textContent, CAN15);
     check('seams: Terminal draws box guides', /^[├└]─ $/.test(guides || ''), guides);
     await page.screenshot({ path: path.join(SHOTS, 'integration-terminal-guides.png'), clip: { x: 0, y: 300, width: 470, height: 420 } });
-    await page.selectOption('#skin', 'contrast');
+    await pick(page, '#skin', 'contrast');
     const focus = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--io-focus-width').trim());
     check('seams: --io-focus-width per skin', focus === '3px', focus);
-    await page.selectOption('#skin', 'claude');
+    await pick(page, '#skin', 'contrast');
     await page.click('[data-view="table"]');
     await page.waitForSelector('table.grid tbody tr');
     const mono = await page.evaluate(() => { const td = document.querySelector('table.grid tbody tr[data-key] td.xcol'); return td ? getComputedStyle(td).fontFamily : ''; });
@@ -387,6 +458,8 @@ async function main() {
     check('seams: mono extra column', Boolean(mono) && mono.replace(/\s/g, '') === monoRef.replace(/\s/g, ''), { mono, monoRef });
     check('no page errors', errors.length === 0, errors.slice(0, 3).join(' | ') || 'none');
     await context.close();
+    await panes(browser, base);
+    for (const scheme of ['light', 'dark']) await round3Shots(browser, base, scheme);
   } finally {
     stopServer(server.child);
   }
@@ -397,6 +470,174 @@ async function main() {
   }
   console.log(`\n${passed}/${passed + failed} checks passed · screenshots in ${SHOTS}`);
   process.exitCode = failed ? 1 : 0;
+}
+
+// ---- round 3: the panes (Settings/Memory/feedback_resizable_panels.md) ----
+// Drag each sash with the mouse in headless Chrome, reload, and read the width back; a double-click restores the
+// default; every pane keeps its minimum; the Table's inspector folds and unfolds (row click, the same row, the table's
+// empty space, Escape, its close button, `]` to pin, remembered across a reload). Widths are measured
+// (getBoundingClientRect), never assumed.
+async function panes(browser, base) {
+  const context = await browser.newContext({ viewport: VIEWPORT, colorScheme: 'light' });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(String(error)));
+  const width = (selector) => page.evaluate((sel) => Math.round(document.querySelector(sel).getBoundingClientRect().width), selector);
+  const stored = (key) => page.evaluate((k) => localStorage.getItem(k), key);
+  const drag = async (dx, x = null) => {
+    const box = await page.locator('#sash').boundingBox();
+    const from = { x: box.x + box.width / 2, y: box.y + 200 };
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(x === null ? from.x + dx / 2 : (from.x + x) / 2, from.y, { steps: 4 });
+    await page.mouse.move(x === null ? from.x + dx : x, from.y, { steps: 4 });
+    await page.mouse.up();
+    await page.waitForTimeout(400);
+  };
+  const settle = () => page.waitForTimeout(400); // the inspector's .18 s slide
+  try {
+    await open(page, base);
+    const tree0 = await width('#left');
+    await drag(150);
+    const dragged = await width('#left');
+    const saved = await stored('io-diagnostics.pane.tree');
+    await page.reload();
+    await ready(page);
+    const reloaded = await width('#left');
+    check('panes: the tree|detail sash drags and is remembered', tree0 === 470 && Math.abs(dragged - 620) <= 1 && saved === String(dragged) && reloaded === dragged, { tree0, dragged, saved, reloaded });
+    await drag(0, 20);
+    const least = await width('#left');
+    await drag(0, VIEWPORT.width - 20);
+    const detailLeast = await width('#inspector');
+    await page.dblclick('#sash');
+    await page.waitForTimeout(400);
+    const reset = { tree: await width('#left'), stored: await stored('io-diagnostics.pane.tree') };
+    await page.reload();
+    await ready(page);
+    check('panes: minimum widths; a double-click restores the default', least === 280 && detailLeast >= 360 && reset.tree === 470 && reset.stored === null && (await width('#left')) === 470,
+      { least, detailLeast, reset });
+
+    // the Table: the inspector folded, a row slides it in, and it folds again five ways
+    await page.click('[data-view="table"]');
+    await page.waitForSelector('table.grid tbody tr');
+    await settle();
+    const folded = { inspector: await width('#inspector'), table: await width('#left'), sash: await page.evaluate(() => getComputedStyle(document.getElementById('sash')).display) };
+    const row = 'table.grid tbody tr[data-key] td.namecell .name';
+    await page.locator(row).nth(2).click();
+    await settle();
+    const opened = { inspector: await width('#inspector'), key: await page.evaluate(() => (document.querySelector('table.grid tr.sel') || {}).dataset.key), sel: await page.evaluate(() => S.sel) };
+    check('inspector: folded by default, a row click slides it in on that row', folded.inspector === 0 && folded.table >= VIEWPORT.width - 2 && folded.sash === 'none'
+      && opened.inspector === 460 && opened.key === opened.sel, { folded, opened });
+    const ways = {};
+    await page.locator('table.grid tr.sel td.namecell .name').click();
+    await settle();
+    ways.sameRow = await width('#inspector');
+    await page.locator(row).nth(2).click();
+    await settle();
+    await page.keyboard.press('Escape');
+    await settle();
+    ways.escape = await width('#inspector');
+    await page.locator(row).nth(2).click();
+    await settle();
+    await page.mouse.click(400, 960); // the table's empty space below its rows
+    await settle();
+    ways.emptySpace = await width('#inspector');
+    await page.locator(row).nth(2).click();
+    await settle();
+    await page.click('#insp-close');
+    await settle();
+    ways.closeButton = await width('#inspector');
+    check('inspector: folds on the same row, Escape, the empty space, its close button', Object.values(ways).every((w) => w === 0), ways);
+    await page.keyboard.press(']');
+    await settle();
+    const pinned = { width: await width('#inspector'), pressed: await page.getAttribute('#insp-toggle', 'aria-pressed') };
+    await page.locator(row).nth(3).click();
+    await settle();
+    await page.mouse.click(400, 960);
+    await page.keyboard.press('Escape');
+    await settle();
+    pinned.stays = await width('#inspector');
+    await drag(-120);
+    pinned.dragged = await width('#inspector');
+    pinned.saved = await stored('io-diagnostics.pane.inspector');
+    await page.reload();
+    await ready(page);
+    await page.click('[data-view="table"]');
+    await settle();
+    pinned.reloaded = await width('#inspector');
+    await page.dblclick('#sash');
+    await page.waitForTimeout(400);
+    pinned.reset = await width('#inspector');
+    await page.keyboard.press(']');
+    await settle();
+    pinned.unpinned = await width('#inspector');
+    check('inspector: `]` pins it open (remembered), its sash drags and resets', pinned.width === 460 && pinned.pressed === 'true' && pinned.stays === 460
+      && Math.abs(pinned.dragged - 580) <= 1 && pinned.saved === String(pinned.dragged) && pinned.reloaded === pinned.dragged && pinned.reset === 460 && pinned.unpinned === 0, pinned);
+    await page.click('#insp-toggle');
+    await settle();
+    const toggled = await width('#inspector');
+    await page.click('#insp-toggle');
+    await settle();
+    check('inspector: the toolbar toggle pins and unpins it', toggled === 460 && (await width('#inspector')) === 0, { toggled });
+    check('panes: no page errors', errors.length === 0, errors.slice(0, 3).join(' | ') || 'none');
+  } finally {
+    await context.close();
+  }
+}
+
+// ---- round 3 screenshots for the report: reports/media/round3/a-*.png, light and dark ----
+async function round3Shots(browser, base, scheme) {
+  fs.mkdirSync(ROUND3, { recursive: true });
+  const context = await browser.newContext({ viewport: VIEWPORT, colorScheme: scheme });
+  const page = await context.newPage();
+  const shot = (name, clip) => page.screenshot({ path: path.join(ROUND3, `a-${name}-${scheme}.png`), ...(clip ? { clip } : {}) });
+  try {
+    await open(page, base, CAN15);
+    await page.mouse.move(5, 995);
+    await shot('tree-inspector');
+    await viewOptions(page);
+    await page.waitForTimeout(200);
+    const pop = await page.locator('#view-options').boundingBox();
+    await shot('view-options', { x: 0, y: 0, width: Math.min(VIEWPORT.width, pop.x + pop.width + 40), height: pop.y + pop.height + 30 });
+    await page.keyboard.press('Escape');
+    const util = async () => { const box = await page.locator('.sec.utilities').boundingBox(); return { x: box.x - 10, y: box.y - 6, width: box.width + 20, height: box.height + 12 }; };
+    await page.evaluate(() => document.querySelector('.sec.utilities').scrollIntoView({ block: 'start' }));
+    await page.waitForTimeout(200);
+    await shot('utilities-quiet', await util());
+    await page.hover('[data-util="update_firmware"] .u-title');
+    await page.waitForTimeout(700);
+    const tipBox = await util();
+    await shot('utilities-tooltip', { ...tipBox, height: tipBox.height + 60 });
+    // busy: a query held 6 s at the network
+    await open(page, base, ADAPTER);
+    await page.route('**/api/v1/act', async (route) => {
+      if (!JSON.parse(route.request().postData() || '{}').dry_run) await new Promise((resolve) => setTimeout(resolve, 6000));
+      await route.continue();
+    });
+    await page.click('[data-util="check_comms"]');
+    await page.waitForSelector('[data-util-run]');
+    await page.click('[data-util-run]');
+    await page.waitForTimeout(3200);
+    await page.mouse.move(5, 995);
+    await shot('utilities-busy', await util());
+    await page.waitForSelector('.u-panel .u-result', { timeout: 20000 });
+    await page.unroute('**/api/v1/act');
+    await page.click('[data-view="table"]');
+    await page.waitForTimeout(500);
+    await shot('table-folded');
+    await page.locator('table.grid tbody tr[data-key] td.namecell .name').nth(2).click();
+    await page.waitForTimeout(500);
+    await page.mouse.move(5, 995);
+    await shot('table-open');
+    await page.click('[data-view="activity"]');
+    await page.waitForTimeout(500);
+    await shot('activity');
+    await page.click('[data-act-filter="faults"]');
+    await page.waitForTimeout(300);
+    await shot('activity-faults');
+  } finally {
+    await context.close();
+  }
 }
 
 // ---- the expected setup (docs/expected-setup.md), on F1 with a rig file of its own (a temporary copy) ----
@@ -462,9 +703,9 @@ async function expectedSetup(browser) {
 
     // the rig row: first, the counts in its name, a warn shape; its card offers Expect what's here
     await open(page, base, RIG);
-    await page.waitForSelector('.card.setup [data-setup="expect"]', { timeout: 15000 });
+    await page.waitForSelector('.sec.setup [data-setup="expect"]', { timeout: 15000 });
     const rig = await rigRow();
-    const rigCard = await page.evaluate(() => ({ buttons: [...document.querySelectorAll('.card.setup [data-setup]')].map((b) => b.dataset.setup), why: (document.querySelector('.card.why') || {}).textContent || '' }));
+    const rigCard = await page.evaluate(() => ({ buttons: [...document.querySelectorAll('.sec.setup [data-setup]')].map((b) => b.dataset.setup), why: (document.querySelector('.sec.why') || {}).textContent || '' }));
     check('expected: the rig row counts at a glance', rig && rig.name === '1-DOF test rack · 1/2 adapters · 3/4 boards · 2/2 cameras' && rig.shape && rig.first, rig);
     check('expected: the rig row names what is missing', /can\/16 on fdcanusb 272813EF/.test(rigCard.why) && /fdcanusb 99990000: not on this PC/.test(rigCard.why)
       && rigCard.buttons.join() === 'expect', rigCard);
@@ -472,11 +713,11 @@ async function expectedSetup(browser) {
 
     // the retired adapter, plugged in again (F1's 28B3A25D on 1-5): a warning on its own row, the reason in its card
     await open(page, base, SECOND);
-    await page.waitForSelector('.card.setup .s-retired', { timeout: 15000 });
+    await page.waitForSelector('.sec.setup .s-retired', { timeout: 15000 });
     const retired = await page.evaluate((entity) => {
       const row = S.built.byKey.get(S.built.byEntity.get(entity));
-      return { own: row.status.own, card: document.querySelector('.card.setup .s-retired').textContent,
-        check: [...document.querySelectorAll('.card.check')].map((card) => card.textContent).find((text) => /: retired/.test(text)) || '' };
+      return { own: row.status.own, card: document.querySelector('.sec.setup .s-retired').textContent,
+        check: [...document.querySelectorAll('#detail .check')].map((card) => card.textContent).find((text) => /: retired/.test(text)) || '' };
     }, SECOND);
     check('expected: a retired adapter plugged in again is a warn row with its reason', retired.own === 'warn'
       && retired.card === 'Retired 2026-10-23: frames never reached the bus (2026-10-22); replaced by 0607623A' && /RetiredDevice/.test(retired.check), retired);
@@ -484,8 +725,8 @@ async function expectedSetup(browser) {
 
     // Retire…: a reason first (typed key by key: the box keeps its focus while the card redraws), Cancel writes nothing
     await open(page, base, ADAPTER);
-    await page.click('.card.setup [data-setup="retire"]');
-    await page.waitForSelector('.card.setup [data-setup-reason]');
+    await page.click('.sec.setup [data-setup="retire"]');
+    await page.waitForSelector('.sec.setup [data-setup-reason]');
     const disabledFirst = await page.$eval('[data-setup-confirm]', (button) => button.disabled);
     await page.click('[data-setup-reason]');
     await page.keyboard.type('loose USB socket', { delay: 30 });
@@ -493,17 +734,17 @@ async function expectedSetup(browser) {
       enabled: !document.querySelector('[data-setup-confirm]').disabled, confirm: document.querySelector('.s-panel .confirm').textContent }));
     check('expected: Retire… needs a reason and says it in the confirm', disabledFirst && typed.value === 'loose USB socket' && typed.focus && typed.enabled
       && typed.confirm === 'Retire fdcanusb 272813EF? It leaves 1-DOF test rack. Plugged in again, its row says “retired 2026-10-21: loose USB socket” (a warning).', { disabledFirst, ...typed });
-    await page.locator('.card.setup').scrollIntoViewIfNeeded();
-    await page.locator('.card.setup').screenshot({ path: path.join(SHOTS, 'expected-controls-retire.png') });
+    await page.locator('.sec.setup').scrollIntoViewIfNeeded();
+    await page.locator('.sec.setup').screenshot({ path: path.join(SHOTS, 'expected-controls-retire.png') });
     await page.click('[data-setup-cancel]');
     check('expected: Cancel writes nothing', fs.readFileSync(file, 'utf8') === RIG_FILE);
 
     // Expect what's here on the adapter: the confirm names the change; the file and the rig row follow
-    await page.click('.card.setup [data-setup="expect"]');
+    await page.click('.sec.setup [data-setup="expect"]');
     await page.waitForSelector('.s-panel .confirm');
     const expectText = await page.textContent('.s-panel .confirm');
     check('expected: Expect what\'s here says exactly what changes', expectText === 'Expect fdcanusb 272813EF in 1-DOF test rack with can/1, can/14, can/15 (can/16 no longer expected)?', expectText);
-    await page.locator('.card.setup').screenshot({ path: path.join(SHOTS, 'expected-controls-expect.png') });
+    await page.locator('.sec.setup').screenshot({ path: path.join(SHOTS, 'expected-controls-expect.png') });
     await page.click('[data-setup-confirm]');
     await page.waitForSelector('.s-panel .u-result.ok', { timeout: 15000 });
     await page.waitForFunction((key) => /3\/3 boards/.test((document.querySelector(`.t6-row[data-t6-path="${key}"] .t6-name`) || {}).textContent || ''), RIG, { timeout: 15000 });
@@ -513,17 +754,17 @@ async function expectedSetup(browser) {
 
     // Forget on the adapter that is never there
     await open(page, base, LOST);
-    await page.waitForSelector('.card.setup [data-setup="forget"]', { timeout: 15000 });
-    const lostButtons = await page.evaluate(() => [...document.querySelectorAll('.card.setup [data-setup]')].map((b) => b.dataset.setup));
-    await page.click('.card.setup [data-setup="forget"]');
+    await page.waitForSelector('.sec.setup [data-setup="forget"]', { timeout: 15000 });
+    const lostButtons = await page.evaluate(() => [...document.querySelectorAll('.sec.setup [data-setup]')].map((b) => b.dataset.setup));
+    await page.click('.sec.setup [data-setup="forget"]');
     const forgetText = await page.textContent('.s-panel .confirm');
-    await page.locator('.card.setup').screenshot({ path: path.join(SHOTS, 'expected-controls-forget.png') });
+    await page.locator('.sec.setup').screenshot({ path: path.join(SHOTS, 'expected-controls-forget.png') });
     await page.click('[data-setup-confirm]');
     await page.waitForSelector('.s-panel .u-result.ok', { timeout: 15000 });
     await page.waitForFunction((key) => /1\/1 adapter /.test((document.querySelector(`.t6-row[data-t6-path="${key}"] .t6-name`) || {}).textContent || ''), RIG, { timeout: 15000 });
     const lostRowGone = await page.evaluate(({ entity, rig }) => !S.built.byEntity.has(entity) && !S.data.summary.attention.some((item) => item.path === entity)
-      && S.sel === rig && /Saved/.test(document.querySelector('.card.setup .u-result.ok').textContent), { entity: LOST, rig: RIG });
-    await page.locator('.card.setup').screenshot({ path: path.join(SHOTS, 'expected-controls-forget-done.png') });
+      && S.sel === rig && /Saved/.test(document.querySelector('.sec.setup .u-result.ok').textContent), { entity: LOST, rig: RIG });
+    await page.locator('.sec.setup').screenshot({ path: path.join(SHOTS, 'expected-controls-forget-done.png') });
     check('expected: Forget on an absent row drops it from the file and the page', lostButtons.join() === 'forget,retire' && lostRowGone
       && forgetText.startsWith('Forget fdcanusb 99990000? It leaves the expected setup (1-DOF test rack)') && !/99990000/.test(fs.readFileSync(file, 'utf8')), { lostButtons, forgetText });
     await open(page, base, RIG);

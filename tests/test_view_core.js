@@ -394,8 +394,55 @@ function liveFrame() {
     && top.some((label) => /Ethernet|RTL8111/.test(label)) && top.indexOf('fdcanusb · 272813EF') < top.indexOf('Computer'), top);
 }
 
+// ------------------------------------------------------------------- round 3: sort + P1 opened ----
+// View options' Sort by (core.js sortRows) on the live rack frame through P1, and P1's default expansion.
+function sortUnit() {
+  const state = JSON.parse(fs.readFileSync(LIVE, 'utf8')); // the live rack frame: 10 top-level rows, a Computer row
+  const plain = V.build(state, 'p1', {});
+  const worst = (row) => Math.max(V.RANK[row.status.own] ?? -1, V.RANK[row.status.part && row.status.part.level] ?? -1, V.RANK[row.status.hint && row.status.hint.level] ?? -1);
+  // a container row (a structure's grouping row or the host's own row: P1's "Computer") ends its level under Name / Last change
+  const container = (row) => !row.entity || row.kind === 'host';
+  const containersLast = (built) => { const n = built.rows.filter(container).length; return n > 0 && built.rows.slice(built.rows.length - n).every(container); };
+  const devices = (built) => built.rows.filter((row) => !container(row));
+  const status = V.build(state, 'p1', { sort: 'status' });
+  const levels = status.rows.map(worst);
+  const okKeys = (built) => built.rows.filter((row) => worst(row) < 0).map((row) => row.key);
+  check('sort status: problems first, worst first, the rest in the structure\'s order', levels.every((level, at) => at === 0 || levels[at - 1] >= level)
+    && levels[0] > 0 && okKeys(status).join() === okKeys(plain).join(), status.rows.map((row) => `${row.label}:${worst(row)}`));
+  check('sort: none asked keeps the structure\'s order', labels(V.build(state, 'p1', { sort: '' }).rows).join() === labels(plain.rows).join(), labels(plain.rows));
+  const named = V.build(state, 'p1', { sort: 'name' });
+  const names = devices(named).map((row) => row.label);
+  const sortedNames = [...names].sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+  const boards = named.flat.find((row) => row.label === 'fdcanusb · 272813EF').children.map((row) => row.label);
+  check('sort name: labels in order, numbers as numbers, the Computer last', names.join() === sortedNames.join() && containersLast(named)
+    && boards.join() === 'CAN 1,CAN 14,CAN 15', { top: named.rows.map((row) => row.label), boards });
+  // newest event first: a camera at 300, a board below the adapter at 200 (the adapter takes its board's time), nothing else
+  const camera = plain.rows.find((row) => /RealSense/.test(row.label));
+  const adapter = plain.rows.find((row) => row.label === 'fdcanusb · 272813EF');
+  const board = adapter.children.find((row) => row.label === 'CAN 14');
+  const changed = V.build(state, 'p1', { sort: 'change', changes: { [camera.entity]: 300, [board.entity]: 200, 'host/nowhere': 999 } });
+  const rest = devices(changed).slice(2).map((row) => row.key);
+  const restPlain = devices(plain).filter((row) => row.key !== camera.key && row.key !== adapter.key).map((row) => row.key);
+  check('sort change: newest event first (a row takes its children\'s), the rest kept, the Computer last', changed.rows[0].key === camera.key
+    && changed.rows[1].key === adapter.key && changed.rows[1].children[0].label === 'CAN 14' && rest.join() === restPlain.join()
+    && containersLast(changed), changed.rows.map((row) => row.label));
+  const rigged = withRig(withExpected(state));
+  const rigFirst = V.SORTS.map((by) => `${by}:${V.build(rigged, 'p1', { sort: by, changes: { [camera.entity]: 300 } }).rows[0].kind}`);
+  check('sort: the rig row leads under every sort (the expected setup\'s summary)', rigFirst.every((text) => text.endsWith(':rig')), rigFirst);
+  const folders = plain.flat.filter((row) => row.children.length);
+  const computer = plain.flat.filter((row) => row.label === 'Computer');
+  check('p1 opens every device row with children, the Computer row stays closed', folders.some((row) => !container(row))
+    && folders.filter((row) => !container(row)).every((row) => row.defaultOpen) && computer.length === 1 && !computer[0].defaultOpen,
+  folders.map((row) => `${row.label}:${row.defaultOpen}`));
+  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'io_diagnostics', 'web', 'view', 'structure', 'index.json'), 'utf8'));
+  const picker = manifest.structures.filter((entry) => entry.picker !== false).sort((a, b) => a.pick - b.pick).map((entry) => `${entry.id}:${entry.group}`);
+  check('Group by: Devices · Type · Port · Bus · Physical; P3 off the picker, its file kept', picker.join() === 'p1:Devices,p2:Type,p4:Port,p5:Bus,p0:Physical'
+    && manifest.structures.some((entry) => entry.id === 'p3' && entry.ready && entry.picker === false), picker);
+}
+
 (async () => {
   unit();
+  sortUnit();
   liveFrame();
   if (!process.argv.includes('--unit')) await frames();
   console.log(`\n${passed}/${passed + failed} checks passed`);

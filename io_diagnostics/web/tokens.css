@@ -109,6 +109,7 @@
   --io-link-decoration: none;       /* links' text-decoration at rest (High contrast: underline) */
   --io-guide-style: none;           /* tree guides: none, or box = box-drawing glyphs (Terminal; read by tree/v6.js) */
   --io-guide-glyph: "│├└─";         /* the box glyphs, in order: bar, tee, corner, dash */
+  --io-detail-max: 760px;           /* the detail page's reading width (round 3: "compact", read in one glance) */
 }
 
 /* Print forces light, whatever the skin and mode: a neutral black-on-white palette with the light status fills
