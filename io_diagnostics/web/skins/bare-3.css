@@ -1,134 +1,145 @@
-/* STUB (orchestrator, 2026-10-23): a copy of High contrast until the Bare Metal lane replaces it. */
-/* Skin 11 · High contrast — WCAG AAA: pure white / pure black surfaces, every text token >= 7:1 on every surface it
- * sits on, problem fills >= 4.5:1 so the four shapes read without their colour, a saturated focus colour, and a
- * light mode that prints (white paper, black ink, no tinted panes).
- * Defines every BASE token of web/tokens.css for both modes, and overrides the derived tokens whose 10-15 % tints
- * would fall under AAA (level words, guides, controls, knock-on shapes).
- * WHY borders and guides are drawn in full ink: separation here comes from lines, not from tinted surfaces. */
+/* Skin · Bare Metal · Operator Grey — the High Performance HMI grey-scale operator display, stripped to one grey
+ * per role: mid-grey surfaces (light operator room) or a dark control-room grey, dark-grey normal text, and colour
+ * that appears only when something is abnormal.
+ * Source: B. Hollifield, D. Oliver, I. Nimmo, E. Habibi, "The High Performance HMI Handbook" (PAS, 2008) — a mid /
+ * light grey background so neither black nor white glares, normal values de-emphasised in grey, saturated colour only
+ * for abnormal; ANSI/ISA-101.01-2015 — colour never the only cue; ISA-18.2 priority colours red = high (error),
+ * yellow / amber = medium (warn). Grey levels and hues are est. (the Handbook prints its palette as examples).
+ * WHY flat: every pane is the same grey (the Handbook's "no gratuitous 3-D, no decoration"); separation is a thin
+ * darker rule, so the page is all data-ink.
+ * WHY the light warn is a dark amber (#8f5f00) and not alarm yellow: yellow on mid-grey measures ~1.4:1; the 3:1 a
+ * shape needs forces amber. Pure HP-HMI yellow (#ffd200) is kept for the dark control-room mode.
+ * WHY unknown is a deep blue: blue is the Handbook's "operator attention, not an alarm" colour, and no alarm uses it;
+ * stale is grey because old data is dim, not a new fault.
+ * WHY the level words are near-black browns and reds: the colour belongs to the shape; the words only need to read
+ * (AAA on mid-grey leaves little room for hue).
+ * Defines every BASE token of web/tokens.css for both modes; level words and neutrals overridden for WCAG AAA. */
 [data-skin="bare-3"][data-mode="light"] {
-  --io-bg: #ffffff;
-  --io-surface: #ffffff;
-  --io-surface-2: #ffffff;
-  --io-surface-alt: #ffffff;
-  --io-field: #ffffff;
-  --io-popover: #ffffff;
-  --io-chrome-bg: #000000;
-  --io-chrome-text: #ffffff;
+  --io-bg: #b8b8b8;
+  --io-surface: #c4c4c4;
+  --io-surface-2: #bdbdbd;
+  --io-surface-alt: #c0c0c0;
+  --io-field: #d4d4d4;
+  --io-popover: #cccccc;
+  --io-chrome-bg: #3c3c3c;
+  --io-chrome-text: #dcdcdc;
 
-  --io-text: #000000;
+  --io-text: #141414;
   --io-text-strong: #000000;
-  --io-muted: #262626;
-  --io-faint: #333333;
-  --io-off: #595959;
-  --io-icon: #000000;
+  --io-muted: #222222;
+  --io-faint: #2b2b2b;
+  --io-off: #858585;
+  --io-icon: #3c3c3c;
 
-  --io-border: #000000;
-  --io-border-soft: #6b6b6b;
+  --io-border: #8f8f8f;
+  --io-border-soft: #b0b0b0;
 
-  --io-hover: #f0f0f0;
-  --io-selected: #e3e3e3;
+  --io-hover: #cbcbcb;
+  --io-selected: #d8d8d8;
   --io-selected-line: #000000;
-  --io-accent: #0033cc;
-  --io-accent-text: #0029a3;
-  --io-focus: #0033cc;
+  --io-accent: #3c3c3c;
+  --io-accent-text: #000000;
+  --io-focus: #000000;
 
-  --io-warn: #8a4b00;
-  --io-error: #b3000c;
-  --io-stale: #3d3d3d;
-  --io-unknown: #5a1f9e;
+  --io-warn: #8f5f00;
+  --io-error: #a00000;
+  --io-stale: #595959;
+  --io-unknown: #1f3f8f;
   --io-on-status: #ffffff;
-  --io-ok: #005c1f;
-  --io-info: #0033cc;
+  --io-ok: #333333;
+  --io-info: #333333;
   --io-shadow: #000000;
 
-  --io-font-ui: system-ui, -apple-system, "Segoe UI", Ubuntu, Inter, sans-serif;
-  --io-font-mono: ui-monospace, "DejaVu Sans Mono", "Ubuntu Mono", monospace;
-  --io-font-display: system-ui, -apple-system, "Segoe UI", Ubuntu, Inter, sans-serif;
-  --io-font-size: 14px;
+  --io-font-ui: system-ui, "Segoe UI", Tahoma, Arial, "Liberation Sans", "DejaVu Sans", sans-serif;
+  --io-font-mono: ui-monospace, "Consolas", "DejaVu Sans Mono", "Liberation Mono", "Ubuntu Mono", monospace;
+  --io-font-display: system-ui, "Segoe UI", Tahoma, Arial, "Liberation Sans", "DejaVu Sans", sans-serif;
+  --io-font-size: 13px;
 
-  --io-radius: 4px;
-  --io-radius-sm: 2px;
-  --io-radius-lg: 6px;
-  --io-row-h: 30px;
-  --io-indent: 16px;
-  --io-focus-width: 3px;           /* WCAG 2.4.13: a thicker focus ring */
-  --io-link-decoration: underline; /* links never by colour alone (WCAG 1.4.1) */
+  --io-radius: 0;
+  --io-radius-sm: 0;
+  --io-radius-lg: 0;
+  --io-row-h: 26px;
+  --io-indent: 14px;
+  --io-focus-width: 2px;
+  --io-link-decoration: underline;
 
-  --io-warn-text: #6b3a00;
-  --io-error-text: #8f000a;
-  --io-stale-text: #262626;
-  --io-unknown-text: #4b1a85;
-  --io-ok-text: #004d1a;
-  --io-info-text: #002b99;
-  --io-knock: #595959;
-  --io-guide: #8c8c8c;
-  --io-guide-strong: #000000;
-  --io-control: #ffffff;
-  --io-control-hover: #f0f0f0;
-  --io-pressed: #d9d9d9;
-  --io-mark: #ffe94d;
+  --io-warn-text: #3d2600;
+  --io-error-text: #4d0000;
+  --io-stale-text: #222222;
+  --io-unknown-text: #0f2052;
+  --io-ok-text: #222222;
+  --io-info-text: #222222;
+  --io-knock: #707070;
+  --io-guide: #a3a3a3;
+  --io-guide-strong: #3c3c3c;
+  --io-control: #cbcbcb;
+  --io-control-hover: #d2d2d2;
+  --io-pressed: #dadada;
+  --io-mark: #e0e0e0;
+  --io-radius-pill: 0;
 }
 
 [data-skin="bare-3"][data-mode="dark"] {
-  --io-bg: #000000;
-  --io-surface: #000000;
-  --io-surface-2: #000000;
-  --io-surface-alt: #000000;
-  --io-field: #000000;
-  --io-popover: #000000;
-  --io-chrome-bg: #000000;
-  --io-chrome-text: #ffffff;
+  --io-bg: #262626;
+  --io-surface: #2e2e2e;
+  --io-surface-2: #333333;
+  --io-surface-alt: #2b2b2b;
+  --io-field: #262626;
+  --io-popover: #333333;
+  --io-chrome-bg: #1a1a1a;
+  --io-chrome-text: #cfcfcf;
 
-  --io-text: #ffffff;
-  --io-text-strong: #ffffff;
-  --io-muted: #e6e6e6;
-  --io-faint: #d4d4d4;
-  --io-off: #a3a3a3;
-  --io-icon: #ffffff;
+  --io-text: #dedede;
+  --io-text-strong: #f5f5f5;
+  --io-muted: #cfcfcf;
+  --io-faint: #c4c4c4;
+  --io-off: #6b6b6b;
+  --io-icon: #9e9e9e;
 
-  --io-border: #ffffff;
-  --io-border-soft: #8c8c8c;
+  --io-border: #4d4d4d;
+  --io-border-soft: #3b3b3b;
 
-  --io-hover: #1a1a1a;
-  --io-selected: #2e2e2e;
-  --io-selected-line: #ffffff;
-  --io-accent: #ffff00;
-  --io-accent-text: #8cc8ff;
-  --io-focus: #ffff00;
+  --io-hover: #383838;
+  --io-selected: #474747;
+  --io-selected-line: #bdbdbd;
+  --io-accent: #bdbdbd;
+  --io-accent-text: #f0f0f0;
+  --io-focus: #f0f0f0;
 
-  --io-warn: #ffb000;
+  --io-warn: #ffd200;
   --io-error: #ff6b6b;
-  --io-stale: #c8c8c8;
-  --io-unknown: #d0a8ff;
+  --io-stale: #a6a6a6;
+  --io-unknown: #8cb0ff;
   --io-on-status: #000000;
-  --io-ok: #5ce08a;
-  --io-info: #8cc8ff;
+  --io-ok: #c4c4c4;
+  --io-info: #c4c4c4;
   --io-shadow: #000000;
 
-  --io-font-ui: system-ui, -apple-system, "Segoe UI", Ubuntu, Inter, sans-serif;
-  --io-font-mono: ui-monospace, "DejaVu Sans Mono", "Ubuntu Mono", monospace;
-  --io-font-display: system-ui, -apple-system, "Segoe UI", Ubuntu, Inter, sans-serif;
-  --io-font-size: 14px;
+  --io-font-ui: system-ui, "Segoe UI", Tahoma, Arial, "Liberation Sans", "DejaVu Sans", sans-serif;
+  --io-font-mono: ui-monospace, "Consolas", "DejaVu Sans Mono", "Liberation Mono", "Ubuntu Mono", monospace;
+  --io-font-display: system-ui, "Segoe UI", Tahoma, Arial, "Liberation Sans", "DejaVu Sans", sans-serif;
+  --io-font-size: 13px;
 
-  --io-radius: 4px;
-  --io-radius-sm: 2px;
-  --io-radius-lg: 6px;
-  --io-row-h: 30px;
-  --io-indent: 16px;
-  --io-focus-width: 3px;           /* WCAG 2.4.13: a thicker focus ring */
-  --io-link-decoration: underline; /* links never by colour alone (WCAG 1.4.1) */
+  --io-radius: 0;
+  --io-radius-sm: 0;
+  --io-radius-lg: 0;
+  --io-row-h: 26px;
+  --io-indent: 14px;
+  --io-focus-width: 2px;
+  --io-link-decoration: underline;
 
-  --io-warn-text: #ffc24d;
-  --io-error-text: #ffadad;
-  --io-stale-text: #e0e0e0;
-  --io-unknown-text: #ddc0ff;
-  --io-ok-text: #7ee8a3;
-  --io-info-text: #a8d5ff;
-  --io-knock: #a3a3a3;
-  --io-guide: #737373;
-  --io-guide-strong: #ffffff;
-  --io-control: #000000;
-  --io-control-hover: #1a1a1a;
-  --io-pressed: #333333;
-  --io-mark: #5c4d00;
+  --io-warn-text: #ffe066;
+  --io-error-text: #ffb3b3;
+  --io-stale-text: #cfcfcf;
+  --io-unknown-text: #c2d4ff;
+  --io-ok-text: #cfcfcf;
+  --io-info-text: #cfcfcf;
+  --io-knock: #7a7a7a;
+  --io-guide: #4d4d4d;
+  --io-guide-strong: #bdbdbd;
+  --io-control: #383838;
+  --io-control-hover: #404040;
+  --io-pressed: #4d4d4d;
+  --io-mark: #5c5c5c;
+  --io-radius-pill: 0;
 }
