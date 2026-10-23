@@ -1,0 +1,27 @@
+{
+  "about": "Skins (docs/round2-seams.md). One entry per skin, pre-listed; the page loads only entries with ready=true. A skin lane writes skins/<id>.css and flips ONLY its own entry's ready to true (entries are blank-line separated so parallel lanes merge cleanly).",
+  "default": "claude",
+  "skins": [
+    {"id": "claude", "name": "Claude", "file": "claude.css", "ready": true},
+
+    {"id": "obsidian", "name": "Obsidian", "file": "obsidian.css", "ready": false},
+
+    {"id": "notion", "name": "Notion", "file": "notion.css", "ready": false},
+
+    {"id": "terminal", "name": "Terminal", "file": "terminal.css", "ready": false},
+
+    {"id": "foxglove", "name": "Foxglove / medkit", "file": "foxglove.css", "ready": false},
+
+    {"id": "shadcn", "name": "shadcn/ui", "file": "shadcn.css", "ready": false},
+
+    {"id": "unstyled", "name": "Unstyled", "file": "unstyled.css", "ready": false},
+
+    {"id": "isa101", "name": "ISA-101 HMI", "file": "isa101.css", "ready": false},
+
+    {"id": "macos", "name": "macOS Settings", "file": "macos.css", "ready": false},
+
+    {"id": "linear", "name": "Linear", "file": "linear.css", "ready": false},
+
+    {"id": "contrast", "name": "High contrast", "file": "contrast.css", "ready": false}
+  ]
+}

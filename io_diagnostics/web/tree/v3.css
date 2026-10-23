@@ -1,22 +1,22 @@
 /* Tree proposal v3 — "Problems first". Scoped to .iot-v3 so it can sit beside the other proposals.
    Palette follows web/app.css (falls back to the same values when a page has no app.css). Dark only, like the app. */
 .iot-v3 {
-  --v3-text: #c4c7cd;          /* rule 5: connected and healthy = normal grey text */
-  --v3-strong: #eceef1;        /* a row that reports a problem itself */
-  --v3-icon: #8d9199;
-  --v3-off: #5f636b;           /* rule 5: not connected = completely greyed out */
-  --v3-msg: #a2a6ad;
-  --v3-quiet: #7b7f87;
-  --v3-warn: var(--warn, #e8a92c);
-  --v3-error: var(--error, #e5534b);
-  --v3-stale: #9ea3c7;         /* a touch bluer than app.css --stale so the clock is not mistaken for "off" grey */
-  --v3-unknown: var(--unknown, #9a8fc4);
-  --v3-hover: #2a2b31;
-  --v3-sel: var(--accent-soft, rgba(138, 124, 240, 0.16));
-  --v3-accent: var(--accent, #8a7cf0);
-  --v3-guide: rgba(255, 255, 255, 0.07);
+  --v3-text: var(--io-text);          /* rule 5: connected and healthy = normal grey text */
+  --v3-strong: var(--io-text-strong);        /* a row that reports a problem itself */
+  --v3-icon: var(--io-icon);
+  --v3-off: var(--io-off);           /* rule 5: not connected = completely greyed out */
+  --v3-msg: var(--io-muted);
+  --v3-quiet: var(--io-faint);
+  --v3-warn: var(--io-warn);
+  --v3-error: var(--io-error);
+  --v3-stale: var(--io-stale);         /* a touch bluer than app.css --stale so the clock is not mistaken for "off" grey */
+  --v3-unknown: var(--io-unknown);
+  --v3-hover: var(--io-hover);
+  --v3-sel: var(--io-selected);
+  --v3-accent: var(--io-accent);
+  --v3-guide: var(--io-guide);
   --v3-indent: 16px;           /* keep equal to the 16px pitch the guides and the message indent are drawn on */
-  font: 13px/1.4 var(--sans, Inter, Ubuntu, "Segoe UI", system-ui, sans-serif);
+  font: var(--io-font-size)/1.4 var(--io-font-ui);
   color: var(--v3-text);
   padding-bottom: 14px;
   outline: none;
@@ -26,7 +26,7 @@
 .iot-v3 *, .iot-v3 *::before, .iot-v3 *::after { box-sizing: border-box; }
 
 /* ---- head: the root's independent causes, as shapes --------------------------------------------- */
-.iot-v3 .v3-head { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px 6px; color: #8c9098;
+.iot-v3 .v3-head { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px 6px; color: var(--io-faint);
   font-size: 11px; text-transform: uppercase; letter-spacing: .6px; }
 .iot-v3 .v3-counts { display: inline-flex; gap: 10px; align-items: center; text-transform: none; letter-spacing: 0;
   font-size: 12px; font-variant-numeric: tabular-nums; color: var(--v3-text); }
@@ -35,7 +35,7 @@
 
 /* ---- items: a row (or a folded "N OK" line) = one line, plus a message line for a problem row -------- */
 .iot-v3 .v3-item { cursor: pointer; position: relative; }
-.iot-v3 .v3-line { display: flex; align-items: center; gap: 7px; height: 26px; white-space: nowrap;
+.iot-v3 .v3-line { display: flex; align-items: center; gap: 7px; height: var(--io-row-h); white-space: nowrap;
   padding: 0 10px 0 calc(8px + var(--d) * var(--v3-indent)); }
 .iot-v3 .v3-item:hover { background-color: var(--v3-hover); }
 .iot-v3 .v3-item.v3-sel { background-color: var(--v3-sel); box-shadow: inset 2px 0 0 var(--v3-accent); }
@@ -48,20 +48,20 @@
 .iot-v3 .v3-type { position: absolute; inset: 0; width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8;
   stroke-linecap: round; stroke-linejoin: round; color: var(--v3-icon); transition: opacity .08s; }
 .iot-v3 .v3-chev { position: absolute; inset: -2px; display: flex; align-items: center; justify-content: center; padding: 0; margin: 0;
-  border: 0; border-radius: 4px; background: transparent; color: #c9ccd3; cursor: pointer; opacity: 0; transition: opacity .08s; }
+  border: 0; border-radius: var(--io-radius-sm); background: transparent; color: var(--io-text); cursor: pointer; opacity: 0; transition: opacity .08s; }
 .iot-v3 .v3-chev svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round;
   stroke-linejoin: round; transition: transform .1s; }
 .iot-v3 .v3-open > .v3-line .v3-chev svg { transform: rotate(90deg); }
 .iot-v3 .v3-kids:hover > .v3-line .v3-type, .iot-v3 .v3-quiet:hover > .v3-line .v3-type { opacity: 0; }
 .iot-v3 .v3-kids:hover > .v3-line .v3-chev, .iot-v3 .v3-quiet:hover > .v3-line .v3-chev { opacity: 1; }
-.iot-v3 .v3-chev:hover { background: rgba(255, 255, 255, .09); }
+.iot-v3 .v3-chev:hover { background: var(--io-control-hover); }
 .iot-v3:focus-visible .v3-kids.v3-sel > .v3-line .v3-type { opacity: 0; }
 .iot-v3:focus-visible .v3-kids.v3-sel > .v3-line .v3-chev { opacity: 1; }
 
 /* rule 2: type icon + name together on the left; id, hint and the status shape on the right */
 .iot-v3 .v3-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.iot-v3 .v3-id { flex: 0 3 auto; min-width: 0; max-width: 150px; overflow: hidden; text-overflow: ellipsis; color: #6f737b;
-  font-family: var(--mono, "JetBrains Mono", "Ubuntu Mono", ui-monospace, monospace); font-size: 11.5px; }
+.iot-v3 .v3-id { flex: 0 3 auto; min-width: 0; max-width: 150px; overflow: hidden; text-overflow: ellipsis; color: var(--io-faint);
+  font-family: var(--io-font-mono); font-size: 11.5px; }
 .iot-v3 .v3-id:empty { display: none; }
 .iot-v3 .v3-status { flex: none; width: 15px; height: 15px; display: inline-flex; }
 .iot-v3 .v3-problem > .v3-line .v3-name { color: var(--v3-strong); }
@@ -73,23 +73,23 @@
 .iot-v3 .v3-off > .v3-msg { color: var(--v3-off); }
 .iot-v3 .v3-off.v3-problem > .v3-line .v3-name { color: var(--v3-off); }
 /* knock-on: explained by a failed ancestor, counted once there: drawn subdued */
-.iot-v3 .v3-knocked > .v3-line .v3-name, .iot-v3 .v3-knocked > .v3-msg { color: #868a92; }
+.iot-v3 .v3-knocked > .v3-line .v3-name, .iot-v3 .v3-knocked > .v3-msg { color: var(--io-muted); }
 
 /* the quiet hint (rule 6): a small faded shape and grey words, never a second status */
-.iot-v3 .v3-hint { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: #80848c; }
+.iot-v3 .v3-hint { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--io-faint); }
 .iot-v3 .v3-hint .v3-glyph { opacity: .7; }
 .iot-v3 .v3-hint .v3-shape { width: 11px; height: 11px; }
-.iot-v3 .v3-hint-plain { color: #6f737b; }
+.iot-v3 .v3-hint-plain { color: var(--io-faint); }
 
 /* the folded "N OK" line: muted, no colour (rule 4: no green anywhere) */
 .iot-v3 .v3-quiet > .v3-line { color: var(--v3-quiet); font-size: 12px; }
-.iot-v3 .v3-quiet .v3-type { color: #5f636b; }
-.iot-v3 .v3-quiet:hover > .v3-line { color: #a6aab1; }
+.iot-v3 .v3-quiet .v3-type { color: var(--io-off); }
+.iot-v3 .v3-quiet:hover > .v3-line { color: var(--io-muted); }
 .iot-v3 .v3-qtext { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.iot-v3 .v3-qfold { margin-left: auto; font-size: 11px; color: #5f636b; opacity: 0; }
+.iot-v3 .v3-qfold { margin-left: auto; font-size: 11px; color: var(--io-off); opacity: 0; }
 .iot-v3 .v3-quiet:hover .v3-qfold { opacity: 1; }
 
-.iot-v3 .v3-hit > .v3-line .v3-name { color: #fff; text-decoration: underline; text-decoration-color: var(--v3-accent); text-underline-offset: 3px; }
+.iot-v3 .v3-hit > .v3-line .v3-name { color: var(--io-on-status); text-decoration: underline; text-decoration-color: var(--v3-accent); text-underline-offset: 3px; }
 .iot-v3 .v3-empty { padding: 18px 14px; color: var(--v3-quiet); }
 
 /* ---- rule 3: SHAPES (16-unit grid); colour only reinforces the shape --------------------------------- */
@@ -100,9 +100,9 @@
 .iot-v3 .lv-stale { color: var(--v3-stale); }
 .iot-v3 .lv-unknown { color: var(--v3-unknown); }
 .iot-v3 .v3-s-body { fill: currentColor; stroke: currentColor; stroke-width: .6; stroke-linejoin: round; }
-.iot-v3 .v3-s-mark { fill: none; stroke: #17181b; stroke-width: 1.75; stroke-linecap: round; }
-.iot-v3 .v3-s-dot { fill: #17181b; }
-.iot-v3 .lv-error .v3-s-mark { stroke: #fff; }
+.iot-v3 .v3-s-mark { fill: none; stroke: var(--io-on-status); stroke-width: 1.75; stroke-linecap: round; }
+.iot-v3 .v3-s-dot { fill: var(--io-on-status); }
+.iot-v3 .lv-error .v3-s-mark { stroke: var(--io-on-status); }
 /* WHY miter + a shallower corner cut: a regular octagon with soft joins reads as a circle at 15 px, and the
    circle is the clock / "?" outline; the error shape must stay unmistakable without its colour */
 .iot-v3 .lv-error .v3-s-body { stroke-linejoin: miter; }
@@ -114,5 +114,5 @@
 .iot-v3 .v3-hollow .v3-s-mark { stroke: currentColor; stroke-width: 1.5; }
 .iot-v3 .v3-hollow .v3-s-dot { fill: currentColor; }
 /* knock-on: the shape stays (it is not OK) but loses its colour (it is not a cause) */
-.iot-v3 .v3-status.v3-knock { color: #7d818a; }
-.iot-v3 .v3-status.v3-knock .v3-s-mark { stroke: #1e1f23; }
+.iot-v3 .v3-status.v3-knock { color: var(--io-knock); }
+.iot-v3 .v3-status.v3-knock .v3-s-mark { stroke: var(--io-surface); }

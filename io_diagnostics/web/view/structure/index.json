@@ -1,0 +1,17 @@
+{
+  "about": "Structures (docs/round2-seams.md). One entry per structure, pre-listed; the page loads view/structure/<file> only for entries with ready=true. A structure lane writes its file and flips ONLY its own entry's ready to true (entries are blank-line separated so parallel lanes merge cleanly).",
+  "default": "p0",
+  "structures": [
+    {"id": "p0", "name": "Physical (today)", "file": "p0.js", "ready": true},
+
+    {"id": "p1", "name": "Devices, transport as columns", "file": "p1.js", "ready": false},
+
+    {"id": "p2", "name": "Two views, one toggle", "file": "p2.js", "ready": false},
+
+    {"id": "p3", "name": "Path on demand", "file": "p3.js", "ready": false},
+
+    {"id": "p4", "name": "Compact folders", "file": "p4.js", "ready": false},
+
+    {"id": "p5", "name": "Bus lens", "file": "p5.js", "ready": false}
+  ]
+}

@@ -1,7 +1,8 @@
 // Tree proposal v1 — "Quiet IDE tree" (the VS Code explorer feel) for IO diagnostics.
 //
-// Relies only on docs/api-v1.md (the node shape inside GET /api/v1/state). Registers
-//   window.IOTreeRenderers['v1'] = {name, render(container, apiTree, {onSelect, selectedPath, query?})}
+// Round 2: consumes display rows from the active structure (web/view/core.js; docs/round2-seams.md), never the
+// raw API tree. A row carries the API node's fields plus label / status / parts / defaultOpen. Registers
+//   window.IOTreeRenderers['v1'] = {name, consumes: 'rows', render(container, rows, {onSelect, selectedPath, query?, summary?})}
 //
 // Zach's tree rules (2026-10-22), and where each one lives below:
 //   1. chevrons only on hover, in a left gutter (IDE style)       -> .t1-chev, opacity in v1.css
@@ -73,6 +74,7 @@
   // self-report, so its rollup is ALSO only a hint. WHY: drawing grouping rollups as full shapes is exactly the
   // red chain from host down to the cause that made the V6 tree noisy (Zach's screenshot, 2026-10-22).
   function hintOf(node) {
+    if (node.status) return node.status.hint ? { level: node.status.hint.level, message: node.status.hint.message || '' } : null;
     if (isGrouping(node)) {
       const level = node.level || (node.rollup && node.rollup.level);
       if (!PROBLEM.has(level)) return null;
@@ -86,18 +88,15 @@
   // Open the way to anything that needs attention; keep quiet branches closed (a calm first screen).
   function defaultOpen(node) {
     if (!node.children || !node.children.length) return false;
+    if (typeof node.defaultOpen === 'boolean') return node.defaultOpen; // the structure's call (view/core.js)
     if (node.kind === 'host' || node.kind === 'group') return true;
     if (node.kind === 'bus' && node.depth <= 1) return true; // OS buses: show what is plugged in
     if (node.kind === 'port') return true; // a port is "where", its device is the row that matters
     return Boolean(hintOf(node));
   }
 
-  function treeOf(apiTree) {
-    if (apiTree && apiTree.tree && apiTree.tree.children) return { tree: apiTree.tree, summary: apiTree.summary || null };
-    return { tree: apiTree, summary: null };
-  }
-
-  function indexTree(tree) {
+  // the top-level rows of a structure (single-host elision means there may be several)
+  function indexTree(forest) {
     const byPath = new Map();
     const parentOf = new Map();
     let count = 0;
@@ -106,12 +105,14 @@
       byPath.set(node.path, node);
       parentOf.set(node.path, parent ? parent.path : null);
       (node.children || []).forEach((child) => visit(child, node));
-    })(tree, null);
-    return { byPath, parentOf, count };
+    })({ path: null, children: forest }, null);
+    byPath.delete(null);
+    return { byPath, parentOf, count: count - 1 };
   }
 
-  const matches = (node, q) => [node.name, node.id_text, node.path, node.message, node.hardware_id]
-    .some((value) => String(value || '').toLowerCase().includes(q));
+  // view/core.js has already searched (labels, ids, messages, folded parts) and marked each kept row's `hit`
+  const matches = (node, q) => (typeof node.hit === 'boolean' ? node.hit : [node.name, node.id_text, node.path, node.message, node.hardware_id]
+    .some((value) => String(value || '').toLowerCase().includes(q)));
 
   // ------------------------------------------------------------------------------- state ----
   const STATES = new WeakMap(); // container -> renderer state (expansion survives the 1 s re-render)
@@ -145,30 +146,37 @@
 
   const isOpen = (st, node) => (st.open.has(node.path) ? st.open.get(node.path) : defaultOpen(node));
 
-  function visibleRows(st, tree, query) {
+  function visibleRows(st, forest, query) {
     const q = String(query || '').trim().toLowerCase();
     const keep = new Set();
     if (q) {
       (function mark(node, trail) {
         if (matches(node, q)) { trail.forEach((path) => keep.add(path)); keep.add(node.path); }
         (node.children || []).forEach((child) => mark(child, trail.concat(node.path)));
-      })(tree, []);
+      })({ path: null, children: forest }, []);
+      keep.add(null);
     }
     const rows = [];
     (function walk(node) {
       if (q && !keep.has(node.path)) return;
       const kids = node.children || [];
       const open = kids.length > 0 && (q ? true : isOpen(st, node));
-      rows.push({ node, open, hasKids: kids.length > 0, hit: Boolean(q) && matches(node, q) });
-      if (open) kids.forEach(walk);
-    })(tree);
+      if (node.path !== null) rows.push({ node, open, hasKids: kids.length > 0, hit: Boolean(q) && matches(node, q) });
+      if (open || node.path === null) kids.forEach(walk);
+    })({ path: null, children: forest });
     return rows;
   }
 
   // ------------------------------------------------------------------------------ drawing ----
   function statusHtml(node, open) {
     const problem = ownProblem(node);
-    const hint = hintOf(node);
+    const part = node.status && node.status.part;
+    if (!problem && part) {
+      // a folded part's own report (driver: fault 33), drawn on its owner because the part is not a row
+      return `<span class="t1-st"><span class="t1-mark t1-part${part.knock_on_of ? ' t1-subdued' : ''}">${shape(part.level, `${part.text}`)}</span></span>`;
+    }
+    // a folded part worse than the row's own report badges the shape like a worse cause below
+    const hint = part && problem && RANK[part.level] > RANK[problem] ? { level: part.level, message: part.text } : hintOf(node);
     const hintWorse = hint && (!problem || RANK[hint.level] > RANK[problem]);
     // Knock-on: explained by a failed ancestor, counted once there -> the shape is drawn subdued (grey).
     const subdued = problem && node.knock_on_of ? ' t1-subdued' : '';
@@ -221,15 +229,16 @@
     const chevron = hasKids
       ? `<span class="t1-chev${open ? ' t1-open' : ''}" data-t1-toggle="${esc(node.path)}"><svg viewBox="0 0 16 16" aria-hidden="true">${CHEVRON}</svg></span>`
       : '<span class="t1-chev t1-leaf"></span>';
-    const id = node.id_text ? `<span class="t1-id">${esc(node.id_text)}</span>` : '';
+    const idText = node.idText !== undefined ? node.idText : node.id_text;
+    const id = idText ? `<span class="t1-id">${esc(idText)}</span>` : '';
     return `<div class="${classes.join(' ')}" role="treeitem" aria-level="${node.depth + 1}"${hasKids ? ` aria-expanded="${open}"` : ''}`
-      + ` aria-selected="${node.path === st.selected}" data-t1-path="${esc(node.path)}" style="--t1-d:${node.depth}" title="${esc(tooltip(node, byPath))}">`
+      + ` aria-selected="${node.path === st.selected}" data-t1-path="${esc(node.path)}" style="--t1-d:${node.depth}" title="${esc(node.title || tooltip(node, byPath))}">`
       + `<span class="t1-guides"></span>${chevron}${typeIcon(node.icon)}`
       + `<span class="t1-name">${highlight(node.name, hit ? q : '')}</span>${id}${statusHtml(node, open)}</div>`;
   }
 
-  function headHtml(tree, summary, entities) {
-    const counts = (summary && summary.counts) || (tree.rollup && tree.rollup.counts) || {};
+  function headHtml(summary, entities) {
+    const counts = (summary && summary.counts) || {};
     const parts = WORST_FIRST.filter((level) => counts[level])
       .map((level) => `<span class="t1-count" title="${counts[level]} independent ${WORD[level]}${counts[level] > 1 ? 's' : ''}">${shape(level, WORD[level])}${counts[level]}</span>`);
     return `<span class="t1-title">Entities <span class="t1-num">${entities}</span></span>`
@@ -238,20 +247,19 @@
 
   function paint(container, st) {
     if (!st.apiTree) return;
-    const { tree, summary } = treeOf(st.apiTree);
-    if (!tree) return;
-    const { byPath, parentOf, count } = indexTree(tree);
+    const forest = st.apiTree;
+    const { byPath, parentOf, count } = indexTree(forest);
     // Reveal a new selection once (e.g. picked from the chip's attention list); later collapses stay collapsed.
     if (st.selected && st.selected !== st.revealedFor && byPath.has(st.selected)) {
       for (let path = parentOf.get(st.selected); path; path = parentOf.get(path)) st.open.set(path, true);
       st.revealedFor = st.selected;
     }
     const q = String(st.opts.query || '').trim().toLowerCase();
-    const rows = visibleRows(st, tree, q);
+    const rows = visibleRows(st, forest, q);
     st.visible = rows.map((row) => row.node.path);
     st.byPath = byPath;
     st.parentOf = parentOf;
-    const head = headHtml(tree, summary, count);
+    const head = headHtml(st.opts.summary, count);
     if (head !== st.lastHead) { st.head.innerHTML = head; st.lastHead = head; }
     const html = rows.map((row) => rowHtml(row, st, byPath, q)).join('');
     // WHY compare before writing: the page re-renders every second; an unchanged tree must not touch the DOM
@@ -322,10 +330,10 @@
   }
 
   // ----------------------------------------------------------------------------- export ----
-  function render(container, apiTree, opts = {}) {
+  function render(container, rows, opts = {}) {
     if (!container) return;
     const st = stateFor(container);
-    st.apiTree = apiTree;
+    st.apiTree = Array.isArray(rows) ? rows : [];
     st.opts = opts || {};
     if (opts.selectedPath !== undefined && opts.selectedPath !== null) st.selected = opts.selectedPath;
     paint(container, st);
@@ -334,6 +342,7 @@
   window.IOTreeRenderers = window.IOTreeRenderers || {};
   window.IOTreeRenderers.v1 = {
     name: 'Quiet IDE tree',
+    consumes: 'rows',
     description: 'VS Code explorer: hover chevrons in a left gutter, type icon + name, muted ids, a status shape at the far right only on problem rows; rollups are a quiet dot.',
     render,
   };

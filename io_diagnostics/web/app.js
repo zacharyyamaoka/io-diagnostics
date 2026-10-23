@@ -1,10 +1,14 @@
-// IO diagnostics v1 page: renders what the host computes (docs/api-v1.md is the only contract it relies on).
+// IO diagnostics page: renders what the host computes (docs/api-v1.md is the only contract it relies on).
 // Levels, staleness, rollup and knock-on are decided server-side (contract/record.py via io_diagnostics/tree.py);
-// this file lays the same tree out three ways and never talks to hardware. Started from V6's page.
+// this file lays the same rows out three ways and never talks to hardware. Started from V6's page.
 //
-// The Tree view is drawn by one of five tree proposals (web/tree/v1..v5.js, window.IOTreeRenderers), picked live
-// with the drop-down at the bottom-right and remembered in this browser. The page owns the data, the selection,
-// the detail panel, the table and the activity tab; a renderer owns its own rows, expansion, keys and clicks.
+// Round 2 (docs/round2-seams.md): a STRUCTURE (window.IOStructures, view/structure/*.js) turns the API state into
+// display rows through view/core.js; the Tree view (a tree style, window.IOTreeRenderers, tree/*.js) and the
+// Table both draw those rows, never the raw API tree (the legacy styles v3-v5 still draw the physical API tree).
+// A SKIN (skins/*.css) sets the tokens of tokens.css for light and dark. Structure, tree style, skin and
+// light/dark switch live from the quiet control cluster at the bottom-right and persist in this browser.
+// The page owns the data, the selection, the detail panel, the table and the activity tab; a renderer owns its
+// own rows' drawing, expansion, keys and clicks.
 'use strict';
 
 const params = new URLSearchParams(location.search);
@@ -17,7 +21,14 @@ const S = {
   actAt: 0,
   node: null,          // /api/v1/node for S.sel
   nodeAt: 0,
-  open: new Map(),     // path -> true/false, for the table and the built-in fallback tree
+  open: new Map(),     // row key -> true/false, for the table and the built-in fallback tree
+  selKey: null,        // the selected row when it stands for no entity (a structure's own grouping row)
+  built: null,         // IOView.build(...) of the active structure for the current state
+  structure: null,     // active structure id (view/structure/*.js)
+  toggles: {},         // structure id -> {option key: bool}: the structure's own declared toggles
+  skins: [],           // ready skins from skins/index.json
+  skin: null,
+  mode: 'auto',        // 'auto' (prefers-color-scheme) | 'light' | 'dark'
   dialog: params.get('dialog') ? { name: params.get('dialog') } : null,
   chip: params.get('chip') === '1',
   lastOk: 0,
@@ -37,12 +48,74 @@ const shape = (level, title = '') => (PROBLEM.has(level)
 const ago = (s) => (s === null || s === undefined ? '—' : s < 90 ? `${Math.round(s)} s` : s < 3600 ? `${Math.floor(s / 60)} min` : `${(s / 3600).toFixed(1)} h`);
 const isGrouping = (node) => !node.own || node.own.level === null || node.own.level === undefined;
 
+// ---------------------------------------------------------------------------- preferences ----
+// Every choice persists in this browser; storage may be blocked (private mode), then it lasts this page only.
+const PREFS = {
+  structure: 'io-diagnostics.structure',
+  variant: 'io-diagnostics.tree-variant',
+  skin: 'io-diagnostics.skin',
+  mode: 'io-diagnostics.mode',
+  toggles: 'io-diagnostics.structure-toggles',
+};
+function readPref(key) {
+  try { return localStorage.getItem(key); } catch (_) { return null; }
+}
+function writePref(key, value) {
+  try { localStorage.setItem(key, value); } catch (_) { /* private mode: the choice lasts this page only */ }
+}
+
 // ---------------------------------------------------------------------------------- data ----
 async function getJson(url) {
   const response = await fetch(url);
   const data = await response.json();
   if (data.error) throw new Error(data.error);
   return data;
+}
+
+// --------------------------------------------------------------- skins, structures (manifests) ----
+// skins/index.json and view/structure/index.json pre-list every planned entry; only `ready` ones are loaded, so a
+// lane that lands a skin or a structure flips its own line and nothing else (docs/round2-seams.md).
+async function readManifest(url, listKey) {
+  try {
+    const manifest = await getJson(url);
+    return { default: manifest.default, entries: (manifest[listKey] || []).filter((entry) => entry.ready) };
+  } catch (error) {
+    console.warn(`manifest ${url}:`, error);
+    return { default: null, entries: [] };
+  }
+}
+
+function loadStylesheet(href, id) {
+  if (document.querySelector(`link[data-skin-css="${id}"]`)) return Promise.resolve();
+  return new Promise((resolve) => {
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = href;
+    link.dataset.skinCss = id;
+    link.onload = link.onerror = () => resolve();
+    document.head.appendChild(link);
+  });
+}
+
+function loadScript(src) {
+  if (document.querySelector(`script[src="${src}"]`)) return Promise.resolve();
+  return new Promise((resolve) => {
+    const script = document.createElement('script');
+    script.src = src;
+    script.onload = script.onerror = () => resolve();
+    document.head.appendChild(script);
+  });
+}
+
+const DEFAULTS = { skin: 'claude', structure: 'p0', variant: 'v6' };
+const darkQuery = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+
+// <html data-skin data-mode>: the skin's tokens for the mode. Auto follows the OS until the viewer picks one.
+function applyTheme() {
+  const html = document.documentElement;
+  html.dataset.skin = S.skin || DEFAULTS.skin;
+  html.dataset.mode = S.mode === 'light' || S.mode === 'dark' ? S.mode : (darkQuery && darkQuery.matches ? 'dark' : 'light');
+  html.dataset.modePref = S.mode;
 }
 
 async function tick() {
@@ -79,11 +152,15 @@ function index(tree) {
   return byPath;
 }
 
-// ------------------------------------------------------------------------- tree proposals ----
-// Each renderer: window.IOTreeRenderers[id] = {name, description?, render(container, apiTree, {onSelect, selectedPath,
-// query})}. render() is idempotent, so the page calls it on every 1 s tick with the same persistent pane.
-const VARIANT_KEY = 'io-diagnostics.tree-variant';
-const DEFAULT_VARIANT = 'v1';
+// ------------------------------------------------------------------------------ tree styles ----
+// Each renderer: window.IOTreeRenderers[id] = {name, description?, consumes?, render(container, data, opts)}.
+// consumes: 'rows' -> data is the active structure's top-level rows (view/core.js), opts {onSelect(rowKey),
+// onSelectEntity(entityPath), selectedPath: rowKey, query, summary, host}. Without it the renderer is legacy and
+// gets the raw API tree with {onSelect(entityPath), selectedPath: entityPath, query}. render() is idempotent,
+// so the page calls it on every 1 s tick with the same persistent pane.
+const VARIANT_KEY = PREFS.variant;
+const DEFAULT_VARIANT = DEFAULTS.variant;
+const VARIANT_ORDER = ['v6', 'v1', 'v2', 'v3', 'v4', 'v5'];
 // v5 draws whatever tree it is given and has no search of its own: the page says so instead of a box that does nothing.
 const NO_QUERY = new Set(['v5']);
 // v5 is the tree that is also the table: its ID / last-seen columns appear from 600 px and all of them from 840 px.
@@ -91,14 +168,13 @@ const WIDE = new Set(['v5']);
 const scrollTops = new Map();  // variant -> the tree pane's scroll position, restored on switching back
 
 const renderers = () => window.IOTreeRenderers || {};
-const variantIds = () => Object.keys(renderers()).filter((id) => typeof renderers()[id].render === 'function').sort();
+const orderOf = (id) => (VARIANT_ORDER.includes(id) ? VARIANT_ORDER.indexOf(id) : VARIANT_ORDER.length);
+const variantIds = () => Object.keys(renderers()).filter((id) => typeof renderers()[id].render === 'function')
+  .sort((a, b) => orderOf(a) - orderOf(b) || a.localeCompare(b));
+const isLegacy = (id) => Boolean(renderers()[id]) && renderers()[id].consumes !== 'rows';
 
-function storedVariant() {
-  try { return localStorage.getItem(VARIANT_KEY); } catch (_) { return null; } // blocked storage: default each load
-}
-function storeVariant(id) {
-  try { localStorage.setItem(VARIANT_KEY, id); } catch (_) { /* private mode: the choice lasts this page only */ }
-}
+const storedVariant = () => readPref(VARIANT_KEY);
+const storeVariant = (id) => writePref(VARIANT_KEY, id);
 
 function paneFor(id) {
   const host = $('tree-host');
@@ -112,11 +188,27 @@ function paneFor(id) {
   return pane;
 }
 
-function onTreeSelect(path) {
-  if (!path || path === S.sel) return;
-  select(path);
+// a rows renderer reports a row key; legacy renderers report an entity path
+function onTreeSelect(key) {
+  const row = S.built && S.built.byKey.get(key);
+  if (row && !row.entity) { // a structure's own grouping row: nothing to load from /api/v1/node
+    if (S.selKey === key) return;
+    S.selKey = key; S.sel = null; S.node = null;
+    render();
+    return;
+  }
+  const entity = row ? row.entity : key;
+  if (!entity || (entity === S.sel && !S.selKey)) return;
+  select(entity);
   render();
 }
+function onSelectEntity(entity) {
+  if (!entity || entity === S.sel) return;
+  select(entity);
+  render();
+}
+// the row key a rows renderer should mark selected
+const selectedKey = () => S.selKey || (S.built && S.sel ? S.built.byEntity.get(S.sel) || null : null);
 
 function renderTreePane() {
   const id = S.variant;
@@ -127,23 +219,100 @@ function renderTreePane() {
   const pane = paneFor(id);
   pane.hidden = false;
   try {
-    renderer.render(pane, S.data.tree, { onSelect: onTreeSelect, selectedPath: S.sel, query: NO_QUERY.has(id) ? '' : S.query });
+    if (isLegacy(id)) renderer.render(pane, S.data.tree, { onSelect: onTreeSelect, selectedPath: S.sel, query: NO_QUERY.has(id) ? '' : S.query });
+    else {
+      renderer.render(pane, S.built.rows, { onSelect: onTreeSelect, onSelectEntity, selectedPath: selectedKey(), query: S.query,
+        summary: S.data.summary, host: S.built.host, structure: S.structure });
+    }
   } catch (error) {
     console.error(`tree ${id}:`, error);
     pane.innerHTML = `<div class="err">tree ${esc(id)} failed: ${esc(error)}</div>`;
   }
 }
 
+// ------------------------------------------------------------------ the bottom-right controls ----
+// One quiet cluster (Zach: never make him edit a URL flag): structure (+ its own toggles), tree style, skin,
+// Auto / Light / Dark. Every choice switches live and persists.
 function setupSwitcher() {
   const ids = variantIds();
   const stored = storedVariant();
   S.variant = ids.includes(stored) ? stored : ids.includes(DEFAULT_VARIANT) ? DEFAULT_VARIANT : ids[0] || null;
   const picker = $('tree-variant');
   picker.innerHTML = ids.map((id) => `<option value="${esc(id)}" title="${esc(renderers()[id].description || '')}">`
-    + `${esc(id)} · ${esc(renderers()[id].name || id)}</option>`).join('');
+    + `${esc(id)} · ${esc(renderers()[id].name || id)}${isLegacy(id) ? ' (legacy)' : ''}</option>`).join('');
   picker.value = S.variant || '';
   $('variant-switch').hidden = ids.length < 2;
   picker.addEventListener('change', () => switchVariant(picker.value));
+}
+
+function setupStructures(manifestDefault) {
+  const ids = IOView.structureIds();
+  const stored = readPref(PREFS.structure);
+  const fallback = ids.includes(manifestDefault) ? manifestDefault : ids.includes(DEFAULTS.structure) ? DEFAULTS.structure : ids[0] || null;
+  S.structure = ids.includes(stored) ? stored : fallback;
+  try { S.toggles = JSON.parse(readPref(PREFS.toggles) || '{}') || {}; } catch (_) { S.toggles = {}; }
+  const picker = $('structure');
+  picker.innerHTML = ids.map((id) => `<option value="${esc(id)}" title="${esc(window.IOStructures[id].description || '')}">`
+    + `${esc(id)} · ${esc(window.IOStructures[id].name || id)}</option>`).join('');
+  picker.value = S.structure || '';
+  picker.addEventListener('change', () => {
+    if (!window.IOStructures[picker.value]) return;
+    S.structure = picker.value;
+    writePref(PREFS.structure, S.structure);
+    S.open.clear();
+    renderToggles();
+    render();
+  });
+  renderToggles();
+}
+
+// the active structure's own toggles (e.g. p0 "Parts as rows"), as quiet check chips in the cluster
+function structureOptions() {
+  const structure = window.IOStructures[S.structure] || {};
+  const chosen = S.toggles[S.structure] || {};
+  const options = {};
+  for (const toggle of structure.toggles || []) options[toggle.key] = toggle.key in chosen ? Boolean(chosen[toggle.key]) : Boolean(toggle.default);
+  return options;
+}
+function renderToggles() {
+  const structure = window.IOStructures[S.structure] || {};
+  const options = structureOptions();
+  $('structure-toggles').innerHTML = (structure.toggles || []).map((toggle) => `<label class="ctl-check" title="${esc(toggle.title || toggle.label)}">`
+    + `<input type="checkbox" data-opt="${esc(toggle.key)}"${options[toggle.key] ? ' checked' : ''}>${esc(toggle.label)}</label>`).join('');
+}
+function setToggle(key, value) {
+  S.toggles[S.structure] = { ...(S.toggles[S.structure] || {}), [key]: value };
+  writePref(PREFS.toggles, JSON.stringify(S.toggles));
+  render();
+}
+
+function setupSkins(manifestDefault) {
+  const ids = S.skins.map((skin) => skin.id);
+  const stored = readPref(PREFS.skin);
+  S.skin = ids.includes(stored) ? stored : ids.includes(manifestDefault) ? manifestDefault : ids[0] || DEFAULTS.skin;
+  const picker = $('skin');
+  picker.innerHTML = S.skins.map((skin) => `<option value="${esc(skin.id)}">${esc(skin.name || skin.id)}</option>`).join('');
+  picker.value = S.skin;
+  picker.addEventListener('change', () => { S.skin = picker.value; writePref(PREFS.skin, S.skin); applyTheme(); });
+  const storedMode = readPref(PREFS.mode);
+  S.mode = ['auto', 'light', 'dark'].includes(storedMode) ? storedMode : 'auto';
+  if (darkQuery) darkQuery.addEventListener('change', () => { if (S.mode === 'auto') { applyTheme(); renderModeSwitch(); } });
+  applyTheme();
+  renderModeSwitch();
+}
+function renderModeSwitch() {
+  document.querySelectorAll('#mode-switch button').forEach((button) => {
+    const on = button.dataset.mode === S.mode;
+    button.classList.toggle('on', on);
+    button.setAttribute('aria-checked', String(on));
+  });
+  $('mode-switch').title = `Light / dark: ${S.mode}${S.mode === 'auto' ? ` (the OS says ${document.documentElement.dataset.mode})` : ''}`;
+}
+function setMode(mode) {
+  S.mode = mode;
+  writePref(PREFS.mode, mode);
+  applyTheme();
+  renderModeSwitch();
 }
 
 function switchVariant(id) {
@@ -158,92 +327,90 @@ function switchVariant(id) {
 }
 
 // ------------------------------------------------------- the page's own rows (table + fallback) --
-function defaultOpen(node) {
-  if (['host', 'group'].includes(node.kind)) return true;
-  if (node.kind === 'bus' && node.depth <= 1) return node.id_text !== '0 devices';
-  if (node.kind === 'port') return true;
-  // open the way to anything that needs attention; keep quiet branches closed
-  return Boolean(node.hint) || (node.level && node.level !== 'ok' && node.kind !== 'device');
-}
-const isOpen = (node) => (S.open.has(node.path) ? S.open.get(node.path) : defaultOpen(node));
+// The table and the fallback list draw the active structure's rows with the tree's row grammar: chevron, type icon
+// and label together, a folded part's words, the status shape at the right end of the name column; same nesting.
+const isOpen = (row) => row.children.length > 0 && (S.query.trim() ? true : S.open.has(row.key) ? S.open.get(row.key) : row.defaultOpen);
 
-function matches(node, q) {
-  return [node.name, node.id_text, node.path, node.message, node.hardware_id].some((v) => String(v || '').toLowerCase().includes(q));
+function visibleRows(rows) {
+  const out = [];
+  (function walk(list) {
+    for (const row of list) {
+      out.push(row);
+      if (isOpen(row)) walk(row.children);
+    }
+  })(rows);
+  return out;
 }
 
-function visibleRows(tree) {
-  const q = S.query.trim().toLowerCase();
-  const rows = [];
-  const keep = new Set();
-  if (q) {
-    (function mark(node, trail) {
-      if (matches(node, q)) { trail.forEach((p) => keep.add(p)); keep.add(node.path); }
-      node.children.forEach((child) => mark(child, trail.concat(node.path)));
-    })(tree, []);
+// The row's own status mark (black box): its own problem, else a folded part's own problem; never the hint.
+function statusMark(row) {
+  const status = row.status || {};
+  if (status.own) {
+    // a folded part worse than the own report badges the shape (as tree style v6)
+    const worse = status.part && IOView.RANK[status.part.level] > IOView.RANK[status.own] ? `<i class="badge lv-${status.part.level}" title="${esc(status.part.text)}"></i>` : '';
+    return `<span class="st own${row.knock_on_of ? ' knock' : ''}">${shape(status.own, row.message)}${worse}</span>`;
   }
-  (function walk(node) {
-    if (q && !keep.has(node.path)) return;
-    rows.push({ node, hit: q && matches(node, q) });
-    if (node.children.length && (q ? true : isOpen(node))) node.children.forEach(walk);
-  })(tree);
-  return rows;
+  if (status.part) return `<span class="st part${status.part.knock_on_of ? ' knock' : ''}">${shape(status.part.level, status.part.text)}</span>`;
+  return '<span class="st"></span>';
 }
 
-// The row's OWN problem (black-box rule): a grouping row has no self-report, so it never draws a shape of its own.
-const ownProblem = (node) => (!isGrouping(node) && PROBLEM.has(node.level) ? node.level : null);
-
-function rowHtml(node, hit, inTable) {
-  const chev = node.children.length ? `<svg class="chev ${isOpen(node) || S.query ? 'open' : ''}" data-toggle="${esc(node.path)}"><use href="#i-chev"/></svg>`
-    : '<svg class="chev none"></svg>';
-  const cls = ['row', node.connected ? '' : 'off', node.knock_on_of ? 'knock' : '', hit ? 'hit' : '', !inTable && node.path === S.sel ? 'sel' : ''].join(' ');
-  const edge = node.edge === 'part_of' ? '<span class="edge" title="part of its parent (composition)">part</span>' : '';
-  // in the table the status and "below" have their own columns; the fallback tree puts its shape at the far right
-  const status = inTable ? '' : `<span class="st${node.knock_on_of ? ' knock' : ''}">${shape(ownProblem(node), node.message)}</span>`;
-  return `<div class="${cls}" data-path="${esc(node.path)}" style="--d:${node.depth}" title="${esc(node.message)}">${chev}${icon(node.icon)}`
-    + `<span class="name">${esc(node.name)}</span>${edge}<span class="cnt" title="${esc(node.id_text)}">${esc(node.id_text)}</span>${status}</div>`;
+function rowHtml(row, selectable) {
+  const open = isOpen(row);
+  const chev = row.children.length
+    ? `<span class="chev${open ? ' open' : ''}" data-toggle="${esc(row.key)}" title="${open ? 'Collapse' : 'Expand'}"><svg class="ic"><use href="#i-chev"/></svg></span>`
+    : '<span class="chev leaf"></span>';
+  const cls = ['row', row.connected === false ? 'off' : '', row.knock_on_of ? 'knock' : '', row.hit ? 'hit' : '',
+    selectable && row.key === selectedKey() ? 'sel' : ''].join(' ');
+  const note = row.status && row.status.note ? `<span class="note">${esc(row.status.note)}</span>` : '';
+  return `<div class="${cls}" data-key="${esc(row.key)}" style="--d:${row.depth}" title="${esc(row.title || row.label)}">${chev}${icon(row.icon)}`
+    + `<span class="name">${esc(row.label)}</span>${note}<span class="fill"></span>${statusMark(row)}</div>`;
 }
 
-// Fallback only: drawn when no tree proposal registered (e.g. a tree/*.js failed to load).
+// Fallback only: drawn when no tree style registered (e.g. a tree/*.js failed to load).
 function renderTree() {
   const counts = S.data.summary.counts;
   const text = ['error', 'stale', 'unknown', 'warn'].filter((l) => counts[l]).map((l) => `${counts[l]} ${l}`).join(' · ') || 'nothing needs you';
   return `<div class="tree-head"><span>Entities · ${S.data.summary.entities}</span><span>${text}</span></div>`
-    + visibleRows(S.data.tree).map(({ node, hit }) => rowHtml(node, hit, false)).join('');
+    + visibleRows(S.built.rows).map((row) => rowHtml(row, true)).join('');
 }
 
 // ------------------------------------------------------------------------------ table mode --
-function fmtSeen(node) {
-  if (node.age_s === null || node.age_s === undefined) return '<span class="muted">—</span>';
-  const period = node.expected_period_s ? ` / ${node.expected_period_s} s` : '';
-  return `<span title="last received ${esc(node.last_received)}">${ago(node.age_s)} ago${period}</span> ${node.stale ? shape('stale', 'stale') : ''}`;
+function fmtSeen(row) {
+  if (row.age_s === null || row.age_s === undefined) return '<span class="muted">—</span>';
+  const period = row.expected_period_s ? ` / ${row.expected_period_s} s` : '';
+  return `<span title="last received ${esc(row.last_received)}">${ago(row.age_s)} ago${period}</span> ${row.stale ? shape('stale', 'stale') : ''}`;
 }
 
-// Status column: the row's own self-report, as a shape and a word; nothing when OK (rule 4).
-function statusCell(node) {
-  const own = ownProblem(node);
-  if (!own) return '';
-  return `<span class="lvcell${node.knock_on_of ? ' knock' : ''}">${shape(own, node.message)}<span class="lvword lv-${own}">${esc(own)}</span></span>`;
+// Message column: the row's own words; a problem row's own report reads in full text colour, everything else quiet.
+function messageCell(row) {
+  const own = row.status && row.status.own;
+  const word = own ? `<span class="lvword lv-${own}${row.knock_on_of ? ' knock' : ''}">${esc(own)}</span> ` : '';
+  return `<td title="${esc(row.message)}" class="${own && !row.knock_on_of ? '' : 'quiet'}">${word}${esc(row.message || '')}</td>`;
 }
 
-// Below column: the advisory hint (a worse cause below), or a grouping row's rollup; quiet text, small shape.
-function belowCell(node) {
-  const level = node.hint ? node.hint.level : isGrouping(node) && PROBLEM.has(node.level) ? node.level : null;
-  if (!level) return '';
-  return `<span class="belowcell">${shape(level, `below: ${level}`)}<span>${esc(node.rollup.origin_name || '')}</span></span>`;
+// Below column: the advisory hint (a worse cause below) as the API sent it; quiet text, small shape.
+function belowCell(row) {
+  const hint = row.status && row.status.hint;
+  if (!hint) return '<td></td>';
+  return `<td title="${esc(hint.message)}"><span class="belowcell">${shape(hint.level, `below: ${hint.level}`)}<span>${esc(hint.origin_name || hint.message || '')}</span></span></td>`;
 }
 
 function renderTable() {
-  const rows = visibleRows(S.data.tree);
-  const body = rows.map(({ node, hit }) => `<tr class="${node.path === S.sel ? 'sel' : ''} ${node.connected ? '' : 'off'}" data-path="${esc(node.path)}">`
-    + `<td class="namecell">${rowHtml(node, hit, true)}</td>`
-    + `<td>${statusCell(node)}</td>`
-    + `<td title="${esc(node.message)}" class="${ownProblem(node) && !node.knock_on_of ? '' : 'quiet'}">${esc(node.message)}</td>`
-    + `<td title="${esc(node.hint ? node.hint.message : '')}">${belowCell(node)}</td>`
-    + `<td class="num">${fmtSeen(node)}</td>`
-    + `<td class="num">${node.checks || ''}</td>`
-    + `<td class="num">${node.faults || ''}</td></tr>`).join('');
-  return `<table class="grid"><colgroup><col style="width:330px"><col style="width:96px"><col><col style="width:200px"><col style="width:150px"><col style="width:60px"><col style="width:60px"></colgroup>`
-    + '<thead><tr><th>Name · id</th><th>Status</th><th>Message</th><th>Below</th><th>Last seen</th><th>Checks</th><th>Faults</th></tr></thead>'
+  const rows = visibleRows(S.built.rows);
+  const extra = S.built.columns || [];
+  const body = rows.map((row) => `<tr class="${row.key === selectedKey() ? 'sel' : ''} ${row.connected === false ? 'off' : ''}" data-key="${esc(row.key)}">`
+    + `<td class="namecell">${rowHtml(row, false)}</td>`
+    + `<td class="mono idcell" title="${esc(row.id_text || '')}">${esc(row.idText || '')}</td>`
+    + messageCell(row)
+    + belowCell(row)
+    + extra.map((column) => `<td title="${esc(row.columns[column.key] || '')}">${esc(row.columns[column.key] || '')}</td>`).join('')
+    + `<td class="num">${fmtSeen(row)}</td>`
+    + `<td class="num">${row.checks || ''}</td>`
+    + `<td class="num">${row.faults || ''}</td></tr>`).join('');
+  const extraCols = extra.map((column) => `<col style="width:${esc(column.width || '160px')}">`).join('');
+  const extraHeads = extra.map((column) => `<th>${esc(column.title)}</th>`).join('');
+  return `<table class="grid"><colgroup><col style="width:380px"><col style="width:170px"><col><col style="width:190px">${extraCols}<col style="width:140px"><col style="width:60px"><col style="width:60px"></colgroup>`
+    + `<thead><tr><th>Name</th><th>ID</th><th>Message</th><th>Below</th>${extraHeads}<th>Last seen</th><th>Checks</th><th>Faults</th></tr></thead>`
     + `<tbody>${body}</tbody></table>`;
 }
 
@@ -285,14 +452,37 @@ function checkCard(check) {
     + `${check.level !== check.effective_level ? ` · reported ${esc(check.level)}` : ''}<br>${esc(check.source)}</div></div>`;
 }
 
+// A structure's own grouping row (no entity): its members, each one click from its detail.
+function renderGroupDetail(row) {
+  const members = row.children.map((child) => `<div class="part-row" ${child.entity ? `data-go="${esc(child.entity)}"` : ''}>${icon(child.icon)}`
+    + `<span class="pname">${esc(child.label)}</span><span class="pmsg">${esc(child.message || '')}</span>${statusMark(child)}</div>`).join('');
+  return `<div class="d-head"><div class="d-title">${icon(row.icon)}<span>${esc(row.label)}</span></div>`
+    + `<div class="d-msg">${row.status.hint ? `${esc(row.status.hint.level)} below · ${esc(row.status.hint.message)}` : esc(row.message || 'grouping row')}</div></div>`
+    + `<div class="cards"><div class="card wide"><h3>Members · ${row.children.length}</h3>${members || '<div class="muted">none</div>'}</div></div>`;
+}
+
+// The folded parts of the selected row (view/core.js keeps them off the tree): each one click from its own detail.
+function partsCard(row) {
+  if (!row || !row.parts || !row.parts.length) return '';
+  const items = row.parts.map((part) => `<div class="part-row" data-go="${esc(part.entity)}" title="${esc(part.name)}">${icon(part.icon)}`
+    + `<span class="pname">${esc(part.label)}</span><span class="pmsg">${esc(part.message)}</span>`
+    + `<span class="st${part.knock_on_of ? ' knock' : ''}">${shape(part.problem, part.message)}</span></div>`).join('');
+  return `<div class="card wide"><h3>Parts · ${row.parts.length}<span class="right muted">composition (part_of), folded into this row</span></h3>${items}</div>`;
+}
+
 function renderDetail(byPath) {
+  if (!S.sel && S.selKey && S.built && S.built.byKey.has(S.selKey)) return renderGroupDetail(S.built.byKey.get(S.selKey));
   const tnode = byPath.get(S.sel) || S.data.tree;
   const detail = S.node && S.node.node.path === tnode.path ? S.node : null;
   const node = tnode;
+  // the row that stands for exactly this entity (not its owner, when the selection is a folded part)
+  const rowKey = S.built ? S.built.byEntity.get(node.path) : null;
+  const ownRow = rowKey && S.built.byKey.get(rowKey).entity === node.path ? S.built.byKey.get(rowKey) : null;
+  const title = ownRow ? ownRow.label : node.name;
   const hint = node.hint ? `<span class="muted"> · below: <a class="link" data-go="${esc(node.hint.origin)}">${esc(node.rollup.origin_name)}</a> is ${esc(node.hint.level)}</span>` : '';
-  let html = `<div class="d-head"><div class="d-title">${icon(node.icon)}<span>${esc(node.name)}</span>${pill(node.level)}</div>`
+  let html = `<div class="d-head"><div class="d-title">${icon(node.icon)}<span>${esc(title)}</span>${pill(node.level)}</div>`
     + `<div class="d-msg">${esc(node.message || '—')}${hint}</div>`
-    + `<div class="d-path">${esc(node.path)}${node.hardware_id ? ` · ${esc(node.hardware_id)}` : ''}</div></div>`;
+    + `<div class="d-path">${title !== node.name ? `${esc(node.name)} · ` : ''}${esc(node.path)}${node.hardware_id ? ` · ${esc(node.hardware_id)}` : ''}</div></div>`;
   if (node.knock_on_of) {
     const cause = byPath.get(node.knock_on_of);
     html += `<div class="banner knock">↳ <span>Explained by <a class="link" data-go="${esc(node.knock_on_of)}">${esc(cause ? cause.name : node.knock_on_of)}</a> above: counted once, as that cause.</span></div>`;
@@ -316,6 +506,7 @@ function renderDetail(byPath) {
   if (parent) idRows.push([node.edge === 'part_of' ? 'part of' : 'via', `<a class="link" data-go="${esc(parent.path)}">${esc(parent.name)}</a>`]);
   if (node.hardware_id) idRows.push(['hardware id', `<span class="mono">${esc(node.hardware_id)}</span>`]);
   html += kvCard('Identity', idRows);
+  html += partsCard(ownRow);
   html += renderActions(detail.actions);
   html += detail.checks.map(checkCard).join('');
   if (detail.faults.length) {
@@ -379,6 +570,7 @@ function renderStatusbar() {
 function render() {
   if (!S.data) return;
   const byPath = index(S.data.tree);
+  S.built = IOView.build(S.data, S.structure, { ...structureOptions(), query: S.query });
   $('clock').textContent = S.data.clock.iso ? `${S.data.clock.iso.slice(5, 10)}  ${S.data.clock.time}` : '—';
   const fixture = S.data.fixture;
   $('mode').textContent = fixture ? `Replay ${fixture.name} · ${fixture.label} (recorded)` : `Live · ${S.data.host.name}`;
@@ -388,6 +580,9 @@ function render() {
   document.querySelectorAll('#views button').forEach((b) => b.classList.toggle('on', b.dataset.view === S.view));
   const treeView = S.view === 'tree';
   $('main').className = `main v-${S.view}${treeView && WIDE.has(S.variant) ? ' wide-tree' : ''}`;
+  const legacy = treeView && isLegacy(S.variant);
+  $('structure-switch').classList.toggle('dim', legacy);
+  $('structure-switch').title = legacy ? `${S.variant} is a legacy style: it always draws the physical API tree` : 'Structure: what the rows are';
   $('tree-host').hidden = !treeView;
   $('left-other').hidden = treeView;
   if (treeView) renderTreePane();
@@ -404,6 +599,7 @@ function render() {
 
 function select(path) {
   S.sel = path;
+  S.selKey = null;
   S.node = null;
   loadNode();
 }
@@ -415,11 +611,14 @@ document.addEventListener('click', (event) => {
   if (t.closest('.tree-pane')) { if (S.chip) { S.chip = false; render(); } return; }
   const toggle = t.closest('[data-toggle]');
   if (toggle) {
-    const path = toggle.dataset.toggle;
-    S.open.set(path, !isOpen(index(S.data.tree).get(path)));
+    const row = S.built && S.built.byKey.get(toggle.dataset.toggle);
+    if (row) S.open.set(row.key, !isOpen(row));
     event.stopPropagation();
     return render();
   }
+  const mode = t.closest('#mode-switch [data-mode]');
+  if (mode) return setMode(mode.dataset.mode);
+  if (t.closest('#controls')) return; // the cluster's selects and check chips report through change events
   const view = t.closest('[data-view]');
   if (view) { S.view = view.dataset.view; return render(); }
   if (t.closest('#chip')) { S.chip = !S.chip; return render(); }
@@ -430,13 +629,29 @@ document.addEventListener('click', (event) => {
   const action = t.closest('[data-action]');
   if (action) { S.dialog = { name: action.dataset.action }; return render(); }
   if (t.closest('[data-cancel]') || t.id === 'modal') { S.dialog = null; return render(); }
-  const row = t.closest('[data-path]');
-  if (row) { select(row.dataset.path); if (S.view === 'activity') S.view = 'tree'; return render(); }
+  const row = t.closest('[data-key]');
+  if (row) { if (S.view === 'activity') S.view = 'tree'; onTreeSelect(row.dataset.key); return render(); }
   if (S.chip && !t.closest('#chip-pop')) { S.chip = false; render(); }
 });
 $('search').addEventListener('input', (event) => { S.query = event.target.value; render(); });
+$('structure-toggles').addEventListener('change', (event) => {
+  const box = event.target.closest('[data-opt]');
+  if (box) setToggle(box.dataset.opt, box.checked);
+});
 document.addEventListener('keydown', (event) => { if (event.key === 'Escape') { S.dialog = null; S.chip = false; render(); } });
 
-setupSwitcher();
-tick();
-setInterval(tick, 1000);
+async function boot() {
+  // index.html's inline script already set data-skin / data-mode from storage, so the first paint is right
+  const [skins, structures] = await Promise.all([readManifest('skins/index.json', 'skins'), readManifest('view/structure/index.json', 'structures')]);
+  S.skins = skins.entries.length ? skins.entries : [{ id: DEFAULTS.skin, name: 'Claude', file: 'claude.css' }];
+  await Promise.all([
+    ...S.skins.map((skin) => loadStylesheet(`skins/${skin.file}`, skin.id)),
+    ...structures.entries.map((entry) => loadScript(`view/structure/${entry.file}`)),
+  ]);
+  setupSkins(skins.default);
+  setupStructures(structures.default);
+  setupSwitcher();
+  tick();
+  setInterval(tick, 1000);
+}
+boot();

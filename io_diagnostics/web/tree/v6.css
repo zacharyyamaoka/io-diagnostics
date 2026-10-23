@@ -1,0 +1,89 @@
+/* Tree style v6 — "IDE × Notion" (io_diagnostics/web/tree/v6.js). Every class is t6-*; every colour, font,
+   radius and row height is a web/tokens.css token, so every skin works with it. */
+.t6 {
+  font: var(--io-font-size)/1.4 var(--io-font-ui);
+  color: var(--io-text);
+  user-select: none;
+  padding-bottom: 14px;
+}
+
+/* ---- head: the (elided) host, then independent causes as the same shapes -------------------------------- */
+.t6-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; height: 36px; padding: 0 14px 0 12px; color: var(--io-faint); font-size: 11px; }
+.t6-title { text-transform: uppercase; letter-spacing: .6px; padding-left: 2px; }
+.t6-host { display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; color: var(--io-muted); font: inherit; font-size: 12px; padding: 3px 6px; margin-left: -2px; border-radius: var(--io-radius-sm); cursor: pointer; }
+.t6-host:hover { background: var(--io-hover); color: var(--io-text); }
+.t6-host .t6-ic { width: 14px; height: 14px; }
+.t6-counts { display: inline-flex; gap: 12px; align-items: center; font-size: 12px; color: var(--io-text); }
+.t6-count { display: inline-flex; gap: 5px; align-items: center; font-variant-numeric: tabular-nums; }
+.t6-count .t6-shape { width: 13px; height: 13px; }
+.t6-quiet { color: var(--io-faint); }
+
+/* ---- rows (Notion: inset, rounded, no guides) ---------------------------------------------------------- */
+.t6-rows { outline: none; }
+.t6-row { position: relative; display: flex; align-items: center; gap: 6px; height: var(--io-row-h); margin: 0 6px;
+  padding: 0 8px 0 calc(4px + var(--t6-d) * var(--io-indent)); border-radius: var(--io-radius-sm); cursor: default; white-space: nowrap; }
+.t6-row:hover { background: var(--io-hover); }
+.t6-row.t6-sel { background: var(--io-selected); }
+.t6-rows:focus-visible .t6-row.t6-sel { box-shadow: inset 0 0 0 1px var(--io-selected-line); }
+
+/* IDE: a folder's chevron is always there, quiet; a leaf keeps the empty slot so the icons line up.
+   Notion: the chevron brightens on hover and is a target of its own. */
+.t6-chev { width: 16px; height: 16px; flex: none; display: inline-flex; align-items: center; justify-content: center; color: var(--io-icon);
+  opacity: .5; transition: opacity .12s; cursor: pointer; border-radius: var(--io-radius-sm); }
+.t6-chev svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; transition: transform .12s; }
+.t6-chev.t6-open svg { transform: rotate(90deg); }
+.t6-chev.t6-leaf { visibility: hidden; cursor: default; }
+.t6-row:hover .t6-chev, .t6-row.t6-sel .t6-chev { opacity: 1; }
+.t6-chev:not(.t6-leaf):hover { background: var(--io-control-hover); color: var(--io-text-strong); }
+
+/* type icon + name together */
+.t6-ic { width: 16px; height: 16px; flex: none; fill: none; stroke: var(--io-icon); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.t6-name { min-width: 0; max-width: 72%; overflow: hidden; text-overflow: ellipsis; color: var(--io-text); flex: 0 0 auto; }
+/* WHY the label never shrinks (until its 72% cap): it is the entity, and any lost pixel ellipsizes "CAN 15" to
+   "CAN …"; the part words shrink next, the id first */
+.t6-row.t6-sel .t6-name, .t6-row.t6-hit .t6-name { color: var(--io-text-strong); }
+.t6-name mark { background: var(--io-mark); color: inherit; border-radius: 2px; }
+/* a folded part's own report, on its owner ("driver: fault 33 …"): quiet words, the shape carries the level */
+.t6-note { min-width: 0; flex: 0 20 auto; overflow: hidden; text-overflow: ellipsis; color: var(--io-muted); font-size: 12px; margin-left: 4px; }
+.t6-note.t6-subdued { color: var(--io-faint); }
+.t6-fill { flex: 1 0 8px; }
+
+/* ids muted on the right; the full value is in the row's tooltip (the ellipsis is explicit) */
+.t6-id { color: var(--io-faint); font: 11.5px/1 var(--io-font-mono); flex: 0 100 auto; max-width: 40%; overflow: hidden; text-overflow: ellipsis; min-width: 2ch; }
+
+/* ---- status slot at the far right: fixed width so ids line up; empty on OK rows ---------------------------- */
+.t6-st { width: 18px; flex: none; display: inline-flex; align-items: center; justify-content: center; margin-left: 4px; }
+.t6-mark { position: relative; display: inline-flex; }
+.t6-shape { width: 14px; height: 14px; flex: none; display: block; }
+.t6-shape .t6-fill { fill: currentColor; stroke: currentColor; stroke-width: .6; stroke-linejoin: round; }
+.t6-shape .t6-ink { fill: none; stroke: var(--io-on-status); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.t6-shape .t6-ink-dot { fill: var(--io-on-status); }
+.t6-shape .t6-line { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.t6-shape.t6-warn { color: var(--io-warn); }
+.t6-shape.t6-error { color: var(--io-error); }
+.t6-shape.t6-stale { color: var(--io-stale); }
+.t6-shape.t6-unknown { color: var(--io-unknown); }
+.t6-mark.t6-subdued .t6-shape { color: var(--io-knock); }
+
+/* the quiet hint: a small dot on a collapsed branch; an open branch's ring is revealed on hover / selection */
+.t6-hint { width: 6px; height: 6px; border-radius: 50%; display: block; background: currentColor; opacity: .85; }
+.t6-hint.t6-open { background: transparent; box-shadow: inset 0 0 0 1.3px currentColor; width: 7px; height: 7px; opacity: 0; transition: opacity .12s; }
+.t6-row:hover .t6-hint.t6-open, .t6-row.t6-sel .t6-hint.t6-open { opacity: .6; }
+.t6-hint.t6-warn, .t6-badge.t6-warn { color: var(--io-warn); }
+.t6-hint.t6-error, .t6-badge.t6-error { color: var(--io-error); }
+.t6-hint.t6-stale, .t6-badge.t6-stale { color: var(--io-stale); }
+.t6-hint.t6-unknown, .t6-badge.t6-unknown { color: var(--io-unknown); }
+.t6-badge { position: absolute; right: -3px; top: -3px; width: 6px; height: 6px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 1.5px var(--io-surface); }
+.t6-row:hover .t6-badge { box-shadow: 0 0 0 1.5px var(--io-hover); }
+.t6-row.t6-sel .t6-badge { box-shadow: 0 0 0 1.5px var(--io-selected); }
+.t6-badge.t6-open { opacity: 0; transition: opacity .12s; }
+.t6-row:hover .t6-badge.t6-open, .t6-row.t6-sel .t6-badge.t6-open { opacity: 1; }
+
+/* knock-on (explained by a failed ancestor, counted once there): subdued name and shape */
+.t6-row.t6-knock .t6-name { color: var(--io-muted); }
+
+/* not connected: icon, name and id fully greyed; a real problem on it keeps its shape's colour */
+.t6-row.t6-off .t6-name, .t6-row.t6-off .t6-id { color: var(--io-off); }
+.t6-row.t6-off .t6-ic { stroke: var(--io-off); }
+
+.t6-empty { padding: 14px 18px; color: var(--io-faint); }

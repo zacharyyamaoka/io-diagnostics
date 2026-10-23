@@ -1,0 +1,106 @@
+/* IO diagnostics — the semantic token list (round 2 foundation; contract: docs/round2-seams.md).
+ *
+ * Every colour, font, radius and row height in app.css and tree/*.css reads one of these tokens; no stylesheet
+ * outside this file and skins/ carries a colour literal (tests/test_tree_variants.js greps for it).
+ *
+ * Two tiers:
+ *   BASE tokens    — a skin MUST define every one of them, for [data-mode=light] AND [data-mode=dark]
+ *                    (skins/<id>.css; the test reads each skin's own rules through the CSSOM).
+ *   DERIVED tokens — computed here from the base tokens (color-mix); a skin MAY override any of them.
+ *
+ * The values below are the bare fallback: system colours, so a page with no skin still renders legibly in both
+ * modes. They are not a skin; skins/claude.css is the default look.
+ *
+ * The page sets <html data-skin="<id>" data-mode="light|dark">; data-mode follows prefers-color-scheme unless the
+ * viewer picked Light or Dark in the bottom-right controls (app.js, persisted).
+ */
+:root { color-scheme: light dark; }
+:root[data-mode="light"] { color-scheme: light; }
+:root[data-mode="dark"] { color-scheme: dark; }
+
+:root {
+  /* ---- BASE · surfaces ---------------------------------------------------------------------------------- */
+  --io-bg: Canvas;                 /* the desk behind the window (body) */
+  --io-surface: Canvas;            /* the main panes: tree, table, detail cards */
+  --io-surface-2: Canvas;          /* raised chrome: toolbar, status bar, table header */
+  --io-surface-alt: Canvas;        /* the detail pane behind its cards */
+  --io-field: Field;               /* inputs, selects, the segmented-control track */
+  --io-popover: Canvas;            /* chip pop-over, confirm dialog */
+  --io-chrome-bg: CanvasText;      /* the desktop top bar mock (GNOME keeps it dark in both modes) */
+  --io-chrome-text: Canvas;        /* text and icons on the top bar */
+
+  /* ---- BASE · text --------------------------------------------------------------------------------------- */
+  --io-text: CanvasText;           /* body text and connected row names ("normal grey text", rule 5) */
+  --io-text-strong: CanvasText;    /* headings, the selected / matched row's name */
+  --io-muted: GrayText;            /* secondary text: labels, messages, column heads (AA on --io-surface) */
+  --io-faint: GrayText;            /* tertiary text: ids, captions, counts (AA on --io-surface) */
+  --io-off: GrayText;              /* not connected: the whole row greyed (rule 5; exempt from AA, like disabled text) */
+  --io-icon: GrayText;             /* type icons (stroke) */
+
+  /* ---- BASE · lines -------------------------------------------------------------------------------------- */
+  --io-border: GrayText;           /* pane and card edges, input borders */
+  --io-border-soft: GrayText;      /* row separators inside tables and cards */
+
+  /* ---- BASE · interaction -------------------------------------------------------------------------------- */
+  --io-hover: Canvas;              /* row / item hover background */
+  --io-selected: Highlight;        /* the selected row's background (keep it neutral: OK rows carry no colour) */
+  --io-selected-line: Highlight;   /* the selected row's edge / keyboard-focus outline inside a list */
+  --io-accent: AccentColor;        /* brand accent: the open chip, the active control, switches */
+  --io-accent-text: LinkText;      /* links (AA on --io-surface) */
+  --io-focus: AccentColor;         /* focus ring */
+
+  /* ---- BASE · status (the fills of the problem SHAPES; 3:1 against --io-surface) -------------------------- */
+  --io-warn: #b7791f;              /* triangle */
+  --io-error: #c83e32;             /* octagon with a cross */
+  --io-stale: #8c897f;             /* hollow clock: old data, not a new fault */
+  --io-unknown: #7466b8;           /* disc with a question mark: not evaluated */
+  --io-on-status: Canvas;          /* the glyph knocked out of a filled shape (!, x, ?) */
+  --io-ok: #5e8c4a;                /* the ONLY coloured OK: a passing precondition, a "plugged" event — never a row */
+  --io-info: #3f6fa8;              /* neutral facts: query actions, re-enumerated events, recorded provenance */
+  --io-shadow: CanvasText;         /* drop shadows and the modal backdrop (mixed down, never used raw) */
+
+  /* ---- BASE · type ------------------------------------------------------------------------------------------ */
+  --io-font-ui: system-ui, sans-serif;         /* everything */
+  --io-font-mono: ui-monospace, monospace;     /* ids, times, paths, numbers */
+  --io-font-display: system-ui, sans-serif;    /* the detail title and modal headings */
+  --io-font-size: 13px;                        /* body size; everything else is relative to the design */
+
+  /* ---- BASE · shape -------------------------------------------------------------------------------------- */
+  --io-radius: 8px;                /* cards, inputs, buttons */
+  --io-radius-sm: 4px;             /* rows, tags, small chips */
+  --io-radius-lg: 12px;            /* pop-over, modal */
+  --io-row-h: 26px;                /* one tree / table row (both use it: the table matches the tree) */
+  --io-indent: 14px;               /* one nesting step */
+
+  /* ---- DERIVED · status text, tints, lines (a skin may override) ----------------------------------------- */
+  --io-warn-text: color-mix(in srgb, var(--io-warn) 72%, var(--io-text-strong));       /* level words, tinted names */
+  --io-error-text: color-mix(in srgb, var(--io-error) 72%, var(--io-text-strong));
+  --io-stale-text: color-mix(in srgb, var(--io-stale) 72%, var(--io-text-strong));
+  --io-unknown-text: color-mix(in srgb, var(--io-unknown) 72%, var(--io-text-strong));
+  --io-ok-text: color-mix(in srgb, var(--io-ok) 72%, var(--io-text-strong));
+  --io-info-text: color-mix(in srgb, var(--io-info) 72%, var(--io-text-strong));
+  --io-warn-soft: color-mix(in srgb, var(--io-warn) 15%, transparent);                 /* pill / banner backgrounds */
+  --io-error-soft: color-mix(in srgb, var(--io-error) 16%, transparent);
+  --io-stale-soft: color-mix(in srgb, var(--io-stale) 16%, transparent);
+  --io-unknown-soft: color-mix(in srgb, var(--io-unknown) 16%, transparent);
+  --io-ok-soft: color-mix(in srgb, var(--io-ok) 15%, transparent);
+  --io-info-soft: color-mix(in srgb, var(--io-info) 16%, transparent);
+  --io-accent-soft: color-mix(in srgb, var(--io-accent) 16%, transparent);
+  --io-warn-line: color-mix(in srgb, var(--io-warn) 42%, transparent);                 /* tinted borders */
+  --io-error-line: color-mix(in srgb, var(--io-error) 42%, transparent);
+  --io-stale-line: color-mix(in srgb, var(--io-stale) 40%, transparent);
+  --io-info-line: color-mix(in srgb, var(--io-info) 42%, transparent);
+  --io-accent-line: color-mix(in srgb, var(--io-accent) 55%, transparent);
+
+  /* ---- DERIVED · neutrals -------------------------------------------------------------------------------- */
+  --io-knock: color-mix(in srgb, var(--io-faint) 80%, var(--io-surface));   /* a knock-on shape: drawn, but not a cause */
+  --io-guide: color-mix(in srgb, var(--io-text) 10%, transparent);          /* indent guides (v1/v2/legacy) */
+  --io-guide-strong: color-mix(in srgb, var(--io-text) 24%, transparent);   /* the selection's own guide */
+  --io-control: color-mix(in srgb, var(--io-text) 7%, var(--io-surface));   /* button / tag background */
+  --io-control-hover: color-mix(in srgb, var(--io-text) 12%, var(--io-surface));
+  --io-pressed: color-mix(in srgb, var(--io-text) 14%, var(--io-surface));  /* the "on" segment, a pressed button */
+  --io-mark: color-mix(in srgb, var(--io-accent) 30%, transparent);         /* search-match highlight */
+  --io-overlay: color-mix(in srgb, var(--io-shadow) 50%, transparent);      /* modal backdrop */
+  --io-shadow-pop: 0 16px 48px color-mix(in srgb, var(--io-shadow) 40%, transparent);   /* pop-over / modal shadow */
+  --io-radius-pill: 999px;          /* fully rounded pills */
+}

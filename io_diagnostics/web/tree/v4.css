@@ -1,24 +1,24 @@
 /* IO diagnostics tree proposal v4 — "Status rail" (see v4.js for the design notes).
    Every selector is scoped under .v4-tree so it never fights web/app.css; colours fall back to the app's tokens. */
 .v4-tree {
-  --v4-text: #b3b6bd;          /* connected + healthy: normal grey text */
-  --v4-text-strong: #eceef1;   /* a row with its own problem, or the selected row */
-  --v4-icon: #868a93;
-  --v4-id: var(--faint, #6c7079);
-  --v4-vacant: #50545c;        /* not connected: fully greyed */
-  --v4-hover: #2a2b31;
-  --v4-sel: var(--accent-soft, rgba(138, 124, 240, .16));
-  --v4-accent: var(--accent, #8a7cf0);
-  --v4-guide: rgba(255, 255, 255, .07);
-  --v4-ink: #17181b;           /* the knocked-out mark inside a solid shape */
-  --v4-error: var(--error, #e5534b);
-  --v4-warn: var(--warn, #e8a92c);
-  --v4-stale: var(--stale, #8d8fa6);
-  --v4-unknown: var(--unknown, #9a8fc4);
-  --v4-knock: #6c7079;
+  --v4-text: var(--io-text);          /* connected + healthy: normal grey text */
+  --v4-text-strong: var(--io-text-strong);   /* a row with its own problem, or the selected row */
+  --v4-icon: var(--io-icon);
+  --v4-id: var(--io-faint);
+  --v4-vacant: var(--io-off);        /* not connected: fully greyed */
+  --v4-hover: var(--io-hover);
+  --v4-sel: var(--io-selected);
+  --v4-accent: var(--io-accent);
+  --v4-guide: var(--io-guide);
+  --v4-ink: var(--io-on-status);           /* the knocked-out mark inside a solid shape */
+  --v4-error: var(--io-error);
+  --v4-warn: var(--io-warn);
+  --v4-stale: var(--io-stale);
+  --v4-unknown: var(--io-unknown);
+  --v4-knock: var(--io-knock);
   padding: 4px 0 12px;
   outline: none;
-  font: 12.5px/1.3 var(--sans, Inter, Ubuntu, "Segoe UI", system-ui, sans-serif);
+  font: 12.5px/1.3 var(--io-font-ui);
   user-select: none;
 }
 
@@ -28,7 +28,7 @@
   position: relative;
   display: flex;
   align-items: center;
-  height: 22px;
+  height: calc(var(--io-row-h) - 4px);
   padding: 0 0 0 calc(6px + var(--d) * 12px);
   color: var(--v4-text);
   white-space: nowrap;
@@ -36,7 +36,7 @@
 }
 .v4-tree .v4-row:hover { background-color: var(--v4-hover); }
 .v4-tree .v4-row.v4-sel { background-color: var(--v4-sel); box-shadow: inset 2px 0 0 var(--v4-accent); }
-.v4-tree:focus-visible .v4-row.v4-sel { box-shadow: inset 2px 0 0 var(--v4-accent), inset 0 0 0 1px rgba(138, 124, 240, .45); }
+.v4-tree:focus-visible .v4-row.v4-sel { box-shadow: inset 2px 0 0 var(--v4-accent), inset 0 0 0 1px var(--io-selected-line); }
 
 /* indent guides: drawn only while the pointer is over the tree (quiet at rest) */
 .v4-tree .v4-row::before {
@@ -62,12 +62,12 @@
   color: var(--v4-icon); transition: opacity .08s;
 }
 .v4-tree .v4-chev {
-  position: absolute; inset: -2px; display: grid; place-items: center; border-radius: 4px;
-  color: #c9ccd3; opacity: 0; transition: opacity .08s; cursor: pointer;
+  position: absolute; inset: -2px; display: grid; place-items: center; border-radius: var(--io-radius-sm);
+  color: var(--io-text); opacity: 0; transition: opacity .08s; cursor: pointer;
 }
 .v4-tree .v4-chev svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; transition: transform .1s; }
 .v4-tree .v4-row.v4-open .v4-chev svg { transform: rotate(90deg); }
-.v4-tree .v4-chev:hover { background: rgba(255, 255, 255, .09); }
+.v4-tree .v4-chev:hover { background: var(--io-control-hover); }
 .v4-tree .v4-row.v4-kids:hover .v4-type,
 .v4-tree:focus-visible .v4-row.v4-kids.v4-sel .v4-type { opacity: 0; }
 .v4-tree .v4-row.v4-kids:hover .v4-chev,
@@ -76,7 +76,7 @@
 .v4-tree .v4-name { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; }
 .v4-tree .v4-id {
   min-width: 0; flex: 0 1000 auto; overflow: hidden; text-overflow: ellipsis;
-  margin-left: 8px; color: var(--v4-id); font: 11px/1 var(--mono, "JetBrains Mono", "Ubuntu Mono", ui-monospace, monospace);
+  margin-left: 8px; color: var(--v4-id); font: 11px/1 var(--io-font-mono);
 }
 .v4-tree .v4-row.v4-part .v4-type { width: 13px; height: 13px; } /* part_of (composition): a hair smaller than via */
 .v4-tree .v4-row.v4-hit .v4-name { text-decoration: underline; text-decoration-color: var(--v4-accent); text-underline-offset: 3px; }

@@ -1,7 +1,8 @@
 // Tree proposal v2 — "Notion toggle" for IO diagnostics.
 //
-// Relies only on docs/api-v1.md (the node shape inside GET /api/v1/state → tree). Registers
-//   window.IOTreeRenderers['v2'] = {name, render(container, apiTree, {onSelect, selectedPath, query?})}
+// Round 2: consumes display rows from the active structure (web/view/core.js; docs/round2-seams.md), never the
+// raw API tree. A row carries the API node's fields plus label / status / parts / defaultOpen. Registers
+//   window.IOTreeRenderers['v2'] = {name, consumes: 'rows', render(container, rows, {onSelect, selectedPath, query?})}
 //
 // The idea: Notion's sidebar. A row is icon · name, nothing else until something needs you. Hovering a row that has
 // children swaps its TYPE icon for the disclosure chevron (no permanent chevron column), thin indentation guides
@@ -34,7 +35,7 @@
   // (and drop the hovered chevron) just because age_s ticked. Level words are listed so rollup.counts survive.
   const DRAWN_FIELDS = ['path', 'name', 'kind', 'icon', 'level', 'own', 'rollup', 'hint', 'message', 'knock_on_of',
     'connected', 'stale', 'id_text', 'edge', 'children', 'counts', 'origin', 'origin_name', 'ok', 'warn', 'unknown',
-    'error'];
+    'error', 'label', 'idText', 'status', 'part', 'text', 'defaultOpen', 'hit', 'title'];
 
   // ------------------------------------------------------------------------------ icons ----
   // Type icons: 24-unit stroke drawings (Lucide-style, ISC; the same family as web/index.html's sprite), carried here
@@ -64,16 +65,16 @@
   // Status shapes, 16-unit, filled with currentColor (the level colour) and a dark glyph, so the SHAPE reads even
   // without colour: warning triangle, error octagon with a cross, stale = a hollow clock (old data, not a new fault),
   // unknown = a disc with a question mark.
-  const GLYPH = '#1b1c1f';
+  const GLYPH = 'var(--io-on-status)'; // a token, so it is set through style="" (presentation attributes take no var())
   const STATUS_SHAPES = {
     warn: '<path d="M8 1.5c.42 0 .8.22 1.01.58l6.16 10.8c.43.76-.12 1.7-1 1.7H1.83c-.88 0-1.43-.94-1-1.7L6.99 2.08C7.2 1.72 7.58 1.5 8 1.5Z" fill="currentColor"/>'
-      + `<path d="M8 6.1v3.6" stroke="${GLYPH}" stroke-width="1.7" stroke-linecap="round"/><circle cx="8" cy="12" r="1" fill="${GLYPH}"/>`,
+      + `<path d="M8 6.1v3.6" style="stroke:${GLYPH}" stroke-width="1.7" stroke-linecap="round"/><circle cx="8" cy="12" r="1" style="fill:${GLYPH}"/>`,
     error: '<path d="M5.1 1h5.8L15 5.1v5.8L10.9 15H5.1L1 10.9V5.1Z" fill="currentColor" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/>'
-      + `<path d="m5.6 5.6 4.8 4.8m0-4.8-4.8 4.8" stroke="${GLYPH}" stroke-width="1.8" stroke-linecap="round"/>`,
+      + `<path d="m5.6 5.6 4.8 4.8m0-4.8-4.8 4.8" style="stroke:${GLYPH}" stroke-width="1.8" stroke-linecap="round"/>`,
     stale: '<circle cx="8" cy="8" r="6.4" fill="none" stroke="currentColor" stroke-width="1.6"/>'
       + '<path d="M8 4.6V8l2.4 1.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
     unknown: '<circle cx="8" cy="8" r="7" fill="currentColor"/>'
-      + `<path d="M6.05 6.2a2 2 0 0 1 3.9.55c0 1.35-1.95 1.65-1.95 2.95" fill="none" stroke="${GLYPH}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><circle cx="8" cy="12.1" r=".95" fill="${GLYPH}"/>`,
+      + `<path d="M6.05 6.2a2 2 0 0 1 3.9.55c0 1.35-1.95 1.65-1.95 2.95" fill="none" style="stroke:${GLYPH}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><circle cx="8" cy="12.1" r=".95" style="fill:${GLYPH}"/>`,
   };
 
   const esc = (text) => String(text ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -133,6 +134,7 @@
   // Default expansion: the frame (host, groups, OS buses, ports) is open; a device, node or plugin bus opens only
   // when something below it needs attention, so quiet branches stay folded (and carry no mark at all).
   function defaultOpen(node) {
+    if (typeof node.defaultOpen === 'boolean') return node.defaultOpen; // the structure's call (view/core.js)
     if (node.kind === 'host' || node.kind === 'group') return true;
     if (node.kind === 'bus' && node.depth <= 1) return true;
     if (node.kind === 'port') return true; // a port is a wrapper: the device in it is what you look for
@@ -140,8 +142,9 @@
   }
   const isOpen = (node) => (OPEN.has(node.path) ? OPEN.get(node.path) : defaultOpen(node));
 
-  const matches = (node, q) => [node.name, node.id_text, node.path, node.message, node.hardware_id]
-    .some((value) => String(value || '').toLowerCase().includes(q));
+  // view/core.js has already searched (labels, ids, messages, folded parts) and marked each kept row's `hit`
+  const matches = (node, q) => (typeof node.hit === 'boolean' ? node.hit : [node.name, node.id_text, node.path, node.message, node.hardware_id]
+    .some((value) => String(value || '').toLowerCase().includes(q)));
 
   function collectRows(tree, query) {
     const q = String(query || '').trim().toLowerCase();
@@ -151,6 +154,7 @@
         if (matches(node, q)) { trail.forEach((path) => keep.add(path)); keep.add(node.path); }
         (node.children || []).forEach((child) => mark(child, trail.concat(node.path)));
       })(tree, []);
+      keep.add(null);
     }
     const rows = [];
     (function walk(node, ancestors) {
@@ -158,6 +162,7 @@
       const kids = node.children || [];
       const hasKids = kids.length > 0;
       const open = hasKids && (keep ? kids.some((child) => keep.has(child.path)) : isOpen(node));
+      if (node.path === null) { kids.forEach((child) => walk(child, [])); return; } // the forest's virtual root
       rows.push({ node, ancestors, hasKids, open, hit: Boolean(keep) && matches(node, q) });
       if (open) kids.forEach((child) => walk(child, ancestors.concat(node)));
     })(tree, []);
@@ -169,7 +174,7 @@
     (function find(node, trail) {
       if (found) return;
       if (node.path === path) { found = trail; return; }
-      (node.children || []).forEach((child) => find(child, trail.concat(node)));
+      (node.children || []).forEach((child) => find(child, node.path === null ? trail : trail.concat(node)));
     })(tree, []);
     return found;
   }
@@ -178,6 +183,11 @@
   function statusHtml(node) {
     const level = node.level;
     const selfReport = node.own && node.own.level !== null && node.own.level !== undefined;
+    const part = node.status && node.status.part;
+    if ((!selfReport || !WORST_FIRST.includes(level)) && part) {
+      // a folded part's own report (driver: fault 33), drawn on its owner because the part is not a row
+      return `<span class="t2-part t2-${part.level}${part.knock_on_of ? ' t2-knock' : ''}" title="${esc(part.text)}"><svg class="t2-shape"><use href="#t2-s-${part.level}"/></svg></span>`;
+    }
     if (!selfReport || !WORST_FIRST.includes(level)) return '<span class="t2-status"></span>';
     const knock = node.knock_on_of ? ' t2-knock' : '';
     const why = node.knock_on_of ? ' (knock-on: explained by a failed ancestor and counted once, there)' : '';
@@ -212,9 +222,15 @@
     const lead = hasKids
       ? `<span class="t2-lead" data-t2-toggle="${esc(node.path)}" title="${open ? 'Collapse' : 'Expand'}">${icon}<svg class="t2-chev"><use href="#t2-chev"/></svg></span>`
       : `<span class="t2-lead">${icon}</span>`;
-    const pill = hasKids && !open ? pillHtml(node) : '';
-    const id = node.id_text ? `<span class="t2-id" title="${esc(node.id_text)}">${esc(node.id_text)}</span>` : '';
-    const title = `${node.name}${node.message ? ` — ${node.message}` : ''}${node.connected === false ? ' (not connected)' : ''}`;
+    // a folded part worse than the row's own report: v2's folded-problems pill, as on a collapsed parent
+    const part = node.status && node.status.part;
+    const ownLevel = node.own && node.own.level !== null && node.own.level !== undefined && WORST_FIRST.includes(node.level);
+    const partPill = part && ownLevel && node.status.note ? `<span class="t2-pill" title="${esc(`part (folded): ${part.text}`)}"><span class="t2-seg t2-${part.level}"><b>1</b>`
+      + `<svg class="t2-mini"><use href="#t2-s-${part.level}"/></svg></span></span>` : '';
+    const pill = (hasKids && !open ? pillHtml(node) : '') || partPill;
+    const idText = node.idText !== undefined ? node.idText : node.id_text;
+    const id = idText ? `<span class="t2-id" title="${esc(idText)}">${esc(idText)}</span>` : '';
+    const title = node.title || `${node.name}${node.message ? ` — ${node.message}` : ''}${node.connected === false ? ' (not connected)' : ''}`;
     return `<div class="${cls}" role="treeitem" aria-level="${ancestors.length + 1}"${hasKids ? ` aria-expanded="${open}"` : ''}`
       + ` aria-selected="${selected}" data-t2-path="${esc(node.path)}" title="${esc(title)}">`
       + `<span class="t2-guides">${guides}</span>${lead}<span class="t2-name">${esc(node.name)}</span>`
@@ -329,7 +345,7 @@
       STATES.set(container, state);
       bind(state);
     }
-    state.tree = apiTree || null;
+    state.tree = Array.isArray(apiTree) ? { path: null, children: apiTree } : null; // the structure's top-level rows
     state.opts = opts || {};
     paint(state, false);
   }
@@ -337,6 +353,7 @@
   window.IOTreeRenderers = window.IOTreeRenderers || {};
   window.IOTreeRenderers.v2 = {
     name: 'Notion toggle',
+    consumes: 'rows',
     description: 'Hover a row to swap its icon for the chevron; thin indent guides; a folded parent with problems shows a count pill ("2 ▲").',
     render,
   };

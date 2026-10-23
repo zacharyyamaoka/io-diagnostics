@@ -1,23 +1,23 @@
 /* Tree proposal v1 — "Quiet IDE tree" (io_diagnostics/web/tree/v1.js). Every class is t1-* so it can sit inside
-   web/index.html beside app.css without either sheet touching the other's rows. Colours read app.css's tokens
-   with the same values as fallbacks. */
+   web/index.html beside app.css without either sheet touching the other's rows. Every colour, font, radius and
+   row height is a web/tokens.css token (round 2), so every skin works with it. */
 .t1-tree {
   --t1-indent: 12px;               /* keep equal to INDENT_PX in v1.js */
-  --t1-row-h: 24px;
-  --t1-text: #c9ccd2;              /* connected = normal grey text (rule 5) */
-  --t1-icon: #8f939b;
-  --t1-id: #6c7079;
-  --t1-off: #55585f;               /* not connected = fully greyed (rule 5) */
-  --t1-guide: rgba(255, 255, 255, .07);
-  --t1-hover: #2a2b31;
-  --t1-sel: rgba(138, 124, 240, .17);
-  --t1-sel-line: rgba(138, 124, 240, .55);
-  --t1-warn: var(--warn, #e8a92c);
-  --t1-error: var(--error, #e5534b);
-  --t1-stale: var(--stale, #8d8fa6);
-  --t1-unknown: var(--unknown, #9a8fc4);
-  --t1-ink: #1b1c1f;               /* the mark knocked out of a filled shape */
-  font: 13px/1.4 var(--sans, Inter, Ubuntu, "Segoe UI", system-ui, sans-serif);
+  --t1-row-h: calc(var(--io-row-h) - 2px);
+  --t1-text: var(--io-text);       /* connected = normal grey text (rule 5) */
+  --t1-icon: var(--io-icon);
+  --t1-id: var(--io-faint);
+  --t1-off: var(--io-off);         /* not connected = fully greyed (rule 5) */
+  --t1-guide: var(--io-guide);
+  --t1-hover: var(--io-hover);
+  --t1-sel: var(--io-selected);
+  --t1-sel-line: var(--io-selected-line);
+  --t1-warn: var(--io-warn);
+  --t1-error: var(--io-error);
+  --t1-stale: var(--io-stale);
+  --t1-unknown: var(--io-unknown);
+  --t1-ink: var(--io-on-status);   /* the mark knocked out of a filled shape */
+  font: var(--io-font-size)/1.4 var(--io-font-ui);
   color: var(--t1-text);
   user-select: none;
   padding-bottom: 12px;
@@ -44,23 +44,23 @@
 .t1-tree:hover .t1-guides { opacity: 1; }
 
 /* chevron gutter (rule 1): reserved space, invisible until the pointer is over the tree; full on the hovered row */
-.t1-chev { width: 16px; height: 16px; flex: none; display: inline-flex; align-items: center; justify-content: center; color: #8f939b; opacity: 0; transition: opacity .12s; cursor: pointer; border-radius: 3px; }
+.t1-chev { width: 16px; height: 16px; flex: none; display: inline-flex; align-items: center; justify-content: center; color: var(--t1-icon); opacity: 0; transition: opacity .12s; cursor: pointer; border-radius: var(--io-radius-sm); }
 .t1-chev svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; transition: transform .12s; }
 .t1-chev.t1-open svg { transform: rotate(90deg); }
 .t1-chev.t1-leaf { cursor: default; }
 .t1-tree:hover .t1-chev, .t1-rows:focus-visible .t1-chev { opacity: .4; }
 .t1-row:hover .t1-chev, .t1-row.t1-sel .t1-chev { opacity: 1; }
-.t1-chev:not(.t1-leaf):hover { background: rgba(255, 255, 255, .08); color: #d5d8dd; }
+.t1-chev:not(.t1-leaf):hover { background: var(--io-control-hover); color: var(--io-text-strong); }
 
 /* type icon + name together (rule 2) */
 .t1-ic { width: 16px; height: 16px; flex: none; fill: none; stroke: var(--t1-icon); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .t1-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--t1-text); }
-.t1-row.t1-sel .t1-name { color: #f1f2f4; }
-.t1-row.t1-sel .t1-ic { stroke: #b9bcc4; }
-.t1-name mark { background: rgba(138, 124, 240, .35); color: inherit; border-radius: 2px; }
+.t1-row.t1-sel .t1-name { color: var(--io-text-strong); }
+.t1-row.t1-sel .t1-ic { stroke: var(--io-text); }
+.t1-name mark { background: var(--io-mark); color: inherit; border-radius: 2px; }
 
 /* ids muted on the right; the full value is in the row's tooltip (the ellipsis is explicit) */
-.t1-id { margin-left: auto; padding-left: 12px; color: var(--t1-id); font: 11.5px/1 var(--mono, "JetBrains Mono", "Ubuntu Mono", ui-monospace, monospace); flex: 0 1 auto; max-width: 42%; overflow: hidden; text-overflow: ellipsis; min-width: 2ch; }
+.t1-id { margin-left: auto; padding-left: 12px; color: var(--t1-id); font: 11.5px/1 var(--io-font-mono); flex: 0 1 auto; max-width: 42%; overflow: hidden; text-overflow: ellipsis; min-width: 2ch; }
 
 /* status slot at the far right (rules 2-4): fixed width so ids line up; empty on OK rows */
 .t1-st { width: 18px; flex: none; display: inline-flex; align-items: center; justify-content: center; margin-left: 6px; }
@@ -87,25 +87,25 @@
 .t1-hint.t1-stale, .t1-badge.t1-stale { color: var(--t1-stale); }
 .t1-hint.t1-unknown, .t1-badge.t1-unknown { color: var(--t1-unknown); }
 /* own problem AND something worse below: a badge dot on the shape's corner */
-.t1-badge { position: absolute; right: -3px; top: -3px; width: 6px; height: 6px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 1.5px var(--panel, #222327); }
+.t1-badge { position: absolute; right: -3px; top: -3px; width: 6px; height: 6px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 1.5px var(--io-surface); }
 .t1-row:hover .t1-badge { box-shadow: 0 0 0 1.5px var(--t1-hover); }
 .t1-badge.t1-open { opacity: 0; transition: opacity .12s; }
 .t1-row:hover .t1-badge.t1-open, .t1-row.t1-sel .t1-badge.t1-open { opacity: 1; }
 
 /* problem rows: the name takes a muted tint of its level (VS Code's decorated file name); stale reads as "old" */
-.t1-row.t1-lv-error .t1-name { color: #ee9a94; }
-.t1-row.t1-lv-warn .t1-name { color: #e2c27e; }
-.t1-row.t1-lv-stale .t1-name { color: #9a9ea6; }
+.t1-row.t1-lv-error .t1-name { color: var(--io-error-text); }
+.t1-row.t1-lv-warn .t1-name { color: var(--io-warn-text); }
+.t1-row.t1-lv-stale .t1-name { color: var(--io-muted); }
 
 /* knock-on (explained by a failed ancestor, counted once there): subdued name and a grey shape */
-.t1-row.t1-knock .t1-name { color: #8a8e96; }
-.t1-mark.t1-subdued .t1-shape { color: #6f727a; }
+.t1-row.t1-knock .t1-name { color: var(--io-muted); }
+.t1-mark.t1-subdued .t1-shape { color: var(--io-knock); }
 
 /* a grouping row with nothing under it (e.g. an empty USB bus): present but quieter */
-.t1-row.t1-empty .t1-name { color: #8a8e96; }
+.t1-row.t1-empty .t1-name { color: var(--io-muted); }
 
 /* not connected (rule 5): icon, name and id fully greyed; a real problem on it keeps its shape's colour */
 .t1-row.t1-off .t1-name, .t1-row.t1-off .t1-id { color: var(--t1-off); }
 .t1-row.t1-off .t1-ic { stroke: var(--t1-off); }
 
-.t1-row.t1-hit .t1-name { color: #f1f2f4; }
+.t1-row.t1-hit .t1-name { color: var(--io-text-strong); }

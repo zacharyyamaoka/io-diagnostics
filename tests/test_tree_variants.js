@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Acceptance for the tree switcher: the five tree proposals (web/tree/v1..v5.js) inside the REAL dashboard
-// (web/index.html + app.js), at the 18:11 (F1) and 18:25 (F2) fixture frames, in headless Chrome.
+// Acceptance for the tree switcher: the tree styles (web/tree/v1..v6.js) inside the REAL dashboard
+// (web/index.html + app.js), at the 18:11 (F1) and 18:25 (F2) fixture frames, in headless Chrome; then the round 2
+// FOUNDATION checks (docs/round2-seams.md): tree style v6 and the Table, each in light and dark.
 //
 // Runner note: this is a Node + Playwright script, not a pytest test (pytest does not collect .js). Run it with
 //
@@ -9,7 +10,8 @@
 // It starts its own fixture servers (`cli.py serve --fixture F1|F2 --port 0`, a free port each, stopped by their
 // process group at the end), drives headless Chrome (/usr/bin/google-chrome; never a visible window), prints one
 // line per check, writes reports/media/v1/tree-variants-report.json plus screenshots
-// reports/media/v1/tree-<variant>-<1811|1825>.png (+ -hover.png crops), and exits 1 on any failed check.
+// reports/media/v1/tree-<variant>-<1811|1825>.png (+ -hover.png crops), the foundation screenshots
+// reports/media/round2/foundation-<tree|table>-<1811|1825>-<light|dark>.png, and exits 1 on any failed check.
 // Nothing here opens a CAN adapter or a camera: the fixture host replays recorded frames.
 //
 // Checks per variant and frame (Zach's tree rules, 2026-10-22):
@@ -17,12 +19,26 @@
 //   no-green    no green computed colour anywhere in the tree; no status mark on a row that shows OK / nothing
 //   shapes      every visible row whose OWN report is a problem carries a visible shape element
 //   right       that shape sits right of the row's name (getBoundingClientRect x order)
-//   chevrons    no chevron visible at rest on unselected rows; hovering a parent row shows its chevron
-//   greyed      a not-connected row's name is grey (low saturation) and dimmer than connected rows' names
+//   chevrons    v1-v5: no chevron visible at rest on unselected rows; hovering a parent row shows its chevron
+//               v6 (IDE × Notion): every folder shows a quiet chevron at rest (opacity <= .6), no leaf does; hover = full
+//   greyed      a not-connected row's name is grey (low saturation) and recedes: closer to the pane's background
+//               luminance than connected rows' names (round 2: holds in light and dark)
 //   select      clicking a row updates the detail panel (title + path) and the renderer marks it selected
 //   search      the search box filters the tree (v5 has none: the box is disabled and says so)
 //   tabs        Table and Activity still render, and Tree comes back on the same proposal
 //   errors      no page errors or console errors
+//
+// Foundation checks (stylesheets once, then per frame × {v6 tree, table} × {light, dark}):
+//   literals    no colour literal (hex, rgb/hsl, named colour) in a declaration of app.css or tree/*.css; every
+//               var(--io-*) any stylesheet reads is in the token list of tokens.css
+//   mode        the Light / Dark control sets <html data-mode>, a reload keeps it; Auto follows prefers-color-scheme
+//   tokens      every token of tokens.css resolves to a value on <html>, and the skin's own rule for this mode
+//               declares every BASE token (nothing silently falls back)
+//   quiet-ok    an OK row (no own problem, no folded-part problem, no hint) paints no colour at all (chroma of every
+//               text, fill, stroke, background and border < .12)
+//   shapes      every row whose own report or folded part is a problem carries a visible shape
+//   right       that shape sits right of the row's name (getBoundingClientRect)
+//   labels      rows show `model · id` labels and no composition part is a row (parts folded)
 'use strict';
 
 const fs = require('fs');
@@ -34,25 +50,32 @@ const PLAYWRIGHT = process.env.IO_DIAG_PLAYWRIGHT || '/home/bam/aruco-studio/web
 const CHROME = '/usr/bin/google-chrome';
 const UV = '/home/bam/.local/bin/uv';
 const SHOTS = path.join(ROOT, 'reports', 'media', 'v1');
+const ROUND2 = path.join(ROOT, 'reports', 'media', 'round2');
+const WEB = path.join(ROOT, 'io_diagnostics', 'web');
 const FRAMES = [{ fixture: 'F1', label: '1811' }, { fixture: 'F2', label: '1825' }];
-const VARIANTS = ['v1', 'v2', 'v3', 'v4', 'v5'];
+const VARIANTS = ['v1', 'v2', 'v3', 'v4', 'v5', 'v6'];
+const QUIET_CHEVRONS = new Set(['v6']); // chevrons visible (quiet) at rest on every folder
 const VIEWPORT = { width: 1600, height: 1000 };
 const PROBLEM = new Set(['warn', 'unknown', 'stale', 'error']);
-// --mutate proves the ruler can fail: it paints every name green and pins every chevron visible, so `no-green` and
-// `chevrons` must FAIL for every variant (no screenshots or report are written in that mode).
+// --mutate proves the ruler can fail: it paints every name green and pins every chevron visible (v6: hides them), so
+// `no-green` and `chevrons` must FAIL for every variant, and the foundation's `quiet-ok` must FAIL for the tree and
+// the table (no screenshots or report are written in that mode).
 //   /usr/bin/node /home/bam/io-diagnostics/tests/test_tree_variants.js --mutate
 const MUTATE = process.argv.includes('--mutate');
 const MUTATION_CSS = '#tree-host [class*="-name"] { color: #5cb85c !important; }'
   + ' #tree-host .t1-chev, #tree-host .v3-chev, #tree-host .v4-chev, #tree-host .v5-chev { opacity: 1 !important; }'
-  + ' #tree-host .t2-chev { display: block !important; }';
+  + ' #tree-host .t2-chev { display: block !important; }'
+  + ' #tree-host .t6-chev { opacity: 0 !important; }'
+  + ' table.grid .name { color: #5cb85c !important; }';
 
 // What each proposal calls its parts. `own` is the shape of the row's OWN self-report (not the advisory hint).
 const SPEC = {
-  v1: { row: '.t1-row[data-t1-path]', attr: 'data-t1-path', name: '.t1-name', own: '.t1-st > .t1-mark > .t1-shape', chev: '.t1-chev:not(.t1-leaf)' },
+  v1: { row: '.t1-row[data-t1-path]', attr: 'data-t1-path', name: '.t1-name', own: '.t1-st > .t1-mark:not(.t1-part) > .t1-shape', chev: '.t1-chev:not(.t1-leaf)' },
   v2: { row: '.t2-row[data-t2-path]', attr: 'data-t2-path', name: '.t2-name', own: '.t2-status .t2-shape', chev: '.t2-chev' },
   v3: { row: '.v3-row[data-v3-path]', attr: 'data-v3-path', name: '.v3-name', own: '.v3-status > .v3-shape', chev: '.v3-chev' },
   v4: { row: '.v4-row[data-path]', attr: 'data-path', name: '.v4-name', own: '.v4-status > .v4-glyph-box > .v4-self, .v4-status > .v4-glyph-box > .v4-knock', chev: '.v4-chev' },
   v5: { row: '.v5-row[data-v5-path]', attr: 'data-v5-path', name: '.v5-name', own: '.v5-c-status > .v5-shape', chev: '.v5-chev' },
+  v6: { row: '.t6-row[data-t6-path]', attr: 'data-t6-path', name: '.t6-name', own: '.t6-st > .t6-mark.t6-own > .t6-shape', part: '.t6-st > .t6-mark.t6-part > .t6-shape', chev: '.t6-chev:not(.t6-leaf)' },
 };
 
 // ------------------------------------------------------------------------------------------ servers ----
@@ -167,7 +190,12 @@ function measureRows({ spec, nodes }) {
       chevDisplay: chev ? getComputedStyle(chev).display : null,
     });
   }
-  return { greens, rows, scroll: document.getElementById('left').scrollTop };
+  // the pane's background luminance (first opaque background up the tree): "greyed" = closer to it
+  let bg = null;
+  for (let e = pane; e && !bg; e = e.parentElement) { const c = parse(getComputedStyle(e).backgroundColor); if (c && c.a > 0.5) bg = c; }
+  const bgLum = luminance(bg || { r: 255, g: 255, b: 255 });
+  for (const row of rows) row.nameDistance = row.nameLuminance === null ? null : Math.abs(row.nameLuminance - bgLum);
+  return { greens, rows, scroll: document.getElementById('left').scrollTop, bgLum };
 }
 
 // ------------------------------------------------------------------------------------------- checks ----
@@ -176,6 +204,7 @@ function check(frame, variant, name, ok, detail) {
   results.push({ frame, variant, check: name, ok: Boolean(ok), detail });
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${frame} ${variant}  ${name.padEnd(9)}  ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`);
 }
+const ONLY_FOUNDATION = process.argv.includes('--foundation'); // skip the per-variant checks
 
 async function waitForTree(page, spec) {
   await page.waitForFunction((selector) => {
@@ -195,7 +224,8 @@ async function nodeIndex(page) {
 
 async function runVariant(browser, base, frame, variant) {
   const spec = SPEC[variant];
-  const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: 1 });
+  // WHY dark: this per-variant regression was written against the dark v1 page; light is the foundation phase's job
+  const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: 1, colorScheme: 'dark' });
   const page = await context.newPage();
   if (MUTATE) {
     await page.addInitScript((css) => document.addEventListener('DOMContentLoaded', () => {
@@ -211,7 +241,7 @@ async function runVariant(browser, base, frame, variant) {
   try {
     // ---- switch live from the default, then reload: the choice must stick
     await page.goto(`${base}/`);
-    await page.waitForFunction(() => document.querySelectorAll('#tree-variant option').length >= 5 && document.querySelector('.d-title'));
+    await page.waitForFunction(() => document.querySelectorAll('#tree-variant option').length >= 6 && document.querySelector('.d-title'));
     const firstLoad = await page.evaluate(() => document.getElementById('tree-variant').value);
     await page.selectOption('#tree-variant', variant);
     await waitForTree(page, spec);
@@ -224,11 +254,11 @@ async function runVariant(browser, base, frame, variant) {
       pane: document.querySelector('#tree-host > .tree-pane:not([hidden])').dataset.variant,
       panes: document.querySelectorAll('#tree-host > .tree-pane:not([hidden])').length,
       stored: (() => { try { return localStorage.getItem('io-diagnostics.tree-variant'); } catch (_) { return null; } })(),
-      corner: (() => { const r = document.getElementById('variant-switch').getBoundingClientRect(); return { right: Math.round(innerWidth - r.right), bottom: Math.round(innerHeight - r.bottom) }; })(),
+      corner: (() => { const r = document.getElementById('controls').getBoundingClientRect(); return { right: Math.round(innerWidth - r.right), bottom: Math.round(innerHeight - r.bottom) }; })(),
     }));
     check(frame, variant, 'switch', live === variant && kept.picker === variant && kept.pane === variant && kept.panes === 1 && kept.stored === variant
       && kept.corner.right < 40 && kept.corner.bottom < 40,
-    `first load ${firstLoad} · live ${live} · after reload picker ${kept.picker}, pane ${kept.pane}, stored ${kept.stored} · switch ${kept.corner.right}px from right, ${kept.corner.bottom}px from bottom`);
+    `first load ${firstLoad} · live ${live} · after reload picker ${kept.picker}, pane ${kept.pane}, stored ${kept.stored} · controls ${kept.corner.right}px from right, ${kept.corner.bottom}px from bottom`);
 
     // ---- park the pointer outside the tree, measure the resting state, shoot it
     await page.mouse.move(1560, 960);
@@ -254,8 +284,11 @@ async function runVariant(browser, base, frame, variant) {
       `${problems.filter((r) => r.marks.length).map((r) => `${r.name}: name ends ${Math.round(r.nameRight)} < mark ${Math.round(r.marks[0].left)}`).join(' · ')}`
       + `${leftOfName.length ? ` · LEFT of name: ${leftOfName.map((r) => r.name).join(', ')}` : ''}`);
 
-    // chevrons: none visible at rest on unselected rows; hovering a parent row shows its own
-    const restingChevrons = rest.rows.filter((r) => r.chevShown && !r.selected);
+    // chevrons: none visible at rest on unselected rows (v6: a quiet one on every folder); hovering a parent row shows its own
+    const quietStyle = QUIET_CHEVRONS.has(variant);
+    const restingChevrons = quietStyle
+      ? rest.rows.filter((r) => !r.selected && r.chevOpacity !== null && !(r.chevShown && r.chevOpacity <= 0.6))
+      : rest.rows.filter((r) => r.chevShown && !r.selected);
     const candidates = rest.rows.filter((r) => r.chevOpacity !== null && !r.selected && nodes[r.path].children.length && nodes[r.path].depth > 0);
     let hover = { name: null };
     if (candidates.length) {
@@ -272,8 +305,8 @@ async function runVariant(browser, base, frame, variant) {
       await page.mouse.move(1560, 960);
       await page.waitForTimeout(300);
     }
-    check(frame, variant, 'chevrons', restingChevrons.length === 0 && hover.name && hover.shownBefore === false && hover.shown,
-      `at rest ${restingChevrons.length} visible on unselected rows${restingChevrons.length ? ` (${restingChevrons.map((r) => r.name).join(', ')})` : ''} · `
+    check(frame, variant, 'chevrons', restingChevrons.length === 0 && hover.name && (quietStyle ? hover.after > 0.95 : hover.shownBefore === false) && hover.shown,
+      `at rest ${restingChevrons.length} ${quietStyle ? 'folders without a quiet chevron' : 'visible on unselected rows'}${restingChevrons.length ? ` (${restingChevrons.map((r) => r.name).join(', ')})` : ''} · `
       + `hover "${hover.name}": before opacity ${fmt(hover.before)} (display ${hover.beforeDisplay}) → after ${fmt(hover.after)}, shown ${hover.shown}`);
 
     // not connected = greyed: grey (low saturation) and dimmer than the connected rows' names
@@ -291,12 +324,12 @@ async function runVariant(browser, base, frame, variant) {
         reference = revealed.rows;
       }
     }
-    const connectedNames = reference.filter((r) => r.connected !== false && r.nameLuminance !== null && !(r.own && PROBLEM.has(r.own.level)) && !r.selected)
-      .map((r) => r.nameLuminance).sort((a, b) => a - b);
+    const connectedNames = reference.filter((r) => r.connected !== false && r.nameDistance !== null && !(r.own && PROBLEM.has(r.own.level)) && !r.selected)
+      .map((r) => r.nameDistance).sort((a, b) => a - b);
     const typical = connectedNames.length ? connectedNames[Math.floor(connectedNames.length / 2)] : null;
-    const notGrey = greyRows.filter((r) => !(r.nameSaturation < 0.15 && typical !== null && r.nameLuminance < typical - 20));
+    const notGrey = greyRows.filter((r) => !(r.nameSaturation < 0.15 && typical !== null && r.nameDistance < typical - 20));
     check(frame, variant, 'greyed', greyRows.length > 0 && notGrey.length === 0,
-      `${greyRows.map((r) => `${r.name}: ${r.nameColor} (sat ${r.nameSaturation.toFixed(2)}, lum ${Math.round(r.nameLuminance)})`).join(' · ')} vs connected median lum ${Math.round(typical)}`);
+      `${greyRows.map((r) => `${r.name}: ${r.nameColor} (sat ${r.nameSaturation.toFixed(2)}, ${Math.round(r.nameDistance)} from the background)`).join(' · ')} vs connected median ${Math.round(typical)}`);
 
     // clicking a row updates the detail panel, and the renderer marks it selected
     const now = await page.evaluate(measureRows, { spec, nodes });
@@ -305,20 +338,21 @@ async function runVariant(browser, base, frame, variant) {
     const target = clickable.find((r) => r.own && PROBLEM.has(r.own.level)) || clickable.find((r) => r.name === 'CAN 14') || clickable[0];
     const rowSelector = rowSelectorFor(spec, target.path);
     await page.click(`${rowSelector} ${spec.name}`);
+    const label = await page.evaluate((nodePath) => (window.IOView ? window.IOView.labelOf(S.data && index(S.data.tree).get(nodePath)).label : null), target.path);
     let selectOk = true;
     try {
       await page.waitForFunction(({ name, nodePath }) => {
         const title = document.querySelector('.d-title span');
         const where = document.querySelector('.d-path');
-        return title && title.textContent === name && where && where.textContent.startsWith(nodePath) && document.querySelector('#detail .cards .card');
-      }, { name: target.name, nodePath: target.path }, { timeout: 6000 });
+        return title && title.textContent === name && where && where.textContent.includes(nodePath) && document.querySelector('#detail .cards .card');
+      }, { name: label, nodePath: target.path }, { timeout: 6000 });
     } catch (_) { selectOk = false; }
     const picked = await page.evaluate(({ selector }) => {
       const row = document.querySelector(`#tree-host > .tree-pane:not([hidden]) ${selector}`);
       return { selected: row && row.getAttribute('aria-selected'), title: (document.querySelector('.d-title span') || {}).textContent, cards: document.querySelectorAll('#detail .cards .card').length };
     }, { selector: rowSelector });
     check(frame, variant, 'select', selectOk && picked.selected === 'true',
-      `clicked "${target.name}" → detail "${picked.title}" with ${picked.cards} cards · row aria-selected ${picked.selected}`);
+      `clicked "${target.name}" → detail "${picked.title}" (label "${label}") with ${picked.cards} cards · row aria-selected ${picked.selected}`);
 
     // search
     if (variant === 'v5') {
@@ -350,7 +384,7 @@ async function runVariant(browser, base, frame, variant) {
       selected: (document.querySelector(`#tree-host > .tree-pane:not([hidden]) ${selector}`) || { getAttribute: () => null }).getAttribute('aria-selected'),
       title: (document.querySelector('.d-title span') || {}).textContent,
     }), { selector: rowSelector });
-    check(frame, variant, 'tabs', table.rows > 0 && table.treeHidden && table.okPills === 0 && activity.events > 0 && back.pane === variant && back.title === target.name,
+    check(frame, variant, 'tabs', table.rows > 0 && table.treeHidden && table.okPills === 0 && activity.events > 0 && back.pane === variant && back.title === label,
       `table ${table.rows} rows (OK marks ${table.okPills}) · activity ${activity.events} events, ${activity.links} link rows · back on ${back.pane}, detail "${back.title}", row selected ${back.selected}`);
 
     check(frame, variant, 'errors', errors.length === 0, errors.length ? errors.slice(0, 3).join(' | ') : 'none');
@@ -365,9 +399,225 @@ const fmt = (value) => (typeof value === 'number' ? value.toFixed(2) : String(va
 // the row element of one entity, e.g. .t1-row[data-t1-path="host/usb1/port-1-7"]
 const rowSelectorFor = (spec, entityPath) => `${spec.row.split('[')[0]}[${spec.attr}="${entityPath.replace(/"/g, '\\"')}"]`;
 
+// ------------------------------------------------------------------------------- foundation ----
+// The token list, read from tokens.css itself: BASE tokens come before the first "DERIVED" section.
+function tokenList() {
+  const text = fs.readFileSync(path.join(WEB, 'tokens.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, (c) => (c.includes('---- DERIVED') ? '@@DERIVED@@' : ''));
+  const [basePart] = text.split('@@DERIVED@@');
+  const names = (part) => [...new Set([...part.matchAll(/(--io-[a-z0-9-]+)\s*:/g)].map((m) => m[1]))];
+  return { base: names(basePart), all: names(text) };
+}
+
+// The ids a manifest marks ready (skins/index.json, view/structure/index.json).
+const readyIds = (manifest, key) => (JSON.parse(fs.readFileSync(path.join(WEB, manifest), 'utf8'))[key] || []).filter((entry) => entry.ready).map((entry) => entry.id);
+
+// Colour literals in declarations (comments stripped): hex, rgb()/hsl() and the common named colours.
+const NAMED = /\b(white|black|red|green|blue|gr[ae]y|orange|yellow|purple|pink|silver|navy|teal|maroon)\b/i;
+function literalsIn(file) {
+  const text = fs.readFileSync(file, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  const found = [];
+  for (const block of text.matchAll(/\{([^{}]*)\}/g)) {
+    for (const declaration of block[1].split(';')) {
+      const colon = declaration.indexOf(':');
+      if (colon < 0) continue;
+      const value = declaration.slice(colon + 1);
+      const hit = value.match(/#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch)\(/) || value.match(NAMED);
+      if (hit) found.push(`${path.basename(file)}: ${declaration.trim().slice(0, 80)}`);
+    }
+  }
+  return found;
+}
+
+function staticChecks() {
+  const sheets = [path.join(WEB, 'app.css'), ...fs.readdirSync(path.join(WEB, 'tree')).filter((f) => f.endsWith('.css')).map((f) => path.join(WEB, 'tree', f))];
+  const literals = sheets.flatMap(literalsIn);
+  check('static', 'css', 'literals', literals.length === 0 && sheets.length >= 7,
+    `${sheets.length} stylesheets (app.css + tree/*.css), ${literals.length} colour literals${literals.length ? `: ${literals.slice(0, 4).join(' | ')}` : ''}`);
+  const { all } = tokenList();
+  const readers = [...sheets, path.join(WEB, 'skins', 'claude.css'), path.join(WEB, 'index.html'), ...fs.readdirSync(path.join(WEB, 'tree')).filter((f) => f.endsWith('.js')).map((f) => path.join(WEB, 'tree', f))];
+  const unknown = new Set();
+  for (const file of readers) for (const m of fs.readFileSync(file, 'utf8').matchAll(/var\((--io-[a-z0-9-]+)/g)) if (!all.includes(m[1])) unknown.add(`${path.basename(file)} ${m[1]}`);
+  check('static', 'css', 'var-refs', unknown.size === 0, `${all.length} tokens; unknown var(--io-*) reads: ${[...unknown].join(', ') || 'none'}`);
+}
+
+// Runs in the page: what the foundation checks need, from the rows the page actually drew (S.built).
+function foundationMeasure({ view, tokens, base }) {
+  const html = document.documentElement;
+  const parse = (text) => {
+    const m = String(text || '').match(/rgba?\(([\d.]+)[ ,]+([\d.]+)[ ,]+([\d.]+)(?:[ ,/]+([\d.]+%?))?\)/);
+    if (!m) return null;
+    let a = m[4] === undefined ? 1 : parseFloat(m[4]);
+    if (String(m[4]).endsWith('%')) a /= 100;
+    return { r: +m[1], g: +m[2], b: +m[3], a };
+  };
+  // chroma in sRGB (max - min channel): neutrals, warm or cool, stay under .12; a status colour is far above
+  const chroma = (c) => (c && c.a >= 0.1 ? (Math.max(c.r, c.g, c.b) - Math.min(c.r, c.g, c.b)) / 255 : 0);
+  const opacity = (element) => { let v = 1; for (let e = element; e && e !== document.body; e = e.parentElement) v *= parseFloat(getComputedStyle(e).opacity); return v; };
+  const shown = (element) => {
+    if (!element) return false;
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    return rect.width >= 1 && rect.height >= 1 && style.visibility !== 'hidden' && style.display !== 'none' && opacity(element) > 0.05;
+  };
+  const tree = view === 'tree';
+  const pane = tree ? document.querySelector('#tree-host > .tree-pane:not([hidden])') : document.getElementById('left-other');
+  const domRows = tree ? [...pane.querySelectorAll('.t6-row[data-t6-path]')] : [...pane.querySelectorAll('table.grid tbody tr[data-key]')];
+  const keyOf = (element) => element.getAttribute(tree ? 'data-t6-path' : 'data-key');
+  const nameSel = tree ? '.t6-name' : 'td.namecell .name';
+  const shapeSel = tree ? '.t6-st .t6-shape' : 'td.namecell .st .shape';
+  const coloured = [];
+  const shapeless = [];
+  const leftOf = [];
+  const labelMismatch = [];
+  let okRows = 0;
+  let problemRows = 0;
+  for (const element of domRows) {
+    const row = S.built.byKey.get(keyOf(element));
+    if (!row) continue;
+    const status = row.status || {};
+    const name = element.querySelector(nameSel);
+    if (!name || name.textContent !== row.label) labelMismatch.push(`${row.label} ≠ ${name && name.textContent}`);
+    if (!status.own && !status.part && !status.hint) {
+      okRows += 1;
+      for (const e of [element, ...element.querySelectorAll('*')]) {
+        if (!shown(e)) continue;
+        const style = getComputedStyle(e);
+        const samples = [['background', style.backgroundColor]];
+        if ([...e.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim())) samples.push(['color', style.color]);
+        if (e instanceof SVGElement) {
+          if (style.fill && style.fill !== 'none') samples.push(['fill', style.fill]);
+          if (style.stroke && style.stroke !== 'none') samples.push(['stroke', style.stroke]);
+        }
+        for (const side of ['Top', 'Right', 'Bottom', 'Left']) if (parseFloat(style[`border${side}Width`]) > 0) samples.push([`border-${side}`, style[`border${side}Color`]]);
+        for (const [prop, value] of samples) if (chroma(parse(value)) >= 0.12) coloured.push(`${row.label}: ${e.tagName.toLowerCase()}.${String(e.className && e.className.baseVal !== undefined ? e.className.baseVal : e.className).trim()} ${prop} ${value}`);
+      }
+    }
+    if (status.own || status.part) {
+      problemRows += 1;
+      const mark = [...element.querySelectorAll(shapeSel)].find(shown);
+      if (!mark) shapeless.push(row.label);
+      else if (name && mark.getBoundingClientRect().left < name.getBoundingClientRect().right - 0.5) leftOf.push(row.label);
+    }
+  }
+  const style = getComputedStyle(html);
+  const unset = tokens.filter((token) => !style.getPropertyValue(token).trim());
+  // the skin's OWN rule for this mode must declare every base token
+  const skin = html.dataset.skin;
+  const mode = html.dataset.mode;
+  const declared = new Set();
+  for (const sheet of document.styleSheets) {
+    let rules;
+    try { rules = sheet.cssRules; } catch (_) { continue; }
+    for (const rule of rules) {
+      if (rule.selectorText === `[data-skin="${skin}"][data-mode="${mode}"]`) for (let i = 0; i < rule.style.length; i += 1) declared.add(rule.style[i]);
+    }
+  }
+  const undeclared = base.filter((token) => !declared.has(token));
+  return {
+    skin, mode, rows: domRows.length, okRows, problemRows, coloured, shapeless, leftOf, labelMismatch, unset, undeclared,
+    partRows: S.built.flat.filter((row) => row.edge === 'part_of').length,
+    folded: S.built.flat.filter((row) => row.parts.length).map((row) => row.label),
+    labels: S.built.flat.filter((row) => row.model).map((row) => row.label),
+  };
+}
+
+async function runFoundation(browser, base, frame) {
+  const { all, base: baseTokens } = tokenList();
+  // the OS says dark: Auto must follow it until a mode is picked
+  const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: 1, colorScheme: 'dark' });
+  const page = await context.newPage();
+  if (MUTATE) {
+    await page.addInitScript((css) => document.addEventListener('DOMContentLoaded', () => {
+      const style = document.createElement('style');
+      style.textContent = css;
+      document.head.appendChild(style);
+    }), MUTATION_CSS);
+  }
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(String(error)));
+  page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
+  const ready = async () => {
+    await page.waitForFunction(() => typeof S !== "undefined" && S.built && S.built.flat.some((row) => row.parts.length) && document.querySelector('.t6-row') && document.querySelector('.d-title'), null, { timeout: 30000 });
+    await page.mouse.move(1590, 600);
+    await page.waitForTimeout(500);
+  };
+  try {
+    await page.goto(`${base}/`);
+    await ready();
+    const fresh = await page.evaluate(() => ({ mode: document.documentElement.dataset.mode, skin: document.documentElement.dataset.skin,
+      variant: document.getElementById('tree-variant').value, structure: document.getElementById('structure').value,
+      skins: [...document.querySelectorAll('#skin option')].map((o) => o.value), structures: [...document.querySelectorAll('#structure option')].map((o) => o.value) }));
+    check(frame, 'found', 'defaults', fresh.mode === 'dark' && fresh.skin === 'claude' && fresh.variant === 'v6' && fresh.structure === 'p0',
+      `fresh browser, OS dark: mode ${fresh.mode} (Auto), skin ${fresh.skin} of [${fresh.skins}], tree ${fresh.variant}, structure ${fresh.structure} of [${fresh.structures}]`);
+    // every READY skin (with p0) and every READY structure (with the default skin): a lane that flips its manifest
+    // line gets these gates without touching this file (docs/round2-seams.md)
+    const combos = [{ skin: 'claude', structure: 'p0' },
+      ...readyIds('view/structure/index.json', 'structures').filter((id) => id !== 'p0').map((structure) => ({ skin: 'claude', structure })),
+      ...readyIds('skins/index.json', 'skins').filter((id) => id !== 'claude').map((skin) => ({ skin, structure: 'p0' }))];
+    for (const combo of combos) {
+      const isDefault = combo.skin === 'claude' && combo.structure === 'p0';
+      if (!isDefault) {
+        await page.selectOption('#skin', combo.skin);
+        await page.selectOption('#structure', combo.structure);
+      }
+      for (const mode of ['light', 'dark']) {
+        await page.click(`#mode-switch [data-mode="${mode}"]`);
+        await page.reload();
+        await ready();
+        const tag = isDefault ? `found-${mode}` : `found-${combo.skin}-${combo.structure}-${mode}`;
+        const kept = await page.evaluate(() => ({ mode: document.documentElement.dataset.mode, stored: localStorage.getItem('io-diagnostics.mode'),
+          on: (document.querySelector('#mode-switch button.on') || {}).textContent, skin: document.documentElement.dataset.skin, structure: S.structure }));
+        check(frame, tag, 'mode', kept.mode === mode && kept.stored === mode && kept.on.toLowerCase() === mode && kept.skin === combo.skin && kept.structure === combo.structure,
+          `picked ${mode} (OS dark) → html data-mode ${kept.mode} after reload, stored ${kept.stored}, control shows ${kept.on} · skin ${kept.skin}, structure ${kept.structure}`);
+        for (const view of ['tree', 'table']) {
+          if (view === 'table') {
+            await page.click('[data-view="table"]');
+            await page.waitForSelector('table.grid tbody tr', { timeout: 5000 });
+            await page.mouse.move(1590, 600);
+            await page.waitForTimeout(400);
+          }
+          const m = await page.evaluate(foundationMeasure, { view, tokens: all, base: baseTokens });
+          const label = `${view.padEnd(5)}`;
+          check(frame, tag, `${label} quiet-ok`, m.okRows > 0 && m.coloured.length === 0,
+            `${m.okRows} OK rows of ${m.rows}: ${m.coloured.length ? `coloured paint: ${m.coloured.slice(0, 3).join(' | ')}` : 'no colour'}`);
+          check(frame, tag, `${label} shapes`, m.problemRows > 0 && m.shapeless.length === 0,
+            `${m.problemRows - m.shapeless.length}/${m.problemRows} problem rows carry a shape${m.shapeless.length ? ` · missing: ${m.shapeless.join(', ')}` : ''}`);
+          check(frame, tag, `${label} right`, m.problemRows > 0 && m.leftOf.length === 0, m.leftOf.length ? `LEFT of name: ${m.leftOf.join(', ')}` : 'every shape right of its name');
+          check(frame, tag, `${label} labels`, m.labelMismatch.length === 0 && m.partRows === 0 && m.folded.length > 0 && m.labels.some((l) => /^fdcanusb · /.test(l)),
+            `model · id rows: ${m.labels.slice(0, 4).join(' | ')} · parts folded into ${m.folded.length} rows, ${m.partRows} part rows${m.labelMismatch.length ? ` · mismatch ${m.labelMismatch.slice(0, 2).join(', ')}` : ''}`);
+          if (view === 'tree') {
+            check(frame, tag, 'tokens', m.unset.length === 0 && m.undeclared.length === 0,
+              `skin ${m.skin} ${m.mode}: ${all.length - m.unset.length}/${all.length} tokens resolve; skin rule declares ${baseTokens.length - m.undeclared.length}/${baseTokens.length} base tokens${m.unset.length ? ` · unset ${m.unset.join(', ')}` : ''}${m.undeclared.length ? ` · undeclared ${m.undeclared.join(', ')}` : ''}`);
+          }
+          if (!MUTATE) {
+            const prefix = isDefault ? 'foundation' : `foundation-${combo.skin}-${combo.structure}`;
+            await page.screenshot({ path: path.join(ROUND2, `${prefix}-${view}-${frame}-${mode}.png`) });
+            if (view === 'tree' && isDefault) {
+              const box = await page.locator('#controls').boundingBox();
+              if (box) await page.screenshot({ path: path.join(ROUND2, `foundation-controls-${frame}-${mode}.png`), clip: { x: Math.max(0, box.x - 20), y: box.y - 12, width: Math.min(VIEWPORT.width - Math.max(0, box.x - 20), box.width + 28), height: box.height + 24 } });
+            }
+          }
+          if (view === 'table') await page.click('[data-view="tree"]');
+        }
+      }
+    }
+    await page.click('#mode-switch [data-mode="auto"]');
+    await page.waitForTimeout(200);
+    const auto = await page.evaluate(() => ({ mode: document.documentElement.dataset.mode, stored: localStorage.getItem('io-diagnostics.mode') }));
+    check(frame, 'found', 'auto', auto.mode === 'dark' && auto.stored === 'auto', `Auto again → data-mode ${auto.mode} (OS dark), stored ${auto.stored}`);
+    check(frame, 'found', 'errors', errors.length === 0, errors.length ? errors.slice(0, 3).join(' | ') : 'none');
+  } catch (error) {
+    check(frame, 'found', 'crashed', false, String(error && error.stack ? error.stack.split('\n').slice(0, 3).join(' ') : error));
+  } finally {
+    await context.close();
+  }
+}
+
 // ---------------------------------------------------------------------------------------------- main ----
 async function main() {
   fs.mkdirSync(SHOTS, { recursive: true });
+  fs.mkdirSync(ROUND2, { recursive: true });
+  staticChecks();
   const { chromium } = require(PLAYWRIGHT);
   const browser = await chromium.launch({ executablePath: CHROME, headless: true });
   const servers = [];
@@ -379,7 +629,8 @@ async function main() {
       const server = await startServer(frame.fixture);
       servers.push(server);
       console.log(`--- ${frame.fixture} (${frame.label}) on ${server.base}${MUTATE ? ' · MUTATED (expect no-green + chevrons to FAIL)' : ''}`);
-      for (const variant of VARIANTS) await runVariant(browser, server.base, frame.label, variant);
+      if (!ONLY_FOUNDATION) for (const variant of VARIANTS) await runVariant(browser, server.base, frame.label, variant);
+      await runFoundation(browser, server.base, frame.label);
       stopServer(server.child);
     }
   } finally {
@@ -390,8 +641,9 @@ async function main() {
   if (MUTATE) {
     // the ruler works when every variant fails both mutated checks
     const caught = VARIANTS.filter((v) => ['no-green', 'chevrons'].every((name) => failed.some((r) => r.variant === v && r.check === name)));
-    console.log(`\nmutation caught in ${caught.length}/${VARIANTS.length} variants (${caught.join(', ')})`);
-    process.exitCode = caught.length === VARIANTS.length ? 0 : 1;
+    const quiet = ['tree ', 'table'].filter((view) => ['light', 'dark'].every((mode) => failed.some((r) => r.variant === `found-${mode}` && r.check === `${view} quiet-ok`)));
+    console.log(`\nmutation caught in ${caught.length}/${VARIANTS.length} variants (${caught.join(', ')}) · foundation quiet-ok caught for ${quiet.length}/2 views`);
+    process.exitCode = (ONLY_FOUNDATION || caught.length === VARIANTS.length) && quiet.length === 2 ? 0 : 1;
     return;
   }
   const report = { run: new Date().toISOString(), viewport: VIEWPORT, frames: FRAMES, variants: VARIANTS, passed: results.length - failed.length, failed: failed.length, results };
