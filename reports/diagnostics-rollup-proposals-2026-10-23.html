@@ -1,0 +1,931 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Diagnostics Rollup Proposals</title>
+<meta name="description" content="Five ways to reconcile black-box self-reports with user-specified top-level diagnostics, scored, with the Computer entity and a tracer bullet. 2026-10-23.">
+<style>
+:root {
+  --bg: #fbfaf8; --surface: #ffffff; --surface2: #f3f1ed; --text: #1d1b18; --muted: #6b665e; --faint: #9a948a;
+  --border: #e3dfd8; --accent: #3d5a80; --accent-soft: #e8eef6; --code-bg: #f5f3ef;
+  --ok: #8a857c; --warn: #b26a00; --warn-soft: #fbf0de; --error: #b3261e; --error-soft: #fbe6e4;
+  --unknown: #6b5b95; --unknown-soft: #efebf7; --stale: #7a7a7a;
+  --up: #2f7d5b; --down: #3d5a80;
+  --font: ui-sans-serif, -apple-system, "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161514; --surface: #1d1c1a; --surface2: #262422; --text: #ebe7e0; --muted: #a39d93; --faint: #7a756d;
+    --border: #34312d; --accent: #8fb0d8; --accent-soft: #23303f; --code-bg: #201f1d;
+    --ok: #8f8a81; --warn: #e0a046; --warn-soft: #3a2c16; --error: #f07a70; --error-soft: #3c1f1c;
+    --unknown: #b4a5dd; --unknown-soft: #2c2740; --stale: #9a9a9a; --up: #6cc59a; --down: #8fb0d8;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161514; --surface: #1d1c1a; --surface2: #262422; --text: #ebe7e0; --muted: #a39d93; --faint: #7a756d;
+  --border: #34312d; --accent: #8fb0d8; --accent-soft: #23303f; --code-bg: #201f1d;
+  --ok: #8f8a81; --warn: #e0a046; --warn-soft: #3a2c16; --error: #f07a70; --error-soft: #3c1f1c;
+  --unknown: #b4a5dd; --unknown-soft: #2c2740; --stale: #9a9a9a; --up: #6cc59a; --down: #8fb0d8;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); font: 15px/1.55 var(--font); }
+main { max-width: 980px; margin: 0 auto; padding: 32px 16px 80px; }
+h1 { font-size: 28px; line-height: 1.2; margin: 0 0 6px; letter-spacing: -0.01em; }
+h2 { font-size: 20px; margin: 44px 0 10px; padding-top: 12px; border-top: 1px solid var(--border); }
+h3 { font-size: 16px; margin: 22px 0 6px; }
+p { margin: 8px 0; }
+a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+.sub { color: var(--muted); font-size: 13px; margin: 0 0 20px; }
+code, pre, .mono { font-family: var(--mono); font-size: 12.5px; }
+code { background: var(--code-bg); padding: 1px 4px; border-radius: 4px; }
+pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; overflow-x: auto; line-height: 1.45; margin: 10px 0; }
+pre.term { background: #15140f; color: #e8e4da; border-color: #2c2a25; }
+pre.term .p { color: #8fb0d8; } pre.term .c { color: #8c877d; } pre.term .w { color: #e0a046; } pre.term .e { color: #f07a70; } pre.term .g { color: #6cc59a; }
+.ref { font-size: 11px; vertical-align: super; line-height: 0; text-decoration: none; margin-left: 1px; }
+.ref + .ref::before { content: ","; color: var(--faint); margin-right: 1px; }
+.verdict { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 10px; padding: 16px 18px; }
+.verdict .lead { font-size: 18px; font-weight: 650; margin: 0 0 8px; }
+.verdict ul { margin: 8px 0 0; padding-left: 20px; }
+.verdict li { margin: 6px 0; }
+ul.tight { padding-left: 20px; } ul.tight li { margin: 4px 0; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin: 12px 0; }
+.muted { color: var(--muted); } .faint { color: var(--faint); }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; margin: 10px 0; }
+th, td { text-align: left; vertical-align: top; padding: 7px 8px; border-bottom: 1px solid var(--border); }
+th { font-weight: 600; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tablewrap { overflow-x: auto; }
+.timeline { list-style: none; padding: 0; margin: 10px 0; }
+.timeline > li { display: grid; grid-template-columns: 92px 1fr; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--border); }
+.timeline ul.tight { margin: 4px 0 0; }
+.timeline .d { color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; padding-top: 2px; }
+.timeline .q { color: var(--muted); font-style: italic; }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 7px; vertical-align: 1px; border: 1.5px solid var(--ok); background: transparent; }
+.dot.warn { background: var(--warn); border-color: var(--warn); }
+.dot.error { background: var(--error); border-color: var(--error); }
+.dot.unknown { background: var(--unknown); border-color: var(--unknown); }
+.rows { font-size: 13.5px; }
+.row { display: grid; grid-template-columns: 150px 1fr; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); align-items: start; }
+.row .who { font-weight: 600; }
+.row .line { font-family: var(--mono); font-size: 12.5px; }
+.row .note { color: var(--muted); font-size: 12.5px; margin-top: 2px; font-family: var(--font); }
+.chip { display: inline-block; font-family: var(--mono); font-size: 11.5px; padding: 1px 7px; border-radius: 99px; border: 1px solid var(--border); color: var(--muted); margin-left: 6px; white-space: nowrap; }
+.chip.bad { border-color: var(--error); color: var(--error); }
+.chip.good { border-color: var(--up); color: var(--up); }
+figure { margin: 14px 0; }
+figure .svgwrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 8px; }
+figure svg { display: block; width: 100%; min-width: 640px; height: auto; }
+figcaption { color: var(--muted); font-size: 12.5px; margin-top: 6px; }
+svg .box { fill: var(--surface2); stroke: var(--border); stroke-width: 1.2; }
+svg .boxa { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.2; }
+svg .boxw { fill: var(--warn-soft); stroke: var(--warn); stroke-width: 1.2; }
+svg .boxe { fill: var(--error-soft); stroke: var(--error); stroke-width: 1.2; }
+svg .boxu { fill: var(--unknown-soft); stroke: var(--unknown); stroke-width: 1.2; }
+svg text { fill: var(--text); font-family: var(--font); font-size: 12.5px; }
+svg text.s { font-size: 11px; fill: var(--muted); }
+svg text.b { font-weight: 650; }
+svg text.mono { font-family: var(--mono); font-size: 11px; }
+svg .ln { stroke: var(--faint); stroke-width: 1.3; fill: none; }
+svg .lnd { stroke: var(--down); stroke-width: 1.6; fill: none; }
+svg .lnu { stroke: var(--up); stroke-width: 1.6; fill: none; stroke-dasharray: 5 3; }
+svg .lna { stroke: var(--accent); stroke-width: 1.5; fill: none; }
+svg .sok { fill: none; stroke: var(--ok); stroke-width: 1.5; }
+svg .swarn { fill: var(--warn); } svg .serr { fill: var(--error); } svg .sunk { fill: var(--unknown); }
+svg .tdown { fill: var(--down); } svg .tup { fill: var(--up); } svg .tacc { fill: var(--accent); }
+.tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0 0; border-bottom: 1px solid var(--border); }
+.tabs button { font: inherit; font-size: 13.5px; background: none; border: 1px solid transparent; border-bottom: none; color: var(--muted); padding: 8px 12px; border-radius: 8px 8px 0 0; cursor: pointer; }
+.tabs button[aria-selected="true"] { color: var(--text); background: var(--surface); border-color: var(--border); margin-bottom: -1px; font-weight: 600; }
+.tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tabs .score { font-variant-numeric: tabular-nums; color: var(--faint); margin-left: 6px; font-weight: 400; }
+.panel { background: var(--surface); border: 1px solid var(--border); border-top: none; border-radius: 0 0 10px 10px; padding: 6px 18px 18px; }
+.panel[hidden] { display: block; }
+.js .panel[hidden] { display: none; }
+.panel h3:first-child { margin-top: 14px; }
+.kv { display: grid; grid-template-columns: 170px 1fr; gap: 6px 14px; margin: 10px 0; }
+.kv > div:nth-child(odd) { color: var(--muted); font-size: 13px; padding-top: 1px; }
+.kv ul { margin: 0; }
+.kv > div { padding-bottom: 6px; }
+.bar { height: 8px; background: var(--surface2); border-radius: 99px; overflow: hidden; min-width: 60px; }
+.bar > span { display: block; height: 100%; background: var(--accent); border-radius: 99px; }
+.bar.best > span { background: var(--up); }
+.scoregrid td .bar { margin-top: 5px; }
+.pill { display: inline-block; font-size: 11px; padding: 1px 8px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); font-weight: 600; margin-left: 6px; vertical-align: 2px; }
+details { margin: 8px 0; }
+details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+ol.steps { padding-left: 22px; } ol.steps li { margin: 8px 0; }
+.qa { display: grid; grid-template-columns: 1fr; gap: 10px; }
+.qa .card { margin: 0; }
+.qa .card p { margin: 4px 0; }
+.src { font-size: 12.5px; color: var(--muted); padding-left: 26px; }
+.src li { margin: 3px 0; overflow-wrap: anywhere; }
+.src li:target { background: var(--accent-soft); }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12.5px; color: var(--muted); margin: 6px 0; }
+@media (max-width: 640px) {
+  h1 { font-size: 23px; }
+  .timeline > li { grid-template-columns: 1fr; gap: 2px; }
+  .row { grid-template-columns: 1fr; gap: 2px; }
+  .kv { grid-template-columns: 1fr; gap: 2px 0; }
+  .kv > div:nth-child(odd) { margin-top: 8px; }
+  .panel { padding: 4px 12px 14px; }
+}
+</style>
+</head>
+<body>
+<main>
+
+<h1>Diagnostics rollups: five proposals</h1>
+<p class="sub">How the black-box self-reports and the higher-level diagnostics you specify fit together, and where the Computer's own checks go · 2026-10-23 · robotdiagnostics / io-diagnostics · research and design only, no code changed</p>
+
+<div class="verdict">
+  <p class="lead">Build P3: the expected setup becomes the rig's acceptance spec. First land one contract fix, so a composite's problem is explained by the members it names.</p>
+  <ul>
+    <li><b>P3 scores 4.45 / 5.</b> The others: P5 4.00, P4 3.65, P2 3.40, P1 3.20. No single weight moved by ±10 or +20 points changes the winner. P3 grows the file being built now (<code>expected.toml</code>) from "what should be here" into "what must be true, and when it is checked":
+      <ul>
+        <li><b>startup:</b> read-only checks at boot, plug and replug;</li>
+        <li><b>continuous:</b> judged on the reports the drivers already send;</li>
+        <li><b>initiated:</b> a person's click runs a check that touches or moves hardware.</li>
+      </ul>
+      The same file runs at the bench and on site. That is your oldest diagnostics decision: one check is both the acceptance test and the deployment monitor.<a class="ref" href="#s1">1</a><a class="ref" href="#s2">2</a><a class="ref" href="#s8">8</a></li>
+    <li><b>The barrier: knock-on collapse runs <i>down</i> every edge today.</b>
+      <ul>
+        <li>That is right for <code>via</code>: a dead adapter explains its silent boards.</li>
+        <li>It is backwards for a composite, whose verdict is <i>caused by</i> its members. Measured below: the rig row counts one missing board twice, and a spider that reports ERROR hides its failed leg.</li>
+        <li>The fix is an additive <code>caused_by</code> on the composite's record. The chip names the member, and the composite's row keeps its own word.<a class="ref" href="#s29">29</a></li>
+      </ul></li>
+    <li><b>The Computer is the host entity, judged as a leaf beside the tree.</b> That is what the computer lane in flight already does (<code>tree.py</code> <code>HOST_SELF</code>).<a class="ref" href="#s19">19</a> Its thresholds are data, because the stock tools disagree on this PC today: <code>/</code> at 8.5 % free is OK for ROS <code>hd_monitor</code> and WARN for Netdata.<a class="ref" href="#s28">28</a><a class="ref" href="#s56">56</a></li>
+  </ul>
+</div>
+
+<h2>What you already decided</h2>
+<p>Sixteen months of notes say the same thing. A diagnostic is the interface's contract test: it accepts the part at the bench, then keeps running in deployment to prove the part still meets it. Two questions were never settled: <b>who judges a group</b>, and <b>how "not run yet" reads</b>. The five proposals answer exactly those. Quotes are from files you wrote; the AI-pasted sections are excluded.</p>
+<ul class="timeline">
+  <li><span class="d">2025-06-27</span><div><a href="obsidian://open?vault=zach_brain&amp;file=Sources%2FApple%20Notes%2FChanges%20(APPLE%20NOTE)">Changes (Apple Note)</a><a class="ref" href="#s1">1</a>: <b>unified testing and diagnostics.</b> <span class="q">"Test via diagnostics… no need for separate tests."</span>
+    <ul class="tight">
+      <li>Levels you can switch on and off "like pytest" marks.</li>
+      <li>Thresholds are data: a <code>thresholds</code> folder, chosen by the launch file.</li>
+      <li>"minimal and complete": <span class="q">"If they are all ok it means the robot is ok."</span></li>
+      <li>Your two questions: how do I know it works before I ship it, and how do I know it keeps working once it runs?</li>
+      <li>The scope rule: <span class="q">"If something once fixed will never go wrong, then no need to monitor it!"</span></li>
+    </ul></div></li>
+  <li><span class="d">2025-06-28</span><div><a href="obsidian://open?vault=zach_brain&amp;file=Sources%2FNotion%20Import%2FNotebook%20(Jul%202025)%2FJune%2028%20-%20UR%20pick%20up%20in%20Sim">June 28, UR pick up in Sim (Notion)</a><a class="ref" href="#s2">2</a>: a test listens to the diagnostics and asserts every metric is OK, "or ERROR if your expecting that". You then <span class="q">"continue to test during deployment and its unified."</span></div></li>
+  <li><span class="d">2025-06-29</span><div><a href="obsidian://open?vault=zach_brain&amp;file=Sources%2FNotion%20Import%2FNotebook%20(Jul%202025)%2FJune%2029%20-%20Top%20Level%20Design%20%20Python%20calls%20for%20To%20do%20list">June 29, Top Level Design (Notion)</a><a class="ref" href="#s3">3</a>: the <code>DiagnosticClient</code>.
+    <ul class="tight">
+      <li><code>assert diagnostics.OK</code>; <code>.level</code> is the highest level in a 10 s window; <code>.count(level=…)</code>.</li>
+      <li>Two kinds of assertion: no errors exist, or "a certain number of errors do exist".</li>
+    </ul></div></li>
+  <li><span class="d">2025-07-13</span><div><a href="obsidian://open?vault=zach_brain&amp;file=Sources%2FApple%20Notes%2FFirst%20deployments%20(APPLE%20NOTE)">First deployments</a><a class="ref" href="#s4">4</a>: new robots "always do a calibration sequence", register online and stream their diagnostics. Optical flow on the conveyor catches drift. That is a site acceptance test plus continuous monitoring.</div></li>
+  <li><span class="d">2025-07-22</span><div><a href="obsidian://open?vault=zach_brain&amp;file=Sources%2FApple%20Notes%2FHow%20long%20before%20I%20can%20actually%20get%20a%20robot%20moving%20(APPLE%20NOTE)">How long before I can actually get a robot moving</a><a class="ref" href="#s5">5</a>: <span class="q">"Ultimately they can all be diagnostic checks actually!!!"</span> Measure torque "before leaving factory" against the other units. That is a factory acceptance test, per unit.</div></li>
+  <li><span class="d">2025-07-23</span><div><a href="obsidian://open?vault=zach_brain&amp;file=Acceptance%20Tests">Acceptance Tests</a><a class="ref" href="#s6">6</a>, your own numbered items:
+    <ul class="tight">
+      <li>Item 10: tests become deployment monitors.</li>
+      <li>Item 14: <span class="q">"Test that diagonistics catch failures and success"</span>.</li>
+      <li>Item 18: calibration and homing "with diagonistics so it can be done continually".</li>
+      <li>Item 27: new robots must match the others after burn-in.</li>
+      <li>Every test loops over robots and over sim/real.</li>
+    </ul></div></li>
+  <li><span class="d">2025-07-23</span><div><a href="obsidian://open?vault=zach_brain&amp;file=bam_ros_common">bam_ros_common</a><a class="ref" href="#s7">7</a>: Apex.Grace's chain (fault monitors → fault manager → trouble codes) is <span class="q">"Basically exactly what I have been thinking"</span>. Debounce means "3 faults in a row".</div></li>
+  <li><span class="d">≤ 2026-08</span><div><code>bam_docs/diagnostics.md</code><a class="ref" href="#s8">8</a>: <span class="q">"high level contract, verification during testing and deployment of the API"</span>. About one diagnostic per interface, as a wrapper so the API looks unchanged.</div></li>
+  <li><span class="d">2025-12-04</span><div><a href="obsidian://open?vault=zach_brain&amp;file=Sources%2FApple%20Notes%2FNext%202%20(APPLE%20NOTE)">Next 2</a><a class="ref" href="#s9">9</a>: run "the exact same test then but hardware in the loop". Mock and real must match, with "a wider tolerance range" where friction and temperature differ. So one check gets per-context tolerances.</div></li>
+  <li><span class="d">2026</span><div><a href="obsidian://open?vault=zach_brain&amp;file=Q%20-%20What%20do%20good%20sub%20components%20look%20like%EF%BC%9F">Q: What do good sub components look like?</a><a class="ref" href="#s10">10</a>: black-box design.
+    <ul class="tight">
+      <li>The datasheet sits outside the box.</li>
+      <li>Write the spec and the acceptance tests first, then let AI fill the box.</li>
+      <li>Diagnostics is one of the primitives every robotics stack re-invents.</li>
+    </ul></div></li>
+  <li><span class="d">2026-10-14</span><div><a href="obsidian://open?vault=zach_brain&amp;file=Daily%20Note%20-%20Oct%2014%202026">Daily Note</a><a class="ref" href="#s11">11</a>: KPIs are computed, never entered. <span class="q">"The gates set the bounds of the design space, and the KPI's are the things to optimize for"</span>.</div></li>
+  <li><span class="d">2026-10-16</span><div><a href="obsidian://open?vault=zach_brain&amp;file=Daily%20Note%20-%20Oct%2016%202026">Daily Note</a><a class="ref" href="#s12">12</a>: tests are first class.
+    <ul class="tight">
+      <li>Hierarchy, so you can "roll up the results"; results are calculated, and re-run with one click.</li>
+      <li><span class="q">"The test is actually the real FR"</span>.</li>
+      <li>Vibe Tracks built this as computed pass / fail / <i>not run yet</i>.<a class="ref" href="#s25">25</a></li>
+    </ul></div></li>
+  <li><span class="d">2026-10-22</span><div><a href="obsidian://open?vault=zach_brain&amp;file=Daily%20Note%20-%20Oct%2022%202026">Daily Note</a><a class="ref" href="#s13">13</a> plus the chat recorded in record v0<a class="ref" href="#s16">16</a>:
+    <ul class="tight">
+      <li>The computer should monitor its own wires.</li>
+      <li><span class="q">"the roll up view I think important"</span>.</li>
+      <li>The black-box rule: each lower box self-reports in its own context, and a composite wraps its children (the spider).</li>
+    </ul></div></li>
+  <li><span class="d">2026-10-23</span><div><a href="obsidian://open?vault=zach_brain&amp;file=Daily%20Note%20-%20Oct%2023%202026">Daily Note</a><a class="ref" href="#s14">14</a>:
+    <ul class="tight">
+      <li><span class="q">"computer -&gt; entity -&gt; diaginstic"</span>.</li>
+      <li>On click you see what is "rolling up to impact the top level entity".</li>
+      <li>A rolling window with a health bar, and CPU and memory history as in the ROS2 System Webview.</li>
+      <li>Warning colour only on real diagnostics.</li>
+    </ul></div></li>
+  <li><span class="d">2026-10-03</span><div><a href="obsidian://open?vault=zach_brain&amp;file=MOC%20-%20Component%20Testing">MOC: Component Testing</a><a class="ref" href="#s15">15</a>: v1 is "can you connect to the actuator and do IO on a computer". The timeline there records the warning case: 29 acceptance tests written in 2025, none ever run as a gate.</div></li>
+</ul>
+<p class="muted">Earlier attempts in code:</p>
+<ul class="tight muted">
+  <li><b>like_keras <code>bam_diagnostics</code>:</b> a typed config with thresholds as data, and a <code>monitor_node</code> that rolls everything up to healthy or degraded.<a class="ref" href="#s21">21</a></li>
+  <li><b>v1 <code>mdp_machine</code>:</b> Agent / Component / Global levels, where Global is CPU, memory, GPU and deployment health.<a class="ref" href="#s22">22</a></li>
+  <li><b><code>bam_runtime</code>:</b> one contract test against kinematic, MuJoCo and real.<a class="ref" href="#s15">15</a></li>
+  <li><b>bam_rack_twin's <code>deployment.json</code>:</b> a second manifest of this same rack.<a class="ref" href="#s23">23</a></li>
+</ul>
+
+<h2>Three traps every proposal has to close</h2>
+<p>The tree has one parent edge per entity (<code>part_of or via</code>). <code>summarize()</code> collapses a problem into the nearest failed ancestor on that edge.<a class="ref" href="#s16">16</a> Three probes ran against the real contract code, with no host process and no hardware:</p>
+<figure>
+<div class="svgwrap">
+<svg viewBox="0 0 760 300" role="img" aria-labelledby="dirT dirD">
+  <title id="dirT">Explanation direction</title>
+  <desc id="dirD">Along via, a failed adapter explains the boards below it. From a composite to its members, a member's failure explains the composite.</desc>
+  <defs>
+    <marker id="mDown" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="tdown"/></marker>
+    <marker id="mUp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="tup"/></marker>
+  </defs>
+  <text x="20" y="24" class="b">via: connectivity, explains DOWN</text>
+  <text x="20" y="40" class="s">dead adapter = one cause; its silent boards are knock-ons</text>
+  <rect x="20" y="56" width="150" height="34" rx="7" class="box"/><text x="32" y="78">host · bam-GPU</text>
+  <rect x="40" y="110" width="170" height="34" rx="7" class="boxe"/><text x="52" y="132">fdcanusb 272813EF</text>
+  <rect x="60" y="164" width="150" height="34" rx="7" class="box"/><text x="72" y="186">CAN bus</text>
+  <rect x="80" y="218" width="64" height="30" rx="6" class="box"/><text x="92" y="238">CAN 1</text>
+  <rect x="150" y="218" width="64" height="30" rx="6" class="box"/><text x="158" y="238">CAN 14</text>
+  <rect x="220" y="218" width="64" height="30" rx="6" class="box"/><text x="228" y="238">CAN 15</text>
+  <path d="M95 90 V110" class="lnd" marker-end="url(#mDown)"/>
+  <path d="M120 144 V164" class="lnd" marker-end="url(#mDown)"/>
+  <path d="M112 198 V216" class="lnd" marker-end="url(#mDown)"/>
+  <path d="M182 198 V216" class="lnd" marker-end="url(#mDown)"/>
+  <path d="M252 198 V216" class="lnd" marker-end="url(#mDown)"/>
+  <text x="222" y="186" class="s">(Nagios UNREACHABLE)</text>
+  <text x="80" y="270" class="s">boards read "knock-on of fdcanusb 272813EF"</text>
+
+  <text x="420" y="24" class="b">composite → members: explains UP</text>
+  <text x="420" y="40" class="s">failed member = the cause; the composite's verdict follows</text>
+  <rect x="470" y="60" width="240" height="40" rx="8" class="boxw"/><text x="484" y="80" class="b">1-DOF test rack</text><text x="484" y="94" class="s">WARN · missing: CAN 15</text>
+  <rect x="420" y="190" width="72" height="32" rx="6" class="box"/><text x="432" y="211">CAN 1</text>
+  <rect x="500" y="190" width="72" height="32" rx="6" class="box"/><text x="510" y="211">CAN 14</text>
+  <rect x="580" y="190" width="72" height="32" rx="6" class="boxe"/><text x="590" y="211">CAN 15</text>
+  <rect x="660" y="190" width="80" height="32" rx="6" class="box"/><text x="670" y="211">D405 ·4411</text>
+  <path d="M616 190 C616 150, 600 130, 590 100" class="lnu" marker-end="url(#mUp)"/>
+  <text x="626" y="150" class="s">caused_by</text>
+  <path d="M456 190 L520 100 M536 190 L560 100 M700 190 L640 100" class="ln"/>
+  <text x="420" y="250" class="s">the chip counts and names CAN 15 once;</text>
+  <text x="420" y="266" class="s">the rack row still shows its own WARN (black-box rule kept)</text>
+</svg>
+</div>
+<figcaption>The contract has one edge kind and one direction of explanation. Composites need the other direction.</figcaption>
+</figure>
+
+<h3>Trap 1: the Computer's checks written on <code>host</code> swallow the rack</h3>
+<pre class="term"><span class="p">$</span> python3 -B knockon_probe.py
+--- Computer checks ON host
+  chip counts (independent causes): {'error': 1}
+  knock_on: [('host/usb1/1-3/can/15', 'host')]
+  CAN 15 row: level=error · counted as its own cause: <span class="e">False</span>
+--- Computer checks on sibling host/computer
+  chip counts (independent causes): {'error': 2}
+  knock_on: []
+  CAN 15 row: level=error · counted as its own cause: <span class="g">True</span></pre>
+<p>A full disk becomes "the cause", and CAN 15's fault 33 becomes its symptom. The computer lane in flight already guards against this: it evaluates the host's own records as a leaf <code>host/:self</code> beside its children. The comment there says "a hot CPU or a crashed computer plugin explains nothing about a dead CAN bus".<a class="ref" href="#s19">19</a></p>
+
+<h3>Trap 2: a rig row beside the tree counts one missing board twice</h3>
+<pre class="term"><span class="p">$</span> python3 -B rig_doublecount_probe.py
+independent causes counted by the chip: <span class="w">{'warn': 1, 'error': 1}</span>
+knock_on: []</pre>
+<p>Two records describe one fact:</p>
+<ul class="tight">
+  <li>the rig row's <code>ExpectedMissing</code>, an entity <code>via host</code> that is not an ancestor of the board (<code>expected.py _rig_row</code>);<a class="ref" href="#s17">17</a></li>
+  <li>the board's own <code>BoardNotAnswering</code>, at ERROR in the moteus driver.<a class="ref" href="#s23">23</a></li>
+</ul>
+<p>The chip reads "IO 2 ⚠".</p>
+
+<h3>Trap 3: a composite that reports ERROR hides its failed member</h3>
+<pre class="term"><span class="p">$</span> python3 -B spider_probe.py
+spider self-reports WARN  -&gt; chip names: cell/spider/leg3 · counts <span class="w">{'warn': 1, 'error': 1}</span> · knock_on []
+spider self-reports ERROR -&gt; chip names: <span class="e">cell/spider</span> · counts {'error': 1} · knock_on [('cell/spider/leg3', 'cell/spider')]</pre>
+<p>When the spider reports WARN, its record and the leg's are counted as two causes. When it reports ERROR, leg 3 (fault 33), which the spider's own message names, is filed as the spider's symptom.</p>
+
+<div class="card">
+  <p><b>The shared fix (record v0.2, additive), which every proposal below assumes:</b></p>
+  <ul class="tight">
+    <li><b>The field:</b> <code>DiagnosticStatus.caused_by: tuple[str, ...]</code>, a list of entity paths. It is stripped by <code>to_diagnostic_status()</code>, so stock → v0 → stock stays the identity.</li>
+    <li><b>The rule:</b>
+      <ul>
+        <li>A record whose every <code>caused_by</code> member is itself a non-OK independent cause counts as those members' consequence.</li>
+        <li>A record that names nothing, or names an OK member, is its own cause.</li>
+        <li>The composite's row keeps its level and message. Only the chip's count and the attention list change.</li>
+      </ul></li>
+    <li><b>Precedent:</b>
+      <ul>
+        <li>AUTOSAR DEM files a failure as a CONSECUTIVE FAULT when a parent component is already FAILED, and does not store it (SWS_Dem_01127, 01130). It also allows a DAG of dependencies, not a tree (01120, CONSTR_06106).<a class="ref" href="#s29">29</a></li>
+        <li>Boeing's central maintenance computer screens out cascaded faults.<a class="ref" href="#s36">36</a></li>
+        <li>Icinga's <code>--blame --root-cause</code>.<a class="ref" href="#s32">32</a></li>
+        <li>Alertmanager's <code>inhibit_rules</code>.<a class="ref" href="#s33">33</a></li>
+      </ul></li>
+    <li><b>Why not a second tree edge:</b> membership lives on the composite's records. The rig composes things scattered across the connectivity tree (2 adapters, 7 boards, 2 cameras, the PC). ros2_medkit's <i>areas</i> and <i>functions</i> are the same kind of cross-cutting group.<a class="ref" href="#s51">51</a><a class="ref" href="#s62">62</a></li>
+  </ul>
+</div>
+
+<h2>Criteria</h2>
+<p>Weights come from your notes above. Your 2025 scope rule decides which checks get a second life. A check on code that, once fixed, stays fixed is acceptance only. A check on anything that touches the world (wear, wiring, config, firmware, temperature, drift) stays on as a monitor.<a class="ref" href="#s1">1</a></p>
+<div class="tablewrap">
+<table>
+  <thead><tr><th>#</th><th>Criterion</th><th class="num">Weight</th><th>Source</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td><b>Black boxes keep their own word.</b> A composite's verdict is the composite's, and the host never overrides a leaf.</td><td class="num">20</td><td class="muted">Oct 22 rule; Blackbox Design</td></tr>
+    <tr><td>2</td><td><b>One check, two lives.</b> The same check is the bench acceptance test and the deployment monitor (twin, bench, site), with per-context tolerances.</td><td class="num">20</td><td class="muted">Changes; June 28; bam_docs; Next 2; Oct 16</td></tr>
+    <tr><td>3</td><td><b>Honest status.</b> "Not run yet" and "can't tell" never read green, and one fact is one cause.</td><td class="num">15</td><td class="muted">record v0 lessons 3 and 5; Vibe Tracks</td></tr>
+    <tr><td>4</td><td><b>Declared, minimal, stable.</b> Data, not scattered code, that survives swapping a board, planner or arm.</td><td class="num">15</td><td class="muted">DP Diagnostics commitments 1 and 3</td></tr>
+    <tr><td>5</td><td><b>Off the shelf.</b> Stock schemas and tools; the stock ROS view keeps working.</td><td class="num">10</td><td class="muted">availability before originality</td></tr>
+    <tr><td>6</td><td><b>Calm first screen.</b> One answer up top, then computer → entity → diagnostic.</td><td class="num">10</td><td class="muted">Oct 23</td></tr>
+    <tr><td>7</td><td><b>A tracer bullet this week,</b> on top of the expected setup in flight.</td><td class="num">10</td><td class="muted">speed; the 29 unrun tests</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>One scenario, six answers</h2>
+<p>The scenario comes from today's file<a class="ref" href="#s17">17</a>: CAN 15's moteus-c1 is out for replacement, the last comms sweep ran 26 h ago, and <code>/</code> has 8.5 % free. Below is the top of the page under each option.</p>
+<div class="rows card">
+  <div class="row"><div class="who">Today</div><div><div class="line"><span class="dot warn"></span>1-DOF test rack · 2/2 adapters · 6/7 boards · 2/2 cameras<span class="chip bad">chip: IO 2 ⚠</span></div><div class="note">The rig's WARN and CAN 15's ERROR are counted as two causes for one fact (trap 2). Nothing says whether the rack was ever accepted.</div></div></div>
+  <div class="row"><div class="who">P1 wrappers</div><div><div class="line"><span class="dot warn"></span>1-DOF test rack: actuators · 6/7 boards: CAN 15 out; single-joint tests on the other six still run<span class="chip good">IO 1 ⚠ · CAN 15</span></div><div class="note">A good sentence, but its rule lives in someone's Python.</div></div></div>
+  <div class="row"><div class="who">P2 groups</div><div><div class="line"><span class="dot error"></span>1-DOF test rack › Boards · Expected 7, found 6<span class="chip good">IO 1 ⚠ · CAN 15</span></div><div class="note">ROS's own wording and level: a count mismatch raises the group to at least ERROR.<a class="ref" href="#s27">27</a> It says nothing about firmware, config or readiness.</div></div></div>
+  <div class="row"><div class="who">P3 manifest <span class="pill">pick</span></div><div><div class="line"><span class="dot warn"></span>1-DOF test rack · 6/7 boards · accepted 2/4 · comms sweep not run (26 h ago)<span class="chip good">IO 1 ⚠ · CAN 15</span></div><div class="note">Missing, accepted and not-run, read in one line. Clicking it opens the check table (level · name · message), as in your Oct 23 drill-down.</div></div></div>
+  <div class="row"><div class="who">P4 tests</div><div><div class="line"><span class="dot error"></span>test_every_expected_board_answers · failed 09:12 on a3da60 (CAN 15)<span class="chip">as of last run</span></div><div class="note">True at 09:12. Between runs it says nothing.</div></div></div>
+  <div class="row"><div class="who">P5 capabilities</div><div><div class="line"><span class="dot"></span>3/4 ready · <span class="dot error"></span>Track on CAN 15: not available (CAN 15 not answering)<span class="chip good">IO 1 ⚠ · CAN 15</span></div><div class="note">The calmest top line. It answers "what can I do now?" rather than "how is the rack?".</div></div></div>
+</div>
+
+<h2>The five proposals</h2>
+<div class="tabs" role="tablist" aria-label="Proposals">
+  <button role="tab" id="t1" aria-controls="p1" aria-selected="false">P1 Wrappers<span class="score">3.20</span></button>
+  <button role="tab" id="t2" aria-controls="p2" aria-selected="false">P2 Groups<span class="score">3.40</span></button>
+  <button role="tab" id="t3" aria-controls="p3" aria-selected="true">P3 Manifest spec<span class="score">4.45</span></button>
+  <button role="tab" id="t4" aria-controls="p4" aria-selected="false">P4 Tests<span class="score">3.65</span></button>
+  <button role="tab" id="t5" aria-controls="p5" aria-selected="false">P5 Capabilities<span class="score">4.00</span></button>
+</div>
+
+<!-- ======================== P1 ======================== -->
+<section class="panel" role="tabpanel" id="p1" aria-labelledby="t1">
+<h3>P1 · Wrapper plugins: every composite is a driver</h3>
+<p>A rig (or arm, or spider) is a plugin like <code>moteus_servo</code>, with the same <code>describe | diagnose | act</code> CLI. It reads its members' latest records and writes its own. The verdict is code, owned by whoever owns the composite. This is closure under composition taken literally: a composite is a black box like any leaf.</p>
+<figure><div class="svgwrap">
+<svg viewBox="0 0 760 300" role="img" aria-label="P1: a rig plugin reads its members' records and writes its own status">
+  <defs><marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="tup"/></marker>
+  <marker id="a1b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="tacc"/></marker></defs>
+  <rect x="230" y="18" width="300" height="54" rx="9" class="boxa"/>
+  <text x="246" y="40" class="b">rig plugin · one_dof_test_rack/diagnostics.py</text>
+  <text x="246" y="58" class="s mono">describe | diagnose --records - | act</text>
+  <rect x="560" y="22" width="185" height="46" rx="8" class="boxw"/>
+  <text x="572" y="42" class="b">rig row: WARN BoardOut</text><text x="572" y="58" class="s">caused_by: …/can/15</text>
+  <path d="M530 45 H556" class="lna" marker-end="url(#a1b)"/>
+  <text x="30" y="128" class="s">reads members' latest records (stdin)</text>
+  <path d="M65 214 C65 150, 260 120, 300 74" class="lnu" marker-end="url(#a1)"/>
+  <path d="M215 214 C215 160, 330 130, 350 74" class="lnu" marker-end="url(#a1)"/>
+  <path d="M405 214 C405 160, 400 120, 395 74" class="lnu" marker-end="url(#a1)"/>
+  <path d="M567 214 C567 160, 470 120, 440 74" class="lnu" marker-end="url(#a1)"/>
+  <path d="M692 214 C692 150, 520 120, 480 74" class="lnu" marker-end="url(#a1)"/>
+  <rect x="10" y="214" width="110" height="56" rx="8" class="box"/><text x="22" y="236" class="b">Computer</text><text x="22" y="252" class="s">host leaf</text>
+  <rect x="130" y="214" width="170" height="56" rx="8" class="box"/><text x="142" y="236" class="b">fdcanusb 272813EF</text><text x="142" y="252" class="s">CAN 1 · 14 · <tspan class="serr">●</tspan> 15</text>
+  <rect x="310" y="214" width="190" height="56" rx="8" class="box"/><text x="322" y="236" class="b">fdcanusb 0607623A</text><text x="322" y="252" class="s">CAN 11 · 12 · 13 · 21</text>
+  <rect x="510" y="214" width="115" height="56" rx="8" class="box"/><text x="522" y="236" class="b">D405 ·4411</text><text x="522" y="252" class="s">intel_rgbd</text>
+  <rect x="635" y="214" width="115" height="56" rx="8" class="box"/><text x="647" y="236" class="b">D405 ·6036</text><text x="647" y="252" class="s">intel_rgbd</text>
+  <text x="10" y="292" class="s">leaves unchanged: every driver keeps self-reporting</text>
+</svg></div><figcaption>The rule lives in the composite's own code. The host only adds the records input.</figcaption></figure>
+<pre>{"record": "status", "path": "host/rig-1-dof-test-rack", "name": "1-DOF test rack: actuators",
+ "level": "warn", "code": "BoardOut", "caused_by": ["host/usb1/1-5/can/15"],
+ "message": "6/7 boards: CAN 15 out; single-joint tests on the other six still run"}
+# rule in code: one board out -&gt; WARN · CAN 1 out (hard stop + gravity load) or any adapter out -&gt; ERROR</pre>
+<div class="kv">
+  <div>Record v0.1 / black box</div><div>The purest fit. The schema gains only <code>caused_by</code>. The plugin protocol gains a records input; today a plugin gets <code>--device</code> only.</div>
+  <div>Computer</div><div>The computer plugin is one more leaf. A wrapper may read it, for example "recording unavailable: disk".</div>
+  <div>Dev vs deployment</div><div>At the bench, pytest calls the wrapper's <code>diagnose()</code> on the F1–F3 fixtures. On site, the host runs it every period. There is no readiness unless every wrapper writes its own.</div>
+  <div>Stock parts</div><div>ROS <code>diagnostic_updater</code> composite tasks<a class="ref" href="#s26">26</a>, Apex.Grace fault monitors<a class="ref" href="#s7">7</a>, ROS <code>self_test</code> for the on-demand part<a class="ref" href="#s60">60</a>, and the existing plugin protocol.</div>
+  <div>Failure modes</div><div><ul class="tight">
+    <li>Every composite re-implements counting, staleness and "not run". <code>bam_diagnostics</code> fell into exactly this: a check that never ran was reported as OK, "SKIPPING".<a class="ref" href="#s16">16</a></li>
+    <li><b>Arrival skew.</b> Members report at different times, so the wrapper flaps. Your Oct 23 health-bar note makes the same point.<a class="ref" href="#s14">14</a></li>
+    <li>A crashed wrapper reads STALE while every leaf is fine.</li>
+    <li>The reasoning is invisible on the page.</li>
+    <li>You need one wrapper per rig.</li>
+  </ul></div>
+</div>
+</section>
+
+<!-- ======================== P2 ======================== -->
+<section class="panel" role="tabpanel" id="p2" aria-labelledby="t2" hidden>
+<h3>P2 · Rollup groups as data: the ROS aggregator's analyzers</h3>
+<p>One file declares groups and how their members combine. It uses the ROS <code>diagnostic_aggregator</code> analyzer schema plus Icinga Business Process operators. The host computes each group's own record. The groups only combine levels: there are no thresholds.</p>
+<figure><div class="svgwrap">
+<svg viewBox="0 0 760 300" role="img" aria-label="P2: groups re-project the leaves into a declared tree">
+  <rect x="14" y="14" width="170" height="40" rx="8" class="box"/><text x="28" y="32" class="b">Computer</text><text x="28" y="47" class="s mono">GenericAnalyzer</text>
+  <rect x="300" y="14" width="250" height="40" rx="8" class="boxe"/><text x="314" y="32" class="b">1-DOF test rack</text><text x="314" y="47" class="s mono">AnalyzerGroup · worst (AND)</text>
+  <rect x="200" y="96" width="140" height="40" rx="8" class="box"/><text x="212" y="114" class="b">Adapters</text><text x="212" y="129" class="s mono">expected: 2 ids</text>
+  <rect x="360" y="96" width="170" height="40" rx="8" class="boxe"/><text x="372" y="114" class="b">Boards</text><text x="372" y="129" class="s mono">Expected 7, found 6</text>
+  <rect x="550" y="96" width="140" height="40" rx="8" class="box"/><text x="562" y="114" class="b">Cameras</text><text x="562" y="129" class="s mono">expected: 2 ids</text>
+  <path d="M380 54 L270 96 M425 54 L445 96 M470 54 L620 96" class="ln"/>
+  <path d="M250 136 L215 214 M290 136 L405 214" class="ln" stroke-dasharray="3 3"/>
+  <path d="M420 136 L240 214 M460 136 L420 214" class="ln" stroke-dasharray="3 3"/>
+  <path d="M600 136 L567 214 M640 136 L692 214" class="ln" stroke-dasharray="3 3"/>
+  <path d="M90 54 L65 214" class="ln" stroke-dasharray="3 3"/>
+  <rect x="10" y="214" width="110" height="56" rx="8" class="box"/><text x="22" y="236" class="b">Computer</text><text x="22" y="252" class="s">cpu · mem · disk…</text>
+  <rect x="130" y="214" width="170" height="56" rx="8" class="box"/><text x="142" y="236" class="b">fdcanusb 272813EF</text><text x="142" y="252" class="s">CAN 1 · 14 · <tspan class="serr">●</tspan> 15</text>
+  <rect x="310" y="214" width="190" height="56" rx="8" class="box"/><text x="322" y="236" class="b">fdcanusb 0607623A</text><text x="322" y="252" class="s">CAN 11 · 12 · 13 · 21</text>
+  <rect x="510" y="214" width="115" height="56" rx="8" class="box"/><text x="522" y="236" class="b">D405 ·4411</text>
+  <rect x="635" y="214" width="115" height="56" rx="8" class="box"/><text x="647" y="236" class="b">D405 ·6036</text>
+  <text x="10" y="292" class="s">a second, declared tree over the same leaves, matched by selectors (expected / regex / num_items)</text>
+</svg></div><figcaption>Groups are wrappers written as data. They combine levels, nothing more.</figcaption></figure>
+<pre># ~/.config/io-diagnostics/rollups.yaml  (aggregator schema, keyed on paths and ids, never names)
+analyzers:
+  rack:
+    type: diagnostic_aggregator/AnalyzerGroup
+    path: 1-DOF test rack
+    analyzers:
+      adapters: {type: diagnostic_aggregator/GenericAnalyzer, path: Adapters,
+                 expected: ["usb:0483:5740:272813EF", "usb:0483:5740:0607623A"]}
+      boards:   {type: diagnostic_aggregator/GenericAnalyzer, path: Boards,
+                 regex: "can/(1|11|12|13|14|15|21)$", num_items: 7}
+      cameras:  {type: diagnostic_aggregator/GenericAnalyzer, path: Cameras,
+                 expected: ["usb:8086:0b5b:219323070276", "usb:8086:0b5b:130523071221"]}
+  computer:
+    type: diagnostic_aggregator/GenericAnalyzer
+    path: Computer
+    expected: [cpu, memory, "disk /", temperature, clock]</pre>
+<div class="kv">
+  <div>Record v0.1 / black box</div><div>Groups become entities with one status each, and <code>caused_by</code> names the members that set it. Leaves are untouched. It sits close to the central configured graph that v0 left out on purpose; it stays short of it only by never remapping a leaf.<a class="ref" href="#s16">16</a></div>
+  <div>Computer</div><div>One group with its expected checks. If the computer plugin dies, its checks read "Missing", ROS's placeholder.<a class="ref" href="#s27">27</a></div>
+  <div>Dev vs deployment</div><div><code>io-diagnostics check --group …</code> exits 0/1/2/3, the Monitoring Plugins API that round 3 adopts.<a class="ref" href="#s18">18</a> It is a snapshot ("OK now"), never "accepted".</div>
+  <div>Stock parts</div><div><ul class="tight">
+    <li>ROS <code>GenericAnalyzer</code> / <code>AnalyzerGroup</code>.<a class="ref" href="#s26">26</a><a class="ref" href="#s27">27</a></li>
+    <li>Icinga BP operators: AND (worst), OR (best), MIN n (the worst of the best n), DEGRADED (AND, with CRITICAL capped at WARNING).<a class="ref" href="#s31">31</a></li>
+    <li>Datadog composite monitors, where No Data is its own state.<a class="ref" href="#s34">34</a></li>
+  </ul></div>
+  <div>Failure modes</div><div><ul class="tight">
+    <li>ROS matches on names, which v0 says machines must never key on.</li>
+    <li>ROS's own stale rule is inconsistent: <code>GenericAnalyzerBase</code> still turns a partly-stale group into ERROR.<a class="ref" href="#s27">27</a></li>
+    <li>Structure only: it cannot say "ratio 0.1" or "reply loss &lt; 1 %".</li>
+    <li><code>MIN 6 of 7</code> turns a dead board green (hidden stratification).</li>
+    <li>A rollup with no written rule is why OpenBMC removed Redfish's <code>HealthRollup</code> in 2024.<a class="ref" href="#s61">61</a></li>
+  </ul></div>
+</div>
+</section>
+
+<!-- ======================== P3 ======================== -->
+<section class="panel" role="tabpanel" id="p3" aria-labelledby="t3">
+<h3>P3 · The expected setup becomes the acceptance spec: one file, three run modes <span class="pill">recommended</span></h3>
+<p>Keep everything <code>expected.toml</code> has. Add <code>[[rig.check]]</code> entries that each name the status they read, a pass condition and <i>when</i> they run. The three modes are aerospace's built-in-test modes<a class="ref" href="#s35">35</a>:</p>
+<ul class="tight">
+  <li><b>startup</b> (power-on BIT): boot, plug and replug, read-only;</li>
+  <li><b>continuous</b> (CBIT): judged on every fresh driver report;</li>
+  <li><b>initiated</b> (IBIT): a person's click runs the action. The result is kept and expires.</li>
+</ul>
+<p>Readiness is a separate state from pass/fail, as in OBD-II: <i>ran</i>, <i>not run since boot</i>, or <i>not run since a change</i>.<a class="ref" href="#s37">37</a><a class="ref" href="#s38">38</a></p>
+<figure><div class="svgwrap">
+<svg viewBox="0 0 760 320" role="img" aria-label="P3: one manifest feeds startup, continuous and initiated checks on the rig row">
+  <defs><marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="tacc"/></marker>
+  <marker id="a3u" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="tup"/></marker></defs>
+  <path d="M14 18 h96 l18 18 v100 h-114 z" class="boxa"/><path d="M110 18 v18 h18" class="ln"/>
+  <text x="24" y="54" class="b">expected.toml</text>
+  <text x="24" y="72" class="s">[[rig.device]]</text><text x="24" y="88" class="s">[[rig.check]]</text>
+  <text x="24" y="104" class="s">[computer]</text><text x="24" y="120" class="s">[profile.*]</text>
+  <rect x="160" y="18" width="190" height="34" rx="7" class="box"/><text x="172" y="40"><tspan class="b">startup</tspan> · boot, plug, replug</text>
+  <rect x="160" y="62" width="190" height="34" rx="7" class="box"/><text x="172" y="84"><tspan class="b">continuous</tspan> · every report</text>
+  <rect x="160" y="106" width="190" height="34" rx="7" class="box"/><text x="172" y="128"><tspan class="b">initiated</tspan> · a person's click</text>
+  <path d="M128 40 H156 M128 79 H156 M128 123 H156" class="lna" marker-end="url(#a3)"/>
+  <rect x="380" y="14" width="370" height="136" rx="9" class="boxw"/>
+  <text x="394" y="36" class="b">1-DOF test rack · 6/7 boards · accepted 2/4</text>
+  <circle cx="400" cy="56" r="4.5" class="sok"/><text x="412" y="60" class="mono">firmware current     startup     ran 08:51 · ok</text>
+  <circle cx="400" cy="78" r="4.5" class="sok"/><text x="412" y="82" class="mono">reply loss &lt; 1 %     continuous  0.0 % · ok</text>
+  <circle cx="400" cy="100" r="4.5" class="sunk"/><text x="412" y="104" class="mono">comms sweep          initiated   not run (26 h)</text>
+  <circle cx="400" cy="122" r="4.5" class="sunk"/><text x="412" y="126" class="mono">CAN 12 tracking      initiated   not run since fw</text>
+  <text x="394" y="143" class="s">each check: a status on the rig · caused_by = members it read</text>
+  <path d="M350 35 H376 M350 79 H376 M350 123 H376" class="lna" marker-end="url(#a3)"/>
+  <path d="M215 234 C230 190, 330 175, 420 152" class="lnu" marker-end="url(#a3u)"/>
+  <path d="M405 234 C410 200, 430 180, 450 152" class="lnu" marker-end="url(#a3u)"/>
+  <path d="M65 234 C60 200, 300 175, 400 152" class="lnu" marker-end="url(#a3u)"/>
+  <text x="470" y="200" class="s">reads members' own statuses (never written onto them)</text>
+  <rect x="10" y="234" width="110" height="56" rx="8" class="box"/><text x="22" y="256" class="b">Computer</text><text x="22" y="272" class="s">[computer] limits</text>
+  <rect x="130" y="234" width="170" height="56" rx="8" class="box"/><text x="142" y="256" class="b">fdcanusb 272813EF</text><text x="142" y="272" class="s">CAN 1 · 14 · <tspan class="serr">●</tspan> 15</text>
+  <rect x="310" y="234" width="190" height="56" rx="8" class="box"/><text x="322" y="256" class="b">fdcanusb 0607623A</text><text x="322" y="272" class="s">CAN 11 · 12 · 13 · 21</text>
+  <rect x="510" y="234" width="115" height="56" rx="8" class="box"/><text x="522" y="256" class="b">D405 ·4411</text><text x="522" y="272" class="s">usb 5000 Mb/s</text>
+  <rect x="635" y="234" width="115" height="56" rx="8" class="box"/><text x="647" y="256" class="b">D405 ·6036</text><text x="647" y="272" class="s">usb 5000 Mb/s</text>
+  <text x="10" y="312" class="s">bench, site and twin run the same file; only the [profile.*] tolerances differ (Next 2, 2025-12-04)</text>
+</svg></div><figcaption>The manifest is the rig's wrapper, written as data. Expectations belong to the consumer (the rig), so they sit on the rig's row.</figcaption></figure>
+<pre>[[rig]]
+name = "1-DOF test rack"
+# ... the [[rig.device]] entries exactly as today ...
+
+[[rig.check]]
+name = "firmware current"
+when = "startup"                 # every boot, plug and replug; reads only
+reads = "can/*: firmware"         # each expected board's own firmware status
+pass = "ok"                       # i.e. no UpdateAvailable
+
+[[rig.check]]
+name = "reply loss"
+when = "continuous"              # judged on the reports the drivers already send
+reads = "can/*: servo"
+pass = "reply_loss &lt; 1 %"
+
+[[rig.check]]
+name = "comms sweep"
+when = "initiated"               # a person's click: check_comms on both adapters (query)
+action = "check_comms"
+valid_for = "24 h"
+invalidated_by = ["Restarted", "Plugged", "firmware"]
+
+[[rig.check]]
+name = "CAN 12 pendulum tracking"
+when = "initiated"
+action = "tape"                  # bam_rack_twin hardware tape: MOVES, never scheduled
+pass = "tracking_rms &lt; 0.5 deg"
+valid_for = "7 d"
+
+[computer]                       # thresholds as data; defaults = ROS diagnostic_common_diagnostics
+cpu_warn = "90 %"
+memory_warn = "90 %"
+disk_free_warn = "5 %"
+disk_free_error = "1 %"
+usb3_links = 2                   # both D405s at 5000 Mb/s
+
+[profile.twin]                   # the same checks on the MuJoCo twin, wider where physics differs
+tracking_rms = "&lt; 1.0 deg"</pre>
+<div class="kv">
+  <div>Record v0.1 / black box</div><div><ul class="tight">
+    <li>Each check is a status on the rig entity, with <code>source: io_diagnostics.expected</code> and <code>caused_by</code> naming the members it read.</li>
+    <li><b>Not run</b> is <code>unknown</code> with code <code>CheckNotRun</code>, the twin of today's <code>ExpectedNotChecked</code>.</li>
+    <li><b>An initiated result never goes stale, but it expires:</b>
+      <ul>
+        <li>after <code>valid_for</code>, IEC 61508's proof-test interval<a class="ref" href="#s39">39</a>;</li>
+        <li>on an <code>invalidated_by</code> event. In OBD, clearing codes resets readiness<a class="ref" href="#s37">37</a>; in DEM, re-enabling an event sets "test not completed" (0x50)<a class="ref" href="#s29">29</a>.</li>
+      </ul></li>
+    <li><b>Expectations are the consumer's</b>, as in consumer-driven contracts<a class="ref" href="#s42">42</a><a class="ref" href="#s43">43</a>. So they live on the rig's row, and a board's row stays its own self-report. Today's <code>RatioMismatch</code> on the board moves to the rig (decision 2 below).</li>
+    <li>Later, a node's pass condition can default from its part's robotparts <code>diagnostics</code> slot (<code>ok_range</code>).<a class="ref" href="#s24">24</a></li>
+  </ul></div>
+  <div>Computer</div><div><ul class="tight">
+    <li><code>[computer]</code> sets the host leaf's thresholds, and rig checks can read it (<code>usb3_links</code>).</li>
+    <li>On this PC, <code>k10temp</code> Tctl has no chip limits, and Zen 4 is designed to sit at its 95 °C limit under load. So CPU temperature warns on sustained throttling, not on a fixed number.<a class="ref" href="#s55">55</a><a class="ref" href="#s58">58</a></li>
+    <li>The NVMe drive reports max 82 / crit 85 °C, used as given.</li>
+  </ul></div>
+  <div>Dev vs deployment</div><div><code>io-diagnostics accept --rig "1-DOF test rack" --profile bench|site|twin</code>:
+    <ul class="tight">
+      <li>runs the startup and continuous checks now;</li>
+      <li>lists the initiated checks, with their dry-run tokens, for a person to run;</li>
+      <li>prints JUnit and exits with a Nagios code.</li>
+    </ul>
+    That is Goss's split: <code>validate</code> at dev, <code>serve</code> → <code>/healthz</code> at deploy, one file.<a class="ref" href="#s44">44</a> It is also the factory/site acceptance pair (IEC 62381: FAT, FIT, SAT, SIT).<a class="ref" href="#s40">40</a></div>
+  <div>Stock parts</div><div><ul class="tight">
+    <li>Goss; InSpec controls (<code>impact</code>, <code>only_if</code> → N/A).<a class="ref" href="#s46">46</a></li>
+    <li>OpenHTF measurement validators (<code>in_range</code>; outcomes PASS / FAIL / UNSET / SKIPPED; <code>marginal</code>).<a class="ref" href="#s47">47</a></li>
+    <li>OBD readiness; DEM; the IEC 61508 proof test.</li>
+    <li>Kubernetes startup vs liveness probes.<a class="ref" href="#s41">41</a></li>
+  </ul></div>
+  <div>Failure modes</div><div><ul class="tight">
+    <li><code>pass</code> grows into a mini-language. Cap it at "measurement op value", with no expressions.</li>
+    <li>The file lives in <code>~/.config</code>, so the copy a site runs needs a committed twin.</li>
+    <li>There are two manifests for one rack: <code>deployment.json</code> already holds UUIDs and firmware history.<a class="ref" href="#s23">23</a></li>
+    <li>Validity windows can nag.</li>
+    <li>A twin pass is not a site pass, so the profile must show on the row.</li>
+  </ul></div>
+</div>
+</section>
+
+<!-- ======================== P4 ======================== -->
+<section class="panel" role="tabpanel" id="p4" aria-labelledby="t4" hidden>
+<h3>P4 · The acceptance suite is code, and its results are records</h3>
+<p>Rig-level checks are pytest tests in the rig's repo, marked with their entity, mode and validity. A pytest plugin turns each result into a status: pass → ok, fail → error, skip → <code>unknown NotRun</code>, plus typed measurements. Development runs <code>pytest</code>. The robot runs the same suite on a timer (passive marks) or on a click (marks that move hardware).</p>
+<figure><div class="svgwrap">
+<svg viewBox="0 0 760 300" role="img" aria-label="P4: a pytest suite runs against twin, bench or site and writes records onto the rig entity">
+  <defs><marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="tacc"/></marker></defs>
+  <rect x="14" y="16" width="250" height="118" rx="9" class="boxa"/>
+  <text x="28" y="38" class="b">tests/test_one_dof_rack.py</text>
+  <text x="28" y="58" class="s mono">@diagnostic(when="startup")</text>
+  <text x="28" y="74" class="s mono">  test_every_expected_board…</text>
+  <text x="28" y="94" class="s mono">@diagnostic(when="initiated",</text>
+  <text x="28" y="110" class="s mono">            moves=True, valid_for="7d")</text>
+  <text x="28" y="126" class="s mono">  test_can12_pendulum_tracking</text>
+  <rect x="300" y="16" width="120" height="30" rx="7" class="box"/><text x="314" y="36">--target twin</text>
+  <rect x="300" y="56" width="120" height="30" rx="7" class="box"/><text x="314" y="76">--target bench</text>
+  <rect x="300" y="96" width="120" height="30" rx="7" class="box"/><text x="314" y="116">systemd timer · site</text>
+  <path d="M264 31 H296 M264 71 H296 M264 111 H296" class="lna" marker-end="url(#a4)"/>
+  <rect x="460" y="36" width="290" height="70" rx="9" class="boxe"/>
+  <text x="474" y="58" class="b">rig: test_every_expected_board_answers</text>
+  <text x="474" y="76" class="s mono">failed 09:12 · a3da60 · pytest</text>
+  <text x="474" y="94" class="s">results → records → Vibe Tracks</text>
+  <path d="M420 71 H456" class="lna" marker-end="url(#a4)"/>
+  <path d="M360 126 L360 214" class="ln" stroke-dasharray="3 3"/><text x="368" y="180" class="s">the test reads leaves through the host API (and may act, gated)</text>
+  <rect x="10" y="214" width="110" height="56" rx="8" class="box"/><text x="22" y="236" class="b">Computer</text>
+  <rect x="130" y="214" width="170" height="56" rx="8" class="box"/><text x="142" y="236" class="b">fdcanusb 272813EF</text><text x="142" y="252" class="s">CAN 1 · 14 · <tspan class="serr">●</tspan> 15</text>
+  <rect x="310" y="214" width="190" height="56" rx="8" class="box"/><text x="322" y="236" class="b">fdcanusb 0607623A</text><text x="322" y="252" class="s">CAN 11 · 12 · 13 · 21</text>
+  <rect x="510" y="214" width="115" height="56" rx="8" class="box"/><text x="522" y="236" class="b">D405 ·4411</text>
+  <rect x="635" y="214" width="115" height="56" rx="8" class="box"/><text x="647" y="236" class="b">D405 ·6036</text>
+  <text x="10" y="292" class="s">tests are first class (Oct 16); the same suite runs on twin, bench and site (Dec 2025 rule)</text>
+</svg></div><figcaption>Full expressiveness, and the result is as old as its run.</figcaption></figure>
+<pre># bam_ws/src/dev/bam_rack_acceptance/tests/test_one_dof_rack.py
+from robotdiagnostics.testing import diagnostic      # pytest plugin: results -&gt; diagnostics-record/0 lines
+
+@diagnostic(entity="rig:1-DOF test rack", when="startup")
+def test_every_expected_board_answers(rig):
+    assert rig.answering("can/*") == rig.expected("can/*")       # names the missing one
+
+@diagnostic(entity="rig:1-DOF test rack", when="initiated", moves=True, valid_for="7d")
+def test_can12_pendulum_tracking(rig, measure):
+    run = rig.act("can/12", "tape", profile="slow")              # a person confirms the token
+    measure("tracking_rms", run.rms_deg, unit="deg", error_high=0.5)</pre>
+<div class="kv">
+  <div>Record v0.1 / black box</div><div>Results are statuses on the rig, with <code>source: pytest</code>, the run's <code>stamp</code> and <code>values.commit</code>. Vibe Tracks reads the same run (<code>@proves</code>, vt-kpi).<a class="ref" href="#s25">25</a> The verdict is the consumer's, but a test can reach into any box.</div>
+  <div>Computer</div><div>Tests assert on the computer leaf's records. An initiated test can measure: record 10 s on both D405s and count dropped frames. That opens the cameras, so it is click-only.</div>
+  <div>Dev vs deployment</div><div><code>pytest -m "rack and not moves" --target twin</code> runs in CI; <code>--target bench</code> runs on the rack; a systemd timer runs <code>-m startup</code> on site.</div>
+  <div>Stock parts</div><div><ul class="tight">
+    <li>pytest marks (your "like pytest" levels).</li>
+    <li>Testinfra <code>--nagios</code>.<a class="ref" href="#s45">45</a></li>
+    <li>OpenHTF phases, plugs, measurements, and its test record with <code>dut_id</code> and <code>station_id</code>.<a class="ref" href="#s47">47</a></li>
+    <li>Labgrid env files to retarget the suite.<a class="ref" href="#s48">48</a></li>
+    <li>Checkly <code>test</code> vs <code>deploy</code>.<a class="ref" href="#s49">49</a></li>
+  </ul></div>
+  <div>Failure modes</div><div><ul class="tight">
+    <li>Periodic, not live.</li>
+    <li>Test code and its dependencies ship to the robot.</li>
+    <li>The ruler drifts unless tests are read-only to builders.</li>
+    <li>Two vocabularies (test outcomes and levels) have to be mapped.</li>
+    <li>A suite nobody schedules repeats 2025's 29 unrun tests.<a class="ref" href="#s15">15</a></li>
+  </ul></div>
+</div>
+</section>
+
+<!-- ======================== P5 ======================== -->
+<section class="panel" role="tabpanel" id="p5" aria-labelledby="t5" hidden>
+<h3>P5 · Capability gates: the top level answers "what can I do now?"</h3>
+<p>Instead of a colour per composite, declare a handful of named capabilities, each a set of required checks. The top of the page lists which are available and, for each one that isn't, its one cause. The actions' existing preconditions (<code>port_free</code>, <code>board_answers</code>, <code>bus_lock_free</code>) are the first capabilities.</p>
+<figure><div class="svgwrap">
+<svg viewBox="0 0 760 300" role="img" aria-label="P5: capabilities list their required leaf checks">
+  <rect x="14" y="14" width="420" height="132" rx="9" class="box"/>
+  <text x="28" y="36" class="b">3/4 ready</text>
+  <circle cx="34" cy="58" r="4.5" class="sok"/><text x="46" y="62">Track a trajectory on CAN 12</text>
+  <circle cx="34" cy="82" r="4.5" class="sok"/><text x="46" y="86">Record both D405s</text>
+  <circle cx="34" cy="106" r="4.5" class="serr"/><text x="46" y="110">Track on CAN 15 · <tspan class="s">not available: CAN 15 not answering</tspan></text>
+  <circle cx="34" cy="130" r="4.5" class="sok"/><text x="46" y="134">Site acceptance · <tspan class="s">all rig checks passed within 7 d</tspan></text>
+  <rect x="470" y="30" width="280" height="96" rx="9" class="boxa"/>
+  <text x="484" y="52" class="b">capability = requires [...]</text>
+  <text x="484" y="72" class="s">Autoware: one availability bool per mode</text>
+  <text x="484" y="90" class="s">Kubernetes readiness: gates, never restarts</text>
+  <text x="484" y="108" class="s">action preconditions are the first ones</text>
+  <path d="M330 146 C340 175, 395 190, 405 214" class="ln" stroke-dasharray="3 3"/>
+  <path d="M380 146 C430 180, 550 190, 567 214" class="ln" stroke-dasharray="3 3"/>
+  <path d="M400 146 C480 175, 680 185, 692 214" class="ln" stroke-dasharray="3 3"/>
+  <path d="M120 146 C100 180, 70 190, 65 214" class="ln" stroke-dasharray="3 3"/>
+  <path d="M230 146 C226 175, 218 195, 215 214" class="lnu"/>  <rect x="10" y="214" width="110" height="56" rx="8" class="box"/><text x="22" y="236" class="b">Computer</text><text x="22" y="252" class="s">disk / · cpu</text>
+  <rect x="130" y="214" width="170" height="56" rx="8" class="box"/><text x="142" y="236" class="b">fdcanusb 272813EF</text><text x="142" y="252" class="s">CAN 1 · 14 · <tspan class="serr">●</tspan> 15</text>
+  <rect x="310" y="214" width="190" height="56" rx="8" class="box"/><text x="322" y="236" class="b">fdcanusb 0607623A</text><text x="322" y="252" class="s">CAN 11 · <tspan class="b">12</tspan> · 13 · 21</text>
+  <rect x="510" y="214" width="115" height="56" rx="8" class="box"/><text x="522" y="236" class="b">D405 ·4411</text><text x="522" y="252" class="s">usb link 5000</text>
+  <rect x="635" y="214" width="115" height="56" rx="8" class="box"/><text x="647" y="236" class="b">D405 ·6036</text><text x="647" y="252" class="s">usb link 5000</text>
+  <text x="10" y="292" class="s">the Computer shows up only through what it enables: USB 3 links and disk for recording, CPU headroom for a 1 kHz loop</text>
+</svg></div><figcaption>The calmest top line. It needs P3's checks as its requirements.</figcaption></figure>
+<pre>[[capability]]
+name = "Track a trajectory on CAN 12"
+requires = ["can/12: servo ok", "can/12: config ratio 0.1", "fdcanusb 0607623A: CAN bus ok",
+            "bus_lock_free", "computer: cpu &lt; 80 %"]
+
+[[capability]]
+name = "Record both D405s"
+requires = ["D405 ·4411: usb link 5000", "D405 ·6036: usb link 5000",
+            "computer: disk / free &gt; 50 GB", "camera_free"]
+
+[[capability]]
+name = "Site acceptance"
+requires = ["1-DOF test rack: all checks passed within 7 d"]</pre>
+<div class="kv">
+  <div>Record v0.1 / black box</div><div>Each capability is an entity with one status: ok = available, error = not available, unknown = can't tell. <code>caused_by</code> names the failing requirements. Capabilities sit outside every box, so nobody overrides a leaf.</div>
+  <div>Computer</div><div>It appears only through what it enables.</div>
+  <div>Dev vs deployment</div><div>At the bench, <code>assert caps["Track a trajectory on CAN 12"].available</code>. On site the list <i>is</i> the readiness display, and a behaviour checks it before it runs.</div>
+  <div>Stock parts</div><div><ul class="tight">
+    <li>Autoware's diagnostic graph, which outputs one availability bool per operation mode.<a class="ref" href="#s50">50</a><a class="ref" href="#s62">62</a></li>
+    <li>Kubernetes readiness.<a class="ref" href="#s41">41</a></li>
+    <li>Pact <code>can-i-deploy</code>.<a class="ref" href="#s42">42</a></li>
+  </ul></div>
+  <div>Failure modes</div><div><ul class="tight">
+    <li>Capabilities multiply into Autoware's central graph.</li>
+    <li>A boolean hides degradation.</li>
+    <li>It must never become the safety path (record v0 §9).</li>
+    <li>It is a new concept to learn.</li>
+  </ul></div>
+</div>
+</section>
+
+<h2>Scored comparison</h2>
+<div class="tablewrap">
+<table class="scoregrid">
+  <thead><tr><th>Criterion</th><th class="num">W</th><th class="num">P1</th><th class="num">P2</th><th class="num">P3</th><th class="num">P4</th><th class="num">P5</th></tr></thead>
+  <tbody>
+    <tr><td>Black boxes keep their word</td><td class="num">20</td><td class="num">5</td><td class="num">3</td><td class="num">4</td><td class="num">3</td><td class="num">4</td></tr>
+    <tr><td>One check, two lives</td><td class="num">20</td><td class="num">3</td><td class="num">2</td><td class="num">5</td><td class="num">5</td><td class="num">4</td></tr>
+    <tr><td>Honest status</td><td class="num">15</td><td class="num">2</td><td class="num">4</td><td class="num">5</td><td class="num">4</td><td class="num">4</td></tr>
+    <tr><td>Declared, minimal, stable</td><td class="num">15</td><td class="num">2</td><td class="num">4</td><td class="num">4</td><td class="num">3</td><td class="num">4</td></tr>
+    <tr><td>Off the shelf</td><td class="num">10</td><td class="num">3</td><td class="num">5</td><td class="num">4</td><td class="num">4</td><td class="num">4</td></tr>
+    <tr><td>Calm first screen</td><td class="num">10</td><td class="num">4</td><td class="num">3</td><td class="num">4</td><td class="num">3</td><td class="num">5</td></tr>
+    <tr><td>Tracer bullet this week</td><td class="num">10</td><td class="num">3</td><td class="num">4</td><td class="num">5</td><td class="num">3</td><td class="num">3</td></tr>
+    <tr><td><b>Weighted / 5</b></td><td></td>
+      <td class="num"><b>3.20</b><div class="bar"><span style="width:64%"></span></div></td>
+      <td class="num"><b>3.40</b><div class="bar"><span style="width:68%"></span></div></td>
+      <td class="num"><b>4.45</b><div class="bar best"><span style="width:89%"></span></div></td>
+      <td class="num"><b>3.65</b><div class="bar"><span style="width:73%"></span></div></td>
+      <td class="num"><b>4.00</b><div class="bar"><span style="width:80%"></span></div></td></tr>
+  </tbody>
+</table>
+</div>
+<ul class="tight">
+  <li><b>Sensitivity:</b> moving any one weight by −10, +10 or +20 never dethrones P3. Even with black-box purity weighted at 50, P3 leads 4.35 to P5's 4.00.</li>
+  <li><b>Why P5 comes second rather than first:</b> its <code>requires</code> lists are P3's checks, and P3 builds on the file already in flight.</li>
+</ul>
+
+<h2>The Computer entity, as read on this PC</h2>
+<p>A passive <code>/proc</code> and <code>/sys</code> snapshot taken at 09:12. No device nodes were opened and io-diagnostics was not run. The stock references are node_exporter's collectors<a class="ref" href="#s52">52</a>, the kernel's AER and USB ABI<a class="ref" href="#s53">53</a><a class="ref" href="#s54">54</a>, and hwmon<a class="ref" href="#s55">55</a>.</p>
+<pre class="term"><span class="p">$</span> python3 -B -I computer_snapshot.py
+cpu: load 1.54/2.16/2.79 on 24 logical CPUs
+memory: 61.9 GiB total, 40.2% available
+disk /: <span class="w">8.5% free</span>
+temp nvme/Composite: 39.9 C (max 82, crit 85)
+temp nvme/Sensor 1: 39.9 C (max 65262)            <span class="c"># a sentinel, not a limit: must be filtered</span>
+temp k10temp/Tctl: 68.4 C (<span class="w">no chip limits</span>)
+temp amdgpu/edge: 47.0 C (no chip limits)
+usb 1-3 0483:5740 serial 0607623A: speed 12 Mb/s, devnum 10
+usb 1-5 0483:5740 serial 272813EF: speed 12 Mb/s, devnum 9
+usb 6-1 8086:0b5b serial 219323070276: speed 5000 Mb/s, devnum 2
+usb 6-2 8086:0b5b serial 130523071221: speed 5000 Mb/s, devnum 3
+pcie 0000:01:00.0 (display): x16 of x16, 16.0 GT/s PCIe (max 16.0 GT/s PCIe), TOTAL_ERR_COR 0</pre>
+<div class="tablewrap">
+<table>
+  <thead><tr><th>Check on the host leaf</th><th>Today</th><th>Default rule (stock source)</th><th>Verdict</th></tr></thead>
+  <tbody>
+    <tr><td>cpu</td><td class="mono">load 1.5 / 24</td><td>WARN when any core &gt; 90 % (ROS <code>cpu_monitor</code>; it has no ERROR)<a class="ref" href="#s28">28</a></td><td><span class="dot"></span>ok</td></tr>
+    <tr><td>memory</td><td class="mono">40 % available</td><td>WARN &gt; 90 % used (ROS <code>ram_monitor</code>)<a class="ref" href="#s28">28</a></td><td><span class="dot"></span>ok</td></tr>
+    <tr><td>disk /</td><td class="mono">8.5 % free</td><td>ROS <code>hd_monitor</code>: WARN &lt; 5 %, ERROR &lt; 1 % free.<a class="ref" href="#s28">28</a> Netdata: WARN &gt; 90 % used.<a class="ref" href="#s56">56</a></td><td><span class="dot"></span>ok by ROS · <span class="dot warn"></span>warn by Netdata</td></tr>
+    <tr><td>temperature: CPU</td><td class="mono">Tctl 68 °C</td><td>No chip limits. Zen 4 is designed to sit at its 95 °C limit under load<a class="ref" href="#s58">58</a>, so warn on sustained throttling, never on a fixed number</td><td><span class="dot"></span>ok</td></tr>
+    <tr><td>temperature: NVMe</td><td class="mono">40 °C</td><td>The chip's own max 82 / crit 85 (hwmon <code>temp*_max</code>, <code>_crit</code>)</td><td><span class="dot"></span>ok</td></tr>
+    <tr><td>usb links (both D405s)</td><td class="mono">5000 Mb/s ×2</td><td>WARN at 480 (USB 2 fallback), already judged on the port rows</td><td><span class="dot"></span>ok</td></tr>
+    <tr><td>pcie link + AER (GPU)</td><td class="mono">x16/x16 · 0 COR</td><td>Width below max, or uncorrectable AER &gt; 0, is a warning. Already judged on the PCI rows (<code>tree.py</code>)</td><td><span class="dot"></span>ok</td></tr>
+    <tr><td>re-enumeration</td><td class="mono">devnum 10 / 9</td><td>A rising <code>devnum</code> means the device re-enumerated. Today the kernel logged repeated disconnects on 1-3 between 08:07 and 08:10 (device number 6 → 10). Count them per port per hour, and make that a level only past a declared rate</td><td><span class="dot"></span>events today; a level only past the rate</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="muted">GPU health (Xid errors, PCIe replays via <code>nvidia-smi</code> or DCGM<a class="ref" href="#s57">57</a>) belongs to an NVIDIA driver plugin of its own, under the rule "drivers bring their own diagnostics".</p>
+
+<h2>Recommendation and tracer bullet</h2>
+<p><b>Build P3, on the <code>caused_by</code> seam.</b></p>
+<ul class="tight">
+  <li>Keep P1 as the escape hatch the record already allows. A composite whose verdict can't be written as data gets a wrapper plugin.</li>
+  <li>Borrow ROS's "Expected N, found M" wording from P2, and a pytest fixture from P4, so the bench gate is literally <code>pytest</code>.</li>
+  <li>Add P5 once you want capabilities beyond the actions' preconditions.</li>
+</ul>
+<ol class="steps">
+  <li><b>Barrier, alone</b> (<code>contract/record.py</code> + <code>tests/test_record.py</code>):
+    <ul class="tight">
+      <li>Add <code>caused_by</code> and the counting rule. The three probes above become regression tests.</li>
+      <li><i>Done when:</i> one missing CAN 15 is one cause and the chip names CAN 15; a spider at ERROR names leg 3; stock → v0 → stock is still the identity.</li>
+      <li>Land it after the computer lane commits. Its <code>io_diagnostics/</code> write set is disjoint from this one, but it imports the contract.</li>
+    </ul></li>
+  <li><b><code>io_diagnostics/expected.py</code> + <code>cli.py</code>:</b>
+    <ul class="tight">
+      <li>Add <code>[[rig.check]]</code> with <code>when</code>, and two checks: <i>firmware current</i> (startup), and <i>comms sweep</i> (initiated, <code>check_comms</code>, valid 24 h, reset by <code>Restarted</code> / <code>Plugged</code> / <code>firmware</code>).</li>
+      <li>Keep readiness in <code>~/.local/state/io-diagnostics/acceptance.json</code>.</li>
+      <li>Add the <code>accept</code> verb.</li>
+    </ul></li>
+  <li><b><code>tests/test_accept.py</code></b>, with the acceptance written first:
+    <ul class="tight">
+      <li>Fixture F1 (CAN 15 missing) exits 1, naming CAN 15.</li>
+      <li>The full fixture exits 0.</li>
+      <li>A sweep that never ran exits 3, UNKNOWN "comms sweep not run".</li>
+    </ul></li>
+  <li><b>A 10-line pytest fixture</b> around <code>accept</code>, so <code>assert rig.ok</code> runs on fixtures in CI and on the rack in your terminal.</li>
+</ol>
+
+<h2>What needs you</h2>
+<p class="muted">Each item has my recommendation and the default I'll take if you say nothing.</p>
+<div class="qa">
+  <div class="card"><p><b>1. Composites explain upward (<code>caused_by</code>).</b></p><p>Recommend: yes. <span class="muted">Default: build it as the barrier.</span></p></div>
+  <div class="card"><p><b>2. Rig expectations live on the rig's row,</b> and a board shows only a muted "rig expects 0.1".</p><p>Recommend: yes. <span class="muted">Default: leave <code>RatioMismatch</code> on the board until P3's checks land.</span></p></div>
+  <div class="card"><p><b>3. Validity windows for click-run checks:</b> comms sweep 24 h, motion checks 7 d, all reset on restart, replug or firmware change.</p><p class="muted">Default: those.</p></div>
+  <div class="card"><p><b>4. One manifest per rack.</b></p><p>Recommend: <code>deployment.json</code> stays the versioned as-built record, and <code>expected.toml</code> later refers to it by rig id. <span class="muted">Default: keep both for now.</span></p></div>
+  <div class="card"><p><b>5. Spider tolerance for the rack</b> ("6 of 7 is fine").</p><p>Recommend: not yet. An acceptance rig with a missing board is WARN <code>ExpectedMissing</code>, as today. <span class="muted">Default: as today.</span></p></div>
+</div>
+
+<h2>Deliberately left out</h2>
+<ul class="tight">
+  <li><b>Safety.</b> None of this is a safety path (ISO 14229 via DEM; record v0 §9).<a class="ref" href="#s16">16</a></li>
+  <li><b>Autoware's hazard-per-mode remapping.</b> P5 keeps the useful half, availability, and never remaps a leaf.</li>
+  <li><b>Fleet streaming to a server</b><a class="ref" href="#s4">4</a>, and SLOs and error budgets<a class="ref" href="#s59">59</a>. These belong to fleet KPIs, later.</li>
+  <li><b>Hardware.</b> I touched none, did not run io-diagnostics, and wrote no code: a peer lane is editing <code>host.py</code>, <code>plugins.py</code> and <code>tree.py</code> right now.</li>
+  <li><b>Probes.</b> The three probe scripts lived in a session scratchpad; their full code is below.</li>
+</ul>
+<details><summary>The three probe scripts (pure contract code)</summary>
+<pre># shared setup
+import sys; sys.path.insert(0, "/home/bam/io-diagnostics")
+from contract.record import DiagnosticStatus, Entity, summarize
+NOW = 1761200000.0
+
+# trap 1: host/usb1/1-3 (fdcanusb) -&gt; can (part_of) -&gt; can/15 (via); "disk /" ERROR written on "host"
+#         vs on a sibling Entity("host/computer", part_of="host"); CAN 15 ERROR MoteusFault.33
+# trap 2: Entity("host/rig-1-dof-test-rack", kind="rig", via="host") WARN ExpectedMissing
+#         + host/usb1/1-5/can/15 ERROR BoardNotAnswering (the driver's level)
+# trap 3: cell (group) -&gt; spider (part_of) -&gt; leg1..8 (part_of); leg 3 ERROR MoteusFault.33;
+#         spider self-reports WARN, then ERROR, "leg 3 failed: walking on 7"
+summary = summarize(entities, statuses, NOW)
+root = summary["host"].rollup        # or summary["cell"].rollup
+print(dict(root.counts), list(root.knock_on), root.origin)</pre>
+</details>
+
+<h2>Sources</h2>
+<ol class="src">
+  <li id="s1">Changes (Apple Note), 2025-06-27: vault <code>Sources/Apple Notes/Changes (APPLE NOTE).md</code></li>
+  <li id="s2">June 28 - UR pick up in Sim (Notion, 2025): vault <code>Sources/Notion Import/Notebook (Jul 2025)/</code></li>
+  <li id="s3">June 29 - Top Level Design / Python calls for To do list (Notion, 2025)</li>
+  <li id="s4">First deployments (Apple Note), 2025-07-13</li>
+  <li id="s5">How long before I can actually get a robot moving (Apple Note), 2025-07-22</li>
+  <li id="s6">Acceptance Tests (bam_core), 2025-07-23: your items 1–29 only</li>
+  <li id="s7">bam_ros_common, 2025-07-23: the Apex.Grace reaction</li>
+  <li id="s8"><code>/home/bam/bam_ws/src/dev/bam_docs/diagnostics.md</code></li>
+  <li id="s9">Next 2 (Apple Note), 2025-12-04</li>
+  <li id="s10">Q - What do good sub components look like?</li>
+  <li id="s11">Daily Note - Oct 14 2026: "Computed, measured, calculated vs entered"</li>
+  <li id="s12">Daily Note - Oct 16 2026: Vibe Tracks feature tree</li>
+  <li id="s13">Daily Note - Oct 22 2026: "Feedback on Io Diagonistics"</li>
+  <li id="s14">Daily Note - Oct 23 2026: "feedback on Digoinastics"</li>
+  <li id="s15">MOC - Component Testing: your Oct 3 notes and the AI timeline</li>
+  <li id="s16"><code>/home/bam/io-diagnostics/docs/diagnostics-record-v0.md</code>: record v0 / v0.1; the black-box rule §3; not a safety path §9</li>
+  <li id="s17"><code>/home/bam/io-diagnostics/docs/expected-setup.md</code> and <code>io_diagnostics/expected.py</code> (<code>_rig_row</code>)</li>
+  <li id="s18"><code>/home/bam/io-diagnostics/docs/round3-brief-2026-10-23.md</code>: CLI as the seam, the Monitoring Plugins API</li>
+  <li id="s19"><code>/home/bam/io-diagnostics/io_diagnostics/tree.py</code>: <code>HOST_SELF</code>, in the computer lane, uncommitted at 09:06 on 2026-10-23</li>
+  <li id="s20">This report.</li>
+  <li id="s21">MOC - Diagnostics §7: like_keras <code>bam_diagnostics</code></li>
+  <li id="s22"><code>/home/bam/bam_archive/v1_bam_ws/src/bam_brain/dev/v3/mdp_machine/docs/diagnostics-architecture.md</code></li>
+  <li id="s23">bam_ws branch <code>claude/traj-tracking-sim-to-real-a3da60</code>: <code>src/dev/bam_rack_twin/records/one-dof-test-rack/deployment.json</code>; <code>moteus_servo/src/moteus_servo/diagnostics.py</code> (<code>BoardNotAnswering</code> is an error)</li>
+  <li id="s24"><code>/home/bam/robotparts/docs/seams/robotdiagnostics.md</code></li>
+  <li id="s25"><code>/home/bam/vibetracks/docs/peps/0007-feature-tree-computed-spec.md</code>, <code>0005-runs-in-kpis-out.md</code></li>
+  <li id="s26"><a href="https://github.com/ros/diagnostics/blob/ros2/diagnostic_aggregator/README.md">ROS diagnostic_aggregator README (ros2)</a></li>
+  <li id="s27"><a href="https://github.com/ros/diagnostics/blob/ros2/diagnostic_aggregator/include/diagnostic_aggregator/generic_analyzer_base.hpp">ROS generic_analyzer_base.hpp (ros2): report()</a></li>
+  <li id="s28"><a href="https://github.com/ros/diagnostics/blob/ros2/diagnostic_common_diagnostics/README.md">ROS diagnostic_common_diagnostics README (ros2)</a></li>
+  <li id="s29"><a href="https://www.autosar.org/fileadmin/standards/R22-11/CP/AUTOSAR_SWS_DiagnosticEventManager.pdf">AUTOSAR CP R22-11 SWS Diagnostic Event Manager, §7.3.6 and §7.5.1</a></li>
+  <li id="s30"><a href="https://assets.nagios.com/downloads/nagioscore/docs/nagioscore/4/en/networkreachability.html">Nagios Core 4: network reachability</a></li>
+  <li id="s31"><a href="https://icinga.com/docs/icinga-business-process-modelling/latest/doc/09-Operators/">Icinga Business Process: operators</a></li>
+  <li id="s32"><a href="https://github.com/Icinga/icingaweb2-module-businessprocess/blob/master/doc/10-Monitoring.md">Icinga Business Process: monitoring, --blame --root-cause</a></li>
+  <li id="s33"><a href="https://prometheus.io/docs/alerting/latest/configuration/">Prometheus Alertmanager configuration: inhibit_rules</a></li>
+  <li id="s34"><a href="https://docs.datadoghq.com/monitors/types/composite/">Datadog composite monitors</a></li>
+  <li id="s35"><a href="https://everyspec.com/MIL-HDBK/MIL-HDBK-2000-2999/MIL-HDBK-2165_15131/">MIL-STD-2165A glossary: BIT, fault detection and isolation, false alarm</a> (the PBIT/CBIT/IBIT mode names are programme usage, not this text)</li>
+  <li id="s36"><a href="https://patents.google.com/patent/US4943919A">Boeing central maintenance computer, US 4943919A</a></li>
+  <li id="s37"><a href="https://www.govinfo.gov/content/pkg/FR-2001-04-05/pdf/01-8276.pdf">EPA final rule 66 FR 18156 (2001): OBD readiness</a></li>
+  <li id="s38"><a href="https://www.dps.texas.gov/section/vehicle-inspection/faq/ready-or-not">Texas DPS: "Ready or not"</a></li>
+  <li id="s39"><a href="https://machinerysafety101.com/glossary/proof-test/">IEC 61508-4 proof-test definition (secondary glossary)</a></li>
+  <li id="s40"><a href="https://webstore.iec.ch/en/publication/67572">IEC 62381:2024: FAT, FIT, SAT, SIT</a></li>
+  <li id="s41"><a href="https://kubernetes.io/docs/concepts/configuration/liveness-readiness-startup-probes/">Kubernetes: liveness, readiness and startup probes</a></li>
+  <li id="s42"><a href="https://docs.pact.io/pact_broker/can_i_deploy">Pact: can-i-deploy</a></li>
+  <li id="s43"><a href="https://martinfowler.com/bliki/ContractTest.html">Martin Fowler: ContractTest (2011)</a></li>
+  <li id="s44"><a href="https://github.com/goss-org/goss">Goss: validate, serve /healthz, junit/tap/nagios formats</a></li>
+  <li id="s45"><a href="https://testinfra.readthedocs.io/en/latest/">Testinfra</a></li>
+  <li id="s46"><a href="https://docs.chef.io/inspec/profiles/controls/">Chef InSpec controls</a></li>
+  <li id="s47"><a href="https://github.com/google/openhtf">OpenHTF: measurements (PASS / FAIL / UNSET / PARTIALLY_SET / SKIPPED, marginal), phases, plugs</a></li>
+  <li id="s48"><a href="https://labgrid.readthedocs.io/en/latest/usage.html">Labgrid: usage, pytest plugin</a></li>
+  <li id="s49"><a href="https://www.checklyhq.com/docs/cli/">Checkly CLI</a></li>
+  <li id="s50"><a href="https://github.com/autowarefoundation/autoware_universe/tree/main/system/autoware_diagnostic_graph_aggregator">Autoware diagnostic graph aggregator</a></li>
+  <li id="s51"><a href="https://github.com/selfpatch/ros2_medkit">ros2_medkit</a></li>
+  <li id="s52"><a href="https://github.com/prometheus/node_exporter">Prometheus node_exporter</a></li>
+  <li id="s53"><a href="https://www.kernel.org/doc/Documentation/ABI/testing/sysfs-bus-pci-devices-aer_stats">Linux ABI: PCIe AER statistics</a></li>
+  <li id="s54"><a href="https://www.kernel.org/doc/Documentation/ABI/testing/sysfs-bus-usb">Linux ABI: sysfs USB</a></li>
+  <li id="s55"><a href="https://docs.kernel.org/hwmon/sysfs-interface.html">Linux hwmon sysfs interface</a></li>
+  <li id="s56"><a href="https://github.com/netdata/netdata/blob/master/src/health/health.d/disks.conf">Netdata health.d/disks.conf</a></li>
+  <li id="s57"><a href="https://docs.nvidia.com/datacenter/dcgm/latest/user-guide/feature-overview.html">NVIDIA DCGM feature overview</a></li>
+  <li id="s58"><a href="https://community.amd.com/t5/pc-processors/ryzen-9-7900x-hight-cpu-temp-over-100-c/m-p/698973">AMD community: Ryzen 9 7900X maximum 95 °C (secondary)</a></li>
+  <li id="s59"><a href="https://sre.google/sre-book/service-level-objectives/">Google SRE book: Service Level Objectives</a></li>
+  <li id="s60"><a href="https://github.com/ros/diagnostics/blob/ros2/self_test/README.md">ROS self_test README (ros2)</a></li>
+  <li id="s61">C - Diagnostics Record (What We Learned Since ROS DiagnosticStatus): Redfish HealthRollup, OpenBMC's 2024 removal</li>
+  <li id="s62"><code>/home/bam/io-diagnostics/docs/research/diagnostics-schema-ros.md</code> §3–4: ros2_medkit entities, Autoware's graph</li>
+</ol>
+<p class="faint" style="margin-top:28px">Vault note: Projects/BAM Robotics/Notes/Diagnostics Rollups — Five Ways to Reconcile Black Boxes with Top-Level Checks (2026-10-23).md · built by Claude Code (Opus 5.5), scribe lane</p>
+</main>
+<script>
+(function () {
+  try {
+    document.documentElement.classList.add("js");
+    var tabs = Array.prototype.slice.call(document.querySelectorAll('[role="tab"]'));
+    var KEY = "diag-rollups-tab";
+    function select(tab, focus) {
+      tabs.forEach(function (t) {
+        var on = t === tab;
+        t.setAttribute("aria-selected", on ? "true" : "false");
+        t.tabIndex = on ? 0 : -1;
+        document.getElementById(t.getAttribute("aria-controls")).hidden = !on;
+      });
+      if (focus) tab.focus();
+      try { localStorage.setItem(KEY, tab.id); } catch (e) {}
+    }
+    tabs.forEach(function (tab, i) {
+      tab.addEventListener("click", function () { select(tab, false); });
+      tab.addEventListener("keydown", function (event) {
+        var next = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+        if (next) { event.preventDefault(); select(tabs[(i + next + tabs.length) % tabs.length], true); }
+      });
+    });
+    var saved = null;
+    try { saved = localStorage.getItem(KEY); } catch (e) {}
+    var hash = (location.hash || "").replace("#", "");
+    var start = document.getElementById(hash.charAt(0) === "p" ? "t" + hash.slice(1) : saved) || document.getElementById("t3");
+    select(start, false);
+  } catch (e) {
+    document.documentElement.classList.remove("js");
+  }
+})();
+</script>
+</body>
+</html>
