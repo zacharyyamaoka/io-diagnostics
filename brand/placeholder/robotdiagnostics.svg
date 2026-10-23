@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- RobotDiagnostics placeholder app icon (2026-10-23): an original calm two-dot face in the spirit of a health
+       robot, until Zach picks a logo from brand/logos. Not a copy of any character. -->
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="#1f2328"/>
+  <ellipse cx="128" cy="134" rx="92" ry="70" fill="#f4f4f2"/>
+  <ellipse cx="128" cy="134" rx="92" ry="70" fill="none" stroke="#d9d9d4" stroke-width="4"/>
+  <line x1="92" y1="134" x2="164" y2="134" stroke="#1f2328" stroke-width="7" stroke-linecap="round"/>
+  <circle cx="88" cy="134" r="15" fill="#1f2328"/>
+  <circle cx="168" cy="134" r="15" fill="#1f2328"/>
+</svg>

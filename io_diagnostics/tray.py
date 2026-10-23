@@ -8,6 +8,8 @@ Tests build the model; they never show the indicator.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 MARK = {"error": "✖", "warn": "▲", "unknown": "?", "stale": "◷", "ok": "·"}  # shapes, not colour dots (decision 3)
 LABEL_GUIDE = "IO 00 ⚠"
 MENU_TEXT = 110  # DBusMenu rows never wrap; past this a row ends in an explicit "…" (the dashboard has the full text)
@@ -59,18 +61,34 @@ def gi_available() -> bool:
     return True
 
 
+DESKTOP_ID = "robotdiagnostics"
+DESKTOP_ENTRY = Path.home() / ".local/share/applications" / f"{DESKTOP_ID}.desktop"
+
+
+def as_installed(model: dict, entry: Path = DESKTOP_ENTRY) -> dict:
+    """The chip as the installed app shows it: "Open dashboard" opens RobotDiagnostics' own window (its desktop
+    entry) instead of a browser tab, once that entry is installed. WHY here and not in chip_model: the host's chip
+    stays the same everywhere (API, tests); only the tray process knows it runs as the installed app."""
+
+    if not entry.exists():
+        return model
+    menu = [{**item, "action": f"launch:{DESKTOP_ID}"} if str(item.get("action", "")).startswith("open:") else item
+            for item in model.get("menu", [])]
+    return {**model, "menu": menu, "title": "RobotDiagnostics"}
+
+
 def run_tray(model_source, *, interval_s: float = 2.0, on_quit=None) -> None:
     """Show the chip and refresh it every ``interval_s`` from ``model_source()``. Blocks in the GTK main loop."""
 
     from contract.indicator import Indicator  # pins Gtk 3.0 before Gtk is imported
     from gi.repository import GLib, Gtk
 
-    tray = Indicator("io-diagnostics", "IO diagnostics")
+    tray = Indicator("io-diagnostics", "RobotDiagnostics")
     state = {"model": None}
 
     def update() -> bool:
         try:
-            model = model_source()
+            model = as_installed(model_source())
         except Exception:  # noqa: BLE001 - keep the last menu rather than kill the tray
             return True
         if state["model"] is None:

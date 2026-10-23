@@ -28,22 +28,28 @@ OPEN = "/home/bam/.local/bin/open"  # Zach's focus-safe opener (never xdg-open)
 
 
 def draw_icons(directory: Path) -> None:
-    """22 px symbolic glyphs: a bus (three taps on a line), plain and with an amber attention dot."""
+    """22 px symbolic glyphs: a calm robot face (a rounded head, two eyes joined by a line), plain and with an amber
+    attention dot. WHY a face: Zach's RobotDiagnostics placeholder (2026-10-23) until a logo is picked from
+    brand/logos; an original two-dot face in the spirit of a health robot, not a copy of any character."""
 
     for name, attention in (("io-diagnostics-ok", False), ("io-diagnostics-attention", True)):
         surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, 22, 22)
         context = cairo.Context(surface)
         context.set_source_rgba(1, 1, 1, 0.95)
         context.set_line_width(1.6)
-        context.move_to(3, 15)
-        context.line_to(19, 15)
+        context.save()
+        context.translate(11, 12)
+        context.scale(9.0, 7.0)
+        context.arc(0, 0, 1, 0, 2 * math.pi)
+        context.restore()
         context.stroke()
-        for x in (5, 11, 17):
-            context.move_to(x, 15)
-            context.line_to(x, 9)
-            context.stroke()
-            context.arc(x, 7.5, 2.2, 0, 2 * math.pi)
+        for x in (7.2, 14.8):
+            context.arc(x, 12, 1.7, 0, 2 * math.pi)
             context.fill()
+        context.set_line_width(1.1)
+        context.move_to(7.2, 12)
+        context.line_to(14.8, 12)
+        context.stroke()
         if attention:
             context.set_source_rgb(0.98, 0.65, 0.15)
             context.arc(18, 5, 3.6, 0, 2 * math.pi)
@@ -97,6 +103,9 @@ class Indicator:
             item.connect("activate", lambda _i, text=action[5:]: Gtk.Clipboard.get_default(Gtk.Window().get_display()).set_text(text, -1))
         elif action.startswith("open:"):
             item.connect("activate", lambda _i, path=action[5:]: subprocess.Popen([OPEN, path]))
+        elif action.startswith("launch:"):
+            # WHY gtk-launch: it starts an installed desktop entry (RobotDiagnostics' own app window), the stock way
+            item.connect("activate", lambda _i, desktop_id=action[7:]: subprocess.Popen(["gtk-launch", desktop_id]))
         elif action == "quit":
             item.connect("activate", lambda _i: Gtk.main_quit())
         return item
