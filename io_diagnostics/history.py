@@ -36,6 +36,7 @@ MAX_SERIES = 4096
 MAX_MEASUREMENTS = 32
 MAX_POINTS = 200_000
 MAX_BINS = 1000
+MAX_TRANSITIONS = 2000  # level changes kept for the activity log (type "level"), the oldest dropped first
 
 
 def stale_after(period: float | None) -> float | None:
@@ -75,6 +76,9 @@ class History:
         self._series: dict[tuple[str, str], _Series] = {}
         self._sources: dict[object, dict[tuple[str, str], tuple]] = {}  # source -> key -> last signature
         self._points = 0
+        # (at, path, name, from, to, code, message): every change of a status's effective level between two levels,
+        # stale included (it is derived: written when the late report arrives, or read as pending in transitions())
+        self._transitions: deque = deque(maxlen=MAX_TRANSITIONS)
         self._lock = threading.Lock()
 
     @property
@@ -139,6 +143,13 @@ class History:
               and (status.expected_period_s is None or at - last.last <= stale_after(status.expected_period_s))):
             last.last, last.message = at, status.message
         else:
+            if last is not None and last.level is not None:  # a first report, or one after the status ended, is no change
+                before, limit = last.level, stale_after(last.period)
+                if limit is not None and at - last.last > limit and before != STALE:
+                    self._transitions.append((last.last + limit, key[0], key[1], before, STALE, "", ""))
+                    before = STALE
+                if before != level:
+                    self._transitions.append((at, key[0], key[1], before, level, status.code, status.message))
             spans.append(_Span(at, at, level, status.expected_period_s, status.code, status.message))
             self._points += 1
         for measurement in status.measurements:
@@ -242,6 +253,22 @@ class History:
             values = {name: [list(point) for point in points if start <= point[0] <= end] for name, points in found.values.items()}
             units = {name: dict(meta) for name, meta in found.units.items()}
         return [{"key": name, **units[name], "points": points} for name, points in values.items()]
+
+    def transitions(self, now: float) -> list[tuple]:
+        """Every level change within the retention, oldest first, plus each status that has gone stale by ``now``
+        and not reported since (``(at, path, name, from, to, code, message)``)."""
+
+        oldest = now - self.retention_s
+        with self._lock:
+            out = [item for item in self._transitions if oldest <= item[0] <= now]
+            for (path, name), series in self._series.items():
+                last = series.spans[-1] if series.spans else None
+                limit = stale_after(last.period) if last is not None else None
+                if last is None or last.level in (None, STALE) or limit is None or now - last.last <= limit:
+                    continue
+                if last.last + limit >= oldest:
+                    out.append((last.last + limit, path, name, last.level, STALE, "", ""))
+        return sorted(out, key=lambda item: item[0])
 
     def period(self, key: tuple[str, str]) -> float | None:
         with self._lock:

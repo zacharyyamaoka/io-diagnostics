@@ -1,8 +1,10 @@
 # IO diagnostics plugin: the Computer's own health (CPU, memory, disks, temperatures, GPU, clock, uptime, network,
 # USB bandwidth), as statuses on THE host entity. Boundary: docs/build-plan-v1.md "Plugin boundary". The host appends
 # one verb to `command`:
-#   describe | diagnose --device <host id>
-# and reads diagnostics-record/0 JSON lines (contract/record.py) from stdout. Run by hand:
+#   describe | diagnose --device <host id> | follow --device <host id>
+# and reads diagnostics-record/0 JSON lines (contract/record.py) from stdout. Its describe declares `follow` (1 s), so
+# `serve` / `tray` keep ONE follow process running (the same statuses every second, plus Processes) and `once` runs
+# diagnose. Run by hand:
 #   uv run --project /home/bam/io-diagnostics/plugins/computer python -m computer_diagnostics diagnose --device host
 
 name = "computer"
@@ -18,9 +20,11 @@ command = ["uv", "run", "--quiet", "--project", "{root}/plugins/computer", "pyth
 cwd = "{root}/plugins/computer"
 
 # Seconds per diagnose: uv's start plus a 0.5 s CPU / network sample and two ~25 ms nvidia-smi queries (about 1 s).
+# A follower that prints nothing for max(10 x its 1 s period, timeout_s) is killed and restarted.
 timeout_s = 20
-# Seconds between diagnose calls. Must equal computer_diagnostics.PERIOD_S: every status promises it as
-# expected_period_s, and the host marks a record stale after max(3 x period, 5 s).
+# Seconds between diagnose calls (`once`, or a host whose describe has not answered). Must equal
+# computer_diagnostics.PERIOD_S: every diagnose status promises it as expected_period_s, and the host marks a record
+# stale after max(3 x period, 5 s). A follower's statuses promise their own cadence (1 s; Processes 3 s; NTP 10 s).
 period_s = 10
 
 # The host itself (the Computer), never a device: the only declaration a `host` match may make.

@@ -21,7 +21,8 @@ uv run --project /home/bam/io-diagnostics python /home/bam/io-diagnostics/io_dia
 |---|---|---|
 | `GET /api/v1/state` | Everything a page draws every tick: clock, chip, the whole tree (nested), the last 6 events | 1 s |
 | `GET /api/v1/node?path=<entity path>` | The detail panel of one row: its checks, values, measurements, actions with gate state, faults, events | on select, then 1-2 s |
-| `GET /api/v1/activity[?limit=N]` | Activity log (all events, newest first), faults, link-health rows | 2-5 s |
+| `GET /api/v1/activity[?limit=N][&types=usb,driver]` | Activity log (all events, newest first, typed), faults, link-health rows | 2-5 s |
+| `GET /api/v1/events[?types=...]` | Server-Sent Events: each new or changed activity event (a provisional plug, then the same id confirmed) and a `tick` per change | stream |
 | `GET /api/v1/records` | The raw v0 records the host holds (entities, statuses with `received`, events, faults) | rarely |
 | `GET /api/v1/plugins` | Plugin registry: loaded `plugins.d/*.toml`, matched devices, last run per device | rarely |
 | `GET /api/v1/health` | `{"ok": true, ...}` liveness | — |
@@ -69,7 +70,7 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
                              "message": "error-passive · no ACK: no powered node on this bus · 0 of 4 answer",
                              "device": {"path": "host/usb1/port-1-5/usb-1-5", "name": "fdcanusb 28B3A25D"}}],
               "entities": 41, "devices": 10},
-  "chip": {"label": "IO 5 ⚠", "label_guide": "IO 00 ⚠", "icon": "attention", "title": "IO diagnostics",
+  "chip": {"label": "IO 5 ⚠", "label_guide": "IO 00 ⚠", "icon": "attention", "status": "error", "title": "IO diagnostics",
            "menu": [{"text": "5 need you · 10 devices"}, {"sep": true}, "..."]},
   "tree": {"...": "node, see below; children nested"},
   "recent": [{"...": "event, see Activity"}],
@@ -89,8 +90,8 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
   "PCI discovery not available" instead of implying there is no PCI. A `"seen devices"` entry appears only when
   the remembered-devices file could not be read or written.
 - **Expected, not connected** (record v0.1): a device a plugin's `describe` lists in `expected`
-  (`[{hardware_id, name, last_seen, source}]`), or a USB device this host has seen a plugin diagnose (kept in
-  `~/.local/state/io-diagnostics/seen.json`, live mode only), that is not on USB now. Each one is a tree row under
+  (`[{hardware_id, name, last_seen, source}]`), or one the expected setup lists (retired ones excepted), that is not
+  on USB now. Each one is a tree row under
   the group `host/expected` (`kind` `"group"`, name `"Expected, not connected"`). The row's `kind` is `"device"`,
   its `owner` the plugin (or `io_diagnostics` for a remembered one), and its one check is `<name>: presence`.
   That check is `warn` with `code` `"ExpectedAbsent"`, and its `message` says what the kernel saw this boot:
@@ -98,6 +99,14 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
   (2026-10-22 07:00): try a data cable or another port"`, or `"… plugged in at 09:00:01 on 1-5, gone at 09:30:00"`,
   or that the kernel log could not be read. Its values are `what_to_check`, `kernel_evidence`
   (`never | left | unknown`), `expected_by` and `last_seen`. Only `usb:<vid>:<pid>:<serial>` ids are judged.
+- **Recently seen** (2026-10-23): a USB device this host has only SEEN a plugin diagnose (kept in
+  `~/.local/state/io-diagnostics/seen.json`, live mode only), expected by nothing above, that is not on USB now and
+  was last seen within a day. It is a row under the group `host/recently-seen` (name `"Recently seen"`,
+  `collapsed: true`) whose one check `<name>: presence` is `ok` with no code: `"seen 2026-10-23 14:26 · not on USB
+  now · plugged in at 14:25:53 on 1-1, gone at 14:26:08 (not in the expected setup)"`. Never a warning and never a
+  fault: its unplug is an `Unplugged` activity event. WHY (Zach, 2026-10-23): fdcanusb FDA81D29, plugged for 15 s,
+  confirmed an `ExpectedAbsent` WARN from the memory alone. Its Expected setup card is an absent row's (`forget`
+  drops it from the memory); to make it expected, plug it in and Expect what's here.
 - `summary` is the **root's advisory rollup** (the chip's question: "does anything need me?"):
   - `level`: the worst independent cause anywhere (`null` = nothing reports). It is `rollup.level` of the root, not
     the host row's `level`: with the computer plugin the host has records of its own and its row shows them, while
@@ -109,7 +118,8 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
     `device` (`null` if none) so a page can say "fdcanusb 28B3A25D › 28B3A25D CAN bus".
   - `devices`: physical devices (USB devices and hubs, PCI functions; not their tty / video / NIC nodes); `entities`: all rows.
 - `chip`: the top-bar chip as the AppIndicator renders it (`contract/indicator.py` model: `label`, `icon`
-  `"ok" | "attention"`, `menu` items `{"text", "enabled"?, "children"?, "action"?}` or `{"sep": true}`). The web page
+  `"ok" | "attention"`, `menu` items `{"text", "enabled"?, "children"?, "action"?}` or `{"sep": true}`; `status`, the
+  top bar's dot since 2026-10-23: `"error"` over `"warn"` over `"stale"` (stale or unknown), `"ok"` = no dot). The web page
   may draw its own chip from `summary`; the `menu` is what the tray shows.
 - `recent`: the 6 newest events (same shape as in `/api/v1/activity`).
 - `expected_setup` (2026-10-23): the person's rig manifest (docs/expected-setup.md): its `file` (`null` = none on
@@ -159,7 +169,7 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
   "owner": "moteus_servo",
   "id_text": "272813EF",
   "last_received": 1761095510.0, "age_s": 0.0, "expected_period_s": null, "stale_after_s": null,
-  "checks": 2, "actions": 1, "faults": 0,
+  "checks": 2, "actions": 1, "faults": 0, "collapsed": false,
   "children": []
 }
 ```
@@ -184,6 +194,7 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
 | `last_received`, `age_s` | When the row was last heard from: the newest `received` among its PERIODIC own records (the ones STALE is judged on), else among all its own records (`null` = no records); age on the host clock. |
 | `expected_period_s`, `stale_after_s` | Shortest declared period among the row's own periodic records and its STALE threshold (`null` = event-driven: never stale). |
 | `checks`, `actions`, `faults` | Counts of own status records, registered actions, and the host's open faults (pending or confirmed) on this row; details via `/api/v1/node`. |
+| `collapsed` | `true` for a group a page starts closed: `host/recently-seen` ("Recently seen": USB devices this host saw a plugin diagnose that are neither in the expected setup nor in a plugin's `describe.expected`, unplugged within the last day; each an OK `presence` row, never a warning or a fault). `false` everywhere else. |
 | `children` | Child nodes, ordered: ports and groups by name, plugin entities in the order the plugin sent them. |
 
 ## `GET /api/v1/node?path=<entity path>`
@@ -274,16 +285,17 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
   `false` while the file is not `editable`. `confirm[op]` is the exact sentence the confirm shows, built from the same
   plan the edit runs. `needs_rig`: the device is in no rig and there are several, so the page asks which.
 
-## `GET /api/v1/activity[?limit=N]`
+## `GET /api/v1/activity[?limit=N][&types=<type>,...]`
 
 ```json
 {
   "clock": {"...": "as in /state"},
   "events": [
     {"stamp": 1761095502.0, "iso": "2026-10-21T18:11:42-07:00", "time": "18:11:42", "code": "Plugged",
-     "kind": "plugged", "severity": "info", "message": "fdcanusb 28B3A25D plugged on 1-5 after 4 flaps on 1-7",
+     "kind": "plugged", "type": "usb", "id": "usb:1-7:21:add", "provisional": false, "severity": "info",
+     "message": "fdcanusb 28B3A25D plugged on 1-5 after 4 flaps on 1-7",
      "path": "host/usb1/port-1-5", "name": "Port 1-5", "hardware_id": "usb:0483:5740:28B3A25D", "port": "1-5",
-     "source": "io_facts.journal", "seq": 12, "args": {"port": "1-5", "flaps": 4}}
+     "source": "io_facts.journal", "seq": 12, "args": {"port": "1-5", "flaps": 4, "merged": ["usb:1-7:21:add", "usb:1-7:21:remove"]}}
   ],
   "faults": [
     {"path": "host/usb1/port-1-3/usb-1-3/can/15/driver", "code": "MoteusFault.33", "severity": "error",
@@ -299,17 +311,69 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
 }
 ```
 
-- `events`: newest first, `limit` default 200. `code` is the contract `Event.code` (`Booted`, `ShutDown`,
-  `Plugged`, `Unplugged`, `ReEnumerated` from the kernel log through `io_facts.journal`'s flap coalescer;
-  `FaultConfirmed`, `FaultHealed`, `FaultCleared` from the host's `FaultManager`; anything a plugin sends, e.g.
-  `NoAck`, `PortHeld`). `kind` is the human label of the code (`"re-enumerated"`, `"fault confirmed"`).
-  `severity` is `info | warn | error`. `port` is the USB port when known, else `""`.
+- `events`: newest first, `limit` default 200; `types` (comma separated) keeps only events of those types (an
+  unknown type → **400**, naming the known ones). `code` is the contract `Event.code`; `kind` its human label
+  (`"re-enumerated"`, `"plugging in"`); `severity` is `info | warn | error`; `port` is the USB port when known, else `""`.
+  Every event is **typed** (`type`), so a page can show "a complete view of all the port activity" (Zach, 2026-10-23)
+  and filter it. Only passive sources feed it (the kernel log, udev, sysfs, the host's own memory); nothing opens a device.
+
+  | `type` | `code`s | from | `args` beside `port` |
+  |---|---|---|---|
+  | `usb` | `Plugging`, `Unplugging` (**provisional**), `Plugged`, `Unplugged`, `ReEnumerated` (dropped and came back), `Flapped` (enumerated, dropped before settling 3 s, never came back) | udev at once; the kernel log (`io_facts.journal`'s coalescer) confirms | `product`, `identity`, `flaps`, `flap_ports`, `gap_s`, `merged` (the raw enumerations it folds); provisional: `product`, `serial`, `devnum` |
+  | `link` | `LinkSpeed` (info: the speed each settled enumeration linked at), `LinkDowngraded` (warn: a USB 3 device, sysfs `version` ≥ 3, linked below 5 Gb/s, or one that linked at USB 3 earlier this boot) | the kernel's `new <speed> USB device` line, sysfs | `speed_mbps`, `identity`; `usb_version` or `before_mbps` |
+  | `usb_error` | `UsbDescriptorReadError`, `UsbNotAcceptingAddress`, `UsbReset`, `UsbConfigFailed` (warn); `UsbOverCurrent`, `UsbEnumerationFailed`, `UsbCannotEnable`, `UsbResetFailed` (error); `UsbPortDisabled` ("disabled by hub (EMI?)", warn) | the kernel log (hub.c's words, `io_facts.kernel_log`); a burst on one port within 5 s is one event | `count`, `kernel` (the kernel's line) |
+  | `driver` | `DriverBound`, `DriverUnbound`: "cdc_acm bound on 1-1 → /dev/ttyACM1", "uvcvideo bound on 1-1 → /dev/video0, /dev/video1", "uvcvideo unbound from 1-1 (/dev/video0 gone)" | udev (interface bind / unbind, tty / video4linux / net nodes) and the kernel log (`cdc_acm`, `Found UVC`, USB serial converters); one event per enumeration and driver | `driver`, `nodes` |
+  | `network` | `NetCarrierUp` (info), `NetCarrierDown` (warn) | sysfs `carrier`, compared on every refresh | `interface`, `carrier_changes` |
+  | `pcie` | `PcieAerError` (warn when Corrected, error when Uncorrected / Fatal) | the kernel log (`AER:`, `PCIe Bus Error`); one per burst | `device` (PCI address), `driver`, `count`, `kernel` |
+  | `level` | `LevelChanged`: "<check>: ok → error (Code: message)", stale included | the history store (each status's effective level) | `status`, `from`, `to`, `status_code` |
+  | `fault` | `FaultConfirmed`, `FaultHealed`, `FaultCleared` | the host's `FaultManager` | `fault`, `occurrence` |
+  | `boot` | `Booted`, `ShutDown` | the kernel log, `journalctl --list-boots` | `devices` |
+  | `plugin` | anything a plugin sends, e.g. `NoAck`, `PortHeld` | the plugin | as sent |
+
+- `id` is the event's **stable** id; `provisional` is `true` while only udev has said it. A plug is
+  `usb:<port>:<devnum>:add`, an unplug `...:remove` (the kernel's device number, which udev reports as `DEVNUM`), so
+  the provisional `Plugging` and the `Plugged` (or `ReEnumerated`, `Flapped`) the kernel log settles it into are ONE
+  event: the same `id` goes `provisional: true → false`, its `code`, `message` and `stamp` relabelled in place, and
+  the log never shows both. A notice folding several enumerations (flaps) takes the first one's id; the others' rows
+  end. A link event is `<its enumeration>:link`, a driver event `<its enumeration>/<driver>:bind|unbind`, a level
+  change `level:<path>|<check>|<at>|<to>`, a plugin's `<source>#<seq>`. A page keys rows on `id` and replaces a row
+  whose `id` comes again. Latency (measured 2026-10-23 with a fake udev stream, uevent → an `/api/v1/events`
+  client): a provisional plug or unplug arrives in 0.10 s (the stream's 0.1 s coalescing); the kernel log confirms a
+  plug in place 3.1 s after it (the settle window) and an unplug 10.1 s after it (the return window).
 - `faults`: every fault the host remembers (`pending → confirmed → healed`, or `cleared`), contract `Fault` fields
   plus `*_iso` twins and the entity `name`. WARN confirms on its 3rd consecutive failing report, ERROR at once,
   3 passes heal (`contract.record.DEFAULT_DEBOUNCE`).
 - `link_health`: "the computer diagnoses its own wires", one row per (edge, metric): USB ports (enumerations in
   the last hour, link speed) and every entity of kind `bus` (its own checks, and the age of its last report).
   `level` uses the same vocabulary as rows.
+
+## `GET /api/v1/events[?types=<type>,...]` (Server-Sent Events)
+
+A `text/event-stream` (`Cache-Control: no-store`) for as long as the client stays: the page's `new
+EventSource("/api/v1/events")`, same-origin and read-only (no CORS header, so another origin cannot read it). `types`
+filters as on `/activity` (unknown → **400** before the stream starts).
+
+```
+retry: 2000
+event: hello
+data: {"api": "io-diagnostics/1", "revision": 41, "now": 1792790150.2, "latest": "usb:1-1:12:add"}
+
+id: usb:1-1:13:add
+event: activity
+data: {"...": "one event, exactly as in /api/v1/activity", "provisional": true, "message": "plugging in: fdcanusb FDA81D29 on 1-1…"}
+
+event: tick
+data: {"revision": 42, "reason": "udev", "now": 1792790150.9}
+```
+
+- `hello` once, on connect: the host's change `revision` and the newest event's `id` (what the page already has from
+  `/activity`). Nothing older is replayed: after a reconnect, re-fetch `/api/v1/activity`.
+- `activity`: an event that is new, or whose `code`, `provisional`, `message`, `stamp`, `severity` or `path` changed
+  (the same `id` confirmed in place), oldest first, among the newest 200.
+- `tick`: something a page draws changed (`reason`: `refresh` (every refresh, ~2 s), `udev`, `plugin` (a plugin's
+  records, 1 Hz for a follower), `stop`); re-fetch `/state` or the open node on it instead of waiting for the poll.
+  Changes within 0.1 s are one diff.
+- `: keepalive` comment lines every 15 s while nothing changes. The stream ends when the host stops.
 
 ## `GET /api/v1/records`
 
@@ -339,13 +403,19 @@ viewers, and what the rack session runner can read.
      "jobs": [{"device_id": "usb:1-3", "device_path": "host/usb1/port-1-3/usb-1-3",
                "last_run": {"started": 1761095500.0, "duration_s": 1.2, "outcome": "ok", "returncode": 0,
                             "accepted": 14, "rejected": 0, "problems": [], "rejected_lines": [],
-                            "message": "ran in 1.2 s · 14 records"}, "next_due_s": 28.8}]}
+                            "message": "ran in 1.2 s · 14 records"}, "next_due_s": 28.8, "follow": null}]}
   ]
 }
 ```
 
 `outcome` is `ok`, `malformed` (some lines rejected), `crashed`, `timeout` or `not_started`; the same outcome is the
-host check on the device row. `diagnose_args` is what the declaration appends after `diagnose --device <id>`
+host check on the device row. `follow` is `null` unless the plugin's `describe` declares `follow` (docs/build-plan-v1.md
+"Plugin boundary"): its job then runs no diagnose (`last_run` stays `null`, `next_due_s` `null`) and `follow` is
+`{"state": "running" | "restarting" | "starting", "pid", "since", "first_started", "restarts", "lines", "records",
+"rejected", "period_s", "retry_at", "exit", "stderr"}` (times on the host clock; `exit` how the last process ended,
+`stderr` its last stderr line). The device row's `<plugin>: plugin run` check then says "following since 14:20:01
+(pid 4242) · every 1 s · 3612 records" (OK, re-said once per period, so a silent follower goes STALE), or ERROR
+`PluginCrashed` / `PluginNotStarted` "follow exited 1: ... · restarting in 4 s". `diagnose_args` is what the declaration appends after `diagnose --device <id>`
 (e.g. a driver's `--passive`). `describe` is `null` until the plugin's `describe` verb has run (once per enabled
 plugin, all in parallel, at the host's first refresh, before the first match); a v0.1 plugin may state
 `"record_version": "0.1"` and its `expected` devices there (see "Expected, not connected"). `exclusive` is the

@@ -28,6 +28,23 @@ class | netdev | tty glob], actions: [...]}; `<cmd> diagnose --device <id>` → 
 pyrealsense2) stay in the driver's own uv env, a crashing driver can't take the host down, any language works, and
 the driver's diagnostics.py is "the exact same code" the driver already has.
 
+**`follow`, an optional long-running verb (additive, 2026-10-23; Zach: "something that feels a bit like system
+monitor with the live data").** A plugin may declare in `describe` `"follow": {"period_s": 1}` (or `"follow": true`,
+1 s). The host's service (`serve`, `tray`; never `once`) then runs NO periodic diagnose for that plugin's devices and
+keeps ONE `<cmd> follow --device <id> [diagnose_args]` per matched device alive instead (`runner.Follower`):
+- **Lines** are exactly diagnose's (`contract.record` JSON lines: Entity / DiagnosticStatus / Event, paths relative
+  to the device, the same validation), printed and flushed one batch per period, forever. The host applies each line
+  as it arrives, so the history fills at the plugin's rate. Statuses set `expected_period_s` to their real cadence.
+- **Environment** as for diagnose; `IO_DIAGNOSTICS_NOW` is the start time.
+- **Restarts:** when it exits (any code) or prints nothing for `max(10 × period_s, timeout_s)` (its process group
+  is killed), the host restarts it after 1 s, doubling to 60 s, back to 1 s after a run of 60 s or more. While it is
+  down the device row's `<plugin>: plugin run` is ERROR `PluginCrashed` ("follow exited 1: ... · restarting in 4 s");
+  while it runs, OK "following since ...", re-said once per period, so a silent follower goes STALE.
+- **Bounded:** a line over 256 KiB is rejected and skipped unread, stderr keeps its last 20 lines, the job's record
+  cache keeps the latest per entity / check and at most 500 events. A device that leaves stops its follower.
+- **Stop:** the host kills the process group (SIGKILL) on stop or when the device leaves; a follower must hold
+  nothing that needs a clean exit. `plugins/computer` follows at 1 Hz (docs/api-v1.md `/api/v1/plugins` → `follow`).
+
 ## Lanes (disjoint write sets)
 - A **UI polish** — io_diagnostics/web/* (moved from prototypes/v6-converged/web) per decision 3; screenshots.
 - B **Discovery sources** — io_facts/{pci,netdev,tty,v4l}.py + tests with sysfs fixtures; merge into the tree as

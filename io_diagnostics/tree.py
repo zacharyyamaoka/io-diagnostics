@@ -31,6 +31,8 @@ from contract.record import (ERROR, OK, RANK, STALE, STALE_FACTOR, STALE_FLOOR_S
                              KeyValue, Measurement, Summary, effective_level, summarize)
 
 HOST_PATH = "host"
+RECENT_PATH = f"{HOST_PATH}/recently-seen"  # devices only seen, not expected (host.py): drawn collapsed
+COLLAPSED = frozenset({RECENT_PATH})  # groups a page starts closed (node "collapsed")
 GROUP_NAMES = {"usb": "USB", "pci": "PCI", "net": "Network", "tty": "Serial", "v4l": "Video"}
 GROUP_ICONS = {"usb": "usb", "pci": "pci", "net": "net", "tty": "tty", "v4l": "video"}
 ICONS = ("host", "group", "usb", "pci", "net", "tty", "video", "port", "hub", "adapter", "bus", "servo", "chip", "motor",
@@ -689,6 +691,7 @@ def node_json(path: str, rows: Rows, layer: OsLayer, faults_by_path: dict[str, i
         "expected_period_s": min(periods) if periods else None,
         "stale_after_s": max(STALE_FACTOR * min(periods), STALE_FLOOR_S) if periods else None,
         "checks": len(own), "actions": len(entity.actions), "faults": faults_by_path.get(path, 0),
+        "collapsed": path in COLLAPSED,
     }
     children = merged.children.get(path, [])
     node["children"] = ([node_json(child, rows, layer, faults_by_path, nested=True) for child in children]

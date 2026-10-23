@@ -28,8 +28,9 @@ from io_diagnostics import settings as settings_module
 from io_diagnostics import tree
 from io_diagnostics.faults import Faults
 from io_diagnostics.plugins import load_plugins, match_devices
-from io_diagnostics.runner import (RUNNER_SOURCE, RUNNING, Gates, Job, Scheduler, absolute, act_argv, describe,
-                                   host_status, rebase, run_act, run_check, run_plugin)
+from io_diagnostics.runner import (RUNNER_SOURCE, RUNNING, Follower, Gates, Job, RunOutcome, Scheduler, absolute, act_argv,
+                                   describe, follow_period, follow_status, host_status, rebase, run_act, run_check,
+                                   run_plugin)
 
 from contract.record import (OK, RANK, RECORD_VERSION, SCHEMA, STALE, STALE_FACTOR, STALE_FLOOR_S, WARN, Action,
                              DiagnosticStatus, Entity, Event, KeyValue, Measurement, effective_level, from_dict, to_dict)
@@ -43,6 +44,9 @@ FIXTURE_FILE = FIXTURE_PLUGINS_DIR / "v6_frames.json"
 FIXTURE_ALIASES = {"plug": "F1", "bus-busy": "F2", "after-restart": "F3", "f1": "F1", "f2": "F2", "f3": "F3",
                    "v6-f1": "F1", "v6-f2": "F2", "v6-f3": "F3"}
 REFRESH_S = 2.0
+# WHY faster while a plug is provisional: the kernel log settles it 3 s (plug) or 10 s (unplug) after the uevent, and
+# the confirmation must replace the provisional row as soon as it is due, not up to 2 s later
+FAST_REFRESH_S = 0.5
 # A precondition state beside True (pass) / False (fail) / None (can't tell): held by this host's own running check,
 # so it frees by itself in a few seconds. Never "blocked", never a warning (round 3 brief item 10).
 WAITING = "waiting"
@@ -93,8 +97,11 @@ class LiveOs:
     mode = "live"
 
     def __init__(self, skeleton_ttl_s: float = 2.0):
+        from io_facts import udev
+
         self.hostname = socket.gethostname()
         self.kernel_log = activity_module.LiveKernelLog()
+        self.udev_command = list(udev.MONITOR)  # the host listens to udev only for an OS source that has this
         self._skeleton_ttl_s = skeleton_ttl_s
         self._skeleton_at = -1e18
         self._skeleton: tuple[list[dict], list[dict]] = ([], [])
@@ -113,6 +120,9 @@ class LiveOs:
 
     def boots(self) -> list[activity_module.Boot]:
         return self.kernel_log.boots(time.monotonic())
+
+    def close(self) -> None:
+        self.kernel_log.close()
 
     def gate(self, device: dict | None, check: str) -> tuple[bool | None, str]:
         """Passive precondition checks: who holds the port / camera, who holds the rack bus lock. Never takes it."""
@@ -261,6 +271,11 @@ SEEN_FILE = "seen.json"
 SEEN_WRITE_S = 300.0  # refresh a known device's last_seen on disk at most this often; a new device is written at once
 EXPECTED_PATH = f"{tree.HOST_PATH}/expected"
 EXPECTED_SOURCE = "io_diagnostics.expected"
+# WHY a group of its own, collapsed and never above OK: a device only SEEN (a plugin diagnosed it once) is not expected.
+# FDA81D29 was plugged for 15 s on 2026-10-23 and its unplug confirmed an ExpectedAbsent WARN from seen.json alone
+# (Zach: a seen-only device must not warn when it goes absent). Its unplug is an activity event; this row is a memory.
+RECENT_PATH = tree.RECENT_PATH
+RECENTLY_SEEN_S = 86400.0  # a seen-only device gets its info row for a day after it was last seen, then none
 
 
 def default_state_dir() -> Path:
@@ -364,8 +379,9 @@ class Host:
     def __init__(self, *, plugins_dir: Path = PLUGINS_DIR, clock: Clock | None = None, os_source=None,
                  fixture: dict | None = None, plugin_env: dict[str, str] | None = None, enable: tuple[str, ...] = (),
                  state_file: Path | None = None, expected_file: Path | None = None, settings_file: Path | None = None,
-                 history_window_s: float | None = None):
+                 history_window_s: float | None = None, follow_backoff_s: tuple[float, float] | None = None):
         self.plugins_dir = Path(plugins_dir)
+        self.follow_backoff_s = follow_backoff_s  # None: runner.FOLLOW_BACKOFF_S (tests make it short)
         self.clock = clock or Clock()
         self.os = os_source or LiveOs()
         self.fixture = fixture  # {"name", "label", "story", "clock", "frames": [...]} or None
@@ -394,6 +410,14 @@ class Host:
         self.sources: list[dict] = []
         self.os_records: list[DiagnosticStatus] = []
         self.usb = activity_module.UsbActivity()
+        self.live = activity_module.LiveActivity(self.clock.now)  # udev's provisional plugs and binds, sysfs carriers
+        self.pending: list[str] = []  # provisional event ids the kernel log has not settled yet
+        self.followers: dict[tuple[str, str], Follower] = {}
+        # every change a page could see (a refresh, a udev event, a plugin's records): /api/v1/events waits on it
+        self.changes = threading.Condition()
+        self.revision = 0
+        self.change_reason = ""
+        self._wake = threading.Event()
         self.faults = Faults()
         self.describes: dict[str, dict | None] = {spec.name: None for spec in self.specs}
         self.url = ""
@@ -457,8 +481,9 @@ class Host:
         boots = self.os.boots()
         usb = activity_module.usb_activity(boots, now, self.utc_offset_s)
         layer = tree.build_os_layer(self.os.hostname, devices, extra_ports=frozenset(usb.recent_ports))
-        usb.events = [dataclasses.replace(event, path=layer.port_paths.get(str(event.args.get("port")), event.path))
-                      if event.args.get("port") else event for event in usb.events]
+        usb.events = [self._placed(event, layer) for event in usb.events]
+        usb.events = self._downgrades(usb.events, layer)
+        self.live.carriers([device for device in devices if device.get("bus") == "net"])
         pairs = match_devices(self.specs, layer.matchables())
         claimed = {layer.entities[path].hardware_id: layer.entities[path].name
                    for path in {layer.device_paths[str(device.get("id"))] for _spec, device in pairs}
@@ -491,16 +516,78 @@ class Host:
                 self._last_os_level[key] = signature
                 changed.append(status)
         self.faults.observe(changed, now)
+        self._sync_followers()
+        self.notify("refresh")
+
+    # --- activity: where an event lands, and what only sysfs knows -------------------------------------------------
+    @staticmethod
+    def _placed(event: Event, layer: tree.OsLayer) -> Event:
+        """An activity event on its tree row: a USB port's, a NIC's (``device_id``), a PCI function's (AER ``device``)."""
+
+        args = event.args if isinstance(event.args, dict) else {}
+        if args.get("port") and str(args["port"]) in layer.port_paths:
+            return dataclasses.replace(event, path=layer.port_paths[str(args["port"])])
+        if args.get("device_id") and str(args["device_id"]) in layer.device_paths:
+            return dataclasses.replace(event, path=layer.device_paths[str(args["device_id"])])
+        if event.code == "PcieAerError" and args.get("device"):
+            found = next((path for device_id, path in layer.device_paths.items() if device_id.endswith(str(args["device"]))), None)
+            if found:
+                return dataclasses.replace(event, path=found)
+        return event
+
+    @staticmethod
+    def _downgrades(events: list[Event], layer: tree.OsLayer) -> list[Event]:
+        """A ``LinkSpeed`` of the enumeration a USB 3 device (sysfs ``version`` >= 3) is on now, below 5 Gb/s, is a
+        ``LinkDowngraded`` WARN: the D435 on 1-1 at 480 Mb/s (2026-10-23), a USB 2 cable or hub in the way."""
+
+        latest = {}
+        for number, event in enumerate(events):
+            if event.code == "LinkSpeed":
+                latest[str(event.args.get("port"))] = number
+        out = list(events)
+        for port, number in latest.items():
+            device_id = layer.port_devices.get(port)
+            attrs = (layer.devices.get(device_id) or {}).get("attrs") or {} if device_id else {}
+            try:
+                major = int(str(attrs.get("usb_version") or "0").strip().split(".")[0])
+            except ValueError:
+                major = 0
+            event = out[number]
+            speed = event.args.get("speed_mbps") or 0
+            if major >= 3 and 0 < speed < activity_module.SUPERSPEED_MBPS:
+                out[number] = dataclasses.replace(
+                    event, code="LinkDowngraded", severity="warn",
+                    message=f"{event.message}, but it is a USB {str(attrs['usb_version']).strip()} device: a USB 2 cable, hub"
+                            " or port is in the way", args={**event.args, "usb_version": str(attrs["usb_version"]).strip()})
+        return out
+
+    # --- change notification (GET /api/v1/events) -------------------------------------------------------------------
+    def notify(self, reason: str) -> None:
+        with self.changes:
+            self.revision += 1
+            self.change_reason = reason
+            self.changes.notify_all()
+
+    def wake(self) -> None:
+        """Refresh now (a udev event, a new kernel line), not at the next tick."""
+
+        self._wake.set()
+
+    def on_udev(self, block: dict) -> None:
+        if self.live.udev(block):
+            self.notify("udev")
+        self._wake.set()
 
     # --- expected but absent ------------------------------------------------------------------------------------
     def expected_devices(self) -> dict[str, dict]:
-        """``hardware_id -> {name, last_seen, source, owner}``: the devices this host has seen a plugin diagnose, plus
-        every enabled plugin's describe ``expected`` (record v0.1; the plugin's entry wins over the memory), plus the
-        expected setup's devices that have a hardware_id (docs/expected-setup.md; the person's file wins over both).
-        A retired device, or one a person chose to Forget, is never expected."""
+        """``hardware_id -> {name, last_seen, source, owner, expected}``: the devices this host has seen a plugin
+        diagnose (``expected`` False: only seen), plus every enabled plugin's describe ``expected`` (record v0.1; the
+        plugin's entry wins over the memory), plus the expected setup's devices that have a hardware_id
+        (docs/expected-setup.md; the person's file wins over both). A retired device, or one a person chose to Forget,
+        is in neither. Only ``expected`` True ones warn when absent (``_absent_rows``)."""
 
         out = {hardware_id: {"name": str(entry.get("name") or hardware_id), "last_seen": entry.get("last_seen"),
-                             "source": "seen by this host", "owner": "io_diagnostics"}
+                             "source": "seen by this host", "owner": "io_diagnostics", "expected": False}
                for hardware_id, entry in self.seen.devices.items()}
         for spec in self.specs:
             if not spec.enabled:
@@ -512,14 +599,15 @@ class Host:
                 remembered = out.get(hardware_id, {})
                 out[hardware_id] = {"name": str(item.get("name") or remembered.get("name") or hardware_id),
                                     "last_seen": item.get("last_seen") or remembered.get("last_seen"),
-                                    "source": str(item.get("source") or spec.name), "owner": spec.name}
+                                    "source": str(item.get("source") or spec.name), "owner": spec.name, "expected": True}
         for rig, device in self.setup.manifest.entries():
             if not device.hardware_id:
                 continue  # a serial-only entry is judged on the merged tree (expected.evaluate)
             known = next((key for key in out if expected_module.same_id(key, device.hardware_id)), device.hardware_id)
             remembered = out.pop(known, {})
             out[device.hardware_id] = {"name": device.label(), "last_seen": remembered.get("last_seen"),
-                                       "source": f"expected setup: {rig.name}", "owner": remembered.get("owner", "io_diagnostics")}
+                                       "source": f"expected setup: {rig.name}", "owner": remembered.get("owner", "io_diagnostics"),
+                                       "expected": True}
         forgotten = set(self.seen.forgotten)
         return {hardware_id: entry for hardware_id, entry in out.items()
                 if hardware_id not in forgotten and self.setup.retired_entry(hardware_id, self._usb_serial(hardware_id)) is None}
@@ -531,7 +619,8 @@ class Host:
 
     def _absent_rows(self, layer: tree.OsLayer, boots: list, now: float) -> list[DiagnosticStatus]:
         """One row (entity + WARN status) per expected USB device that is not on USB now, under ``host/expected``,
-        saying in plain words what the kernel saw. WHY warn, not error: absent is not broken."""
+        saying in plain words what the kernel saw. WHY warn, not error: absent is not broken. A device that was only
+        seen gets an OK row under the collapsed ``host/recently-seen`` instead, for ``RECENTLY_SEEN_S``."""
 
         present = {ids for entity in layer.entities.values() if (ids := activity_module.usb_id(entity.hardware_id))}
         note = str(getattr(getattr(self.os, "kernel_log", None), "note", "") or "")
@@ -540,6 +629,9 @@ class Host:
         for hardware_id, expected in sorted(self.expected_devices().items()):
             ids = activity_module.usb_id(hardware_id)
             if ids is None or ids in present:  # v0.1: only USB ids (usb:<vid>:<pid>:<serial>) are checked here
+                continue
+            if not expected["expected"]:
+                statuses += self._recent_row(layer, hardware_id, expected, boots, now, unreadable)
                 continue
             if EXPECTED_PATH not in layer.entities:
                 layer.entities[EXPECTED_PATH] = Entity(EXPECTED_PATH, "Expected, not connected", "group",
@@ -562,6 +654,25 @@ class Host:
                                              hardware_id=hardware_id, values=values, path=path, code="ExpectedAbsent",
                                              stamp=now, received=now, source=EXPECTED_SOURCE))
         return statuses
+
+    def _recent_row(self, layer: tree.OsLayer, hardware_id: str, seen: dict, boots: list, now: float,
+                    unreadable: str) -> list[DiagnosticStatus]:
+        last = seen["last_seen"]
+        if not isinstance(last, (int, float)) or isinstance(last, bool) or now - float(last) > RECENTLY_SEEN_S:
+            return []
+        if RECENT_PATH not in layer.entities:
+            layer.entities[RECENT_PATH] = Entity(RECENT_PATH, "Recently seen", "group", via=tree.HOST_PATH, owner="io_diagnostics")
+            layer.icons[RECENT_PATH] = "group"
+        path = f"{RECENT_PATH}/{tree.slug(hardware_id)}"
+        layer.entities[path] = Entity(path, seen["name"], "device", via=RECENT_PATH, hardware_id=hardware_id, owner=seen["owner"])
+        layer.icons[path] = "usb"
+        evidence = activity_module.kernel_evidence(boots, hardware_id, now, self.utc_offset_s, unreadable)
+        when = _seen_text(last, self.utc_offset_s)
+        return [DiagnosticStatus(level=OK, name=f"{seen['name']}: presence", hardware_id=hardware_id, path=path,
+                                 message=f"seen {when} · not on USB now · {evidence['text']} (not in the expected setup)",
+                                 values=(KeyValue("kernel_evidence", evidence["kind"]), KeyValue("last_seen", when),
+                                         KeyValue("expected_by", "nothing: only seen by this host")),
+                                 stamp=now, received=now, source=EXPECTED_SOURCE)]
 
     # --- plugin runs -----------------------------------------------------------------------------------------------
     def _job_env(self, job: Job | None = None) -> dict[str, str]:
@@ -598,17 +709,64 @@ class Host:
             entity = self.layer.entities.get(job.device_path)
         outcome = run_plugin(job.spec, job.device, job.device_path, self.clock.now, self._job_env(job),
                              hardware_id=entity.hardware_id if entity else "")
+        self._absorb(job, outcome)
+
+    def _absorb(self, job: Job, outcome: RunOutcome, follower: Follower | None = None) -> None:
+        """One diagnose run, or one follow line, into the job's cache, the fault memory and the history."""
+
         now = self.clock.now()
         with self.lock:
-            fresh_statuses, _fresh_events = job.cache.apply(outcome, received=now)
+            fresh_statuses, fresh_events = job.cache.apply(outcome, received=now)
             hardware_id = self.layer.entities.get(job.device_path).hardware_id if job.device_path in self.layer.entities else ""
-            job.cache.host_status = host_status(job.spec, outcome, hardware_id, now)
-            job.last = outcome
+            previous = job.cache.host_status
+            if follower is None:
+                job.cache.host_status = host_status(job.spec, outcome, hardware_id, now)
+                job.last = outcome
+            else:
+                status = follow_status(job.spec, follower, hardware_id, now)
+                # WHY re-said at most once per period while nothing changes: it is the follower's heartbeat, not news
+                same = previous is not None and (previous.level, previous.code) == (status.level, status.code)
+                if same and previous.received is not None and now - previous.received < follower.period_s:
+                    status = None
+                if status is not None:
+                    job.cache.host_status = status
             device_path = self.layer.device_paths.get(str(job.device.get("id")), job.device_path)
         observed = [rebase(status, device_path) for status in fresh_statuses]
-        observed.append(dataclasses.replace(job.cache.host_status, path=device_path))
+        if job.cache.host_status is not previous or follower is None:
+            observed.append(dataclasses.replace(job.cache.host_status, path=device_path))
         self.faults.observe(observed, now)
         self.history.observe(observed, now, source=("job", *job.key))
+        if observed or fresh_events:
+            self.notify("plugin")
+
+    def _sync_followers(self) -> None:
+        """One follower per job whose plugin's describe declares ``follow`` (started by ``start``, never by ``once``);
+        a job that went away (its device left) stops its follower."""
+
+        if self._scheduler is None:
+            return
+        with self.lock:
+            jobs = dict(self.jobs)
+        for key in [key for key in self.followers if key not in jobs]:
+            self.followers.pop(key).stop()
+        for key, job in jobs.items():
+            period = follow_period(self.describes.get(job.spec.name)) if job.spec.kind == "driver" else None
+            if period is None or key in self.followers:
+                continue
+            entity = self.layer.entities.get(job.device_path)
+
+            def absorb(outcome: RunOutcome, job: Job = job) -> None:
+                self._absorb(job, outcome, self.followers.get(job.key))
+
+            follower = Follower(job.spec, job.device, job.device_path, period, self.clock.now, lambda job=job: self._job_env(job),
+                                absorb, hardware_id=entity.hardware_id if entity else "", backoff_s=self.follow_backoff_s)
+            self.followers[key] = follower
+            follower.start()
+
+    def scheduled_jobs(self) -> list[Job]:
+        """What the scheduler runs: every job but the followed ones, and the checks."""
+
+        return [job for key, job in self.jobs.items() if key not in self.followers] + list(self.check_jobs.values())
 
     def _run_check(self, job: Job) -> None:
         """Run one Monitoring Plugins check; its one status lands on the entity it attaches to (``attach``)."""
@@ -667,18 +825,26 @@ class Host:
 
     # --- background service ------------------------------------------------------------------------------------
     def start(self, *, udev: bool = True) -> None:
-        self.refresh()
-        self._scheduler = Scheduler(lambda: list(self.jobs.values()) + list(self.check_jobs.values()), self._run_job,
-                                    gates=self.gates)
+        kernel_log = getattr(self.os, "kernel_log", None)
+        if hasattr(kernel_log, "on_lines"):
+            kernel_log.on_lines = self.wake  # a new kernel line refreshes at once
+        self._scheduler = Scheduler(self.scheduled_jobs, self._run_job, gates=self.gates)
+        self.refresh()  # after the scheduler exists: the first refresh starts the followers, so they never run a diagnose
         self._scheduler.start()
         threading.Thread(target=self._refresh_loop, name="io-refresh", daemon=True).start()
         threading.Thread(target=self.describe_all, name="io-describe", daemon=True).start()
-        if udev and self.os.mode == "live":
-            self._udev = activity_module.UdevWatcher(self.os.invalidate)
+        # WHY the OS source decides: only a live machine has a udev to listen to (a fixture or a fake machine has none)
+        command = getattr(self.os, "udev_command", None)
+        if udev and command:
+            self._udev = activity_module.UdevWatcher(self.os.invalidate, self.on_udev, command)
             self._udev.start()
 
     def _refresh_loop(self) -> None:
-        while not self._stop.wait(REFRESH_S):
+        while not self._stop.is_set():
+            self._wake.wait(FAST_REFRESH_S if self.pending else REFRESH_S)
+            self._wake.clear()
+            if self._stop.is_set():
+                return
             try:
                 self.refresh()
                 self.faults.tick(self.clock.now())
@@ -687,10 +853,17 @@ class Host:
 
     def stop(self) -> None:
         self._stop.set()
+        self._wake.set()
         if self._scheduler:
             self._scheduler.stop()
         if self._udev:
             self._udev.stop()
+        for follower in list(self.followers.values()):
+            follower.stop()
+        self.followers.clear()
+        if hasattr(self.os, "close"):
+            self.os.close()
+        self.notify("stop")
 
     # --- views -------------------------------------------------------------------------------------------------
     def view(self) -> View:
@@ -711,7 +884,10 @@ class Host:
                 layer = self._layer_with(setup.entities)
                 merged = tree.merge(layer, jobs, self.os_records + setup.statuses + notes + checks)
             rows = tree.build_rows(merged, now)
-            events = list(self.usb.events) + self.faults.events
+            live = [self._placed(event, self.layer) for event in self.live.events()]
+            events, self.pending = activity_module.merge(self.usb.events, self.usb.consumed, live)
+            events += self.faults.events
+            events += activity_module.level_events(self.history.transitions(now))
             for job in self.jobs.values():
                 device_path = self.layer.device_paths.get(str(job.device.get("id")))
                 if device_path:
@@ -856,9 +1032,10 @@ class Host:
         return {"level": root.rollup.level, "counts": dict(root.rollup.counts), "attention": attention,
                 "entities": len(view.merged.entities), "devices": len(view.layer.physical)}
 
-    def events_json(self, view: View, limit: int) -> list[dict]:
+    def events_json(self, view: View, limit: int, types: tuple[str, ...] | None = None) -> list[dict]:
         names = self._names(view)
-        return [activity_module.event_json(event, self.utc_offset_s, names) for event in view.events[:limit]]
+        events = view.events if not types else [event for event in view.events if activity_module.event_type(event.code) in types]
+        return [activity_module.event_json(event, self.utc_offset_s, names) for event in events[:limit]]
 
     def state(self) -> dict:
         from io_diagnostics.tray import chip_model
@@ -910,7 +1087,7 @@ class Host:
             return None
         if view.setup and path in view.setup.rigs:
             return "rig", {"rig": view.setup.rigs[path]}
-        if path.startswith(EXPECTED_PATH + "/"):
+        if path.startswith((EXPECTED_PATH + "/", RECENT_PATH + "/")):  # a recently seen row is absent too: Forget drops it
             serials = tuple(serial for serial in ((entity.identity or {}).get("serial_number", ""),) + self._usb_serial(entity.hardware_id) if serial)
             return "absent", {"hardware_id": entity.hardware_id, "serials": serials, "name": entity.name}
         if layer.device_of_path.get(path) in layer.physical:
@@ -1352,9 +1529,14 @@ class Host:
         return {**out, **result}
 
     # --- activity, records, plugins -----------------------------------------------------------------------------
-    def activity(self, limit: int = 200) -> dict:
+    def activity(self, limit: int = 200, types: tuple[str, ...] | None = None) -> dict:
+        """``types``: only events of these types (``activity.TYPES``); raises ValueError for one it does not know."""
+
+        unknown = sorted(set(types or ()) - set(activity_module.TYPES))
+        if unknown:
+            raise ValueError(f"unknown event type {', '.join(map(repr, unknown))}: one of {', '.join(activity_module.TYPES)}")
         view = self.view()
-        return {"clock": self.clock_json(view.now), "events": self.events_json(view, limit),
+        return {"clock": self.clock_json(view.now), "events": self.events_json(view, limit, types),
                 "faults": [self.fault_json(fault, view) for fault in self.faults.all()],
                 "link_health": activity_module.link_health(view.rows, view.layer, self.utc_offset_s)}
 
@@ -1395,11 +1577,14 @@ class Host:
                         "describe": self.describes.get(spec.name),
                         "jobs": [{"device_id": str(job.device.get("id")), "device_path": job.device_path,
                                   "last_run": job.last.summary() if job.last else None,
-                                  "next_due_s": round(max(job.next_due - time.monotonic(), 0.0), 1) if self._scheduler else None}
+                                  "next_due_s": (None if job.key in self.followers else
+                                                 round(max(job.next_due - time.monotonic(), 0.0), 1) if self._scheduler else None),
+                                  "follow": self.followers[job.key].state() if job.key in self.followers else None}
                                  for job in jobs if job.spec.name == spec.name]
                         + [{"device_id": job.device["id"], "device_path": attached.get(spec.name),
                             "last_run": self._check_run(spec.name),
-                            "next_due_s": round(max(job.next_due - time.monotonic(), 0.0), 1) if self._scheduler else None}
+                            "next_due_s": round(max(job.next_due - time.monotonic(), 0.0), 1) if self._scheduler else None,
+                            "follow": None}
                            for job in self.check_jobs.values() if job.spec.name == spec.name]})
         return {"directory": str(self.plugins_dir), "problems": list(self.plugin_problems), "plugins": out}
 

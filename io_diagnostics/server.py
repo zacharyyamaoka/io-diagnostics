@@ -6,7 +6,8 @@ page"). Every click is a dry run first; a real run needs that dry run's token an
 setup card's ``POST /api/v1/expect | forget | retire`` rewrite the person's rig file under the same page-only rule
 (no device is touched, so no dry run and no token), and ``POST /api/v1/settings`` (the View options: the history
 window, written to settings.toml) likewise. Every other POST / PUT / DELETE / PATCH is 405. Binds to 127.0.0.1 by
-default; the page polls ``/api/v1/state`` once a second. Run by the release-channels runtime as Preview or an agent's
+default; the page polls ``/api/v1/state`` once a second, and may listen to ``GET /api/v1/events`` (Server-Sent
+Events: each new or changed activity event, and a tick per change) so a plug shows without waiting for the poll. Run by the release-channels runtime as Preview or an agent's
 lane, it also answers ``/__sps/*`` for the Stable / Preview chip (release_channels.py, docs/release-channels.md).
 """
 
@@ -37,6 +38,14 @@ SETUP_EDITS = {"/api/v1/expect": "expect", "/api/v1/forget": "forget", "/api/v1/
 UI_HEADER = "X-IO-Diagnostics"
 UI_HEADER_VALUE = "ui"
 MAX_BODY = 64 * 1024
+EVENTS_KEEPALIVE_S = 15.0  # an SSE comment this often while nothing changes, so a dead client is noticed
+EVENTS_COALESCE_S = 0.1  # a burst of changes (a plug's ~30 udev blocks) is one diff
+EVENTS_WINDOW = 200  # the newest events each diff compares
+
+
+def _types(query: dict) -> tuple[str, ...] | None:
+    raw = ",".join(query.get("types") or [])
+    return tuple(word.strip() for word in raw.split(",") if word.strip()) or None
 
 
 class ActGate:
@@ -81,6 +90,10 @@ class ActGate:
             return entry, "", ""
 
 
+def _signature(event: dict) -> tuple:
+    return (event["code"], event["provisional"], event["message"], event["stamp"], event["severity"], event["path"])
+
+
 def _int_or_null(value) -> bool:
     return value is None or (isinstance(value, int) and not isinstance(value, bool))
 
@@ -104,7 +117,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(found) if found else self._json({"error": f"no entity {path!r}"}, 404)
             if parsed.path == "/api/v1/activity":
                 limit = int((query.get("limit") or ["200"])[0])
-                return self._json(self.host.activity(max(1, min(limit, 5000))))
+                try:
+                    return self._json(self.host.activity(max(1, min(limit, 5000)), _types(query)))
+                except ValueError as error:
+                    return self._json({"error": str(error)}, 400)
+            if parsed.path == "/api/v1/events":
+                return self._events(query)
             if parsed.path == "/api/v1/records":
                 return self._json(self.host.records())
             if parsed.path == "/api/v1/plugins":
@@ -142,6 +160,58 @@ class Handler(BaseHTTPRequestHandler):
             return self._act() if endpoint == "/api/v1/act" else self._setup_edit(SETUP_EDITS[endpoint])
         except Exception as error:  # noqa: BLE001 - show the failure, keep serving
             return self._json({"error": f"{type(error).__name__}: {error}"}, 500)
+
+    # --- GET /api/v1/events: Server-Sent Events (docs/api-v1.md "Events") -------------------------------------------
+    def _events(self, query: dict):
+        """Stream ``activity`` (an event, new or changed: a provisional plug, then the same id confirmed) and ``tick``
+        (something a page draws changed) until the client leaves or the host stops. Read-only; no CORS header, so only
+        the page's own origin can read it (EventSource is same-origin unless the server allows otherwise)."""
+
+        host, types = self.host, _types(query)
+        try:
+            host.activity(1, types)
+        except ValueError as error:
+            return self._json({"error": str(error)}, 400)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+        revision = host.revision
+        snapshot = host.activity(EVENTS_WINDOW, types)
+        sent = {event["id"]: _signature(event) for event in snapshot["events"]}
+        try:
+            self._sse("hello", {"api": host.health()["api"], "revision": revision, "now": snapshot["clock"]["now"],
+                              "latest": snapshot["events"][0]["id"] if snapshot["events"] else None}, retry_ms=2000)
+            while True:
+                with host.changes:
+                    host.changes.wait_for(lambda: host.revision != revision or host._stop.is_set(), timeout=EVENTS_KEEPALIVE_S)
+                if host._stop.is_set():
+                    return
+                if host.revision == revision:
+                    self.wfile.write(b": keepalive\n\n")
+                    self.wfile.flush()
+                    continue
+                time.sleep(EVENTS_COALESCE_S)
+                revision, reason = host.revision, host.change_reason
+                current = host.activity(EVENTS_WINDOW, types)
+                for event in reversed(current["events"]):  # oldest first, as they happened
+                    if sent.get(event["id"]) != _signature(event):
+                        sent[event["id"]] = _signature(event)
+                        self._sse("activity", event, event_id=event["id"])
+                keep = {event["id"] for event in current["events"]}
+                sent = {key: value for key, value in sent.items() if key in keep}
+                self._sse("tick", {"revision": revision, "reason": reason, "now": current["clock"]["now"]})
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            return  # the client left
+
+    def _sse(self, name: str, data: dict, *, event_id: str | None = None, retry_ms: int | None = None) -> None:
+        lines = [f"retry: {retry_ms}"] if retry_ms else []
+        if event_id is not None:
+            lines.append(f"id: {event_id}")
+        lines += [f"event: {name}", "data: " + json.dumps(data, default=str, ensure_ascii=False)]
+        self.wfile.write(("\n".join(lines) + "\n\n").encode())
+        self.wfile.flush()
 
     # --- the Stable / Preview chip, under the release-channels runtime only (release_channels.py) -------------------
     def _sps(self, method: str):

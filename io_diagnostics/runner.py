@@ -9,6 +9,9 @@ One run = ``<command> diagnose --device <id>`` for one (plugin, device) pair, bo
 - a plugin that cannot start, exits non-zero, or hangs past its timeout (its whole process group is killed)
   becomes an ERROR check on its device row, authored by the host (``source = "io_diagnostics.runner"``).
 
+A plugin whose ``describe`` declares ``follow`` is instead kept running: ONE ``<command> follow --device <id>`` per
+device (``Follower``), its JSON lines applied as they arrive, restarted with a backoff when it exits.
+
 Paths a plugin writes are RELATIVE to its device: ``""`` is the device itself, ``"can/15"`` is below it; a path
 that already starts with the device's tree path (passed in ``IO_DIAGNOSTICS_DEVICE_PATH``) is accepted too. The
 cache stores them relative, so a device that moves to another USB port keeps its children (``tree`` rebases them).
@@ -16,9 +19,11 @@ cache stores them relative, so a device that moves to another USB port keeps its
 
 from __future__ import annotations
 
+import collections
 import concurrent.futures
 import contextlib
 import dataclasses
+import datetime as dt
 import json
 import os
 import re
@@ -299,14 +304,7 @@ def run_plugin(spec: PluginSpec, device: dict, device_path: str, now: Callable[[
     stdout, stderr, timed_out = _communicate(process, spec.timeout_s, f"{spec.name} diagnose {device.get('id', '')}")
     returncode = process.returncode
     duration = time.monotonic() - clock
-    parsed = parse_lines(stdout or "", replay=spec.replay)
-    parsed.records, _alias = reroot(parsed.records, device_path, hardware_id)
-    records, problems = [], []
-    for record in parsed.records:
-        relative_record = _relativize(record, device_path)
-        problems += validate(_absolutize(relative_record, device_path))
-        records.append(relative_record)
-    parsed.records = records
+    parsed, problems = _records(spec, stdout or "", device_path, hardware_id)
     tail = (stderr or "").strip()[-STDERR_TAIL:]
     last_line = tail.splitlines()[-1] if tail else ""
     if timed_out:
@@ -327,6 +325,20 @@ def run_plugin(spec: PluginSpec, device: dict, device_path: str, now: Callable[[
                         " · ".join(bits) + f" · {len(parsed.records)} records used")
     return _outcome(spec, device, device_path, started, duration, "ok", returncode, parsed, problems, tail,
                     f"ran in {duration:.2g} s · {len(parsed.records)} records")
+
+
+def _records(spec: PluginSpec, text: str, device_path: str, hardware_id: str) -> tuple[Parsed, list[str]]:
+    """Parse, re-root and relativize a plugin's lines (diagnose or follow); ``(parsed, contract problems)``."""
+
+    parsed = parse_lines(text, replay=spec.replay)
+    parsed.records, _alias = reroot(parsed.records, device_path, hardware_id)
+    records, problems = [], []
+    for record in parsed.records:
+        relative_record = _relativize(record, device_path)
+        problems += validate(_absolutize(relative_record, device_path))
+        records.append(relative_record)
+    parsed.records = records
+    return parsed, problems
 
 
 def act_argv(spec: PluginSpec, device: dict, action: str, *, node: int | None = None, confirm: str | None = None,
@@ -420,6 +432,194 @@ def host_status(spec: PluginSpec, outcome: RunOutcome, hardware_id: str, now: fl
     return DiagnosticStatus(level=level, name=f"{spec.name}: plugin run", message=outcome.message, hardware_id=hardware_id,
                             values=tuple(values), path="", code=code, stamp=now, received=now,
                             expected_period_s=spec.period_s, source=RUNNER_SOURCE, measurements=measurements)
+
+
+# ----- follow: one long-running process per device (docs/build-plan-v1.md "Plugin boundary", follow) -------------------
+FOLLOW_BACKOFF_S = (1.0, 60.0)  # first restart delay, doubling up to the cap; back to the first after a healthy run
+FOLLOW_HEALTHY_S = 60.0  # a follower that ran this long before exiting restarts at the first delay again
+FOLLOW_MAX_LINE = 256 * 1024  # bytes: a longer line is rejected (and the rest of it skipped), never buffered whole
+FOLLOW_SILENCE_FACTOR = 10.0  # no line for max(factor x its period, timeout_s): the follower is killed and restarted
+
+
+def follow_period(answer: dict | None) -> float | None:
+    """A plugin's ``describe`` ``follow`` -> its period in seconds (``true`` = 1 s); None = it does not follow."""
+
+    declared = (answer or {}).get("follow")
+    if declared is True:
+        return 1.0
+    if isinstance(declared, dict):
+        period = declared.get("period_s", 1.0)
+        return float(period) if isinstance(period, (int, float)) and not isinstance(period, bool) and period > 0 else 1.0
+    return None
+
+
+class Follower:
+    """``<command> follow --device <id> [diagnose_args]`` kept alive for one job: every JSON line it prints is parsed
+    like a diagnose line and handed to ``on_outcome`` at once (a one-line ``RunOutcome``), so a 1 Hz plugin fills the
+    history at 1 Hz. When it exits it is restarted after a backoff; ``state()`` is what the device row's
+    ``<plugin>: plugin run`` check says. Bounded: one line at most ``FOLLOW_MAX_LINE``, a stderr tail, counters.
+
+    WHY a verb of its own and not a 1 s diagnose: each diagnose is a fresh ``uv run`` (~0.7 s of start-up), so the
+    Computer page could never be live (Zach, 2026-10-23: "something that feels a bit like system monitor")."""
+
+    def __init__(self, spec: PluginSpec, device: dict, device_path: str, period_s: float, now: Callable[[], float],
+                 env: Callable[[], dict[str, str]], on_outcome: Callable[[RunOutcome], None], hardware_id: str = "",
+                 backoff_s: tuple[float, float] | None = None):
+        self.spec, self.device, self.device_path, self.period_s = spec, device, device_path, period_s
+        self.now, self.env, self.on_outcome, self.hardware_id = now, env, on_outcome, hardware_id
+        self.backoff_s = backoff_s or FOLLOW_BACKOFF_S
+        self.process: subprocess.Popen | None = None
+        self.started: float | None = None  # host clock, this process's start
+        self.first_started: float | None = None
+        self.restarts = 0
+        self.lines = 0
+        self.records = 0
+        self.rejected = 0
+        self.last_line: float | None = None  # monotonic
+        self.exit: str = ""  # how the last process ended
+        self.retry_at: float | None = None  # host clock: the next start, while down
+        self.stderr = collections.deque(maxlen=20)
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._loop, name=f"io-follow-{spec.name}", daemon=True)
+
+    @property
+    def argv(self) -> list[str]:
+        return [*self.spec.command, "follow", "--device", str(self.device.get("id", "")), *self.spec.diagnose_args]
+
+    @property
+    def silence_s(self) -> float:
+        return max(FOLLOW_SILENCE_FACTOR * self.period_s, self.spec.timeout_s)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        process = self.process
+        if process is not None and process.poll() is None:
+            _kill_group(process)
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                process.wait(timeout=5)
+
+    def _loop(self) -> None:
+        delay = self.backoff_s[0]
+        while not self._stop.is_set():
+            began = time.monotonic()
+            self._run_once()
+            if self._stop.is_set():
+                return
+            delay = self.backoff_s[0] if time.monotonic() - began >= FOLLOW_HEALTHY_S else delay
+            self.retry_at = self.now() + delay
+            self._report()
+            if self._stop.wait(delay):
+                return
+            self.retry_at = None
+            delay = min(delay * 2, self.backoff_s[1])
+            self.restarts += 1
+
+    def _run_once(self) -> None:
+        env = plugin_env(self.spec, self.device, self.device_path, self.now(), self.env())
+        try:
+            process = subprocess.Popen(self.argv, cwd=self.spec.cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                       stderr=subprocess.PIPE, env=env, start_new_session=True)
+        except OSError as error:
+            self.exit = f"could not start: {type(error).__name__}: {error}"
+            self.process = None
+            return
+        self.process, self.started, self.exit = process, self.now(), ""
+        self.first_started = self.first_started or self.started
+        self.last_line = time.monotonic()
+        threading.Thread(target=self._drain, args=(process,), name=f"io-follow-err-{self.spec.name}", daemon=True).start()
+        watchdog = threading.Thread(target=self._watch, args=(process,), name=f"io-follow-dog-{self.spec.name}", daemon=True)
+        watchdog.start()
+        self._report()
+        with RUNNING.run(process, f"{self.spec.name} follow {self.device.get('id', '')}"):
+            while True:
+                line = process.stdout.readline(FOLLOW_MAX_LINE + 1)
+                if not line:
+                    break
+                if len(line) > FOLLOW_MAX_LINE and not line.endswith(b"\n"):
+                    while (rest := process.stdout.readline(FOLLOW_MAX_LINE)) and not rest.endswith(b"\n"):
+                        pass  # skip the rest of an over-long line without keeping it
+                    self.lines += 1
+                    self.rejected += 1
+                    continue
+                self._line(line.decode("utf-8", errors="replace"))
+            process.wait()
+        code = process.returncode
+        if not self._stop.is_set():
+            how = f"killed by signal {-code}" if code is not None and code < 0 else f"exited {code}"
+            ran = time.monotonic() - (self.last_line or time.monotonic())
+            tail = self.stderr[-1] if self.stderr else ""
+            self.exit = f"follow {how}" + (f" ({ran:.0f} s after its last line)" if ran >= 1 else "") + (f": {tail}" if tail else "")
+
+    def _drain(self, process: subprocess.Popen) -> None:
+        for raw in iter(lambda: process.stderr.readline(4096), b""):
+            text = raw.decode("utf-8", errors="replace").strip()
+            if text:
+                self.stderr.append(text[:300])
+
+    def _watch(self, process: subprocess.Popen) -> None:
+        while process.poll() is None and not self._stop.is_set():
+            if time.monotonic() - (self.last_line or time.monotonic()) > self.silence_s:
+                self.stderr.append(f"no line for {self.silence_s:g} s: killed")
+                _kill_group(process)
+                return
+            time.sleep(min(1.0, self.period_s))
+
+    def _line(self, text: str) -> None:
+        self.last_line = time.monotonic()
+        if not text.strip():
+            return
+        self.lines += 1
+        parsed, problems = _records(self.spec, text, self.device_path, self.hardware_id)
+        self.records += len(parsed.records)
+        self.rejected += len(parsed.rejected)
+        outcome = "malformed" if parsed.rejected or problems else "ok"
+        message = (f"line rejected: {parsed.rejected[0][1]}" if parsed.rejected else problems[0]) if outcome == "malformed" else ""
+        self.on_outcome(_outcome(self.spec, self.device, self.device_path, self.now(), 0.0, outcome, None, parsed, problems,
+                                 "", message))
+
+    def _report(self) -> None:
+        """An empty outcome, so the host re-says the run state (started, down, restarting) without a line."""
+
+        self.on_outcome(_outcome(self.spec, self.device, self.device_path, self.now(), 0.0, "ok", None, Parsed(), [], "", ""))
+
+    def state(self) -> dict:
+        running = self.process is not None and self.process.poll() is None and self.exit == ""
+        return {"state": "running" if running else ("restarting" if self.retry_at is not None else "starting"),
+                "pid": self.process.pid if running else None, "since": self.started if running else None,
+                "first_started": self.first_started, "restarts": self.restarts, "lines": self.lines, "records": self.records,
+                "rejected": self.rejected, "period_s": self.period_s, "retry_at": self.retry_at, "exit": self.exit or None,
+                "stderr": self.stderr[-1] if self.stderr else None}
+
+
+def follow_status(spec: PluginSpec, follower: Follower, hardware_id: str, now: float) -> DiagnosticStatus:
+    """The device row's ``<plugin>: plugin run`` check for a follower: OK while it runs, ERROR while it is down."""
+
+    state = follower.state()
+    values = [KeyValue("command", " ".join(follower.argv)), KeyValue("outcome", state["state"]),
+              KeyValue("restarts", str(state["restarts"]))]
+    if state["stderr"]:
+        values.append(KeyValue("stderr", state["stderr"]))
+    measurements = (Measurement("lines", state["lines"], "1"), Measurement("records", state["records"], "1"),
+                    Measurement("rejected lines", state["rejected"], "1"), Measurement("restarts", state["restarts"], "1"))
+    if state["state"] == "running":
+        since = dt.datetime.fromtimestamp(state["since"]).strftime("%H:%M:%S") if state["since"] else "?"
+        level, code = (WARN, "PluginOutputMalformed") if state["rejected"] else (OK, "")
+        message = (f"following since {since} (pid {state['pid']}) · every {follower.period_s:g} s · {state['records']} records"
+                   + (f" · restarted {state['restarts']}×" if state["restarts"] else "")
+                   + (f" · {state['rejected']} lines rejected" if state["rejected"] else ""))
+    else:
+        level = ERROR
+        code = "PluginNotStarted" if (state["exit"] or "").startswith("could not start") else "PluginCrashed"
+        wait = f" · restarting in {max(state['retry_at'] - now, 0):.0f} s" if state["retry_at"] is not None else " · starting"
+        message = f"{state['exit'] or 'follow not running'}{wait}"
+    # WHY the follow period as its promise: a follower that stops talking reads STALE on this row within seconds
+    return DiagnosticStatus(level=level, name=f"{spec.name}: plugin run", message=message, hardware_id=hardware_id,
+                            values=tuple(values), path="", code=code, stamp=now, received=now,
+                            expected_period_s=max(follower.period_s, 1.0) if level == OK else None, source=RUNNER_SOURCE,
+                            measurements=measurements)
 
 
 @dataclass

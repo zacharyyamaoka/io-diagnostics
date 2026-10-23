@@ -3,6 +3,7 @@ chart we kinda have the Computer as an entity and those diagnostics can be assoc
 
     uv run --project /home/bam/io-diagnostics/plugins/computer python -m computer_diagnostics describe
     uv run --project /home/bam/io-diagnostics/plugins/computer python -m computer_diagnostics diagnose --device host
+    uv run --project /home/bam/io-diagnostics/plugins/computer python -m computer_diagnostics follow --device host
 
 Boundary: docs/build-plan-v1.md "Plugin boundary" (plugins.d/computer.toml, ``matches = ["host"]``). Passive and
 read-only: psutil (``/proc``, ``/sys``), sysfs text files for USB endpoints, and three read-only tools as subprocesses
@@ -28,6 +29,13 @@ measured values and their default thresholds where sensible; every departure say
 Every number is also a ``Measurement`` (unit + limits) so a history view can draw it; per-core loads, per-NIC rates
 and per-bus USB bandwidth are separate measurements (Zach's reference: the ROS 2 System Webview).
 
+``follow`` (docs/build-plan-v1.md "Plugin boundary") is the same statuses once a second, forever, plus ``Processes``
+(the top 10 by CPU and by memory, like GNOME System Monitor's Processes tab), so the host's history of the Computer
+fills at 1 Hz (Zach, 2026-10-23: "something that feels a bit like system monitor with the live data"). It samples
+CPU and network over the second between two ticks instead of sleeping in one, reads the GPU from ONE ``nvidia-smi
+-lms 1000`` loop instead of starting nvidia-smi every second, and re-reads the clock every 10 s and the process
+table every 3 s; each status's ``expected_period_s`` is its own cadence.
+
 Quiet when OK; a reading the machine does not have (no NVIDIA GPU, no hwmon sensor, no clock tool) is an OK
 "not available", never an error. A reading that throws is UNKNOWN ``ReadFailed`` with the reason.
 """
@@ -36,11 +44,13 @@ from __future__ import annotations
 
 import argparse
 import csv
+import dataclasses
 import datetime as dt
 import json
 import os
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -95,6 +105,14 @@ READING_ORDER = {UNKNOWN: -1, OK: 0, WARN: 1, ERROR: 2}
 GIB = 2 ** 30
 MIB = 2 ** 20
 TOOL_TIMEOUT_S = 5.0
+FOLLOW_PERIOD_S = 1.0
+# WHY 3 s: GNOME System Monitor's own Processes refresh (its update-interval default, 3000 ms); one psutil scan of
+# ~1000 processes costs ~35 ms of CPU, ~1 % of a core every 3 s but 3.5 % every second (measured 2026-10-23)
+PROCESSES_PERIOD_S = 3.0
+NTP_PERIOD_S = 10.0  # timedatectl / chronyc are subprocesses: not every second
+TOP_N = 10
+GPU_FIELDS = "index,name,uuid,pci.bus_id,utilization.gpu,memory.used,memory.total,temperature.gpu"
+GPU_RESTART_S = 30.0  # a dead nvidia-smi loop is restarted at most this often
 
 
 # ----- readings: this computer, read only ---------------------------------------------------------------------------
@@ -223,9 +241,14 @@ def read_usb_buses(sys_root: Path) -> list[dict]:
 class LiveProbe:
     """This computer. Each method is one reading; an exception becomes UNKNOWN ``ReadFailed`` on its status."""
 
-    def __init__(self, sys_root: Path = Path("/sys")):
+    def __init__(self, sys_root: Path = Path("/sys"), *, follow: bool = False):
         self.sys_root = sys_root
         self._psutil = None
+        self.follow = follow
+        self.gpu_loop: GpuLoop | None = None
+        self._thresholds: dict | None = None
+        self._proc_ticks: dict[int, int] = {}  # pid -> its CPU ticks at the previous processes() call
+        self._proc_at: float | None = None
 
     @property
     def psutil(self):
@@ -276,8 +299,9 @@ class LiveProbe:
     def gpus(self) -> dict:
         """``{"gpus": [...]}``, or ``{"missing": why}`` (no NVIDIA tool: not available), or ``{"error": why}``."""
 
-        query = _run(["nvidia-smi", "--query-gpu=index,name,uuid,pci.bus_id,utilization.gpu,memory.used,memory.total,"
-                      "temperature.gpu", "--format=csv,noheader,nounits"])
+        if self.follow:
+            return self._followed_gpus()
+        query = _run(["nvidia-smi", f"--query-gpu={GPU_FIELDS}", "--format=csv,noheader,nounits"])
         if query is None:
             return {"missing": "no nvidia-smi on PATH"}
         if query.returncode != 0:
@@ -289,6 +313,75 @@ class LiveProbe:
         for gpu in gpus:
             gpu.update(thresholds.get(gpu["bus_id"], {}))
         return {"gpus": gpus}
+
+    def _followed_gpus(self) -> dict:
+        """follow: the latest rows of ONE ``nvidia-smi -lms`` loop; its first tick (and a dead loop's restart, at most
+        every ``GPU_RESTART_S``) reads once, as diagnose does."""
+
+        if shutil.which("nvidia-smi") is None:
+            return {"missing": "no nvidia-smi on PATH"}
+        loop = self.gpu_loop
+        if loop is not None and loop.alive() and loop.rows:
+            gpus = [dict(row) for row in loop.rows.values()]
+            for gpu in gpus:
+                gpu.update((self._thresholds or {}).get(gpu["bus_id"], {}))
+            return {"gpus": gpus}
+        if loop is not None and loop.alive():
+            pass  # started, no row yet: read once below
+        elif loop is None or self.monotonic() - loop.started >= GPU_RESTART_S:
+            if loop is not None:
+                loop.stop()
+            self.gpu_loop = GpuLoop(self.monotonic())
+            self.gpu_loop.start()
+        else:
+            return {"error": f"nvidia-smi -lms exited {loop.process.returncode}; restarting in"
+                             f" {GPU_RESTART_S - (self.monotonic() - loop.started):.0f} s"}
+        self.follow = False
+        try:
+            found = self.gpus()
+        finally:
+            self.follow = True
+        if self._thresholds is None and "gpus" in found:
+            self._thresholds = {gpu["bus_id"]: {key: gpu[key] for key in ("max_operating", "slowdown", "shutdown") if key in gpu}
+                                for gpu in found["gpus"]}
+        return found
+
+    def processes(self) -> list[dict]:
+        """Every process: pid, name, CPU % of ONE core since the previous call, RSS in bytes.
+
+        WHY ``/proc/<pid>/stat`` by hand here, the one reading psutil does not make: psutil's process_iter reads three
+        or four files per process (~35 ms of CPU per scan of ~1000 processes); stat alone holds the name, the CPU
+        ticks and the RSS (~13 ms), which keeps follow under 2 % of one core (measured 2026-10-23)."""
+
+        clock, ticks, page = time.monotonic(), os.sysconf("SC_CLK_TCK"), os.sysconf("SC_PAGE_SIZE")
+        elapsed = clock - self._proc_at if self._proc_at is not None else 0.0
+        out, seen = [], {}
+        for name in os.listdir("/proc"):
+            if not name.isdigit():
+                continue
+            try:
+                handle = os.open(f"/proc/{name}/stat", os.O_RDONLY)
+                try:
+                    data = os.read(handle, 4096)
+                finally:
+                    os.close(handle)
+                right = data.rindex(b")")
+                fields = data[right + 2:].split()
+                used, rss = int(fields[11]) + int(fields[12]), int(fields[21]) * page  # utime + stime, rss pages
+            except (OSError, ValueError, IndexError):
+                continue  # it exited while we read
+            pid = int(name)
+            seen[pid] = used
+            before = self._proc_ticks.get(pid)
+            percent = max(used - before, 0) / ticks / elapsed * 100.0 if before is not None and elapsed > 0 else 0.0
+            out.append({"pid": pid, "name": data[data.index(b"(") + 1:right].decode("utf-8", errors="replace") or "?",
+                        "cpu_percent": percent, "rss": rss})
+        self._proc_ticks, self._proc_at = seen, clock
+        return out
+
+    def close(self) -> None:
+        if self.gpu_loop is not None:
+            self.gpu_loop.stop()
 
     def clock(self) -> dict | None:
         chrony = _run(["chronyc", "-c", "tracking"])
@@ -327,6 +420,40 @@ class LiveProbe:
         return read_usb_buses(self.sys_root)
 
 
+class GpuLoop:
+    """``nvidia-smi --query-gpu=... -lms 1000``: one long-running reader (read-only) keeping each GPU's latest row.
+    WHY: starting nvidia-smi costs ~20 ms of CPU, 2 % of a core every second; its own loop costs almost nothing."""
+
+    def __init__(self, started: float, interval_ms: int = int(FOLLOW_PERIOD_S * 1000)):
+        self.started, self.interval_ms = started, interval_ms
+        self.rows: dict[str, dict] = {}
+        self.process: subprocess.Popen | None = None
+
+    def start(self) -> None:
+        import threading  # noqa: PLC0415 - follow only
+
+        self.process = subprocess.Popen(["nvidia-smi", f"--query-gpu={GPU_FIELDS}", "--format=csv,noheader,nounits",
+                                         f"--loop-ms={self.interval_ms}"], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                        stderr=subprocess.DEVNULL, text=True, errors="replace", env={**os.environ, "LC_ALL": "C"})
+        threading.Thread(target=self._pump, name="gpu-loop", daemon=True).start()
+
+    def _pump(self) -> None:
+        for line in self.process.stdout:
+            for gpu in parse_nvidia_query(line):
+                self.rows[gpu["index"]] = gpu
+
+    def alive(self) -> bool:
+        return self.process is not None and self.process.poll() is None
+
+    def stop(self) -> None:
+        if self.alive():
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+
+
 # ----- the statuses ------------------------------------------------------------------------------------------------
 class Options(argparse.Namespace):
     sample_s = SAMPLE_S
@@ -361,10 +488,10 @@ def _duration(seconds: float) -> str:
 class Checks:
     """One diagnose: every status, each built from one reading of ``probe``."""
 
-    def __init__(self, probe, host: str, options: Options):
+    def __init__(self, probe, host: str, options: Options, window: tuple | None = None):
         self.probe, self.host, self.options = probe, host, options
         self.now = probe.time()
-
+        self.window = window  # follow: (net counters, monotonic) of the previous tick; it opens this sample
     def status(self, check: str, level: str, message: str, *, code: str = "", values=(), measurements=(), **extra) -> DiagnosticStatus:
         return DiagnosticStatus(level=level, name=f"{self.host}: {check}", message=message, hardware_id=self.host,
                                 values=tuple(values), path="", code=code if level != OK else "", stamp=self.now,
@@ -379,11 +506,16 @@ class Checks:
 
     # --- CPU and network share one sampling window ----------------------------------------------------------------
     def sample(self) -> None:
-        self.net_before = self._try(self.probe.net_counters)
-        started = self.probe.monotonic()
-        self.cores = self._try(lambda: self.probe.cpu_percent(self.options.sample_s))
+        if self.window is not None:  # follow: the second since the previous tick IS the window (no sleep)
+            self.net_before, started = self.window
+            self.cores = self._try(lambda: self.probe.cpu_percent(None))
+        else:
+            self.net_before = self._try(self.probe.net_counters)
+            started = self.probe.monotonic()
+            self.cores = self._try(lambda: self.probe.cpu_percent(self.options.sample_s))
         self.net_after = self._try(self.probe.net_counters)
-        self.elapsed_s = max(self.probe.monotonic() - started, 1e-3)
+        self.ended = self.probe.monotonic()
+        self.elapsed_s = max(self.ended - started, 1e-3)
 
     @staticmethod
     def _try(read: Callable[[], Any]) -> Any:
@@ -680,20 +812,69 @@ class Checks:
                 if worst else f"{len(buses)} buses")
         return [self.status("USB Bandwidth", OK, text, values=values, measurements=measurements)]
 
+    def processes(self) -> list[DiagnosticStatus]:
+        """follow only: the top ``TOP_N`` processes by CPU and by memory. Always OK: what runs is not a fault.
+
+        CPU % is the share of the WHOLE machine (psutil's per-core figure divided by the logical CPU count), as GNOME
+        System Monitor shows it by default ("Divide CPU usage by CPU count"). The two tables are values, tab-separated
+        with a header line ``pid  name  cpu_percent  rss_bytes``, readable as text and parseable by a page."""
+
+        procs = self.probe.processes()
+        logical = (self.probe.cpu_counts()[0] or 1) if procs else 1
+        rows = [{**proc, "share": float(proc["cpu_percent"]) / logical, "name": str(proc["name"]).replace("\t", " ")}
+                for proc in procs]
+        by_cpu = sorted(rows, key=lambda row: (-row["share"], row["pid"]))[:TOP_N]
+        by_memory = sorted(rows, key=lambda row: (-row["rss"], row["pid"]))[:TOP_N]
+
+        def table(chosen: list[dict]) -> str:
+            return "\n".join(["pid\tname\tcpu_percent\trss_bytes",
+                              *(f"{row['pid']}\t{row['name']}\t{row['share']:.1f}\t{row['rss']}" for row in chosen)])
+
+        if not rows:
+            return [self.status("Processes", OK, "not available (no processes listed)")]
+        busiest, largest = by_cpu[0], by_memory[0]
+        message = (f"{len(rows)} processes · busiest {busiest['name']} (pid {busiest['pid']}) {busiest['share']:.1f} % CPU"
+                   f" · largest {largest['name']} (pid {largest['pid']}) {largest['rss'] / GIB:.1f} GiB")
+        measurements = [Measurement("processes", len(rows), "1"), Measurement("busiest process CPU", round(busiest["share"], 2), "%"),
+                        Measurement("largest process RSS", round(largest["rss"] / MIB, 1), "MiBy")]
+        return [self.status("Processes", OK, message, values=[KeyValue("top_cpu", table(by_cpu)),
+                                                             KeyValue("top_memory", table(by_memory))],
+                            measurements=measurements)]
+
+    def builders(self) -> tuple:
+        return (("CPU Information", self.cpu), ("RAM Information", self.ram), ("HD Usage", self.disks),
+                ("Temperatures", self.temperatures), ("GPU", self.gpus), ("NTP offset", self.clock),
+                ("Uptime", self.uptime), ("Network Usage", self.network), ("USB Bandwidth", self.usb))
+
     def all(self) -> list[DiagnosticStatus]:
         self.sample()
         out = []
-        for check, build in (("CPU Information", self.cpu), ("RAM Information", self.ram), ("HD Usage", self.disks),
-                             ("Temperatures", self.temperatures), ("GPU", self.gpus), ("NTP offset", self.clock),
-                             ("Uptime", self.uptime), ("Network Usage", self.network), ("USB Bandwidth", self.usb)):
+        for check, build in self.builders():
             out += self.guarded(check, build)
         return out
+
+    def tick(self, due: set[str]) -> list[DiagnosticStatus]:
+        """follow: one tick, only the checks in ``due``, each stamped with its own cadence as its promise."""
+
+        self.sample()
+        out = []
+        for check, build in (*self.builders(), ("Processes", self.processes)):
+            if check in due:
+                period = FOLLOW_CADENCE.get(check, self.options.period_s)
+                out += [dataclasses.replace(status, expected_period_s=period) for status in self.guarded(check, build)]
+        return out
+
+
+# Each check's period in follow (seconds); a check not listed runs every tick
+FOLLOW_CADENCE = {"Processes": PROCESSES_PERIOD_S, "NTP offset": NTP_PERIOD_S}
 
 
 # ----- the plugin boundary -----------------------------------------------------------------------------------------
 def describe() -> dict:
     return {"name": NAME, "version": VERSION, "schema": SCHEMA, "record_version": RECORD_VERSION, "matches": ["host"],
-            "actions": [], "description": "the Computer: CPU, memory, disks, temperatures, GPU, clock, uptime, network, USB bandwidth"}
+            "actions": [], "follow": {"period_s": FOLLOW_PERIOD_S},
+            "description": "the Computer: CPU, memory, disks, temperatures, GPU, clock, uptime, network, USB bandwidth"
+                           " (follow: the same once a second, plus the top processes)"}
 
 
 def host_name() -> str:
@@ -706,6 +887,45 @@ def host_name() -> str:
 
 def diagnose(probe=None, options: Options | None = None, host: str | None = None) -> list[DiagnosticStatus]:
     return Checks(probe or LiveProbe(), host or host_name(), options or Options()).all()
+
+
+def follow(options: Options, probe=None, host: str | None = None, *, ticks: int | None = None, out=None,
+           sleep: Callable[[float], None] = time.sleep) -> int:
+    """``follow``: a tick every ``options.period_s`` (default 1 s), each a batch of JSON lines, until killed (or
+    ``ticks`` ticks, for tests). The first tick waits one period after priming the CPU and network counters."""
+
+    out = out or sys.stdout
+    probe = probe or LiveProbe(follow=True)
+    host = host or host_name()
+    period = options.period_s
+    last: dict[str, float] = {}
+    try:
+        probe.cpu_percent(None)  # prime: psutil measures from this call to the next
+        if hasattr(probe, "processes"):
+            probe.processes()
+        window = (Checks._try(probe.net_counters), probe.monotonic())
+        next_at = window[1] + period
+        count = 0
+        while ticks is None or count < ticks:
+            sleep(max(next_at - probe.monotonic(), 0.0))
+            checks = Checks(probe, host, options, window=window)
+            now = probe.monotonic()
+            due = {check for check, _build in (*checks.builders(), ("Processes", None))
+                   if now - last.get(check, -1e18) >= FOLLOW_CADENCE.get(check, period) - period / 2}
+            for status in checks.tick(due):
+                out.write(json.dumps(to_dict(status)) + "\n")
+            out.flush()
+            for check in due:
+                last[check] = now
+            window = (checks.net_after, checks.ended)
+            next_at = max(next_at + period, probe.monotonic())  # WHY max: a slow tick never makes a burst of catch-up ticks
+            count += 1
+    except BrokenPipeError:  # the host closed our stdout: it is done with us
+        pass
+    finally:
+        if hasattr(probe, "close"):
+            probe.close()
+    return 0
 
 
 def parser() -> argparse.ArgumentParser:
@@ -725,6 +945,9 @@ def parser() -> argparse.ArgumentParser:
     verbs.add_parser("describe")
     run = verbs.add_parser("diagnose")
     run.add_argument("--device", default="host")
+    followed = verbs.add_parser("follow", help="the same statuses every --interval-s, forever (plus Processes)")
+    followed.add_argument("--device", default="host")
+    followed.add_argument("--interval-s", type=float, default=FOLLOW_PERIOD_S)
     act = verbs.add_parser("act")
     act.add_argument("--device", default="host")
     act.add_argument("--action", required=True)
@@ -736,6 +959,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.verb == "describe":
         print(json.dumps(describe()))
         return 0
+    if args.verb == "follow":
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))  # so the finally stops the nvidia-smi loop
+        args.period_s = args.interval_s
+        return follow(args)
     if args.verb == "act":
         print(json.dumps({"record": "action-result", "action": args.action, "message": "the computer plugin registers no actions"}))
         return 2
