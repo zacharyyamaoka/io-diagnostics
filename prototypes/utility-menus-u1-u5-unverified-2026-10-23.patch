@@ -1,0 +1,867 @@
+diff --git a/io_diagnostics/web/utilities/u1.js b/io_diagnostics/web/utilities/u1.js
+index 36ee872..e7a9a25 100644
+--- a/io_diagnostics/web/utilities/u1.js
++++ b/io_diagnostics/web/utilities/u1.js
+@@ -1,37 +1,89 @@
+-// Utility menu u1 · STUB (a copy of u0: a proposal lane replaces this file) (round 3 baseline; contract: docs/round2-seams.md §6).
+-// One row per utility: its icon and title, nothing else at a glance; the description is a hover / focus tooltip
+-// (Zach, 2026-10-23: "too much information at a glance ... the description is maybe a tool tip"). A busy utility
+-// greys out with one quiet line under its title ("Checking communication… 3 s"); a blocked one says why in muted
+-// text. Danger is a neutral word, never a warn / error colour (those mean a diagnostic). The page owns the flow: a
+-// [data-util] click is a dry run, ctx.panel() is its panel, anything but a query runs from the confirm modal.
++// Utility menu u1 · Toolbar (round 3 proposal; contract: docs/round2-seams.md §6).
++// Idea: the utilities are one row of icon buttons, like a printer utility's or a Mac app's toolbar (Canon IJ Printer
++// Utility, Finder / Preview toolbars, Word's ribbon in "icons only"): at a glance you see only the icons, grouped by a
++// thin divider (Checks | Maintenance | Motion | More); the title, description, danger word and any blocked reason are
++// one tooltip on hover / keyboard focus. Motion's buttons sit in a neutral frame (set apart, never coloured). A busy
++// utility greys its button and one quiet line under the toolbar says what runs ("Checking communication… 3 s"); the
++// open dry run reads below the toolbar at the full width. WHY icons only: Zach, 2026-10-23, "too much information at a
++// glance ... the description is maybe a tool tip" and "the utilities are not the main thing".
+ 'use strict';
+ (function (root) {
++  const STYLE = `
++.u1-root { position: relative; }
++.u1-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 2px 0; }
++.u1-group { display: inline-flex; align-items: center; gap: 2px; }
++.u1-g-motion { border: 1px solid var(--io-border); border-radius: var(--io-radius-sm); padding: 1px; }
++.u1-sep { width: 1px; align-self: stretch; margin: 5px 6px; background: var(--io-border-soft); }
++.u1-item { position: relative; display: inline-flex; align-items: center; gap: 6px; }
++.u1-btn { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 30px; padding: 0; border: 1px solid transparent;
++  border-radius: var(--io-radius-sm); background: transparent; color: var(--io-text); cursor: pointer; }
++.u1-btn:hover { background: var(--io-hover); border-color: var(--io-border-soft); }
++.u1-btn .u-ic { width: 19px; height: 19px; }
++.u1-item.active .u1-btn { background: var(--io-pressed); border-color: var(--io-border); }
++.u1-item.blocked .u-ic { stroke: var(--io-faint); }
++.u1-item.moves .u-ic { stroke: var(--io-text-strong); stroke-width: 1.9; }
++.u1-btn:disabled { cursor: not-allowed; }
++.u1-btn:disabled:hover { background: transparent; border-color: transparent; }
++.u1-item.busy .u1-btn { opacity: .4; cursor: progress; }
++.u1-item .u-newid { padding-right: 4px; }
++.u1-tip { position: absolute; left: 0; top: calc(100% + 4px); z-index: 6; width: max-content; max-width: 320px; display: grid; gap: 2px; padding: 7px 10px;
++  background: var(--io-popover); color: var(--io-text); border: 1px solid var(--io-border); border-radius: var(--io-radius-sm); box-shadow: var(--io-shadow-pop);
++  font-size: 12px; line-height: 1.4; white-space: pre-line; visibility: hidden; opacity: 0; pointer-events: none; transition: opacity .1s, visibility 0s .1s; }
++.u1-item.end .u1-tip { left: auto; right: 0; }
++.u1-tip b { color: var(--io-text-strong); font-weight: 600; }
++.u1-meta { color: var(--io-muted); font-size: 11.5px; }
++.u1-item:hover .u1-tip, .u1-btn:focus-visible ~ .u1-tip { visibility: visible; opacity: 1; transition: opacity .12s .3s, visibility 0s .3s; }
++.u1-btn:focus-visible ~ .u1-tip { transition-delay: 0s; }
++.u1-item.active .u1-tip { visibility: hidden; opacity: 0; } /* its dry run is open below: the panel says it */
++.u1-note { padding: 4px 2px 0; color: var(--io-muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
++.u1-open { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--io-border-soft); }
++.u1-open-h { display: flex; align-items: center; gap: 8px; padding: 2px 2px 2px; }
++.u1-open-h b { color: var(--io-text-strong); font-weight: 600; }
++.u1-open-h .danger { margin-left: auto; }
++.u1-root .u-panel { padding-left: 2px; padding-right: 2px; }
++`;
++  if (root.document && !root.document.getElementById('io-u1-style')) {
++    const style = root.document.createElement('style');
++    style.id = 'io-u1-style';
++    style.textContent = STYLE;
++    root.document.head.appendChild(style);
++  }
++
+   root.IOUtilityMenus = root.IOUtilityMenus || {};
+   root.IOUtilityMenus.u1 = {
+-    name: 'Stub (= u0)',
+-    description: 'Icon + title per utility, the description as a tooltip, a greyed busy row with a quiet line under it, danger as a neutral word.',
++    name: 'Toolbar',
++    description: 'One row of icon buttons (Checks | Maintenance | Motion | More); title, description and danger in a hover / focus tooltip; a greyed button and one quiet line under the bar while it runs.',
+     order: 1,
+     html(ctx) {
+-      const { esc, utilIcon } = ctx.h;
+-      const row = (action) => {
++      const { esc, utilIcon, plainTitle } = ctx.h;
++      const count = ctx.groups.reduce((sum, group) => sum + group.items.length, 0);
++      let at = 0;
++      const item = (action) => {
++        // the right half's tooltips open leftwards, so none runs off the pane
++        const end = count > 3 && at >= Math.ceil(count / 2);
++        at += 1;
+         const busy = ctx.busy(action);
+         const waiting = ctx.waiting(action);
+-        const runnable = ctx.runnable(action);
+-        const tip = `u-tip-${esc(action.name)}`;
+-        // blocked: the reason on one muted line (its full words in the tooltip)
+-        const reason = !busy && action.state !== 'ready' && action.reason ? `<span class="u-reason">${esc(action.reason)}</span>` : '';
+-        const note = busy ? `<span class="u-busy">${esc(busy)}</span>` : reason;
+-        const danger = action.danger !== 'query' ? `<span class="danger ${esc(action.danger)}">${esc(action.danger)}</span>` : '';
+-        const tipText = [action.description, waiting ? 'Type the new CAN id (1-126) first.' : '', action.state !== 'ready' && action.reason ? action.reason : '']
+-          .filter(Boolean).join('\n');
+-        const button = `<button class="u-btn" data-util="${esc(action.name)}"${waiting || busy ? ' disabled' : ''} aria-describedby="${tip}">`
+-          + `${utilIcon(action.name)}<span class="u-text"><span class="u-title">${esc(action.title)}</span>${note}</span>${danger}`
+-          + `<span class="u-desc" id="${tip}" role="tooltip">${esc(tipText)}</span></button>`;
+-        return `<div class="urow${ctx.isActive(action) ? ' active' : ''}${runnable ? '' : ' blocked'}${busy ? ' busy' : ''}" data-util-row="${esc(action.name)}">`
+-          + `${ctx.needsId(action) ? `<div class="u-line">${button}${ctx.newIdBox(action)}</div>` : button}${ctx.panel(action)}</div>`;
++        const tip = `u1-tip-${esc(action.name)}`;
++        const meta = [action.danger === 'query' ? 'reads only' : action.danger, action.state !== 'ready' && action.reason ? action.reason : '',
++          waiting ? 'type the new CAN id (1-126) first' : ''].filter(Boolean).join(' · ');
++        const cls = ['u1-item', ctx.isActive(action) ? 'active' : '', ctx.runnable(action) ? '' : 'blocked', busy ? 'busy' : '',
++          action.danger === 'moves' ? 'moves' : '', end ? 'end' : ''].filter(Boolean).join(' ');
++        return `<span class="${cls}" data-util-row="${esc(action.name)}">`
++          + `<button class="u1-btn" data-util="${esc(action.name)}" aria-label="${esc(plainTitle(action.title))}" aria-describedby="${tip}"${waiting || busy ? ' disabled' : ''}>`
++          + `${utilIcon(action.name)}</button>${ctx.needsId(action) ? ctx.newIdBox(action) : ''}`
++          + `<span class="u1-tip" id="${tip}" role="tooltip"><b>${esc(action.title)}</b><span>${esc(action.description)}</span>`
++          + `<span class="u1-meta">${esc(meta)}</span></span></span>`;
+       };
+-      return ctx.groups.map((group) => `<div class="ugroup ugroup-${esc(group.id)}"><div class="ugroup-h">${esc(group.title)}</div>`
+-        + `${group.items.map(row).join('')}</div>`).join('');
++      const bar = ctx.groups.map((group) => `<span class="u1-group u1-g-${esc(group.id)}" role="group" aria-label="${esc(group.title)}">${group.items.map(item).join('')}</span>`)
++        .join('<span class="u1-sep" aria-hidden="true"></span>');
++      const active = ctx.actions.find((action) => ctx.isActive(action));
++      const busy = active ? ctx.busy(active) : '';
++      const danger = active && active.danger !== 'query' ? `<span class="danger ${esc(active.danger)}">${esc(active.danger)}</span>` : '';
++      const open = active && !busy
++        ? `<div class="u1-open">${`<div class="u1-open-h">${utilIcon(active.name)}<b>${esc(plainTitle(active.title))}</b>${danger}</div>`}${ctx.panel(active)}</div>` : '';
++      return `<div class="u1-root"><div class="u1-bar" role="toolbar" aria-label="Utilities">${bar}</div>`
++        + `${busy ? `<div class="u1-note">${esc(busy)}</div>` : ''}${open}</div>`;
+     },
+   };
+ })(typeof window !== 'undefined' ? window : globalThis);
+diff --git a/io_diagnostics/web/utilities/u2.js b/io_diagnostics/web/utilities/u2.js
+index fed0bd5..02563e0 100644
+--- a/io_diagnostics/web/utilities/u2.js
++++ b/io_diagnostics/web/utilities/u2.js
+@@ -1,37 +1,115 @@
+-// Utility menu u2 · STUB (a copy of u0: a proposal lane replaces this file) (round 3 baseline; contract: docs/round2-seams.md §6).
+-// One row per utility: its icon and title, nothing else at a glance; the description is a hover / focus tooltip
+-// (Zach, 2026-10-23: "too much information at a glance ... the description is maybe a tool tip"). A busy utility
+-// greys out with one quiet line under its title ("Checking communication… 3 s"); a blocked one says why in muted
+-// text. Danger is a neutral word, never a warn / error colour (those mean a diagnostic). The page owns the flow: a
+-// [data-util] click is a dry run, ctx.panel() is its panel, anything but a query runs from the confirm modal.
++// Utility menu u2 · One menu button (round 3 proposal; contract: docs/round2-seams.md §6).
++// Idea: at rest the section is ONE quiet button, "Run a utility…"; it opens a grouped menu (Checks, Maintenance,
++// Motion · makes hardware move, More) where each item is its icon and title with the description as a secondary line.
++// Precedents: a print dialog's single "Maintenance…" / "Printer Utility…" button that opens the utility list, GNOME /
++// macOS popover menus with two-line items (Material's "two-line list" menu). The menu is the browser's own popover
++// (light-dismiss, top layer, anchored to the button with CSS anchor positioning); choosing an item closes it and
++// starts the dry run, which reads under the button. Busy: the item greys out in the menu and one quiet line sits beside the button. Danger is a
++// neutral word at the item's right edge. WHY one button: Zach, 2026-10-23, the utilities "are not the main thing and
++// shouldn't be drawing attention"; the descriptions he liked are still one click away, all of them at once.
+ 'use strict';
+ (function (root) {
++  const STYLE = `
++.u2-line { display: flex; align-items: center; gap: 10px; min-height: 30px; }
++.u2-trigger { anchor-name: --u2-trigger; display: inline-flex; align-items: center; gap: 8px; padding: 5px 10px 5px 12px; font: inherit;
++  border: 1px solid var(--io-border); border-radius: var(--io-radius); background: var(--io-control); color: var(--io-text-strong); cursor: pointer; }
++.u2-trigger:hover { background: var(--io-control-hover); }
++.u2-count { color: var(--io-faint); font-size: 11.5px; font-variant-numeric: tabular-nums; }
++.u2-caret { width: 12px; height: 12px; fill: none; stroke: var(--io-icon); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
++.u2-note { color: var(--io-muted); font-size: 11.5px; font-variant-numeric: tabular-nums; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
++.u2-pop { position: fixed; position-anchor: --u2-trigger; inset: auto; top: anchor(bottom); left: anchor(left); margin: 4px 0; position-try-fallbacks: flip-block;
++  width: min(400px, calc(100vw - 24px)); max-height: min(70vh, 560px); overflow: auto; padding: 6px; font: inherit; font-size: var(--io-font-size);
++  background: var(--io-popover); color: var(--io-text); border: 1px solid var(--io-border); border-radius: var(--io-radius-lg); box-shadow: var(--io-shadow-pop); }
++.u2-group + .u2-group { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--io-border-soft); }
++.u2-gh { padding: 4px 8px 2px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .5px; color: var(--io-muted); }
++.u2-g-motion .u2-gh { color: var(--io-text-strong); }
++.u2-btn { display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 6px 8px; text-align: left; font: inherit; border: 0;
++  border-radius: var(--io-radius-sm); background: transparent; color: var(--io-text); cursor: pointer; }
++.u2-btn:hover, .u2-btn:focus-visible { background: var(--io-hover); outline: none; box-shadow: inset 0 0 0 1px var(--io-border); }
++.u2-btn .u-ic { margin-top: 1px; }
++.u2-t { display: flex; flex-direction: column; min-width: 0; flex: 1; }
++.u2-title { color: var(--io-text-strong); font-weight: 500; }
++.u2-sub { color: var(--io-muted); font-size: 11.5px; line-height: 1.35; }
++.u2-why { color: var(--io-faint); font-size: 11.5px; line-height: 1.35; }
++.u2-btn .danger { margin-left: auto; padding-top: 2px; }
++.u2-item.blocked .u2-title { color: var(--io-muted); }
++.u2-item.blocked .u-ic { stroke: var(--io-faint); }
++.u2-item.busy .u2-btn { opacity: .45; cursor: progress; }
++.u2-btn:disabled { cursor: not-allowed; }
++.u2-btn:disabled:hover { background: transparent; box-shadow: none; }
++.u2-item .u-newid { padding: 0 8px 6px 38px; }
++.u2-open { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--io-border-soft); }
++.u2-open-h { display: flex; align-items: center; gap: 8px; padding: 2px 2px 2px; }
++.u2-open-h b { color: var(--io-text-strong); font-weight: 600; }
++.u2-open-h .danger { margin-left: auto; }
++.u2-root .u-panel { padding-left: 2px; padding-right: 2px; }
++`;
++  const doc = root.document;
++  if (doc && !doc.getElementById('io-u2-style')) {
++    const style = doc.createElement('style');
++    style.id = 'io-u2-style';
++    style.textContent = STYLE;
++    doc.head.appendChild(style);
++  }
++  if (doc) {
++    // choosing an item closes the menu (the page's own click handler has already started its dry run)
++    doc.addEventListener('click', (event) => {
++      const item = event.target.closest('.u2-pop [data-util]');
++      if (item && !item.disabled) item.closest('.u2-pop').hidePopover();
++    });
++    // opening puts the focus on the first item; arrow keys move between items, Home / End jump
++    doc.addEventListener('toggle', (event) => {
++      if (event.target.classList && event.target.classList.contains('u2-pop') && event.newState === 'open' && !event.target.contains(doc.activeElement)) {
++        const first = event.target.querySelector('.u2-btn:not(:disabled)');
++        if (first) first.focus();
++      }
++    }, true);
++    doc.addEventListener('keydown', (event) => {
++      const pop = event.target.closest && event.target.closest('.u2-pop');
++      if (!pop || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key) || event.target.matches('input')) return;
++      const items = [...pop.querySelectorAll('.u2-btn:not(:disabled)')];
++      const at = items.indexOf(event.target.closest('.u2-btn'));
++      const next = { ArrowDown: at + 1, ArrowUp: at - 1, Home: 0, End: items.length - 1 }[event.key];
++      const target = items[(next + items.length) % items.length];
++      if (target) { target.focus(); event.preventDefault(); }
++    });
++  }
++
++  const CARET = '<svg class="u2-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
++
+   root.IOUtilityMenus = root.IOUtilityMenus || {};
+   root.IOUtilityMenus.u2 = {
+-    name: 'Stub (= u0)',
+-    description: 'Icon + title per utility, the description as a tooltip, a greyed busy row with a quiet line under it, danger as a neutral word.',
++    name: 'One menu button',
++    description: 'One quiet "Run a utility…" button; it opens a grouped menu whose items carry the description as a second line. The dry run reads under the button; busy = a greyed item and one quiet line.',
+     order: 2,
+     html(ctx) {
+-      const { esc, utilIcon } = ctx.h;
+-      const row = (action) => {
++      const { esc, utilIcon, plainTitle } = ctx.h;
++      const item = (action) => {
+         const busy = ctx.busy(action);
+         const waiting = ctx.waiting(action);
+         const runnable = ctx.runnable(action);
+-        const tip = `u-tip-${esc(action.name)}`;
+-        // blocked: the reason on one muted line (its full words in the tooltip)
+-        const reason = !busy && action.state !== 'ready' && action.reason ? `<span class="u-reason">${esc(action.reason)}</span>` : '';
+-        const note = busy ? `<span class="u-busy">${esc(busy)}</span>` : reason;
++        const why = !runnable && action.reason ? `<span class="u2-why">${esc(action.reason)}</span>` : '';
++        const wait = waiting ? '<span class="u2-why">Type the new CAN id (1-126) first.</span>' : '';
+         const danger = action.danger !== 'query' ? `<span class="danger ${esc(action.danger)}">${esc(action.danger)}</span>` : '';
+-        const tipText = [action.description, waiting ? 'Type the new CAN id (1-126) first.' : '', action.state !== 'ready' && action.reason ? action.reason : '']
+-          .filter(Boolean).join('\n');
+-        const button = `<button class="u-btn" data-util="${esc(action.name)}"${waiting || busy ? ' disabled' : ''} aria-describedby="${tip}">`
+-          + `${utilIcon(action.name)}<span class="u-text"><span class="u-title">${esc(action.title)}</span>${note}</span>${danger}`
+-          + `<span class="u-desc" id="${tip}" role="tooltip">${esc(tipText)}</span></button>`;
+-        return `<div class="urow${ctx.isActive(action) ? ' active' : ''}${runnable ? '' : ' blocked'}${busy ? ' busy' : ''}" data-util-row="${esc(action.name)}">`
+-          + `${ctx.needsId(action) ? `<div class="u-line">${button}${ctx.newIdBox(action)}</div>` : button}${ctx.panel(action)}</div>`;
++        const cls = ['u2-item', runnable ? '' : 'blocked', busy ? 'busy' : ''].filter(Boolean).join(' ');
++        return `<div class="${cls}" data-util-row="${esc(action.name)}"><button class="u2-btn" role="menuitem" data-util="${esc(action.name)}"${waiting || busy ? ' disabled' : ''}>`
++          + `${utilIcon(action.name)}<span class="u2-t"><span class="u2-title">${esc(action.title)}</span><span class="u2-sub">${esc(action.description)}</span>${why}${wait}</span>`
++          + `${danger}</button>${ctx.needsId(action) ? ctx.newIdBox(action) : ''}</div>`;
+       };
+-      return ctx.groups.map((group) => `<div class="ugroup ugroup-${esc(group.id)}"><div class="ugroup-h">${esc(group.title)}</div>`
+-        + `${group.items.map(row).join('')}</div>`).join('');
++      const count = ctx.groups.reduce((sum, group) => sum + group.items.length, 0);
++      const menu = ctx.groups.map((group) => `<div class="u2-group u2-g-${esc(group.id)}" role="group" aria-label="${esc(group.title)}">`
++        + `<div class="u2-gh">${esc(group.title)}</div>${group.items.map(item).join('')}</div>`).join('');
++      const active = ctx.actions.find((action) => ctx.isActive(action));
++      const busy = active ? ctx.busy(active) : '';
++      const danger = active && active.danger !== 'query' ? `<span class="danger ${esc(active.danger)}">${esc(active.danger)}</span>` : '';
++      const open = active && !busy
++        ? `<div class="u2-open"><div class="u2-open-h">${utilIcon(active.name)}<b>${esc(plainTitle(active.title))}</b>${danger}</div>${ctx.panel(active)}</div>` : '';
++      // WHY the popover stays in the markup when closed: the page patches the detail node by node every second, and an
++      // element it keeps keeps its open state (a popover's open state is not an attribute)
++      return `<div class="u2-root"><div class="u2-line">`
++        + `<button class="u2-trigger" popovertarget="u2-pop" aria-haspopup="menu" title="Checks, maintenance and motion for this entity; every one is a dry run first">`
++        + `Run a utility…<span class="u2-count">${count}</span>${CARET}</button><span class="u2-note">${esc(busy)}</span></div>`
++        + `<div class="u2-pop" id="u2-pop" popover="auto" role="menu" aria-label="Utilities">${menu}</div>${open}</div>`;
+     },
+   };
+ })(typeof window !== 'undefined' ? window : globalThis);
+diff --git a/io_diagnostics/web/utilities/u3.js b/io_diagnostics/web/utilities/u3.js
+index 73989df..19ff6c2 100644
+--- a/io_diagnostics/web/utilities/u3.js
++++ b/io_diagnostics/web/utilities/u3.js
+@@ -1,37 +1,138 @@
+-// Utility menu u3 · STUB (a copy of u0: a proposal lane replaces this file) (round 3 baseline; contract: docs/round2-seams.md §6).
+-// One row per utility: its icon and title, nothing else at a glance; the description is a hover / focus tooltip
+-// (Zach, 2026-10-23: "too much information at a glance ... the description is maybe a tool tip"). A busy utility
+-// greys out with one quiet line under its title ("Checking communication… 3 s"); a blocked one says why in muted
+-// text. Danger is a neutral word, never a warn / error colour (those mean a diagnostic). The page owns the flow: a
+-// [data-util] click is a dry run, ctx.panel() is its panel, anything but a query runs from the confirm modal.
++// Utility menu u3 · CLI first (round 3 proposal; contract: docs/round2-seams.md §6).
++// Idea: each utility IS the command line it runs, in monospace: `$ io-diagnostics act --path …/can/15 --action
++// check_comms --node 15`, with Run (its dry run first, as always) and Copy (the whole line, full path, for a terminal).
++// Groups are shell comments (`# checks`, `# motion · makes hardware move`), danger is a trailing comment (`# changes`),
++// set_id's new id is typed INTO the line (`--new-id [  ]`). The title and description are the hover / focus tooltip.
++// Precedents: Docker Desktop's and GitHub's "copy command" lines, man-page SYNOPSIS lines, Nagios / Monitoring Plugins
++// command definitions (a check is a command line), and the brief's own seam: every control already is a command
++// (`io-diagnostics act`, docs/round3-brief-2026-10-23.md "CLI as the seam"). Very Bare Metal: no icons, no cards.
++// WHY: Zach, 2026-10-23, "should all of the controls register themselves as CLI? then diagnostics never cares about
++// any internal communication" — the person sees, and can paste, exactly the seam.
+ 'use strict';
+ (function (root) {
++  const STYLE = `
++.u3-root { font-family: var(--io-font-mono); font-size: 12px; line-height: 1.5; }
++.u3-path { color: var(--io-faint); padding: 0 4px 4px; overflow-wrap: anywhere; }
++.u3-gh { color: var(--io-faint); padding: 6px 4px 0; }
++.u3-row { position: relative; border-radius: var(--io-radius-sm); }
++.u3-line { display: flex; align-items: center; gap: 8px; padding: 2px 4px; border-radius: var(--io-radius-sm); }
++.u3-line:hover { background: var(--io-hover); }
++.u3-row.active .u3-line { background: var(--io-selected); }
++.u3-cmd { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 0; color: var(--io-muted); }
++.u3-cmd > span { flex: none; white-space: pre; } /* a line too long for the pane wraps between its words, never clips */
++.u3-ps { color: var(--io-faint); user-select: none; }
++.u3-act { color: var(--io-text-strong); font-weight: 600; }
++.u3-cmt { color: var(--io-faint); }
++.u3-run, .u3-copy { flex: none; font: inherit; font-size: 11.5px; line-height: 1.3; padding: 1px 8px; border-radius: var(--io-radius-sm); cursor: pointer; }
++.u3-run { border: 1px solid var(--io-border); background: var(--io-control); color: var(--io-text-strong); }
++.u3-run:hover:not(:disabled) { background: var(--io-control-hover); }
++.u3-copy { border: 1px solid var(--io-border-soft); background: transparent; color: var(--io-muted); min-width: 58px; }
++.u3-copy:hover { color: var(--io-text-strong); border-color: var(--io-border); }
++.u3-run:disabled { opacity: .45; cursor: not-allowed; }
++.u3-row.blocked .u3-act { color: var(--io-muted); font-weight: 500; }
++.u3-row.busy .u3-cmd { opacity: .5; }
++.u3-row.busy .u3-run:disabled { cursor: progress; }
++.u3-note { color: var(--io-muted); padding: 0 4px 3px 20px; font-variant-numeric: tabular-nums; }
++.u3-row .u-newid { padding: 0; font-size: 12px; }
++.u3-row .u-newid > span { display: none; }
++.u3-row .u-newid input { width: 46px; padding: 0 4px; font-size: 12px; line-height: 1.4; }
++.u3-tip { position: absolute; left: 20px; top: calc(100% - 1px); z-index: 6; width: max-content; max-width: min(440px, calc(100% - 28px)); display: grid; gap: 2px;
++  padding: 7px 10px; font-family: var(--io-font-ui); font-size: 12px; line-height: 1.4; white-space: normal;
++  background: var(--io-popover); color: var(--io-text); border: 1px solid var(--io-border); border-radius: var(--io-radius-sm); box-shadow: var(--io-shadow-pop);
++  visibility: hidden; opacity: 0; pointer-events: none; transition: opacity .1s, visibility 0s .1s; }
++.u3-tip b { color: var(--io-text-strong); font-weight: 600; }
++.u3-meta { color: var(--io-muted); font-size: 11.5px; }
++.u3-line:hover + .u3-tip, .u3-line:focus-within + .u3-tip { visibility: visible; opacity: 1; transition: opacity .12s .35s, visibility 0s .35s; }
++.u3-row.active .u3-tip, .u3-row.busy .u3-tip { visibility: hidden; opacity: 0; }
++.u3-root .u-panel { padding-left: 20px; font-family: var(--io-font-ui); font-size: 12.5px; }
++`;
++  const doc = root.document;
++  if (doc && !doc.getElementById('io-u3-style')) {
++    const style = doc.createElement('style');
++    style.id = 'io-u3-style';
++    style.textContent = STYLE;
++    doc.head.appendChild(style);
++  }
++
++  // the CAN id a node-scoped action names (the entity's last path segment), as the CLI's --node and app.js nodeOf()
++  const nodeOf = (path, action) => {
++    if (action.scope !== 'node') return null;
++    const last = String(path).split('/').pop();
++    return /^\d+$/.test(last) ? last : null;
++  };
++  // the line exactly as `io-diagnostics act --help` takes it (io_diagnostics/cli.py); Copy hands over this text
++  const commandLine = (path, action, newId) => ['io-diagnostics act', `--path ${path}`, `--action ${action.name}`,
++    nodeOf(path, action) !== null ? `--node ${nodeOf(path, action)}` : '', action.name === 'set_id' ? `--new-id ${newId || 'N'}` : '']
++    .filter(Boolean).join(' ');
++  // the path shown in the line: the last two segments after an explicit ellipsis; the full path heads the list and is in Copy
++  const shortPath = (path) => {
++    const parts = String(path).split('/');
++    return parts.length > 2 ? `…/${parts.slice(-2).join('/')}` : String(path);
++  };
++
++  let copied = { name: '', at: 0 };
++  const redraw = () => { if (typeof root.render === 'function') root.render(); };
++  const copyText = (text) => {
++    const fallback = () => {
++      const box = doc.createElement('textarea');
++      box.value = text;
++      box.setAttribute('readonly', '');
++      box.style.position = 'fixed';
++      box.style.opacity = '0';
++      doc.body.appendChild(box);
++      box.select();
++      try { doc.execCommand('copy'); } catch (_) { /* nothing to copy with: the tooltip still shows the line */ }
++      box.remove();
++    };
++    if (root.navigator && root.navigator.clipboard && root.isSecureContext) root.navigator.clipboard.writeText(text).catch(fallback);
++    else fallback();
++  };
++  if (doc) {
++    doc.addEventListener('click', (event) => {
++      const button = event.target.closest('[data-u3-copy]');
++      if (!button) return;
++      const row = button.closest('.u3-row');
++      const box = row && row.querySelector('[data-util-newid]');
++      const text = button.dataset.u3Copy.replace(/--new-id N$/, `--new-id ${box && box.value.trim() ? box.value.trim() : 'N'}`);
++      copyText(text);
++      copied = { name: row ? row.dataset.utilRow : '', at: Date.now() };
++      redraw();
++      setTimeout(redraw, 1600);
++    });
++  }
++
+   root.IOUtilityMenus = root.IOUtilityMenus || {};
+   root.IOUtilityMenus.u3 = {
+-    name: 'Stub (= u0)',
+-    description: 'Icon + title per utility, the description as a tooltip, a greyed busy row with a quiet line under it, danger as a neutral word.',
++    name: 'CLI first',
++    description: 'Every utility is the command line it runs (io-diagnostics act …), monospace, with Run (dry run first) and Copy; groups and danger are shell comments; the title and description are the tooltip.',
+     order: 3,
+     html(ctx) {
+-      const { esc, utilIcon } = ctx.h;
++      const { esc, plainTitle } = ctx.h;
+       const row = (action) => {
+         const busy = ctx.busy(action);
+         const waiting = ctx.waiting(action);
+         const runnable = ctx.runnable(action);
+-        const tip = `u-tip-${esc(action.name)}`;
+-        // blocked: the reason on one muted line (its full words in the tooltip)
+-        const reason = !busy && action.state !== 'ready' && action.reason ? `<span class="u-reason">${esc(action.reason)}</span>` : '';
+-        const note = busy ? `<span class="u-busy">${esc(busy)}</span>` : reason;
+-        const danger = action.danger !== 'query' ? `<span class="danger ${esc(action.danger)}">${esc(action.danger)}</span>` : '';
+-        const tipText = [action.description, waiting ? 'Type the new CAN id (1-126) first.' : '', action.state !== 'ready' && action.reason ? action.reason : '']
+-          .filter(Boolean).join('\n');
+-        const button = `<button class="u-btn" data-util="${esc(action.name)}"${waiting || busy ? ' disabled' : ''} aria-describedby="${tip}">`
+-          + `${utilIcon(action.name)}<span class="u-text"><span class="u-title">${esc(action.title)}</span>${note}</span>${danger}`
+-          + `<span class="u-desc" id="${tip}" role="tooltip">${esc(tipText)}</span></button>`;
+-        return `<div class="urow${ctx.isActive(action) ? ' active' : ''}${runnable ? '' : ' blocked'}${busy ? ' busy' : ''}" data-util-row="${esc(action.name)}">`
+-          + `${ctx.needsId(action) ? `<div class="u-line">${button}${ctx.newIdBox(action)}</div>` : button}${ctx.panel(action)}</div>`;
++        const node = nodeOf(ctx.path, action);
++        const tip = `u3-tip-${esc(action.name)}`;
++        const meta = [action.danger === 'query' ? 'reads only' : action.danger, !runnable && action.reason ? action.reason : '',
++          waiting ? 'type the new CAN id (1-126) first' : ''].filter(Boolean).join(' · ');
++        const line = `<span class="u3-ps">$ </span><span>io-diagnostics act --path ${esc(shortPath(ctx.path))} </span>`
++          + `<span class="u3-act">--action ${esc(action.name)}</span>${node !== null ? `<span> --node ${esc(node)}</span>` : ''}`
++          + `${ctx.needsId(action) ? `<span> --new-id </span>${ctx.newIdBox(action)}` : ''}`
++          + `${action.danger !== 'query' ? `<span class="u3-cmt">  # ${esc(action.danger)}</span>` : ''}`;
++        const fresh = copied.name === action.name && Date.now() - copied.at < 1500;
++        const cls = ['u3-row', ctx.isActive(action) ? 'active' : '', runnable ? '' : 'blocked', busy ? 'busy' : ''].filter(Boolean).join(' ');
++        return `<div class="${cls}" data-util-row="${esc(action.name)}">`
++          + `<div class="u3-line"><span class="u3-cmd">${line}</span>`
++          + `<button class="u3-run" data-util="${esc(action.name)}" aria-describedby="${tip}"${waiting || busy ? ' disabled' : ''}>run</button>`
++          + `<button class="u3-copy" data-u3-copy="${esc(commandLine(ctx.path, action))}" aria-label="Copy the command line">${fresh ? 'copied' : 'copy'}</button></div>`
++          + `<span class="u3-tip" id="${tip}" role="tooltip"><b>${esc(plainTitle(action.title))}</b><span>${esc(action.description)}</span>`
++          + `<span class="u3-meta">${esc(meta)} · run = its dry run first</span></span>`
++          + `${busy ? `<div class="u3-note">${esc(busy)}</div>` : ''}${ctx.panel(action)}</div>`;
+       };
+-      return ctx.groups.map((group) => `<div class="ugroup ugroup-${esc(group.id)}"><div class="ugroup-h">${esc(group.title)}</div>`
+-        + `${group.items.map(row).join('')}</div>`).join('');
++      return `<div class="u3-root"><div class="u3-path"># every line: --path ${esc(ctx.path)}</div>`
++        + `${ctx.groups.map((group) => `<div class="u3-group u3-g-${esc(group.id)}"><div class="u3-gh"># ${esc(group.title.toLowerCase())}</div>`
++          + `${group.items.map(row).join('')}</div>`).join('')}</div>`;
+     },
+   };
+ })(typeof window !== 'undefined' ? window : globalThis);
+diff --git a/io_diagnostics/web/utilities/u4.js b/io_diagnostics/web/utilities/u4.js
+index c1a8624..806944a 100644
+--- a/io_diagnostics/web/utilities/u4.js
++++ b/io_diagnostics/web/utilities/u4.js
+@@ -1,37 +1,189 @@
+-// Utility menu u4 · STUB (a copy of u0: a proposal lane replaces this file) (round 3 baseline; contract: docs/round2-seams.md §6).
+-// One row per utility: its icon and title, nothing else at a glance; the description is a hover / focus tooltip
+-// (Zach, 2026-10-23: "too much information at a glance ... the description is maybe a tool tip"). A busy utility
+-// greys out with one quiet line under its title ("Checking communication… 3 s"); a blocked one says why in muted
+-// text. Danger is a neutral word, never a warn / error colour (those mean a diagnostic). The page owns the flow: a
+-// [data-util] click is a dry run, ctx.panel() is its panel, anything but a query runs from the confirm modal.
++// Utility menu u4 · Command palette (round 3 proposal; contract: docs/round2-seams.md §6).
++// Idea: at rest the section is one quiet search-like field, "Run a utility…  Ctrl K"; Ctrl/Cmd-K (anywhere on the
++// page) or a click opens a palette scoped to THIS entity: type to filter, arrow keys to choose, Enter dry-runs it,
++// and the dry run (what will run, the preconditions, Run / Continue…, then the result) is previewed in the palette's
++// right pane, beside the list. The chosen item's description is what the preview shows before Enter. Precedents: VS
++// Code's Command Palette, Linear's / GitHub's Cmd-K (GitHub scopes it to the repo you are in), Raycast's list +
++// detail pane. Busy: the item greys out and one quiet line sits under the field (and in the preview). Danger is a
++// neutral word; moves still confirm in the page's modal (drawn above the palette). WHY: Zach, 2026-10-23, "too much
++// information at a glance" — nothing at rest but one line, and the keyboard reaches every utility.
+ 'use strict';
+ (function (root) {
++  const STYLE = `
++.u4-field { display: flex; align-items: center; gap: 8px; width: 100%; max-width: 420px; padding: 5px 8px 5px 10px; font: inherit; text-align: left;
++  border: 1px solid var(--io-border-soft); border-radius: var(--io-radius); background: var(--io-field); color: var(--io-muted); cursor: text; }
++.u4-field:hover { border-color: var(--io-border); }
++.u4-field .u4-ph { flex: 1; min-width: 0; }
++.u4-glass { width: 15px; height: 15px; flex: none; fill: none; stroke: var(--io-icon); stroke-width: 1.8; stroke-linecap: round; }
++.u4-root kbd, .u4-pal kbd { font: 11px/1.2 var(--io-font-mono); padding: 1px 5px; border: 1px solid var(--io-border-soft); border-bottom-width: 2px;
++  border-radius: var(--io-radius-sm); color: var(--io-muted); background: var(--io-surface); white-space: nowrap; }
++.u4-note { color: var(--io-muted); font-size: 11.5px; font-variant-numeric: tabular-nums; padding: 3px 2px 0; }
++.u4-note:empty { display: none; }
++.u4-open { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--io-border-soft); }
++.u4-head { display: flex; align-items: center; gap: 8px; padding: 2px 2px 2px; }
++.u4-head b { color: var(--io-text-strong); font-weight: 600; }
++.u4-head .danger { margin-left: auto; }
++.u4-root .u-panel { padding-left: 2px; padding-right: 2px; }
++.u4-back { position: fixed; inset: 0; z-index: 45; display: flex; justify-content: center; align-items: flex-start; padding: 11vh 16px 16px; }
++.u4-pal { width: min(820px, 100%); max-height: 76vh; display: flex; flex-direction: column; overflow: hidden;
++  background: var(--io-popover); color: var(--io-text); border: 1px solid var(--io-border); border-radius: var(--io-radius-lg); box-shadow: var(--io-shadow-pop); }
++.u4-top { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--io-border-soft); }
++.u4-input { flex: 1; min-width: 0; font: inherit; font-size: 15px; border: 0; outline: none; background: transparent; color: var(--io-text-strong); }
++.u4-input::placeholder { color: var(--io-faint); }
++.u4-scope { color: var(--io-faint); font: 11.5px var(--io-font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%; }
++.u4-body { display: grid; grid-template-columns: minmax(220px, 300px) 1fr; min-height: 0; flex: 1; }
++.u4-list { overflow: auto; padding: 6px; border-right: 1px solid var(--io-border-soft); }
++.u4-gh { padding: 6px 8px 2px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .5px; color: var(--io-muted); }
++.u4-btn { display: flex; align-items: center; gap: 9px; width: 100%; padding: 5px 8px; text-align: left; font: inherit; border: 0;
++  border-radius: var(--io-radius-sm); background: transparent; color: var(--io-text); cursor: pointer; }
++.u4-btn .u-ic { width: 17px; height: 17px; }
++.u4-btn .u4-title { flex: 1; min-width: 0; color: var(--io-text-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
++.u4-item.sel .u4-btn { background: var(--io-selected); box-shadow: inset 2px 0 0 var(--io-selected-line); }
++.u4-item.blocked .u4-title { color: var(--io-muted); }
++.u4-item.blocked .u-ic { stroke: var(--io-faint); }
++.u4-item.busy .u4-btn { opacity: .45; cursor: progress; }
++.u4-btn:disabled { cursor: not-allowed; }
++.u4-item .u-newid { padding: 2px 8px 4px 34px; }
++.u4-none { padding: 10px; color: var(--io-muted); }
++.u4-preview { overflow: auto; padding: 10px 14px 12px; min-width: 0; }
++.u4-desc { margin: 4px 2px 8px; color: var(--io-text); }
++.u4-why { margin: 0 2px 8px; color: var(--io-muted); font-size: 12px; }
++.u4-hint { margin: 0 2px; color: var(--io-faint); font-size: 11.5px; }
++.u4-preview .u-panel { padding: 4px 2px 4px; }
++.u4-foot { display: flex; gap: 14px; padding: 7px 14px; border-top: 1px solid var(--io-border-soft); color: var(--io-faint); font-size: 11.5px; }
++@media (max-width: 640px) { .u4-body { grid-template-columns: 1fr; } .u4-list { border-right: 0; border-bottom: 1px solid var(--io-border-soft); max-height: 40vh; } }
++`;
++  const doc = root.document;
++  if (doc && !doc.getElementById('io-u4-style')) {
++    const style = doc.createElement('style');
++    style.id = 'io-u4-style';
++    style.textContent = STYLE;
++    doc.head.appendChild(style);
++  }
++
++  // the palette's own state; the page patches the detail every second, so html() draws from it and nothing else
++  const P = { open: false, query: '', at: 0, path: null, names: [] };
++  const MAC = Boolean(root.navigator && /Mac|iPhone|iPad/.test(root.navigator.platform || ''));
++  const redraw = () => { if (typeof root.render === 'function') root.render(); };
++  const mine = () => Boolean(doc && doc.querySelector('#detail .u4-root'));
++  const modalOpen = () => { const modal = doc.getElementById('modal'); return Boolean(modal && !modal.hidden); };
++  function setOpen(open) {
++    P.open = open;
++    if (open) { P.query = ''; P.at = 0; }
++    redraw();
++    const target = doc.querySelector(open ? '.u4-input' : '.u4-field');
++    if (target) target.focus();
++  }
++  function highlight(at) {
++    if (!P.names.length) return;
++    P.at = (at + P.names.length) % P.names.length;
++    redraw();
++    const item = doc.querySelector('.u4-item.sel');
++    if (item) item.scrollIntoView({ block: 'nearest' });
++  }
++
++  if (doc) {
++    // capture: Ctrl/Cmd-K and the palette's keys are handled before the page's own keydown (Escape there folds the inspector)
++    root.addEventListener('keydown', (event) => {
++      if (!mine()) return;
++      if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && String(event.key).toLowerCase() === 'k') {
++        event.preventDefault();
++        event.stopPropagation();
++        setOpen(!P.open);
++        return;
++      }
++      if (!P.open || modalOpen()) return; // the confirm modal (above the palette) keeps its keys
++      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setOpen(false); return; }
++      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
++        event.preventDefault();
++        highlight(P.at + (event.key === 'ArrowDown' ? 1 : -1));
++        return;
++      }
++      if (event.key === 'Enter' && event.target.closest && event.target.closest('.u4-input, [data-util-newid]')) {
++        event.preventDefault();
++        const name = event.target.matches('[data-util-newid]') ? 'set_id' : P.names[P.at];
++        const button = name && doc.querySelector(`.u4-pal [data-util="${name}"]`);
++        if (button && !button.disabled) button.click();
++      }
++    }, true);
++    doc.addEventListener('input', (event) => {
++      if (!event.target.matches || !event.target.matches('.u4-input')) return;
++      P.query = event.target.value;
++      P.at = 0;
++      redraw();
++    });
++    doc.addEventListener('click', (event) => {
++      if (event.target.closest('[data-u4-open]')) { setOpen(true); return; }
++      if (event.target.matches('[data-u4-back]')) { setOpen(false); return; }
++      if (event.target.closest('[data-u4-close]')) setOpen(false);
++    });
++    // the pointer chooses too, as in VS Code's palette
++    doc.addEventListener('mousemove', (event) => {
++      const item = event.target.closest && event.target.closest('.u4-item[data-u4-at]');
++      if (item && Number(item.dataset.u4At) !== P.at) { P.at = Number(item.dataset.u4At); redraw(); }
++    });
++  }
++
++  const GLASS = '<svg class="u4-glass" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>';
++  const matches = (action, query) => {
++    const text = `${action.title} ${action.name} ${action.description}`.toLowerCase();
++    return String(query).toLowerCase().split(/\s+/).filter(Boolean).every((word) => text.includes(word));
++  };
++
+   root.IOUtilityMenus = root.IOUtilityMenus || {};
+   root.IOUtilityMenus.u4 = {
+-    name: 'Stub (= u0)',
+-    description: 'Icon + title per utility, the description as a tooltip, a greyed busy row with a quiet line under it, danger as a neutral word.',
++    name: 'Command palette',
++    description: 'One quiet "Run a utility… Ctrl K" field; Ctrl/Cmd-K opens a palette scoped to this entity (type, arrows, Enter) whose right pane previews the dry run and its result.',
+     order: 4,
+     html(ctx) {
+-      const { esc, utilIcon } = ctx.h;
+-      const row = (action) => {
+-        const busy = ctx.busy(action);
++      const { esc, utilIcon, plainTitle } = ctx.h;
++      if (P.path !== ctx.path) { P.open = false; P.query = ''; P.at = 0; P.path = ctx.path; }
++      const active = ctx.actions.find((action) => ctx.isActive(action));
++      const busy = active ? ctx.busy(active) : '';
++      const head = (action) => `<div class="u4-head">${utilIcon(action.name)}<b>${esc(plainTitle(action.title))}</b>`
++        + `${action.danger !== 'query' ? `<span class="danger ${esc(action.danger)}">${esc(action.danger)}</span>` : ''}</div>`;
++      const field = `<button class="u4-field" data-u4-open aria-haspopup="dialog" aria-keyshortcuts="Control+K Meta+K">${GLASS}`
++        + `<span class="u4-ph">Run a utility…</span><kbd>${MAC ? '⌘' : 'Ctrl'} K</kbd></button>`;
++      const note = `<div class="u4-note">${esc(busy)}</div>`;
++      if (!P.open) {
++        const inline = active && !busy ? `<div class="u4-open">${head(active)}${ctx.panel(active)}</div>` : '';
++        return `<div class="u4-root">${field}${note}${inline}</div>`;
++      }
++      // the list: the standard groups, filtered by every typed word (title, name, description)
++      const shown = ctx.groups.map((group) => ({ ...group, items: group.items.filter((action) => matches(action, P.query)) })).filter((group) => group.items.length);
++      P.names = shown.flatMap((group) => group.items.map((action) => action.name));
++      if (P.at >= P.names.length) P.at = Math.max(0, P.names.length - 1);
++      let at = 0;
++      const item = (action) => {
++        const index = at;
++        at += 1;
++        const busyNow = ctx.busy(action);
+         const waiting = ctx.waiting(action);
+-        const runnable = ctx.runnable(action);
+-        const tip = `u-tip-${esc(action.name)}`;
+-        // blocked: the reason on one muted line (its full words in the tooltip)
+-        const reason = !busy && action.state !== 'ready' && action.reason ? `<span class="u-reason">${esc(action.reason)}</span>` : '';
+-        const note = busy ? `<span class="u-busy">${esc(busy)}</span>` : reason;
+-        const danger = action.danger !== 'query' ? `<span class="danger ${esc(action.danger)}">${esc(action.danger)}</span>` : '';
+-        const tipText = [action.description, waiting ? 'Type the new CAN id (1-126) first.' : '', action.state !== 'ready' && action.reason ? action.reason : '']
+-          .filter(Boolean).join('\n');
+-        const button = `<button class="u-btn" data-util="${esc(action.name)}"${waiting || busy ? ' disabled' : ''} aria-describedby="${tip}">`
+-          + `${utilIcon(action.name)}<span class="u-text"><span class="u-title">${esc(action.title)}</span>${note}</span>${danger}`
+-          + `<span class="u-desc" id="${tip}" role="tooltip">${esc(tipText)}</span></button>`;
+-        return `<div class="urow${ctx.isActive(action) ? ' active' : ''}${runnable ? '' : ' blocked'}${busy ? ' busy' : ''}" data-util-row="${esc(action.name)}">`
+-          + `${ctx.needsId(action) ? `<div class="u-line">${button}${ctx.newIdBox(action)}</div>` : button}${ctx.panel(action)}</div>`;
++        const cls = ['u4-item', index === P.at ? 'sel' : '', ctx.runnable(action) ? '' : 'blocked', busyNow ? 'busy' : ''].filter(Boolean).join(' ');
++        return `<div class="${cls}" data-util-row="${esc(action.name)}" data-u4-at="${index}" role="option" aria-selected="${index === P.at}">`
++          + `<button class="u4-btn" data-util="${esc(action.name)}" tabindex="-1"${waiting || busyNow ? ' disabled' : ''}>${utilIcon(action.name)}`
++          + `<span class="u4-title">${esc(plainTitle(action.title))}</span>${action.danger !== 'query' ? `<span class="danger ${esc(action.danger)}">${esc(action.danger)}</span>` : ''}</button>`
++          + `${ctx.needsId(action) ? ctx.newIdBox(action) : ''}</div>`;
+       };
+-      return ctx.groups.map((group) => `<div class="ugroup ugroup-${esc(group.id)}"><div class="ugroup-h">${esc(group.title)}</div>`
+-        + `${group.items.map(row).join('')}</div>`).join('');
++      const list = shown.length
++        ? shown.map((group) => `<div class="u4-gh">${esc(group.title)}</div>${group.items.map(item).join('')}`).join('')
++        : `<div class="u4-none">No utility matches “${esc(P.query)}”.</div>`;
++      // the preview: the open dry run (or the busy line) when there is one, else the chosen item's description
++      const chosen = ctx.actions.find((action) => action.name === P.names[P.at]);
++      let preview = '';
++      if (active) preview = `${head(active)}${busy ? `<div class="u4-why">${esc(busy)}</div>` : ctx.panel(active)}`;
++      else if (chosen) {
++        preview = `${head(chosen)}<div class="u4-desc">${esc(chosen.description)}</div>`
++          + `${!ctx.runnable(chosen) && chosen.reason ? `<div class="u4-why">${esc(chosen.reason)}</div>` : ''}`
++          + `${ctx.waiting(chosen) ? '<div class="u4-why">Type the new CAN id (1-126) in its row first.</div>' : ''}`
++          + '<div class="u4-hint">Enter shows its dry run here: what would run and its preconditions. Nothing runs yet.</div>';
++      }
++      const palette = `<div class="u4-back" data-u4-back><div class="u4-pal" role="dialog" aria-label="Utilities for this entity">`
++        + `<div class="u4-top">${GLASS}<input class="u4-input" value="${esc(P.query)}" placeholder="Utilities for this entity…" aria-label="Filter utilities"`
++        + ` aria-controls="u4-list" autocomplete="off" spellcheck="false"><span class="u4-scope" title="${esc(ctx.path)}">${esc(ctx.path)}</span><kbd>Esc</kbd></div>`
++        + `<div class="u4-body"><div class="u4-list" id="u4-list" role="listbox">${list}</div><div class="u4-preview">${preview}</div></div>`
++        + '<div class="u4-foot"><span>↑ ↓ choose</span><span>Enter dry run</span><span>Esc close</span></div></div></div>';
++      return `<div class="u4-root">${field}${note}${palette}</div>`;
+     },
+   };
+ })(typeof window !== 'undefined' ? window : globalThis);
+diff --git a/io_diagnostics/web/utilities/u5.js b/io_diagnostics/web/utilities/u5.js
+index 4c6cf07..5b5642d 100644
+--- a/io_diagnostics/web/utilities/u5.js
++++ b/io_diagnostics/web/utilities/u5.js
+@@ -1,37 +1,186 @@
+-// Utility menu u5 · STUB (a copy of u0: a proposal lane replaces this file) (round 3 baseline; contract: docs/round2-seams.md §6).
+-// One row per utility: its icon and title, nothing else at a glance; the description is a hover / focus tooltip
+-// (Zach, 2026-10-23: "too much information at a glance ... the description is maybe a tool tip"). A busy utility
+-// greys out with one quiet line under its title ("Checking communication… 3 s"); a blocked one says why in muted
+-// text. Danger is a neutral word, never a warn / error colour (those mean a diagnostic). The page owns the flow: a
+-// [data-util] click is a dry run, ctx.panel() is its panel, anything but a query runs from the confirm modal.
++// Utility menu u5 · Row context menu (round 3 proposal; contract: docs/round2-seams.md §6).
++// Idea: the utilities live where the entity is: right-click its row in the tree or the table and a context menu opens
++// at the pointer (Checks, Maintenance, Motion · makes hardware move, More; danger as a neutral word in the menu's
++// shortcut column). The detail keeps one quiet link, "Run a utility…", that opens the same menu. The hovered item's
++// description reads in the menu's own help line at the bottom. Precedents: Windows Device Manager's right-click on a
++// device (Update driver · Disable device · Uninstall · Scan for hardware changes), Finder / Explorer / VS Code explorer
++// context menus, and the menu-prompt status line of classic Windows apps (the description of the highlighted command).
++// Busy: the item greys out and one quiet line sits beside the link; the dry run reads under the link, as always.
++// WHY: Zach, 2026-10-23, "the utilities are not the main thing and shouldn't be drawing attention" — at rest the
++// detail shows one link, and the actions are on the thing they act on.
+ 'use strict';
+ (function (root) {
++  const STYLE = `
++.u5-line { display: flex; align-items: baseline; gap: 10px; min-height: 22px; }
++.u5-link { padding: 0; font: inherit; border: 0; background: transparent; color: var(--io-text); cursor: pointer;
++  text-decoration: underline; text-decoration-color: var(--io-border); text-underline-offset: 3px; }
++.u5-link:hover { color: var(--io-text-strong); text-decoration-color: var(--io-text-strong); }
++.u5-note { color: var(--io-muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
++.u5-open { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--io-border-soft); }
++.u5-head { display: flex; align-items: center; gap: 8px; padding: 2px 2px 2px; }
++.u5-head b { color: var(--io-text-strong); font-weight: 600; }
++.u5-head .danger { margin-left: auto; }
++.u5-root .u-panel { padding-left: 2px; padding-right: 2px; }
++.u5-menu { position: fixed; z-index: 45; width: 290px; padding: 4px; font-size: var(--io-font-size);
++  background: var(--io-popover); color: var(--io-text); border: 1px solid var(--io-border); border-radius: var(--io-radius); box-shadow: var(--io-shadow-pop); }
++.u5-for { padding: 4px 8px 4px; color: var(--io-faint); font: 11px var(--io-font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
++.u5-sep { height: 1px; margin: 4px 6px; background: var(--io-border-soft); }
++.u5-gh { padding: 3px 8px 1px; font-size: 10.5px; color: var(--io-muted); }
++.u5-btn { display: flex; align-items: center; gap: 9px; width: 100%; padding: 4px 8px; text-align: left; font: inherit; border: 0;
++  border-radius: var(--io-radius-sm); background: transparent; color: var(--io-text-strong); cursor: default; }
++.u5-btn .u-ic { width: 16px; height: 16px; }
++.u5-btn span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
++.u5-btn .danger { flex: none; }
++.u5-btn:hover:not(:disabled), .u5-btn:focus-visible { background: var(--io-selected); outline: none; }
++.u5-item.blocked .u5-btn { color: var(--io-muted); }
++.u5-item.blocked .u-ic { stroke: var(--io-faint); }
++.u5-item.busy .u5-btn { opacity: .45; }
++.u5-item .u-newid { padding: 1px 8px 4px 33px; }
++.u5-help { margin: 4px 0 0; padding: 6px 8px 3px; border-top: 1px solid var(--io-border-soft); color: var(--io-muted); font-size: 11.5px; line-height: 1.4; min-height: 3.2em; }
++`;
++  const doc = root.document;
++  if (doc && !doc.getElementById('io-u5-style')) {
++    const style = doc.createElement('style');
++    style.id = 'io-u5-style';
++    style.textContent = STYLE;
++    doc.head.appendChild(style);
++  }
++
++  // the menu's own state; the page patches the detail every second, so html() draws the menu from it and nothing else
++  const M = { open: null, path: null, hover: '', pending: null, lastPath: null, focus: false };
++  // the rows of every tree renderer and of the page's own table / fallback list
++  const ROWS = '[data-t6-path], [data-t1-path], [data-t2-path], [data-v3-path], [data-v5-path], .v4-row[data-path], [data-key]';
++  const redraw = () => { if (typeof root.render === 'function') root.render(); };
++  const chosen = () => { const select = doc.getElementById('utility-menu'); return Boolean(select && select.value === 'u5'); };
++  const modalOpen = () => { const modal = doc.getElementById('modal'); return Boolean(modal && !modal.hidden); };
++  const shownInspector = () => { const pane = doc.getElementById('inspector'); return Boolean(pane && pane.getBoundingClientRect().width > 40); };
++  function close() {
++    if (!M.open) return;
++    M.open = null;
++    M.hover = '';
++    redraw();
++  }
++  function openAt(x, y, path) {
++    M.open = { x: Math.round(x), y: Math.round(y) };
++    M.path = path;
++    M.hover = '';
++    M.focus = true;
++    redraw();
++    root.requestAnimationFrame(settle);
++  }
++  // keep the menu inside the window (flip up / left at the edges), then focus its first item
++  function settle() {
++    const menu = doc.querySelector('.u5-menu');
++    if (!menu || !M.open) return;
++    const rect = menu.getBoundingClientRect();
++    let { x, y } = M.open;
++    if (x + rect.width > root.innerWidth - 8) x = Math.max(8, x - rect.width);
++    if (y + rect.height > root.innerHeight - 8) y = Math.max(8, root.innerHeight - 8 - rect.height);
++    if (x !== M.open.x || y !== M.open.y) {
++      M.open = { x, y };
++      menu.style.left = `${x}px`;
++      menu.style.top = `${y}px`;
++    }
++    if (M.focus) {
++      M.focus = false;
++      if (menu.contains(doc.activeElement)) return; // already working in it (its new-id box)
++      const first = menu.querySelector('.u5-btn:not(:disabled)');
++      if (first) first.focus({ preventScroll: true });
++    }
++  }
++
++  if (doc) {
++    doc.addEventListener('contextmenu', (event) => {
++      if (!chosen()) return;
++      const row = event.target.closest && event.target.closest(ROWS);
++      if (!row || !row.closest('#left')) return;
++      event.preventDefault();
++      const selected = row.getAttribute('aria-selected') === 'true' || row.classList.contains('sel') || row.classList.contains('selected');
++      if (selected && shownInspector() && M.lastPath) { openAt(event.clientX, event.clientY, M.lastPath); return; }
++      // another row: select it the way a click does, and open the menu once its utilities have loaded (html() below)
++      M.open = null;
++      M.pending = { x: event.clientX, y: event.clientY, from: M.lastPath, same: selected, at: Date.now() };
++      row.click();
++    });
++    doc.addEventListener('click', (event) => {
++      const link = event.target.closest('[data-u5-open]');
++      if (link) {
++        const rect = link.getBoundingClientRect();
++        if (M.open) close(); else openAt(rect.left, rect.bottom + 4, M.lastPath);
++        return;
++      }
++      // an item's click has already started its dry run (the page's handler): the menu's job is done
++      const item = event.target.closest('.u5-menu [data-util]');
++      if (item && !item.disabled) close();
++    });
++    doc.addEventListener('mousedown', (event) => {
++      if (M.open && !event.target.closest('.u5-menu, [data-u5-open]')) close();
++    }, true);
++    root.addEventListener('keydown', (event) => {
++      if (!M.open || modalOpen()) return;
++      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); return; }
++      if (!['ArrowDown', 'ArrowUp'].includes(event.key) || (event.target.matches && event.target.matches('input'))) return;
++      const items = [...doc.querySelectorAll('.u5-menu .u5-btn:not(:disabled)')];
++      const at = items.indexOf(doc.activeElement);
++      const target = items[((at < 0 ? 0 : at + (event.key === 'ArrowDown' ? 1 : -1)) + items.length) % items.length];
++      if (target) { target.focus(); event.preventDefault(); event.stopPropagation(); }
++    }, true);
++    // the help line: the hovered / focused item's description, written in place (and kept in M for the next draw)
++    const help = (event) => {
++      const row = event.target.closest && event.target.closest('.u5-menu [data-util-row]');
++      if (!row || row.dataset.u5Desc === undefined) return;
++      M.hover = row.dataset.utilRow;
++      const line = doc.querySelector('.u5-help');
++      if (line) line.textContent = row.dataset.u5Desc;
++    };
++    doc.addEventListener('mouseover', help);
++    doc.addEventListener('focusin', help);
++  }
++
+   root.IOUtilityMenus = root.IOUtilityMenus || {};
+   root.IOUtilityMenus.u5 = {
+-    name: 'Stub (= u0)',
+-    description: 'Icon + title per utility, the description as a tooltip, a greyed busy row with a quiet line under it, danger as a neutral word.',
++    name: 'Row context menu',
++    description: 'Right-click the entity\'s row (tree or table) for a context menu of its utilities, with the hovered one\'s description in the menu\'s help line; the detail keeps one quiet "Run a utility…" link.',
+     order: 5,
+     html(ctx) {
+-      const { esc, utilIcon } = ctx.h;
+-      const row = (action) => {
+-        const busy = ctx.busy(action);
+-        const waiting = ctx.waiting(action);
+-        const runnable = ctx.runnable(action);
+-        const tip = `u-tip-${esc(action.name)}`;
+-        // blocked: the reason on one muted line (its full words in the tooltip)
+-        const reason = !busy && action.state !== 'ready' && action.reason ? `<span class="u-reason">${esc(action.reason)}</span>` : '';
+-        const note = busy ? `<span class="u-busy">${esc(busy)}</span>` : reason;
+-        const danger = action.danger !== 'query' ? `<span class="danger ${esc(action.danger)}">${esc(action.danger)}</span>` : '';
+-        const tipText = [action.description, waiting ? 'Type the new CAN id (1-126) first.' : '', action.state !== 'ready' && action.reason ? action.reason : '']
+-          .filter(Boolean).join('\n');
+-        const button = `<button class="u-btn" data-util="${esc(action.name)}"${waiting || busy ? ' disabled' : ''} aria-describedby="${tip}">`
+-          + `${utilIcon(action.name)}<span class="u-text"><span class="u-title">${esc(action.title)}</span>${note}</span>${danger}`
+-          + `<span class="u-desc" id="${tip}" role="tooltip">${esc(tipText)}</span></button>`;
+-        return `<div class="urow${ctx.isActive(action) ? ' active' : ''}${runnable ? '' : ' blocked'}${busy ? ' busy' : ''}" data-util-row="${esc(action.name)}">`
+-          + `${ctx.needsId(action) ? `<div class="u-line">${button}${ctx.newIdBox(action)}</div>` : button}${ctx.panel(action)}</div>`;
+-      };
+-      return ctx.groups.map((group) => `<div class="ugroup ugroup-${esc(group.id)}"><div class="ugroup-h">${esc(group.title)}</div>`
+-        + `${group.items.map(row).join('')}</div>`).join('');
++      const { esc, utilIcon, plainTitle } = ctx.h;
++      const pending = M.pending;
++      // a right-clicked row's utilities arrived: open its menu where the pointer was
++      if (pending && Date.now() - pending.at < 5000 && (pending.same ? ctx.path === pending.from : ctx.path !== pending.from || Date.now() - pending.at > 700)) {
++        M.pending = null;
++        M.open = { x: pending.x, y: pending.y };
++        M.path = ctx.path;
++        M.focus = true;
++        root.requestAnimationFrame(settle);
++      } else if (pending && Date.now() - pending.at >= 5000) M.pending = null;
++      M.lastPath = ctx.path;
++      if (M.open && M.path !== ctx.path) { M.open = null; M.hover = ''; }
++      const active = ctx.actions.find((action) => ctx.isActive(action));
++      const busy = active ? ctx.busy(active) : '';
++      const danger = (action) => (action.danger !== 'query' ? `<span class="danger ${esc(action.danger)}">${esc(action.danger)}</span>` : '');
++      const line = '<div class="u5-line"><button class="u5-link" data-u5-open aria-haspopup="menu" title="The same menu opens on a right-click of this entity\'s row">Run a utility…</button>'
++        + `<span class="u5-note">${esc(busy)}</span></div>`;
++      const open = active && !busy ? `<div class="u5-open"><div class="u5-head">${utilIcon(active.name)}<b>${esc(plainTitle(active.title))}</b>${danger(active)}</div>${ctx.panel(active)}</div>` : '';
++      const descOf = (action) => [action.description, !ctx.runnable(action) && action.reason ? action.reason : '',
++        ctx.waiting(action) ? 'Type the new CAN id (1-126) first.' : ''].filter(Boolean).join(' · ');
++      let menu = '';
++      if (M.open) {
++        const item = (action) => {
++          const busyNow = ctx.busy(action);
++          const waiting = ctx.waiting(action);
++          const desc = descOf(action);
++          const cls = ['u5-item', ctx.runnable(action) ? '' : 'blocked', busyNow ? 'busy' : ''].filter(Boolean).join(' ');
++          return `<div class="${cls}" data-util-row="${esc(action.name)}" data-u5-desc="${esc(desc)}"><button class="u5-btn" role="menuitem" data-util="${esc(action.name)}"${waiting || busyNow ? ' disabled' : ''}>`
++            + `${utilIcon(action.name)}<span>${esc(action.title)}</span>${danger(action)}</button>${ctx.needsId(action) ? ctx.newIdBox(action) : ''}</div>`;
++        };
++        const hovered = ctx.actions.find((action) => action.name === M.hover);
++        const groups = ctx.groups.map((group) => `${group.id === 'motion' ? '<div class="u5-gh">Makes hardware move</div>' : ''}${group.items.map(item).join('')}`)
++          .join('<div class="u5-sep" role="separator"></div>');
++        menu = `<div class="u5-menu" role="menu" aria-label="Utilities" style="left:${M.open.x}px;top:${M.open.y}px">`
++          + `<div class="u5-for">${esc(ctx.path)}</div>${groups}`
++          + `<div class="u5-help" aria-live="polite">${esc(hovered ? descOf(hovered) : 'Every one is a dry run first: nothing runs until you press Run.')}</div></div>`;
++      }
++      return `<div class="u5-root">${line}${open}${menu}</div>`;
+     },
+   };
+ })(typeof window !== 'undefined' ? window : globalThis);
