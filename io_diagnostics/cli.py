@@ -9,7 +9,8 @@
 - ``serve``  the dashboard at http://127.0.0.1:8812/ (``--port``), live from this machine, or ``--fixture F1|F2|F3``
              (plug / bus-busy / after-restart): V6's three recorded frames replayed through the same plugin runner,
              or ``--machine SPEC.json``: a fake machine's sysfs (PCIe grabbers, EtherCAT) through the real sources.
-             ``--enable NAME`` runs a plugin its declaration disables; ``--plugins DIR`` reads another directory.
+             ``--enable NAME`` runs a plugin its declaration disables; ``--plugins DIR`` reads another directory;
+             ``--history-window 15m`` sets this run's history window (docs/api-v1.md "History").
 - ``tray``   ``serve`` plus the top-bar chip in the same process (needs the system python's ``gi``; from the uv
              environment it re-executes itself under /usr/bin/python3). The dashboard opens only on a click.
 - ``once``   refresh, run every matched plugin once, print the merged tree and records (``--json``) and exit:
@@ -93,6 +94,9 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--bind", default="127.0.0.1")
             command.add_argument("--offset", type=float, default=0.0, help="fixture only: start S seconds after the frame clock")
             command.add_argument("--no-udev", action="store_true", help="do not listen to udevadm monitor (live mode)")
+            command.add_argument("--history-window", metavar="DURATION",
+                                 help="this run's history window, the health bars' rolling window: seconds or 15m, 1h"
+                                      " (default: settings.toml's, else 15m; the page's View options write the file)")
     return parser
 
 
@@ -176,8 +180,15 @@ def _serve(args, *, tray: bool) -> int:
     from io_diagnostics.host import make_host
     from io_diagnostics.server import make_server, serve_in_thread
 
+    from io_diagnostics.settings import SettingsError, check_window, parse_duration
+
+    try:
+        window = check_window(parse_duration(args.history_window)) if args.history_window else None
+    except SettingsError as error:
+        print(f"--history-window: {error}", file=sys.stderr)
+        return 2
     host = make_host(fixture=args.fixture, plugins_dir=args.plugins, offset_s=args.offset, enable=tuple(args.enable),
-                     machine=args.machine, expected=args.expected)
+                     machine=args.machine, expected=args.expected, history_window_s=window)
     try:
         server = make_server(host, args.port, args.bind)
     except OSError as error:

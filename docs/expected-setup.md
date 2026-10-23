@@ -112,6 +112,11 @@ under "Expected, not connected" says "no connected device reports serial …" in
 - Its level: **warn** (`ExpectedMissing`) when anything expected is missing, naming each ("missing: CAN 15 on
   fdcanusb 272813EF"), with a numbered what-to-check; **unknown** (`ExpectedNotChecked`) when a node's check could not
   run (port busy, passive run, stale); else **ok** ("everything expected is here").
+- **Counted once** (record v0.1 `caused_by`, 2026-10-23): the rig row's check names, per missing item, the row that
+  reports it (the board's own `BoardNotAnswering` row, or the absent device's row under "Expected, not connected").
+  So the chip counts the missing board once, as the board, and the rig row reads as its knock-on while keeping its
+  own warn and words. When some item has no row that says it (a node its driver never mentions), the rig names
+  nothing and counts as a cause of its own.
 - **A wrong ratio** is the board's own warning, not the rig row's: `<node>: expected ratio` (`RatioMismatch`),
   "config ratio 0.1667, expected 0.1 (10:1 gearbox)", judged on the driver's latest fresh config reading.
 - Notes that never change its level: an extra node that answers but is not listed ("also here, not expected: CAN 2 on

@@ -13,6 +13,9 @@ devices to hand it. The host never imports a driver.
     matches = ["usb:0483:5740", "by-id:*fdcanusb*"]
     exclusive = "rack-bus"             # optional: never two runs of this group at once (queued, not failed)
 
+A ``kind = "check"`` declaration instead runs any Monitoring Plugins (Nagios) command and attaches its one result to
+``attach`` (``"host"``, a hardware_id or ``"rig:<name>"``): exit code = level (runner.run_check).
+
 A skeleton device is the frozen lane-B dict ``{"bus", "id", "path", "label", "vendor", "product", "serial",
 "parent", "attrs"}``; matching reads only those keys, defensively, so any OS source can feed it.
 """
@@ -36,7 +39,12 @@ DEFAULT_PERIOD_S = 30.0
 DEFAULT_ACT_TIMEOUT_S = 900.0
 MATCH_KINDS = ("usb", "pci", "pci-class", "by-id", "tty", "v4l", "netdev", "host")
 KNOWN_KEYS = {"name", "command", "cwd", "timeout_s", "period_s", "timeout", "period", "matches", "enabled", "replay", "env",
-              "description", "diagnose_args", "exclusive", "act_timeout_s", "act_timeout"}
+              "description", "diagnose_args", "exclusive", "act_timeout_s", "act_timeout", "kind", "attach"}
+# WHY two kinds: a "driver" speaks describe | diagnose | act in JSON lines; a "check" is ANY command that speaks the
+# stock Monitoring Plugins API (exit 0/1/2/3, first stdout line, perfdata after "|"), so a simple check needs no code
+# (round 3 brief, "CLI as the seam"; https://www.monitoring-plugins.org/doc/guidelines.html). A check has no matches:
+# it declares the one entity its result attaches to.
+KINDS = ("driver", "check")
 # WHY aliases: docs/build-plan-v1.md names the keys "timeout, period"; the lane spec and this README say timeout_s /
 # period_s. Both mean seconds; the _s spelling wins when a file has both.
 KEY_ALIASES = {"timeout_s": "timeout", "period_s": "period", "act_timeout_s": "act_timeout"}
@@ -204,9 +212,13 @@ class PluginSpec:
     # flock LOCK_NB, so the loser FAILS) must take turns. The host runs at most one job (diagnose or act) per group
     # at a time, across plugins and across one plugin's devices; "" = no group, runs in parallel.
     exclusive: str = ""
+    kind: str = "driver"  # driver | check (KINDS)
+    # a check only: the entity its result lands on: "host" (the Computer), a hardware_id (usb:<vid>:<pid>:<serial>,
+    # moteus:<uuid>, ...) or "rig:<rig name>" (a rig row of the expected setup)
+    attach: str = ""
 
     def accepts(self, device: dict) -> bool:
-        return self.enabled and any(match.accepts(device) for match in self.matches)
+        return self.enabled and self.kind == "driver" and any(match.accepts(device) for match in self.matches)
 
 
 def _expand(text: str, here: Path) -> str:
@@ -263,11 +275,24 @@ def load_plugin(path: Path) -> tuple[PluginSpec, list[str]]:
     exclusive = data.get("exclusive", "")
     if not isinstance(exclusive, str) or (exclusive and not _NAME.match(exclusive)):
         raise PluginConfigError(f"{path.name}: exclusive must be a group name ([A-Za-z0-9_.-]), got {exclusive!r}")
+    kind = data.get("kind", "driver")
+    if kind not in KINDS:
+        raise PluginConfigError(f"{path.name}: kind must be one of {KINDS}, got {kind!r}")
+    attach = data.get("attach", "")
+    if kind == "check":
+        if not isinstance(attach, str) or not attach.strip():
+            raise PluginConfigError(f"{path.name}: a check needs attach: \"host\", a hardware_id, or \"rig:<rig name>\"")
+        if raw_matches or diagnose_args or "act_timeout_s" in data or "act_timeout" in data or "replay" in data:
+            raise PluginConfigError(f"{path.name}: a check takes no matches, diagnose_args, act_timeout_s or replay "
+                                    "(it attaches to one entity, and its command is run as written)")
+    elif "attach" in data:
+        raise PluginConfigError(f"{path.name}: attach is for kind = \"check\"; a driver declares matches")
     spec = PluginSpec(name=name, command=tuple(argv), cwd=cwd, file=path.resolve(), matches=matches,
                       enabled=data.get("enabled", True), replay=data.get("replay", False),
                       env={key: _expand(value, here) for key, value in env.items()},
                       description=str(data.get("description", "")),
-                      diagnose_args=tuple(_expand(part, here) for part in diagnose_args), exclusive=exclusive, **numbers)
+                      diagnose_args=tuple(_expand(part, here) for part in diagnose_args), exclusive=exclusive, kind=kind,
+                      attach=str(attach).strip(), **numbers)
     return spec, notes
 
 

@@ -6,6 +6,7 @@ bus, CAN 15's fault 33, a flapping USB port; plus Zach's spider (2026-10-22) for
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import random
 import sys
@@ -425,3 +426,136 @@ def test_stock_round_trip_is_still_the_identity_beside_v0_1_records():
     stock = to_diagnostic_status(status)
     assert set(stock) == {"level", "name", "message", "hardware_id", "values"}
     assert to_diagnostic_status(from_diagnostic_status(stock)) == stock
+
+
+# ----- v0.1 addendum: caused_by (the three probes of reports/diagnostics-rollup-proposals-2026-10-23.html) --------
+RACK_ADAPTER = "host/usb1/1-3"
+CAN15 = f"{RACK_ADAPTER}/can/15"
+RIG = "host/rig-1-dof-test-rack"
+
+
+def rack_world():
+    """The rack as the probes built it: fdcanusb -> can (part_of) -> can/15 (via), the rig row beside them (via host)."""
+
+    return folder("host") + [Entity(RACK_ADAPTER, "fdcanusb 0607623A", "device", via="host", hardware_id="usb:0483:5740:0607623A"),
+                             Entity(f"{RACK_ADAPTER}/can", "CAN bus", "bus", part_of=RACK_ADAPTER),
+                             Entity(CAN15, "CAN 15", "node", via=f"{RACK_ADAPTER}/can"),
+                             Entity(RIG, "1-DOF test rack", "rig", via="host")]
+
+
+def test_probe_1_the_via_direction_stands_so_the_computer_writes_beside_the_tree():
+    # a failed ancestor still explains everything below it (Nagios UNREACHABLE): written ON the host, a full disk
+    # swallows CAN 15's fault 33 ...
+    board = status(CAN15, ERROR, code="MoteusFault.33", message="fault 33 on bridge enable")
+    on_host = summarize(rack_world(), [status("host", ERROR, code="DiskFull", name="disk /"), board], NOW)["host"]
+    assert (dict(on_host.rollup.counts), on_host.rollup.knock_on) == ({ERROR: 1}, ((CAN15, "host"),))
+    # ... and written on a leaf beside the tree (io_diagnostics.tree HOST_SELF does this for the Computer), both count
+    entities = rack_world() + [Entity("host/computer", "Computer", via="host")]
+    beside = summarize(entities, [status("host/computer", ERROR, code="DiskFull", name="disk /"), board], NOW)["host"]
+    assert (dict(beside.rollup.counts), beside.rollup.knock_on) == ({ERROR: 2}, ())
+
+
+def test_probe_2_a_rig_naming_the_missing_board_is_one_cause_and_the_chip_names_the_board():
+    board = status(CAN15, ERROR, code="BoardNotAnswering", message="CAN 15 does not answer")
+    rig = DiagnosticStatus(WARN, "1-DOF test rack: expected setup", "missing: CAN 15 on fdcanusb 0607623A", path=RIG,
+                           code="ExpectedMissing", stamp=NOW, received=NOW)
+    before = summarize(rack_world(), [rig, board], NOW)["host"]
+    assert dict(before.rollup.counts) == {WARN: 1, ERROR: 1}  # without caused_by: one missing board, two causes
+    rows = summarize(rack_world(), [dataclasses.replace(rig, caused_by=(CAN15,)), board], NOW)
+    host = rows["host"]
+    assert (dict(host.rollup.counts), host.rollup.origin, host.rollup.knock_on) == ({ERROR: 1}, CAN15, ((RIG, CAN15),))
+    # the rig's row keeps its own word (the black-box rule): only the count and the attention list change
+    assert (rows[RIG].own, rows[RIG].level, rows[RIG].message) == (WARN, WARN, "missing: CAN 15 on fdcanusb 0607623A")
+    # inside its own row the rig is all there is, so its rollup still names itself
+    assert rows[RIG].rollup.origin == RIG
+
+
+def test_probe_3_a_spider_at_error_names_its_failed_leg_instead_of_hiding_it():
+    entities, statuses = spider_world()
+    leg3 = "cell/spider/leg3"
+    before = summarize(entities, [status("cell/spider", ERROR, code="LegFailed", message="leg 3 failed: walking on 7"),
+                                  *statuses[1:]], NOW)["cell"]
+    assert (before.rollup.origin, before.rollup.knock_on) == ("cell/spider", ((leg3, "cell/spider"),))  # without: hidden
+    for level in (WARN, ERROR):
+        spider = dataclasses.replace(status("cell/spider", level, code="LegFailed", message="leg 3 failed: walking on 7"),
+                                     caused_by=(leg3,))
+        rows = summarize(entities, [spider, *statuses[1:]], NOW)
+        cell = rows["cell"]
+        assert (dict(cell.rollup.counts), cell.rollup.origin, cell.rollup.knock_on) == ({ERROR: 1}, leg3, (("cell/spider", leg3),)), level
+        assert (rows["cell/spider"].level, rows["cell/spider"].message) == (level, "leg 3 failed: walking on 7")
+        assert rows["cell/spider"].rollup.origin == leg3 and rows[leg3].level == ERROR
+
+
+def test_caused_by_counts_only_when_every_named_member_reports_a_problem():
+    entities, statuses = spider_world()
+    legs = statuses[1:]
+    gait = status("cell/spider", ERROR, code="LegFailed", message="legs failed")
+    # naming an OK leg, a path nobody describes, or itself: the spider's verdict stands as its own cause (and, as
+    # before, its ERROR explains the leg below it)
+    for named in (("cell/spider/leg5",), ("cell/spider/leg3", "cell/spider/leg5"), ("cell/spider/leg9",), ("cell/spider",)):
+        cell = summarize(entities, [dataclasses.replace(gait, caused_by=named), *legs], NOW)["cell"]
+        assert (cell.rollup.origin, dict(cell.rollup.counts)) == ("cell/spider", {ERROR: 1}), named
+    # a second, unnamed problem record on the spider keeps it a cause of its own
+    extra = status("cell/spider", WARN, code="BatteryLow", name="battery")
+    cell = summarize(entities, [dataclasses.replace(gait, caused_by=("cell/spider/leg3",)), extra, *legs], NOW)["cell"]
+    assert cell.rollup.origin == "cell/spider" and dict(cell.rollup.counts) == {ERROR: 1}
+    # a stale composite is its own cause: silence is the wrapper's own failure, whatever it last said
+    stale = dataclasses.replace(status("cell/spider", WARN, code="LegFailed", age=60), caused_by=("cell/spider/leg3",))
+    cell = summarize(entities, [stale, *legs], NOW)["cell"]
+    assert dict(cell.rollup.counts) == {STALE: 1, ERROR: 1}
+    # an unknown member is still a problem the composite can be the consequence of
+    unknown_leg = [status(f"cell/spider/leg{n}", UNKNOWN if n == 3 else OK) for n in range(1, 9)]
+    cell = summarize(entities, [dataclasses.replace(gait, caused_by=("cell/spider/leg3",)), *unknown_leg], NOW)["cell"]
+    assert (dict(cell.rollup.counts), cell.rollup.origin) == ({UNKNOWN: 1}, "cell/spider/leg3")
+
+
+def test_a_dead_adapter_still_explains_the_boards_a_rig_names():
+    adapter, bus, entities = dead_bus_world([1, 2])
+    entities += [Entity(RIG, "rig", "rig", via="host")]
+    rig = DiagnosticStatus(WARN, "rig: expected setup", "missing: CAN 1, CAN 2", path=RIG, code="ExpectedMissing",
+                           stamp=NOW, received=NOW, caused_by=(f"{bus}/1", f"{bus}/2"))
+    statuses = [status(adapter, OK, name="usb"), status(bus, ERROR, code="NoAck"), status(f"{bus}/1", OK, age=600),
+                status(f"{bus}/2", ERROR, code="NoReply"), rig]
+    host = summarize(entities, statuses, NOW)["host"]
+    assert (dict(host.rollup.counts), host.rollup.origin) == ({ERROR: 1}, bus)
+    assert sorted(host.rollup.knock_on) == sorted([(f"{bus}/1", bus), (f"{bus}/2", bus), (RIG, bus)])
+
+
+def test_members_naming_each_other_never_explain_a_problem_away():
+    entities = folder("host") + folder("host/a", "host/b", via="host")
+    ring = [dataclasses.replace(status("host/a", WARN), caused_by=("host/b",)),
+            dataclasses.replace(status("host/b", ERROR), caused_by=("host/a",))]
+    host = summarize(entities, ring, NOW)["host"]
+    assert sum(host.rollup.counts.values()) == 1 and host.rollup.level not in (None, OK)
+    assert (host.rollup.origin, host.rollup.knock_on) == ("host/a", (("host/b", "host/a"),))  # broken at the first in tree order
+
+
+def test_caused_by_rides_in_one_stock_value_and_the_stock_trip_stays_the_identity():
+    from contract.record import CAUSED_BY_KEY
+
+    rig = DiagnosticStatus(WARN, "rack: expected setup", "missing: CAN 15", path=RIG, code="ExpectedMissing",
+                           values=[("missing", "CAN 15")], measurements=(Measurement("boards", 6, "1"),),
+                           caused_by=(CAN15, "host/expected/usb-0483-5740-28B3A25D"))
+    stock = to_diagnostic_status(rig)
+    assert stock["values"] == [{"key": "missing", "value": "CAN 15"}, {"key": "boards", "value": "6"},
+                               {"key": CAUSED_BY_KEY, "value": f"{CAN15}, host/expected/usb-0483-5740-28B3A25D"}]
+    assert to_diagnostic_status(dataclasses.replace(rig, caused_by=()))["values"][-1]["key"] != CAUSED_BY_KEY
+    # a stock message that happens to carry a caused_by value (anywhere) comes back exactly: it stays a value
+    for message in REAL_WORLD + [stock, {**stock, "values": [stock["values"][-1], *stock["values"][:-1]]}]:
+        assert to_diagnostic_status(from_diagnostic_status(message)) == message
+    assert from_diagnostic_status(stock).caused_by == ()
+    # the v0 transport carries it exactly; one path given as a string is one member
+    assert from_dict(json.loads(json.dumps(to_dict(rig)))) == rig
+    assert to_dict(rig)["caused_by"] == [CAN15, "host/expected/usb-0483-5740-28B3A25D"]
+    assert DiagnosticStatus(WARN, "x", caused_by=CAN15).caused_by == (CAN15,)
+    assert from_dict({**to_dict(rig), "caused_by": CAN15}).caused_by == (CAN15,)
+    assert "caused_by" not in to_dict(dataclasses.replace(rig, caused_by=()))
+
+
+def test_validate_names_a_broken_caused_by():
+    rig = DiagnosticStatus(WARN, "rack: expected setup", "missing", path=RIG, code="ExpectedMissing", caused_by=(CAN15,))
+    assert validate(rig) == []
+    assert any("names its own entity" in problem for problem in validate(dataclasses.replace(rig, caused_by=(RIG,))))
+    assert any("entity paths" in problem for problem in validate(dataclasses.replace(rig, caused_by=("",))))
+    clash = dataclasses.replace(rig, values=(KeyValue("caused_by", "CAN 15"),))
+    assert any("where caused_by rides" in problem for problem in validate(clash))

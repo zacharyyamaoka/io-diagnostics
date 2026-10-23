@@ -463,7 +463,7 @@ class Merged:
 def merge(layer: OsLayer, jobs: list, extra_statuses: list[DiagnosticStatus]) -> Merged:
     """OS layer + every job's cached records (rebased onto the device's CURRENT path)."""
 
-    from io_diagnostics.runner import absolute
+    from io_diagnostics.runner import absolute, rebase
 
     entities: dict[str, Entity] = dict(layer.entities)
     icons = dict(layer.icons)
@@ -496,7 +496,7 @@ def merge(layer: OsLayer, jobs: list, extra_statuses: list[DiagnosticStatus]) ->
             if relative_path in cache.icons:
                 icons[path] = cache.icons[relative_path]
         for status in cache.statuses.values():
-            statuses.append(dataclasses.replace(status, path=absolute(status.path, device_path)))
+            statuses.append(rebase(status, device_path))
         if cache.host_status is not None:
             statuses.append(dataclasses.replace(cache.host_status, path=device_path))
     for status in statuses:
@@ -589,10 +589,20 @@ def _summaries(merged: Merged, now: float) -> dict[str, Summary]:
     if not any(status.path == HOST_PATH for status in merged.statuses):
         return summarize(entities, merged.statuses, now)
     host = merged.entities[HOST_PATH]
-    statuses = [dataclasses.replace(status, path=HOST_SELF) if status.path == HOST_PATH else status for status in merged.statuses]
+
+    def to_self(path: str) -> str:
+        return HOST_SELF if path == HOST_PATH else path
+
+    def from_self(path: str) -> str:
+        return HOST_PATH if path == HOST_SELF else path
+
+    # a caused_by naming the host names its own records, which now live on the leaf
+    statuses = [dataclasses.replace(status, path=to_self(status.path), caused_by=tuple(map(to_self, status.caused_by)))
+                for status in merged.statuses]
     summaries = summarize([*entities, Entity(HOST_SELF, host.name, host.kind, via=HOST_PATH)], statuses, now)
     own, root = summaries.pop(HOST_SELF), summaries[HOST_PATH]
-    rollup = dataclasses.replace(root.rollup, origin=HOST_PATH) if root.rollup.origin == HOST_SELF else root.rollup
+    rollup = dataclasses.replace(root.rollup, origin=from_self(root.rollup.origin),
+                                 knock_on=tuple((from_self(member), from_self(cause)) for member, cause in root.rollup.knock_on))
     summaries[HOST_PATH] = Summary(HOST_PATH, own.own, own.own, own.message, rollup)
     return summaries
 

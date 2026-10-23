@@ -108,6 +108,10 @@ never a bare `Action` (actions travel inside their `Entity`).
   arrives re-hangs it on its nearest ancestor by path.
 - **Black boxes self-report:** a composite reports what a child's failure means for IT (the spider says WARN with
   one leg in ERROR). The host never overrides it; the worst-below rollup is only a hint.
+- **A composite names what caused its verdict** in `caused_by` (record v0.1 addendum): `"caused_by": ["leg3"]`,
+  paths written like `path` (relative to the device). When every named member reports a problem itself, the chip
+  counts the member once and the composite's row reads as its knock-on, keeping its own level and message. Name all
+  the causes or none (docs/diagnostics-record-v0.md, "v0.1 addendum: caused_by").
 - **Every non-OK status needs a `code`** (PascalCase): `NoAck`, `NoReply`, `PortBusy` (a check that could not run
   because another process holds the port is `unknown` + `PortBusy`), `UpdateAvailable` (check name `... firmware`,
   values `installed_version` / `latest_version`), `MoteusFault.33`.
@@ -130,6 +134,38 @@ never a bare `Action` (actions travel inside their `Entity`).
 
 The host merges each run into what it already holds (latest per entity and check): a check that could not run this
 time is simply not re-sent, and its last record goes STALE on the host's clock.
+
+## Checks: any Monitoring Plugins (Nagios) command, no code needed
+
+A declaration with `kind = "check"` runs ANY command that speaks the stock Monitoring Plugins API, the CLI seam of
+round 3 (docs/round3-brief-2026-10-23.md, "CLI as the seam"). The host follows the Monitoring Plugins Development
+Guidelines (https://www.monitoring-plugins.org/doc/guidelines.html) as written:
+
+```toml
+name = "check_root_disk"
+kind = "check"
+command = ["/bin/sh", "{root}/plugins/checks/check_root_disk.sh"]   # argv, run as written (no --device, no verb)
+period_s = 60                                  # how often
+timeout_s = 10                                 # past it the process group is killed: unknown CheckTimeout
+attach = "host"                                # the entity its result lands on: "host", a hardware_id, "rig:<rig name>"
+enabled = false                                # cwd, env, description, exclusive as for a driver
+```
+
+- **Exit code → level** (§2.4 Plugin Return Codes): `0` ok, `1` warn (`CheckWarning`), `2` error (`CheckCritical`),
+  `3` unknown (`CheckUnknown`); anything else is unknown, the guidelines' "default catch-all". WHY a check, and not a
+  driver, may use the exit code: a driver's levels travel in its records, so a traceback's exit 1 must not pass for
+  a WARNING (runner.py); a check has no other channel.
+- **First stdout line → message** (§2 Plugin Output for Nagios, "SERVICE STATUS: Information text"); later lines →
+  the value `long_output`.
+- **Perfdata → measurements** (§2.6): after `|` on the first line and on later lines,
+  `'label'=value[UOM];[warn];[crit];[min];[max]`, space separated (`''` is a quote inside a quoted label; `U` = could
+  not be determined). warn / crit are §2.5 ranges (`[@]start:end`) and become the measurement's warn / error limits.
+  Details and the unit mapping: docs/api-v1.md, "Monitoring Plugins checks".
+- A check takes no `matches`, `diagnose_args`, `act_timeout_s` or `replay`, and has no actions.
+
+`check_root_disk.toml` is the shipped example, disabled: a 5-line shell script over `df -P /`
+(`plugins/checks/check_root_disk.sh`), because the stock `check_disk` is not installed on this PC; its comment shows
+the stock plugin's line.
 
 ## Rules a plugin must keep (docs/build-plan-v1.md, Hard rules)
 

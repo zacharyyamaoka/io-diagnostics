@@ -23,11 +23,13 @@ from pathlib import Path
 from io_diagnostics import API, FIXTURE_PLUGINS_DIR, PLUGINS_DIR
 from io_diagnostics import activity as activity_module
 from io_diagnostics import expected as expected_module
+from io_diagnostics import history as history_module
+from io_diagnostics import settings as settings_module
 from io_diagnostics import tree
 from io_diagnostics.faults import Faults
 from io_diagnostics.plugins import load_plugins, match_devices
-from io_diagnostics.runner import (RUNNER_SOURCE, Gates, Job, Scheduler, absolute, act_argv, describe, host_status,
-                                   run_act, run_plugin)
+from io_diagnostics.runner import (RUNNER_SOURCE, RUNNING, Gates, Job, Scheduler, absolute, act_argv, describe,
+                                   host_status, rebase, run_act, run_check, run_plugin)
 
 from contract.record import (OK, RANK, RECORD_VERSION, SCHEMA, STALE, STALE_FACTOR, STALE_FLOOR_S, WARN, Action,
                              DiagnosticStatus, Entity, Event, KeyValue, Measurement, effective_level, from_dict, to_dict)
@@ -41,6 +43,9 @@ FIXTURE_FILE = FIXTURE_PLUGINS_DIR / "v6_frames.json"
 FIXTURE_ALIASES = {"plug": "F1", "bus-busy": "F2", "after-restart": "F3", "f1": "F1", "f2": "F2", "f3": "F3",
                    "v6-f1": "F1", "v6-f2": "F2", "v6-f3": "F3"}
 REFRESH_S = 2.0
+# A precondition state beside True (pass) / False (fail) / None (can't tell): held by this host's own running check,
+# so it frees by itself in a few seconds. Never "blocked", never a warning (round 3 brief item 10).
+WAITING = "waiting"
 GATE_CACHE_S = 2.0
 RECENT = 6
 
@@ -139,7 +144,7 @@ class LiveOs:
             holders = lock.lock_holders()
             if not holders:
                 return True, "rack bus lock free (/proc/locks, never taken)"
-            return False, "rack bus lock held by " + ", ".join(f"pid {holder.pid} {holder.command}" for holder in holders)
+            return bus_lock_state(holders)
         if self._holders is None:
             self._holders = (reuse.port_holders_function(), reuse.camera_holders_function())
         port_holders, camera_holders = self._holders
@@ -162,6 +167,20 @@ class LiveOs:
         if decision.state == "blocked":
             return False, decision.reason.replace("open by", "held by")
         return None, decision.reason
+
+
+def bus_lock_state(holders) -> tuple[bool | str, str]:
+    """The rack bus lock is held: by one of THIS host's own running checks (``WAITING``: it frees in a few seconds,
+    the host's own jobs take turns), or by anyone else (``False``: blocked, naming the pid and its command line).
+
+    WHY not "blocked" for our own: the lock is the host's own diagnose doing its job; calling it an experiment, in a
+    blocking colour, sent people looking for a process that was the dashboard itself (round 3 brief item 10)."""
+
+    foreign = [holder for holder in holders if RUNNING.owner(holder.pid) is None]
+    if foreign:
+        return False, "blocked by " + ", ".join(f"pid {holder.pid} ({holder.command})" for holder in foreign)
+    label, elapsed = max((RUNNING.owner(holder.pid) or ("", 0.0) for holder in holders), key=lambda found: found[1])
+    return WAITING, f"this host's own check is running (a few s): {label}, {elapsed:.0f} s so far"
 
 
 class MachineOs:
@@ -333,6 +352,7 @@ class View:
     events: list[Event]
     faults_by_path: dict[str, int]
     setup: expected_module.SetupView | None = None
+    checks: list[DiagnosticStatus] = dataclasses.field(default_factory=list)  # the checks' results, attached
 
 
 class _Blank(dict):
@@ -343,7 +363,8 @@ class _Blank(dict):
 class Host:
     def __init__(self, *, plugins_dir: Path = PLUGINS_DIR, clock: Clock | None = None, os_source=None,
                  fixture: dict | None = None, plugin_env: dict[str, str] | None = None, enable: tuple[str, ...] = (),
-                 state_file: Path | None = None, expected_file: Path | None = None):
+                 state_file: Path | None = None, expected_file: Path | None = None, settings_file: Path | None = None,
+                 history_window_s: float | None = None):
         self.plugins_dir = Path(plugins_dir)
         self.clock = clock or Clock()
         self.os = os_source or LiveOs()
@@ -357,10 +378,18 @@ class Host:
                                  if name not in known]
         self.specs = [dataclasses.replace(spec, enabled=True) if spec.name in enable else spec for spec in self.specs]
         self.jobs: dict[tuple[str, str], Job] = {}
+        # Monitoring Plugins checks (kind = "check"): one job each, not bound to a skeleton device; their latest result
+        # is kept here and attached to its entity on every view (the entity can move or come and go)
+        self.check_jobs: dict[str, Job] = {spec.name: Job(spec, {"id": f"check:{spec.name}"}, "")
+                                           for spec in self.specs if spec.kind == "check" and spec.enabled}
+        self.check_results: dict[str, DiagnosticStatus] = {}
         self.gates = Gates()  # one per host: `once`, the scheduler and act all take turns per `exclusive` group
         self.seen = SeenDevices(state_file)  # USB devices a plugin diagnosed, remembered across runs (None: memory)
         # the person's rig manifest (docs/expected-setup.md); None = nothing expected and no edits (fixture / machine)
         self.setup = expected_module.ExpectedSetup(expected_file)
+        # the app-wide settings (settings.toml; None: memory only) and the rolling history they size (history.py)
+        self.settings = settings_module.Settings(settings_file, history_window_s)
+        self.history = history_module.History(self.settings.history_window_s)
         self.layer = tree.OsLayer()
         self.sources: list[dict] = []
         self.os_records: list[DiagnosticStatus] = []
@@ -389,7 +418,7 @@ class Host:
 
         from io_diagnostics.plugins import PluginConfigError, parse_match
 
-        pending = [spec for spec in self.specs if spec.enabled and spec.name not in self._described
+        pending = [spec for spec in self.specs if spec.enabled and spec.kind == "driver" and spec.name not in self._described
                    and self.describes.get(spec.name) is None]
         results: dict[str, dict] = {}
 
@@ -448,9 +477,13 @@ class Host:
                 job = self.jobs.get(key) or Job(spec, device, layer.device_paths[str(device.get("id"))])
                 job.device, job.device_path = device, layer.device_paths[str(device.get("id"))]
                 wanted[key] = job
+            gone = [key for key in self.jobs if key not in wanted]
             self.jobs = wanted
             self.layer, self.sources, self.usb = layer, sources, usb
             self.os_records = tree.os_statuses(layer, usb.history, now, {key[1] for key in wanted}) + absent
+        for key in gone:  # its device left: what it last said has no data from now on
+            self.history.end(("job", *key), now)
+        self.history.sync("os", self.os_records, now)
         changed = []
         for status in self.os_records:  # WHY only on change: OS checks are recomputed every refresh, not re-evaluated
             key, signature = (status.path, status.name), (status.level, status.code)
@@ -559,6 +592,8 @@ class Host:
     def _run_job(self, job: Job) -> None:
         """Run one job; the caller holds its group (the scheduler takes it before submitting)."""
 
+        if job.spec.kind == "check":
+            return self._run_check(job)
         with self.lock:
             entity = self.layer.entities.get(job.device_path)
         outcome = run_plugin(job.spec, job.device, job.device_path, self.clock.now, self._job_env(job),
@@ -570,16 +605,56 @@ class Host:
             job.cache.host_status = host_status(job.spec, outcome, hardware_id, now)
             job.last = outcome
             device_path = self.layer.device_paths.get(str(job.device.get("id")), job.device_path)
-        observed = [dataclasses.replace(status, path=absolute(status.path, device_path)) for status in fresh_statuses]
+        observed = [rebase(status, device_path) for status in fresh_statuses]
         observed.append(dataclasses.replace(job.cache.host_status, path=device_path))
         self.faults.observe(observed, now)
+        self.history.observe(observed, now, source=("job", *job.key))
+
+    def _run_check(self, job: Job) -> None:
+        """Run one Monitoring Plugins check; its one status lands on the entity it attaches to (``attach``)."""
+
+        status = run_check(job.spec, self.clock.now, self.plugin_env)
+        now = self.clock.now()
+        with self.lock:
+            self.check_results[job.spec.name] = dataclasses.replace(status, received=now)
+        attached = next((found for found in self.view().checks if found.name == job.spec.name), None)
+        if attached is not None:
+            self.faults.observe([attached], now)
+            self.history.observe([attached], now, source=("check", job.spec.name))
+
+    def _attach_checks(self, merged: tree.Merged) -> list[DiagnosticStatus]:
+        """Each check's latest result on its entity: ``host``, a hardware_id, or ``rig:<name>``. WHY a row of its own
+        under the host when the entity is not here: a check whose subject left must still say what it last found."""
+
+        out = []
+        for name, status in self.check_results.items():
+            job = self.check_jobs.get(name)
+            if job is None:
+                continue
+            attach, path, hardware_id = job.spec.attach, None, ""
+            if attach == tree.HOST_PATH:
+                path = tree.HOST_PATH
+            elif attach.startswith("rig:"):
+                rig = next((rig for rig in self.setup.manifest.rigs if rig.name == attach[4:].strip()), None)
+                path = expected_module.rig_path(rig) if rig else None
+            else:
+                path = next((found for found, entity in merged.entities.items() if not entity.part_of and entity.hardware_id
+                             and (entity.hardware_id == attach or expected_module.same_id(entity.hardware_id, attach))), None)
+                hardware_id = attach
+            values = status.values
+            if path is None:
+                path = f"{tree.HOST_PATH}/check-{tree.slug(name)}"
+                values = (*values, KeyValue("attach", f"{attach} (not here now)"))
+            out.append(dataclasses.replace(status, path=path, hardware_id=hardware_id or status.hardware_id, values=values))
+        return out
 
     def run_all_once(self) -> None:
         """Refresh, then run every matched (plugin, device) once, in parallel except within an ``exclusive`` group,
         whose jobs run one after another; used by ``once`` and tests."""
 
         self.refresh()
-        threads = [threading.Thread(target=self.run_job, args=(job,), daemon=True) for job in list(self.jobs.values())]
+        jobs = list(self.jobs.values()) + list(self.check_jobs.values())
+        threads = [threading.Thread(target=self.run_job, args=(job,), daemon=True) for job in jobs]
         for thread in threads:
             thread.start()
         for thread in threads:
@@ -587,13 +662,14 @@ class Host:
 
     def describe_all(self) -> None:
         for spec in list(self.specs):
-            if spec.enabled and self.describes.get(spec.name) is None:
+            if spec.enabled and spec.kind == "driver" and self.describes.get(spec.name) is None:
                 self.describes[spec.name] = describe(spec, extra_env=self._job_env())
 
     # --- background service ------------------------------------------------------------------------------------
     def start(self, *, udev: bool = True) -> None:
         self.refresh()
-        self._scheduler = Scheduler(lambda: list(self.jobs.values()), self._run_job, gates=self.gates)
+        self._scheduler = Scheduler(lambda: list(self.jobs.values()) + list(self.check_jobs.values()), self._run_job,
+                                    gates=self.gates)
         self._scheduler.start()
         threading.Thread(target=self._refresh_loop, name="io-refresh", daemon=True).start()
         threading.Thread(target=self.describe_all, name="io-describe", daemon=True).start()
@@ -627,9 +703,13 @@ class Host:
             # DRIVER reports (the RealSense SDK serial), which only the plugins' records carry
             setup = expected_module.evaluate(self.setup, merged, layer, now, RUNNER_SOURCE)
             notes = self._host_notes(merged, now) + self._links_summary(merged, now)
-            if setup.entities or setup.statuses or notes:
+            # WHY here: the rig rows and the host's own lines are judged per view, never stored; their changes are
+            # what the history keeps
+            self.history.sync("view", setup.statuses + notes, now)
+            checks = self._attach_checks(merged)
+            if setup.entities or setup.statuses or notes or checks:
                 layer = self._layer_with(setup.entities)
-                merged = tree.merge(layer, jobs, self.os_records + setup.statuses + notes)
+                merged = tree.merge(layer, jobs, self.os_records + setup.statuses + notes + checks)
             rows = tree.build_rows(merged, now)
             events = list(self.usb.events) + self.faults.events
             for job in self.jobs.values():
@@ -638,7 +718,7 @@ class Host:
                     events += [dataclasses.replace(event, path=absolute(event.path, device_path)) for event in job.cache.events.values()]
         events = [event for event in events if event.stamp is None or event.stamp <= now]
         events.sort(key=lambda event: (event.stamp or 0.0, event.seq or 0), reverse=True)
-        return View(now, layer, merged, rows, events, self.faults.open_by_path(), setup)
+        return View(now, layer, merged, rows, events, self.faults.open_by_path(), setup, checks)
 
     def _layer_with(self, extra: list[tuple[Entity, str]]) -> tree.OsLayer:
         """The OS layer plus the expected setup's rows: rig rows first under the host (the at-a-glance answer), the
@@ -709,16 +789,16 @@ class Host:
         port_paths = list(self.layer.port_paths.values())
         port_checks = [(path, status) for path in port_paths for status in own.get(path, []) if status.name.endswith(": link")]
         pcie_checks = [(path, status) for path, statuses in own.items() for status in statuses if status.name.endswith(": PCIe link")]
-        unhappy: list[tuple[str, bool]] = []  # (text, counted on a row of its own)
+        unhappy: list[tuple[str, str | None]] = []  # (text, the row that reports it; None = no row says it)
         for path, status in port_checks + pcie_checks:
             if status.level != OK:
-                unhappy.append((f"{merged.entities[path].name}: {status.message}", True))
+                unhappy.append((f"{merged.entities[path].name}: {status.message}", path))
         driver_usb2 = set()
         for path, statuses in own.items():
             for status in statuses:
                 if status.code == "Usb2Link" and effective_level(status, now) != STALE:
                     driver_usb2.add(tree.nearest_device(path, merged, self.layer))
-                    unhappy.append((f"{merged.entities[path].name}: {status.message}", True))
+                    unhappy.append((f"{merged.entities[path].name}: {status.message}", path))
         for device_id, device in self.layer.devices.items():
             attrs, path = device.get("attrs") or {}, self.layer.device_paths[device_id]
             speed = attrs.get("speed_mbps")
@@ -729,23 +809,26 @@ class Host:
             if device.get("bus") != "usb" or major < 3 or not isinstance(speed, (int, float)) or not 0 < speed < 5000 or path in driver_usb2:
                 continue
             unhappy.append((f"{merged.entities[path].name} on {attrs.get('port') or '?'}: a USB {str(attrs['usb_version']).strip()}"
-                            f" device linked at {tree.speed_text(speed)}", False))
-        unreported = [text for text, counted in unhappy if not counted]
+                            f" device linked at {tree.speed_text(speed)}", None))
+        unreported = [text for text, row in unhappy if row is None]
         message = f"{len(port_paths)} USB port{'s' if len(port_paths) != 1 else ''} · {len(pcie_checks)} PCIe link{'s' if len(pcie_checks) != 1 else ''}"
         if not unhappy:
             message += " · all OK"
         else:
-            message += f" · {len(unhappy)} unhappy: " + "; ".join(text for text, _counted in unhappy)
+            message += f" · {len(unhappy)} unhappy: " + "; ".join(text for text, _row in unhappy)
             if not unreported:
                 message += " (each counted on its own row)"
-        values = [KeyValue("unhappy", "\n".join(text for text, _counted in unhappy) or "none")]
+        values = [KeyValue("unhappy", "\n".join(text for text, _row in unhappy) or "none")]
         if unreported:
             values.append(KeyValue("what_to_check", "1. Plug it straight into a USB 3 port on the computer (not through a USB 2 hub)\n"
                                                     "2. Try a USB 3 data cable: a USB 2 cable links at 480 Mb/s"))
         name = merged.entities[tree.HOST_PATH].name
+        # WHY caused_by only when every unhappy link is a row's own report: the line then says what those rows say
+        # (record v0.1); one it alone reports makes it a cause of its own
+        caused_by = tuple(dict.fromkeys(row for _text, row in unhappy)) if unhappy and not unreported else ()
         return [DiagnosticStatus(level=WARN if unreported else OK, name=f"{name}: USB/PCIe links", message=message,
                                  code="UsbLinkDowngraded" if unreported else "", path=tree.HOST_PATH, stamp=now, received=now,
-                                 source=HOST_SOURCE, values=tuple(values),
+                                 source=HOST_SOURCE, values=tuple(values), caused_by=caused_by,
                                  measurements=(Measurement("usb ports", len(port_paths), "1"),
                                                Measurement("pcie links", len(pcie_checks), "1"),
                                                Measurement("unhappy links", len(unhappy), "1")))]
@@ -1083,7 +1166,8 @@ class Host:
                 "age_s": round(now - seen, 3) if seen is not None else None,
                 "expected_period_s": status.expected_period_s,
                 "stale_after_s": max(STALE_FACTOR * status.expected_period_s, STALE_FLOOR_S) if status.expected_period_s else None,
-                "uptime_s": status.uptime_s, "values": [{"key": key, "value": value} for key, value in status.values],
+                "uptime_s": status.uptime_s, "caused_by": list(status.caused_by),
+                "values": [{"key": key, "value": value} for key, value in status.values],
                 "measurements": [{"key": measurement.key, "value": measurement.value, "unit": measurement.unit,
                                   "text": measurement.render(), "level": measurement.level, "stamp": measurement.stamp,
                                   "warn_low": measurement.warn_low, "warn_high": measurement.warn_high,
@@ -1158,15 +1242,20 @@ class Host:
             for check, text in action.preconditions:
                 state, detail = self.evaluate(check, path, view)
                 results.append({"check": check, "text": string.Formatter().vformat(text, (), fill),
-                                "state": {True: "pass", False: "fail", None: "unknown"}[state], "detail": detail})
+                                "state": {True: "pass", False: "fail", None: "unknown", WAITING: WAITING}[state],
+                                "detail": detail})
             failing = [result for result in results if result["state"] == "fail"]
+            waiting = [result for result in results if result["state"] == WAITING]
             unknown = [result for result in results if result["state"] == "unknown"]
             up_to_date = next((result for result in failing if result["check"] == "update_available"), None)
             if up_to_date:  # WHY first: with nothing to install, a free port would not make the button useful (V6)
                 state, reason = "nothing_to_do", f"up to date: {up_to_date['detail']}"
             elif failing:
                 first = next(result for result in failing if result["check"] != "update_available")
-                state, reason = "blocked", f"blocked: {first['detail']}"
+                detail = first["detail"]
+                state, reason = "blocked", detail if detail.startswith("blocked") else f"blocked: {detail}"
+            elif waiting:  # WHY its own state: runnable in a few seconds, by itself; the page greys it, never warns
+                state, reason = WAITING, waiting[0]["detail"]
             elif unknown:
                 state, reason = "unknown", f"can't tell: {unknown[0]['detail']}"
             else:
@@ -1278,25 +1367,114 @@ class Host:
                 "statuses": [to_dict(status) for status in latest.values()],
                 "events": [to_dict(event) for event in view.events], "faults": self.faults.records()}
 
+    def _check_run(self, name: str) -> dict | None:
+        """A check's last run in a plugin run's shape (``RunOutcome.summary``)."""
+
+        status = self.check_results.get(name)
+        if status is None:
+            return None
+        values, measured = dict(status.values), {m.key: m.value for m in status.measurements}
+        outcome = {"CheckTimeout": "timeout", "CheckNotStarted": "not_started"}.get(status.code, "ok")
+        exit_code = values.get("exit_code", "none")
+        return {"started": status.stamp, "duration_s": measured.get("check duration"), "outcome": outcome,
+                "returncode": int(exit_code) if exit_code.lstrip("-").isdigit() else None, "accepted": 1, "rejected": 0,
+                "problems": [], "rejected_lines": [], "message": status.message}
+
     def plugins(self) -> dict:
         with self.lock:
             jobs = list(self.jobs.values())
+        attached = {status.name: status.path for status in (self.view().checks if self.check_jobs else [])}
         out = []
         for spec in self.specs:
             out.append({"name": spec.name, "file": str(spec.file), "command": list(spec.command),
                         "diagnose_args": list(spec.diagnose_args), "cwd": str(spec.cwd),
                         "timeout_s": spec.timeout_s, "act_timeout_s": spec.act_timeout_s, "period_s": spec.period_s,
                         "enabled": spec.enabled, "replay": spec.replay, "exclusive": spec.exclusive,
+                        "kind": spec.kind, "attach": spec.attach or None,
                         "matches": [match.text() for match in spec.matches], "description": spec.description,
                         "describe": self.describes.get(spec.name),
                         "jobs": [{"device_id": str(job.device.get("id")), "device_path": job.device_path,
                                   "last_run": job.last.summary() if job.last else None,
                                   "next_due_s": round(max(job.next_due - time.monotonic(), 0.0), 1) if self._scheduler else None}
-                                 for job in jobs if job.spec.name == spec.name]})
+                                 for job in jobs if job.spec.name == spec.name]
+                        + [{"device_id": job.device["id"], "device_path": attached.get(spec.name),
+                            "last_run": self._check_run(spec.name),
+                            "next_due_s": round(max(job.next_due - time.monotonic(), 0.0), 1) if self._scheduler else None}
+                           for job in self.check_jobs.values() if job.spec.name == spec.name]})
         return {"directory": str(self.plugins_dir), "problems": list(self.plugin_problems), "plugins": out}
 
     def health(self) -> dict:
         return {"ok": True, "api": API, "mode": self.clock.mode, "uptime_s": round(time.monotonic() - self.started, 1)}
+
+    # --- history and settings (docs/api-v1.md "History", "Settings") ------------------------------------------------
+    def _window(self, window) -> float:
+        """A request's window: the app's, or the one asked for (within 1 min .. the history's retention)."""
+
+        if window in (None, ""):
+            return self.settings.history_window_s
+        seconds = settings_module.parse_duration(window)
+        if not history_module.MIN_WINDOW_S <= seconds <= self.history.retention_s:
+            raise settings_module.SettingsError(f"window is {history_module.MIN_WINDOW_S:g} s .. "
+                                                f"{self.history.retention_s:g} s (what the history keeps), got {seconds:g} s")
+        return seconds
+
+    def history_json(self, path: str, status: str | None = None, window=None) -> dict | None:
+        """Per-status level spans and measurement series of one entity over the window; None: no such entity."""
+
+        view = self.view()
+        keys = [key for key in self.history.keys(path) if status in (None, "", key[1])]
+        if path not in view.merged.entities and not keys:
+            return None
+        seconds = self._window(window)
+        start, end = view.now - seconds, view.now
+        statuses = []
+        for key in keys:
+            period = self.history.period(key)
+            statuses.append({"name": key[1], "expected_period_s": period, "stale_after_s": history_module.stale_after(period),
+                             "levels": self.history.timeline(key, start, end),
+                             "measurements": self.history.series(key, start, end)})
+        entity = view.merged.entities.get(path)
+        return {"path": path, "name": entity.name if entity else path, "window_s": seconds, "from": start, "to": end,
+                "statuses": statuses}
+
+    def bar_json(self, path: str, bins: int = 60, window=None) -> dict | None:
+        """The health bar of one entity and of each child row: per bin, the worst level any of the row's statuses held."""
+
+        view = self.view()
+        if path not in view.merged.entities:
+            return None
+        seconds = self._window(window)
+        bins = max(1, min(int(bins), history_module.MAX_BINS))
+        start, end = view.now - seconds, view.now
+        rows = []
+        for depth, row in [(0, path), *((1, child) for child in view.merged.children.get(path, []))]:
+            # WHY the row's own statuses when it has any: the bar says what THIS black box reported (its row's level);
+            # a pure grouping row, like its level, shows what everything below reported
+            keys = self.history.keys(row)
+            basis = "own" if keys else "below"
+            if not keys:
+                keys = self.history.keys(row, below=True)
+            if not keys:
+                basis = "none"
+            timelines = [self.history.timeline(key, start, end) for key in keys]
+            rows.append({"path": row, "name": view.merged.entities[row].name, "depth": depth, "basis": basis,
+                         "statuses": len(keys), "bar": history_module.bar(timelines, start, end, bins)})
+        return {"path": path, "window_s": seconds, "from": start, "to": end, "bins": bins, "bin_s": seconds / bins,
+                "rows": rows}
+
+    def settings_json(self) -> dict:
+        return self.settings.json()
+
+    def set_settings(self, body: dict) -> dict:
+        """The page's View options: ``{"history_window_s": 600}`` (seconds, or "10m"). Raises SettingsError."""
+
+        unknown = sorted(set(body) - {"history_window_s"})
+        if unknown:
+            raise settings_module.SettingsError(f"no setting {', '.join(map(repr, unknown))}: only history_window_s")
+        if "history_window_s" in body:
+            self.settings.set_history_window(body["history_window_s"])
+            self.history.window_s = self.settings.history_window_s
+        return self.settings_json()
 
 
 # ----- construction ---------------------------------------------------------------------------------------------
@@ -1307,25 +1485,30 @@ def fixture_info(document: dict, frame: dict) -> dict:
 
 def make_host(*, fixture: str | None = None, plugins_dir: Path | None = None, once: bool = False, at_s: float = 0.0,
               offset_s: float = 0.0, enable: tuple[str, ...] = (), machine: Path | None = None,
-              expected: Path | None = None) -> Host:
+              expected: Path | None = None, history_window_s: float | None = None) -> Host:
     """Live: ``plugins.d`` on this machine's clock. Fixture: the recorded frame's OS side, its clock, and the fixture
     plugin directory (``tests/fixtures/plugins``), whose plugin learns the frame from ``IO_DIAGNOSTICS_FIXTURE``.
     Machine: a fake machine's skeleton (``MachineOs``) on this clock. ``enable`` turns on plugins their declaration
     disables, for this host only. ``expected``: the expected-setup file; live mode defaults to
-    ``~/.config/io-diagnostics/expected.toml``, a fixture or a fake machine reads one only when it is named."""
+    ``~/.config/io-diagnostics/expected.toml``, a fixture or a fake machine reads one only when it is named.
+    ``history_window_s``: this run's history window (``serve --history-window``); every mode reads and writes the
+    person's ``settings.toml`` (an app-wide preference, not a record of this machine)."""
 
+    settings = {"settings_file": expected_module.default_config_dir() / settings_module.SETTINGS_FILE,
+                "history_window_s": history_window_s}
     if machine is not None:
         if fixture is not None:
             raise SystemExit("--machine and --fixture are two different OS sides: pick one")
         clock = FixedClock(time.time()) if once else Clock()
         return Host(plugins_dir=plugins_dir or PLUGINS_DIR, clock=clock, os_source=MachineOs(machine), enable=enable,
-                    expected_file=expected)
+                    expected_file=expected, **settings)
     if fixture is None:
         # WHY live only: the remembered devices are this machine's; a fixture or a fake machine must never add to them
         clock = FixedClock(time.time()) if once else Clock()
         return Host(plugins_dir=plugins_dir or PLUGINS_DIR, clock=clock, os_source=LiveOs(), enable=enable,
                     state_file=default_state_dir() / SEEN_FILE,
-                    expected_file=expected or expected_module.default_config_dir() / expected_module.EXPECTED_FILE)
+                    expected_file=expected or expected_module.default_config_dir() / expected_module.EXPECTED_FILE,
+                    **settings)
     document, frame = load_fixture(fixture)
     offset = frame.get("utc_offset_s")
     clock = FixedClock(frame["clock"] + at_s, offset, "fixture") if once else ReplayClock(frame["clock"], offset, offset_s)
@@ -1333,7 +1516,8 @@ def make_host(*, fixture: str | None = None, plugins_dir: Path | None = None, on
     # the recording never had (a test or a screenshot names its own file with --expected)
     return Host(plugins_dir=plugins_dir or FIXTURE_PLUGINS_DIR, clock=clock, os_source=FixtureOs(frame),
                 fixture=fixture_info(document, frame), enable=enable, expected_file=expected,
-                plugin_env={"IO_DIAGNOSTICS_FIXTURE": frame["name"], "IO_DIAGNOSTICS_FIXTURE_FILE": str(FIXTURE_FILE)})
+                plugin_env={"IO_DIAGNOSTICS_FIXTURE": frame["name"], "IO_DIAGNOSTICS_FIXTURE_FILE": str(FIXTURE_FILE)},
+                **settings)
 
 
 __all__ = ["Clock", "ReplayClock", "FixedClock", "LiveOs", "FixtureOs", "MachineOs", "Host", "View", "make_host",

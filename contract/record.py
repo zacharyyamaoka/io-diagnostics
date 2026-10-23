@@ -34,8 +34,15 @@ SCHEMA = "diagnostics-record/0"
 # The additive revision this module validates against. It never travels in a record line (every line still says
 # SCHEMA, so a v0 reader reads it); a producer states the revision it writes once, in its describe answer
 # (``"record_version": "0.1"``), and the host states its own in its API. v0.1 (2026-10-22): identity ``model_id``,
-# danger ``moves``, the standard action names (docs/diagnostics-record-v0.md "v0.1").
+# danger ``moves``, the standard action names (docs/diagnostics-record-v0.md "v0.1"); its addendum (2026-10-23):
+# ``DiagnosticStatus.caused_by`` and the counting rule in ``summarize`` (same doc, "v0.1 addendum: caused_by").
 RECORD_VERSION = "0.1"
+
+# caused_by on the stock side: one value, appended last, the member paths joined by ", ". A person reads it in rqt;
+# ``from_diagnostic_status`` leaves it a plain value (a stock message is never re-read as v0 structure), so the trip
+# stock -> v0 -> stock stays the identity.
+CAUSED_BY_KEY = "caused_by"
+CAUSED_BY_SEPARATOR = ", "
 
 # ----- levels -------------------------------------------------------------------------------------------------
 UNKNOWN, OK, WARN, ERROR = "unknown", "ok", "warn", "error"
@@ -170,6 +177,11 @@ class DiagnosticStatus:
     uptime_s: float | None = None  # seconds since the reporter started; going backwards = it restarted
     source: str = ""  # who reported it ("moteus_servo", "io_facts.usb")
     measurements: tuple[Measurement, ...] = ()  # typed values; rendered into values for stock viewers
+    # v0.1 (2026-10-23): a composite's or rollup's verdict names the members whose own reports caused it (entity
+    # paths): the rig row's "missing: CAN 15", the spider's "leg 3 failed". summarize then counts the record as their
+    # consequence, never as a cause of its own (docs/diagnostics-record-v0.md "v0.1: caused_by"). On the stock side it
+    # rides in one value key, CAUSED_BY_KEY.
+    caused_by: tuple[str, ...] = ()
 
     # ROS-style constants, so ``status.level == DiagnosticStatus.WARN`` reads like rclpy code. No STALE:
     # in v0 nobody authors it; the observer derives it.
@@ -183,6 +195,8 @@ class DiagnosticStatus:
                        for pair in self.values)
         object.__setattr__(self, "values", values)
         object.__setattr__(self, "measurements", tuple(self.measurements))
+        caused_by = (self.caused_by,) if isinstance(self.caused_by, str) else self.caused_by  # one path is one member
+        object.__setattr__(self, "caused_by", tuple(caused_by))
 
 
 @dataclass(frozen=True)
@@ -270,8 +284,9 @@ def to_diagnostic_status(status: DiagnosticStatus) -> dict:
     """The stock ``diagnostic_msgs/DiagnosticStatus`` as a plain dict: what rqt, Lichtblick, Foxglove, medkit read.
 
     Strips every added field (Zach, 2026-10-22: "it makes it backwards compatible"). Typed measurements are
-    rendered after the producer's own strings, so a stock viewer still shows the numbers. ``level`` is an int;
-    a ROS 2 Python bridge sends ``bytes([level])``, because rosidl maps .msg ``byte`` to ``octet``.
+    rendered after the producer's own strings, so a stock viewer still shows the numbers, and ``caused_by`` (v0.1)
+    last, as one ``caused_by`` value (the paths joined by ", "), so a person in rqt still reads who caused it.
+    ``level`` is an int; a ROS 2 Python bridge sends ``bytes([level])``, because rosidl maps .msg ``byte`` to ``octet``.
     """
 
     if status.level not in ROS_LEVEL:
@@ -282,14 +297,16 @@ def to_diagnostic_status(status: DiagnosticStatus) -> dict:
         "message": status.message,
         "hardware_id": status.hardware_id,
         "values": [{"key": key, "value": value} for key, value in status.values]
-        + [{"key": measurement.key, "value": measurement.render()} for measurement in status.measurements],
+        + [{"key": measurement.key, "value": measurement.render()} for measurement in status.measurements]
+        + ([{"key": CAUSED_BY_KEY, "value": CAUSED_BY_SEPARATOR.join(status.caused_by)}] if status.caused_by else []),
     }
 
 
 def from_diagnostic_status(message, **added) -> DiagnosticStatus:
     """Any stock DiagnosticStatus (a dict, or an rclpy message) -> v0. ``added`` sets v0-only fields the
     caller knows (``path``, ``stamp``, ``received``, ``source``). Levels outside 0-3 are not valid stock
-    messages; they come in as UNKNOWN."""
+    messages; they come in as UNKNOWN. A ``caused_by`` value stays a value: like a rendered measurement, it is a
+    string for people once it went through a stock viewer."""
 
     level = _get(message, "level", 3)
     if isinstance(level, (bytes, bytearray)):  # ROS 2 Python delivers a byte field as bytes of length 1
@@ -373,6 +390,8 @@ def _build(cls, data: Mapping):
             value = tuple(_build(Action, item) for item in value)
         elif name == "preconditions":
             value = tuple(tuple(pair) for pair in value)
+        elif name == "caused_by":
+            value = (value,) if isinstance(value, str) else tuple(value)
         kwargs[name] = value
     return cls(**kwargs)
 
@@ -424,6 +443,13 @@ def validate(record) -> list[str]:
         for key, count in Counter(keys).items():
             if count > 1:
                 problems.append(f"{where}: key {key!r} appears {count} times across values and measurements")
+        if record.caused_by:
+            if any(not isinstance(member, str) or not member for member in record.caused_by):
+                problems.append(f"{where}: caused_by must list entity paths (non-empty strings)")
+            elif record.path and record.path in record.caused_by:
+                problems.append(f"{where}: caused_by names its own entity; a record cannot be its own member's consequence")
+            if CAUSED_BY_KEY in keys:
+                problems.append(f"{where}: key {CAUSED_BY_KEY!r} is where caused_by rides on the stock side; rename the value")
         for measurement in record.measurements:
             value = measurement.value
             if not measurement.key:
@@ -556,6 +582,13 @@ def summarize(entities, statuses, now: float, *, factor: float = STALE_FACTOR,
       so a row can hint "a child is in ERROR". A pure grouping node (no records of its own) shows its rollup.
     - Knock-on collapse: a problem below a failed ancestor (on the via / part_of chain, inside the subtree)
       counts once, as that ancestor; the rest are listed in ``knock_on``. One dead bus is one cause, not N+1.
+    - ``caused_by`` (v0.1 addendum) explains the other way, UP: a composite or rollup whose every non-OK record
+      names members that each self-report a problem is those members' consequence. It is listed in ``knock_on``
+      against its worst member's root cause and never counted, and it explains nothing below it, so a spider at
+      ERROR naming leg 3 no longer swallows leg 3. A record that names nothing, names an entity that is OK, has
+      no records or does not exist, or is STALE itself, stays its own cause; its row keeps its own level and
+      message either way.
+      ``via`` is unchanged: a dead adapter still explains its silent boards.
 
     ``statuses`` may hold history; the last record per (entity, name) wins. A record with no path attaches to
     the entity with the same ``hardware_id`` (repeatable identity), else to an implicit root entity.
@@ -608,37 +641,86 @@ def summarize(entities, statuses, now: float, *, factor: float = STALE_FACTOR,
         own[path] = effective_level(worst, now, factor=factor, floor_s=floor_s)
         own_message[path] = _stale_message(worst, now) if own[path] == STALE else worst.message
 
-    nearest: dict[str, str | None] = {}  # nearest ancestor whose own level explains this entity's problem
+    def members(path: str) -> list[str] | None:
+        """The members whose own problems cause every problem this entity reports, or None: it is its own cause."""
+
+        named: list[str] = []
+        for status in own_records.get(path, ()):
+            level = effective_level(status, now, factor=factor, floor_s=floor_s)
+            if level == OK:
+                continue
+            # WHY a stale composite is its own cause: silence is the wrapper's own failure, whatever it last said
+            if level == STALE or not status.caused_by:
+                return None
+            for member in status.caused_by:
+                # WHY only a member that itself reports a problem: naming an OK, absent or record-less entity
+                # cannot explain anything, so the composite's verdict must stand as a cause on its own
+                if member == path or own.get(member) in (None, OK):
+                    return None
+                if member not in named:
+                    named.append(member)
+        return named or None
+
+    blamed: dict[str, str] = {}  # composite -> the member it is the consequence of (its worst, then the shallowest)
+    for path in order:
+        if own[path] in (None, OK):
+            continue
+        named = members(path)
+        if named:
+            blamed[path] = max(named, key=lambda member: (RANK[own[member]], -depth[member], -index[member]))
+
+    nearest: dict[str, str | None] = {}  # what explains this entity's problem: a failed ancestor, or a named member
     for path in order:
         nearest[path] = None
         if own[path] in (None, OK):
             continue
+        if path in blamed:
+            nearest[path] = blamed[path]
+            continue
         ancestor = parent[path]
         while ancestor is not None:
-            if own[ancestor] is not None and _explains(own[ancestor], own[path]):
+            # WHY a consequence explains nothing below: its verdict is its members' problem, not a failure of its own
+            if own[ancestor] is not None and ancestor not in blamed and _explains(own[ancestor], own[path]):
                 nearest[path] = ancestor
                 break
             ancestor = parent[ancestor]
+    # members can name each other (a producer's mistake): break every cycle at its first entity in tree order, so a
+    # problem is never explained away by a ring of consequences
+    resolved: set[str] = set()
+    for start in order:
+        trail, current = [], start
+        while current is not None and current not in resolved and current not in trail:
+            trail.append(current)
+            current = nearest[current]
+        if current is not None and current in trail:
+            ring = trail[trail.index(current):]
+            nearest[min(ring, key=index.__getitem__)] = None
+        resolved.update(trail)
 
     def label(path: str) -> str:
         return by_path[path].name or path
 
     summaries: dict[str, Summary] = {}
     for path in order:
-        base = depth[path]
-        members = order[index[path]:index[path] + size[path]]
+        low, high = index[path], index[path] + size[path]
+
+        def inside(other: str | None) -> bool:
+            # WHY by subtree slice, not depth: a named member can sit anywhere in the tree (the rig row's boards
+            # hang under their adapters); for an ancestor the two tests agree
+            return other is not None and low <= index[other] < high
+
         causes, knock_on, reported = [], [], False
-        for member in members:
+        for member in order[low:high]:
             if own[member] is None:
                 continue
             reported = True
             if own[member] == OK:
                 continue
             cause = nearest[member]
-            if cause is None or depth[cause] < base:
+            if not inside(cause):
                 causes.append(member)
                 continue
-            while nearest[cause] is not None and depth[nearest[cause]] >= base:
+            while inside(nearest[cause]):
                 cause = nearest[cause]
             knock_on.append((member, cause))
         if causes:
@@ -820,7 +902,7 @@ class FaultManager:
 
 
 __all__ = [
-    "SCHEMA", "RECORD_VERSION", "STANDARD_ACTIONS", "UNKNOWN", "OK", "WARN", "ERROR", "STALE", "LEVELS", "RANK", "ROS_LEVEL", "FROM_ROS_LEVEL", "MODES",
+    "SCHEMA", "RECORD_VERSION", "CAUSED_BY_KEY", "CAUSED_BY_SEPARATOR", "STANDARD_ACTIONS", "UNKNOWN", "OK", "WARN", "ERROR", "STALE", "LEVELS", "RANK", "ROS_LEVEL", "FROM_ROS_LEVEL", "MODES",
     "STALE_FACTOR", "STALE_FLOOR_S", "EVENT_SEVERITIES", "PENDING", "CONFIRMED", "HEALED", "CLEARED",
     "FAULT_STATUSES", "IDENTITY_KEYS", "PASSIVE", "TOUCHES", "CHANGES", "DANGERS",
     "KeyValue", "Measurement", "DiagnosticStatus", "Action", "Entity", "Event", "Fault",

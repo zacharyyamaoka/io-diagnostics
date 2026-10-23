@@ -7,7 +7,8 @@
 Every endpoint is `GET` and returns JSON (`Content-Type: application/json`, `Cache-Control: no-store`), except the
 page's writes: `POST /api/v1/act`, the Utilities panel (see "Actions from the page" below), and `POST
 /api/v1/expect | forget | retire`, the Expected setup card (host-side writes of the person's rig file, never a
-device; "Editing the expected setup" below). Any other method or path returns **405**. **Agents never call `POST /api/v1/act`**: they dry-run with `io-diagnostics act --dry-run`; a real
+device; "Editing the expected setup" below), and `POST /api/v1/settings`, the View options (the history window,
+written to the person's settings file; "Settings" below). Any other method or path returns **405**. **Agents never call `POST /api/v1/act`**: they dry-run with `io-diagnostics act --dry-run`; a real
 action runs only from a person's click on the page (or `io-diagnostics act` typed by a person at a TTY). The record contract underneath is `contract/record.py`
 (`SCHEMA = "diagnostics-record/0"`, `RECORD_VERSION = "0.1"`); `docs/diagnostics-record-v0.md` explains every rule
 this API applies.
@@ -24,6 +25,9 @@ uv run --project /home/bam/io-diagnostics python /home/bam/io-diagnostics/io_dia
 | `GET /api/v1/records` | The raw v0 records the host holds (entities, statuses with `received`, events, faults) | rarely |
 | `GET /api/v1/plugins` | Plugin registry: loaded `plugins.d/*.toml`, matched devices, last run per device | rarely |
 | `GET /api/v1/health` | `{"ok": true, ...}` liveness | — |
+| `GET /api/v1/history?path=<entity path>[&status=<name>][&window=<duration>]` | One entity's statuses over the window: level spans (stale and no data included) and every measurement value | on select, then 2-5 s |
+| `GET /api/v1/history/bar?path=<entity path>&bins=N[&window=<duration>]` | The health bar of an entity and of each child row: the worst level held per bin | 2-5 s |
+| `GET /api/v1/settings`, `POST /api/v1/settings` | The app-wide settings (the history window); the POST is the page's View options ONLY | on open / on change |
 | `POST /api/v1/act` | The Utilities panel ONLY: a dry run, then a person's confirmed run with the dry run's token | on click |
 | `POST /api/v1/expect`, `/forget`, `/retire` | The Expected setup card ONLY: one edit of the rig file after a person's confirm | on click |
 | `GET /`, `/<file>` | The page in `io_diagnostics/web/` | — |
@@ -95,8 +99,12 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
   or that the kernel log could not be read. Its values are `what_to_check`, `kernel_evidence`
   (`never | left | unknown`), `expected_by` and `last_seen`. Only `usb:<vid>:<pid>:<serial>` ids are judged.
 - `summary` is the **root's advisory rollup** (the chip's question: "does anything need me?"):
-  - `level`: the worst independent cause anywhere (`null` = nothing reports).
-  - `counts`: independent causes per level; knock-on problems under a failed ancestor are not counted.
+  - `level`: the worst independent cause anywhere (`null` = nothing reports). It is `rollup.level` of the root, not
+    the host row's `level`: with the computer plugin the host has records of its own and its row shows them, while
+    the Computer's checks count here as one more cause beside the tree, never over it.
+  - `counts`: independent causes per level; knock-on problems under a failed ancestor are not counted, nor is a
+    composite whose verdict names, in `caused_by`, members that report the problem themselves (the rig row's
+    "missing: CAN 15" and CAN 15's own report are one cause, CAN 15).
   - `attention`: every independent cause that is not `ok`, worst first; `device` is the nearest ancestor of kind
     `device` (`null` if none) so a page can say "fdcanusb 28B3A25D › 28B3A25D CAN bus".
   - `devices`: physical devices (USB devices and hubs, PCI functions; not their tty / video / NIC nodes); `entities`: all rows.
@@ -163,11 +171,11 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
 | `icon` | The icon TYPE to draw (closed vocabulary; unknown → draw `device`): `host`, `group`, `usb`, `pci`, `net`, `tty`, `video`, `port`, `hub`, `adapter`, `bus`, `servo`, `chip`, `motor`, `camera`, `stream`, `webcam`, `hid`, `device`. A plugin may hint it; otherwise the host derives it from kind, bus and USB class. |
 | `parent`, `edge` | The ONE parent edge (contract `Entity`): `"via"` = connectivity (port, hub, adapter, bus it is reached through), `"part_of"` = composition (a node's driver / motor; a camera's streams). Draw them differently if you like; both nest in `children`. `null` for the root. |
 | `depth` | 0 at `host`. |
-| `level`, `message` | **What the row shows** (contract `summarize` → `Summary.level` / `.message`). An entity with records of its own is a black box: this is ITS self-report (the worst effective level of its own checks). A pure grouping node (`own.level` = `null`: host, the bus groups) shows its rollup instead. **The host never overrides a self-report.** |
+| `level`, `message` | **What the row shows** (contract `summarize` → `Summary.level` / `.message`). An entity with records of its own is a black box: this is ITS self-report (the worst effective level of its own checks). A pure grouping node (`own.level` = `null`: the bus groups, and the host while no plugin diagnoses it) shows its rollup instead. **The host never overrides a self-report.** With the computer plugin the host row has records of its own (the Computer's checks, its `USB/PCIe links` line): its `level` is then the Computer's own report, judged as a leaf beside its children, so a full disk never explains a dead CAN bus (`tree.HOST_SELF`). |
 | `own` | The self-report alone; `own.level` = `null` means a pure grouping node. |
 | `rollup` | Advisory "worst below" (Redfish `HealthRollup`): the worst *independent cause* at or below this row, where it is, its counts per level, and `knock_on` = `[{"path", "cause"}]` problems collapsed into an ancestor's failure. `level` = `"ok"` when everything below reports OK; `null` when nothing below reports. |
 | `hint` | Set when `rollup.level` is worse than `level` (rank order): the "a child is in ERROR" hint a row draws beside its own status. `null` otherwise. Example: the spider self-reports WARN with an ERROR hint from leg 3. |
-| `knock_on_of` | This row's own problem is explained by that failed ancestor (one dead bus is one cause): draw it subdued; it is not counted in `summary`. `null` when the row is an independent cause or OK. |
+| `knock_on_of` | This row's own problem is explained by another row: a failed ancestor (one dead bus is one cause), or, for a composite whose checks name their members in `caused_by` (record v0.1 addendum), the root cause of the member it names (the rig row "missing: CAN 15" → CAN 15's row; a spider at ERROR → its failed leg). Draw it subdued; it is not counted in `summary`. `null` when the row is an independent cause or OK. |
 | `stale` | `own.level` is `"stale"`: the host has not received this entity's periodic record for `max(3 × expected_period_s, 5 s)` on its own receive clock. |
 | `connected` | `false` = not connected → render fully greyed: an empty USB port, or an entity whose latest record says `mode: "offline"` (a deliberate goodbye). |
 | `hardware_id`, `identity` | Repeatable identifier (`usb:<vid>:<pid>:<serial>` for USB) and the descriptive `manufacturer / model / serial_number / hw_version / sw_version / model_id` (any subset; parts carry none). `model_id` (record v0.1) is the robotparts part id, e.g. `"mjbots-moteus-c1"`, a plain string a page may link to robotparts.dev. |
@@ -189,7 +197,7 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
      "message": "answers · 36.5 V · stopped", "code": "", "mode": null, "source": "moteus_servo (rack_inventory, real)",
      "hardware_id": "moteus 22fb62f0 · ABoAQVQwUBUgOTNO", "stamp": 1761096101.0, "received": 1761096101.0,
      "received_iso": "2026-10-21T18:21:41-07:00", "age_s": 199.0, "expected_period_s": 180.0, "stale_after_s": 540.0,
-     "uptime_s": null,
+     "uptime_s": null, "caused_by": [],
      "values": [{"key": "voltage", "value": "36.5 V"}],
      "measurements": [{"key": "voltage", "value": 36.5, "unit": "V", "text": "36.5 V", "level": "ok",
                        "warn_low": null, "warn_high": null, "error_low": null, "error_high": null, "stamp": null}]}
@@ -221,17 +229,31 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
   rendering (`"36.5 V"`). A check named `firmware` with `code` `"UpdateAvailable"` and values
   `installed_version` / `latest_version` is the update-available convention; a check whose name ends in `config`
   holds a read-only config view.
+- `caused_by` (record v0.1 addendum, 2026-10-23): the entity paths whose own reports caused this check's verdict,
+  set by a composite or rollup check: a rig row's `<rig>: expected setup` names the missing boards' rows (or an
+  absent device's row under `host/expected`), the Computer's `USB/PCIe links` line names the port / PCIe / camera
+  rows that report each unhappy link, a plugin's composite (a spider) names its failed legs. `[]` = it judges on its
+  own. When every named row reports a problem, the row is their consequence: `knock_on_of` names the cause and
+  `summary` does not count it; the check's own `level` and `message` are unchanged.
 - Host-authored checks appear here too, with `source` `"io_diagnostics.runner"` (a plugin that crashed, hung or sent
   malformed lines: `code` `PluginCrashed` / `PluginTimeout` / `PluginNotStarted` / `PluginOutputMalformed`) or
   `"io_facts.usb"` (presence, port link).
 - `actions`: registered by the entity's owner, with each precondition evaluated **passively** by the host:
+  - each precondition's `state` is `"pass"`, `"fail"`, `"unknown"` or `"waiting"` (held by this host's own check);
   - `port_free` (no process holds the device's tty / by-id; `find_port_holders`), `bus_lock_free` (rack bus lock
     `/home/bam/.cache/rack-commissioning/bus.lock`, read from `/proc/locks`, never taken), `camera_free`
     (`camera_holders`), `board_answers` (the entity has a fresh own record whose code is not `NoReply` / `NoAck` /
     `PortBusy`), `update_available` (its `firmware` check says `UpdateAvailable`).
   - `state`: `"nothing_to_do"` (`update_available` fails: "up to date", whatever else holds, since a free port
-    would not make the button useful), else `"blocked"` (another precondition fails), else `"unknown"` (one cannot be
-    evaluated), else `"ready"`. `reason` is the text to show beside a disabled button.
+    would not make the button useful), else `"blocked"` (another precondition fails), else `"waiting"` (one is held
+    by this host's own running check, below), else `"unknown"` (one cannot be evaluated), else `"ready"`. `reason` is
+    the text to show beside a disabled button.
+  - **The rack bus lock held by this host itself** (round 3 brief item 10): when every holder of the lock belongs to
+    one of THIS host's own running plugin or check processes (its session: `os.getsid(holder)` is one the host started,
+    so `uv run` → python counts), `bus_lock_free` is `"waiting"` with the detail `"this host's own check is running (a
+    few s): moteus_servo diagnose usb:1-3, 2 s so far"`, and the action is `"waiting"`, never `"blocked"`: it frees by
+    itself, and the page greys it, never in a warning colour. Only a foreign holder is `"fail"` / `"blocked"`, with
+    `"blocked by pid 4187 (python3 -m rack_session)"` (its command line from `/proc/<pid>/cmdline`).
   - `danger`: `query` (reads only) · `interrupts` (stops or resets what runs) · `changes` (writes stored state) ·
     `moves` (record v0.1: hardware moves, e.g. moteus calibration spins the rotor). Every danger but `query` needs a
     per-device confirmation. The same standard `name` can carry a different `danger` on another driver; its `title`
@@ -310,7 +332,7 @@ viewers, and what the rack session runner can read.
   "plugins": [
     {"name": "moteus_servo", "file": ".../plugins.d/moteus_servo.toml", "command": ["..."], "diagnose_args": [],
      "cwd": "...", "timeout_s": 20.0, "act_timeout_s": 900.0, "period_s": 30.0, "enabled": true, "replay": false,
-     "exclusive": "rack-bus",
+     "exclusive": "rack-bus", "kind": "driver", "attach": null,
      "description": "moteus boards",
      "matches": ["usb:0483:5740"],
      "describe": {"name": "moteus_servo", "version": "0.3.0", "schema": "diagnostics-record/0"},
@@ -332,6 +354,29 @@ plugins and across one plugin's devices; a due job whose group is busy waits its
 never failed for it. Both rack drivers declare `"rack-bus"`, because each takes the rack bus lock with
 `flock LOCK_NB` and would otherwise fail its sibling with `BusLockHeld`. `next_due_s` stays `0.0` while a job waits
 for its group.
+
+**Monitoring Plugins checks** (`kind` `"check"`, round 3: "CLI as the seam"; plugins.d/README.md "Checks"): any
+command speaking the Monitoring Plugins API is a diagnostic, no code needed. It has no `matches`; `attach` names its
+one entity (`"host"`, a `hardware_id`, or `"rig:<rig name>"`). Its one job has `device_id` `"check:<name>"`,
+`device_path` = the entity its result is attached to now, and `last_run` in the same shape (`outcome` `ok` |
+`timeout` | `not_started`; `returncode` = the exit code; `accepted` 1). Its result is ONE check on that row, named
+after the check, `source` `"io_diagnostics.check"`:
+
+- level from the exit code (§2.4 Plugin Return Codes): `0` ok · `1` warn `CheckWarning` · `2` error `CheckCritical` ·
+  `3` unknown `CheckUnknown`; any other code (a signal, 127, 255) is unknown `CheckUnknown`, the guidelines'
+  "default catch-all". A run past `timeout_s` (its process group is killed) is unknown `CheckTimeout`, one that cannot
+  start unknown `CheckNotStarted`: the check did not finish, so nothing says the service is broken;
+- `message` = the first stdout line before `|` (§2 Plugin Output: "SERVICE STATUS: Information text"); later lines
+  are the value `long_output`;
+- perfdata (§2.6), after `|` on the first line and on later lines, each `'label'=value[UOM];[warn];[crit];[min];[max]`,
+  becomes a measurement: `value` (`U` → `null`), its UOM as a UCUM unit by name (`""` → `1`, `s`/`ms`/`us`, `%`,
+  `B`/`KB`/`MB`/`TB` → `By`/`kBy`/`MBy`/`TBy`, `c` → `{counter}`; never converted), warn → `warn_low`/`warn_high`, crit →
+  `error_low`/`error_high` from the §2.5 range (`10` = 0..10, `10:`, `~:10`, `10:20`; an alert is outside, endpoints
+  inside, which is the record's own rule). An `@` range (alert inside) has no limit form and stays a value
+  (`<label> warn`); min/max are a value `<label> min..max`; an item that does not parse is listed in
+  `perfdata_ignored`. Plus `exit_code`, `command` and the measurement `check duration`;
+- `expected_period_s` = `period_s`, so a check the host stopped running goes stale. A check whose entity is not
+  here now keeps a row of its own, `host/check-<name>`, with the value `attach: <entity> (not here now)`.
 
 ## Actions: `io-diagnostics act` (a person at a terminal)
 
@@ -463,10 +508,108 @@ The answer is **200** `{"ok": true, "op", "path", "refused": null, "message": "d
 
 `{"ok": true, "api": "io-diagnostics/1", "mode": "live" | "fixture", "uptime_s": 12.3}`
 
+## `GET /api/v1/history?path=<entity path>[&status=<name>][&window=<duration>]`
+
+The host keeps a rolling history per (entity path, status name), in memory (`io_diagnostics/history.py`): the
+level transitions and every measurement value, each on its own receive stamp (`received`, the host's clock). What
+it is fed: every NEW evaluation a plugin run brings (a replay re-sending its recording is one report), the host's
+own `plugin run` checks, and, on change, the OS checks (presence, port link, PCIe link, expected-absent) and the
+per-view lines (rig rows, `another adapter`, the Computer's `USB/PCIe links`). A check its source stops computing
+(an unplugged device's, a removed job's) has no data from then on.
+
+```json
+{
+  "path": "host/usb9/port-9-1/usb-9-1/can",
+  "name": "DEAD CAN bus",
+  "window_s": 900.0,
+  "from": 130.0,
+  "to": 1030.0,
+  "statuses": [
+    {"name": "DEAD CAN bus: bus", "expected_period_s": 2, "stale_after_s": 6.0,
+     "levels": [{"from": 130.0, "to": 1000.0, "level": null, "code": "", "message": ""},
+                {"from": 1000.0, "to": 1010.0, "level": "ok", "code": "", "message": "error-active"},
+                {"from": 1010.0, "to": 1012.0, "level": "stale", "code": "", "message": "no update for 6 s (last: error-active)"},
+                {"from": 1012.0, "to": 1022.0, "level": "error", "code": "NoAck", "message": "error-passive: nobody ACKs"},
+                {"from": 1022.0, "to": 1030.0, "level": "stale", "code": "", "message": "no update for 6 s (last: error-passive: nobody ACKs)"}],
+     "measurements": [{"key": "link speed", "unit": "Mbit/s", "warn_low": null, "warn_high": null, "error_low": null,
+                       "error_high": null, "points": [[1000.0, 12], [1004.0, 12]]}]}
+  ]
+}
+```
+
+- `window`: `900`, `"90s"`, `"15m"`, `"1h"`; default the app's window (`/api/v1/settings`), at least 1 min and at most
+  what the history keeps (`retention`: the window, but at least 15 min). Out of range → **400**. `from` / `to` are
+  `now − window` and `now` on the host clock. `status`: only that check (exact name; none known → `statuses: []`).
+  An entity that is neither in the tree nor in the history → **404**; one that left the tree keeps its history.
+- `levels` cover `[from, to]` exactly, oldest first, with **the honest async rule**:
+  - each status holds its last level until it goes stale, `max(3 × expected_period_s, 5 s)` after its last arrival
+    (the same rule as `effective_level`); an event-driven status (`expected_period_s` `null`) holds until its next
+    report. A span is `"stale"` from then until the next arrival;
+  - `level: null` is **no data**, its own state: before the status's first arrival in the window, and after its
+    source stopped computing it. Never drawn as a level;
+  - a step is drawn only at an arrival or where a promise ran out; two checks that arrive out of sync never produce
+    a step between them. `code` and `message` are the span's (the latest arrival's message for a run of equal
+    reports).
+- `measurements`: one series per measurement key of that status (at most 32), `points` = `[received, value]` pairs in
+  time order (`value` may be `null` = unreadable, or a bool), with the latest unit and limits.
+- **Bounds:** at most 4,096 statuses (the least recently heard is dropped), 200,000 points in all (a level span or
+  one value each; past it the longest series loses its oldest points). Measured with tracemalloc: a full history is
+  16 MB (mostly measurement values) to 28 MB (every point a level change), under the 30 MB `tests/test_history.py`
+  holds it to. Nothing is written to disk: a restart starts empty.
+
+## `GET /api/v1/history/bar?path=<entity path>&bins=N[&window=<duration>]`
+
+The health bar (rqt_robot_monitor's timeline) of one entity and of each of its child rows, over the same window.
+
+```json
+{
+  "path": "host/usb9/port-9-1/usb-9-1",
+  "window_s": 60.0,
+  "from": 970.0,
+  "to": 1030.0,
+  "bins": 10,
+  "bin_s": 6.0,
+  "rows": [
+    {"path": "host/usb9/port-9-1/usb-9-1", "name": "fdcanusb DEAD", "depth": 0, "basis": "own", "statuses": 3,
+     "bar": [null, null, null, null, null, "ok", "stale", "ok", "stale", "stale"]},
+    {"path": "host/usb9/port-9-1/usb-9-1/can", "name": "DEAD CAN bus", "depth": 1, "basis": "own", "statuses": 1,
+     "bar": [null, null, null, null, null, "ok", "stale", "error", "error", "stale"]}
+  ]
+}
+```
+
+- `rows`: the entity (`depth` 0), then each child row in tree order (`depth` 1). `bins` 1..1000 (default 60),
+  oldest first, each `bin_s` wide; not a whole number → **400**.
+- A bin is **the worst level held by any status of the row in it** (rank order, `ok < warn < unknown < stale <
+  error`), using each status's own timeline as in `/api/v1/history`; `null` = no status held anything in that bin
+  (no data yet). So a bin never shows a level no status held.
+- `basis`: `"own"` = the row's own statuses (what this black box reported, like its row's `level`); `"below"` = a
+  pure grouping row with no statuses of its own, which shows every status at or below it (what was reported there,
+  not knock-on collapsed); `"none"` = nothing in the history. `statuses` = how many fed the bar.
+
+## Settings: `GET /api/v1/settings`, `POST /api/v1/settings`
+
+```json
+{"history_window_s": 900.0, "source": "default", "file": "/home/bam/.config/io-diagnostics/settings.toml", "note": "",
+ "limits": {"history_window_s": {"min": 60.0, "max": 86400.0, "default": 900.0}}}
+```
+
+- One app-wide window for every health bar and history answer, default 15 min. Where it comes from (`source`), the
+  first that applies: `serve --history-window 15m` (`"flag"`: this run only, never written), the file
+  (`"file"`: `~/.config/io-diagnostics/settings.toml`, `$IO_DIAGNOSTICS_CONFIG_DIR` / `$XDG_CONFIG_HOME` honoured),
+  the default (`"default"`); after a page change, `"page"`. `note` says why the file could not be read or written.
+- `POST /api/v1/settings` with `{"history_window_s": 600}` (seconds, or `"10m"`) sets it now AND writes the file
+  (atomically; the file holds `history_window_s = 600`). The same page-only rule as `POST /api/v1/act`: the page's
+  `X-IO-Diagnostics: ui` header, `Sec-Fetch-Site: same-origin`, a JSON body, else **403** (`NotFromPage`,
+  `NotSameOrigin`, `NotJson`). A value outside 1 min .. 24 h, or an unknown setting → **400** `BadSetting`. Answers
+  the settings as above.
+
 ## What a page must NOT assume
 
 - That `level` is the worst below: it is the row's self-report. Use `hint` / `rollup` for "something below is worse".
-- That every row has records: groups and the host have none (`own.level` = `null`).
+- That every row has records: groups have none (`own.level` = `null`), and so has the host until a plugin diagnoses
+  it (the computer plugin). Nor that `summary.level` equals the host row's `level`: `summary` is the root's rollup
+  (the worst independent cause anywhere), the host row's `level` its own report once it has one.
 - That levels are only ok/warn/error: `unknown` (not evaluated, e.g. `PortBusy`) and `stale` (overdue) are first-class
   and rank above `warn`.
 - That a path is stable across replugs (key selections on `path`, but expect it to vanish and reappear elsewhere;

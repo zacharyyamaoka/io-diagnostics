@@ -21,6 +21,7 @@ import contextlib
 import dataclasses
 import json
 import os
+import re
 import signal
 import subprocess
 import threading
@@ -30,7 +31,7 @@ from typing import Any, Callable
 
 from io_diagnostics.plugins import PluginSpec
 
-from contract.record import (ERROR, OK, SCHEMA, WARN, DiagnosticStatus, Entity, Event, KeyValue, Measurement,
+from contract.record import (ERROR, OK, SCHEMA, UNKNOWN, WARN, DiagnosticStatus, Entity, Event, KeyValue, Measurement,
                              from_dict, validate)
 
 RUNNER_SOURCE = "io_diagnostics.runner"
@@ -143,6 +144,8 @@ def reroot(records: list, device_path: str, hardware_id: str) -> tuple[list, str
     for record in records:
         if isinstance(record, Entity):
             moved.append(dataclasses.replace(record, path=move(record.path), via=move(record.via), part_of=move(record.part_of)))
+        elif isinstance(record, DiagnosticStatus):
+            moved.append(dataclasses.replace(record, path=move(record.path), caused_by=tuple(map(move, record.caused_by))))
         else:
             moved.append(dataclasses.replace(record, path=move(record.path)))
     return moved, alias
@@ -152,6 +155,10 @@ def _relativize(record, device_path: str):
     if isinstance(record, Entity):
         return dataclasses.replace(record, path=relative(record.path, device_path),
                                    via=relative(record.via, device_path), part_of=relative(record.part_of, device_path))
+    if isinstance(record, DiagnosticStatus):
+        # WHY caused_by too: a composite names its members the way it writes paths, relative to its device
+        return dataclasses.replace(record, path=relative(record.path, device_path),
+                                   caused_by=tuple(relative(member, device_path) for member in record.caused_by))
     return dataclasses.replace(record, path=relative(record.path, device_path))
 
 
@@ -159,7 +166,16 @@ def _absolutize(record, device_path: str):
     if isinstance(record, Entity):
         return dataclasses.replace(record, path=absolute(record.path, device_path),
                                    via=absolute(record.via, device_path), part_of=absolute(record.part_of, device_path))
+    if isinstance(record, DiagnosticStatus):
+        return rebase(record, device_path)
     return dataclasses.replace(record, path=absolute(record.path, device_path))
+
+
+def rebase(status: DiagnosticStatus, device_path: str) -> DiagnosticStatus:
+    """A cached status (paths relative to its device) -> tree paths: its own path and its ``caused_by`` members."""
+
+    return dataclasses.replace(status, path=absolute(status.path, device_path),
+                               caused_by=tuple(absolute(member, device_path) for member in status.caused_by))
 
 
 @dataclass
@@ -191,6 +207,59 @@ def _kill_group(process: subprocess.Popen) -> None:
         os.killpg(process.pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
         process.kill()
+
+
+class Running:
+    """This host's running plugin and check processes, by session (each starts its own: ``start_new_session``).
+
+    WHY by session and not by pid: the rack bus lock is taken by whatever the plugin's command started (``uv run`` ->
+    python), never by the pid the host holds; every descendant keeps the session. So "is the lock holder one of OUR
+    checks?" is ``os.getsid(holder) in sessions``, read passively, and a lock held by this host's own diagnose reads
+    as its own check running, never as "blocked" (round 3 brief item 10)."""
+
+    def __init__(self):
+        self._sessions: dict[int, tuple[str, float]] = {}  # session id -> (what runs, monotonic start)
+        self._lock = threading.Lock()
+
+    @contextlib.contextmanager
+    def run(self, process: subprocess.Popen, label: str):
+        with self._lock:
+            self._sessions[process.pid] = (label, time.monotonic())
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._sessions.pop(process.pid, None)
+
+    def owner(self, pid: int) -> tuple[str, float] | None:
+        """``(what runs, seconds so far)`` when ``pid`` belongs to one of this host's running processes, else None."""
+
+        try:
+            session = os.getsid(pid)
+        except (ProcessLookupError, PermissionError, OSError):
+            return None
+        with self._lock:
+            found = self._sessions.get(session) or self._sessions.get(pid)
+        return (found[0], time.monotonic() - found[1]) if found else None
+
+
+RUNNING = Running()
+
+
+def _communicate(process: subprocess.Popen, timeout_s: float, label: str) -> tuple[str, str, bool]:
+    """``(stdout, stderr, timed_out)``; past ``timeout_s`` the whole process group is killed. Registered in RUNNING."""
+
+    with RUNNING.run(process, label):
+        try:
+            stdout, stderr = process.communicate(timeout=timeout_s)
+            return stdout, stderr, False
+        except subprocess.TimeoutExpired:
+            _kill_group(process)
+            try:
+                stdout, stderr = process.communicate(timeout=5)
+            except subprocess.TimeoutExpired:  # a child kept the pipe open after the kill: give up on its output
+                stdout, stderr = "", ""
+            return stdout, stderr, True
 
 
 def plugin_env(spec: PluginSpec, device: dict, device_path: str, now: float, extra: dict[str, str] | None = None) -> dict[str, str]:
@@ -227,16 +296,7 @@ def run_plugin(spec: PluginSpec, device: dict, device_path: str, now: Callable[[
     except OSError as error:
         return _outcome(spec, device, device_path, started, time.monotonic() - clock, "not_started", None, Parsed(), [],
                         "", f"could not start: {type(error).__name__}: {error}")
-    timed_out = False
-    try:
-        stdout, stderr = process.communicate(timeout=spec.timeout_s)
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        _kill_group(process)
-        try:
-            stdout, stderr = process.communicate(timeout=5)
-        except subprocess.TimeoutExpired:  # a child kept the pipe open after the kill: give up on its output
-            stdout, stderr = "", ""
+    stdout, stderr, timed_out = _communicate(process, spec.timeout_s, f"{spec.name} diagnose {device.get('id', '')}")
     returncode = process.returncode
     duration = time.monotonic() - clock
     parsed = parse_lines(stdout or "", replay=spec.replay)
@@ -306,16 +366,8 @@ def run_act(spec: PluginSpec, device: dict, device_path: str, argv: list[str], n
     except OSError as error:
         return {"outcome": "not_started", "returncode": None, "duration_s": 0.0, "records": [], "rejected": [],
                 "stderr_tail": "", "message": f"could not start: {type(error).__name__}: {error}"}
-    timed_out = False
-    try:
-        stdout, stderr = process.communicate(timeout=spec.act_timeout_s)
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        _kill_group(process)
-        try:
-            stdout, stderr = process.communicate(timeout=5)
-        except subprocess.TimeoutExpired:
-            stdout, stderr = "", ""
+    action = argv[argv.index("--action") + 1] if "--action" in argv[:-1] else "act"
+    stdout, stderr, timed_out = _communicate(process, spec.act_timeout_s, f"{spec.name} {action} {device.get('id', '')}")
     duration = time.monotonic() - clock
     records, rejected = [], []
     for number, raw in enumerate((stdout or "").splitlines(), start=1):
@@ -460,6 +512,165 @@ def describe(spec: PluginSpec, timeout_s: float | None = None, extra_env: dict[s
                 data["error"] = f"schema {data.get('schema')!r} is not {SCHEMA!r}"
             return data
     return {"error": f"describe printed no JSON object (exit {completed.returncode})"}
+
+
+# ----- Monitoring Plugins (Nagios) checks: any command, its exit code is the level ------------------------------
+# The Monitoring Plugins Development Guidelines (https://www.monitoring-plugins.org/doc/guidelines.html), followed as
+# written: §2.4 "Plugin Return Codes" (0 OK, 1 Warning, 2 Critical, 3 Unknown; codes outside 0-3 fall to the
+# guidelines' "default catch-all" UNKNOWN); §2 "Plugin Output for Nagios" (the first stdout line is "SERVICE STATUS:
+# Information text"; later lines are long output; perfdata follows a "|" on the first line and on later lines);
+# §2.6 "Performance data" ('label'=value[UOM];[warn];[crit];[min];[max], space separated, quoted labels with ''
+# for a quote, value "U" = could not be determined); §2.5 "Threshold and ranges" ([@]start:end, inclusive).
+CHECK_SOURCE = "io_diagnostics.check"
+CHECK_LEVEL = {0: (OK, ""), 1: (WARN, "CheckWarning"), 2: (ERROR, "CheckCritical"), 3: (UNKNOWN, "CheckUnknown")}
+# §2.6's UOMs -> the record's UCUM units. WHY by name, never converted: the guidelines do not say whether KB is 1000
+# or 1024 bytes; the number is shown as the check printed it. "" (a number of things) is dimensionless "1".
+CHECK_UNITS = {"": "1", "s": "s", "ms": "ms", "us": "us", "%": "%", "B": "By", "KB": "kBy", "MB": "MBy", "GB": "GBy",
+               "TB": "TBy", "c": "{counter}"}
+_PERF_ITEM = re.compile(r"""\s*('(?:[^']|'')+'|[^'=\s]+)=(\S*)""")
+_PERF_VALUE = re.compile(r"^(U|[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)([A-Za-z%]*)$")
+_NUMBER = re.compile(r"^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?$")
+
+
+def _range(text: str) -> tuple[float | None, float | None, bool] | None:
+    """§2.5 ``[@]start:end`` -> (low, high, inside); None = not a range. ``10`` = 0..10, ``10:`` = 10..inf,
+    ``~:10`` = -inf..10; an alert is raised outside [low, high] (inclusive), or inside it with ``@``."""
+
+    inside = text.startswith("@")
+    body = text[1:] if inside else text
+    start, colon, end = body.partition(":")
+    if not colon:
+        start, end = "0", start  # "start and ':' is not required if start=0"
+        if not end:
+            return None
+    if start == "~":
+        low = None  # "to specify negative infinity, use '~'"
+    elif _NUMBER.match(start or "0"):
+        low = float(start or "0")
+    else:
+        return None
+    if end == "":
+        high = None  # "start:" = end is infinity
+    elif _NUMBER.match(end):
+        high = float(end)
+    else:
+        return None
+    if low is not None and high is not None and low > high:  # "start <= end"
+        return None
+    return low, high, inside
+
+
+def parse_perfdata(text: str) -> tuple[list[Measurement], list[KeyValue], list[str]]:
+    """§2.6 perfdata -> measurements (value, UCUM unit, warn/crit as limits), min/max as values, and what was ignored."""
+
+    measurements, values, ignored, seen = [], [], [], set()
+    position = 0
+    text = text.strip()
+    while position < len(text):
+        found = _PERF_ITEM.match(text, position)
+        if not found:
+            rest = text[position:].split(None, 1)
+            ignored.append(rest[0])
+            position = len(text) - len(rest[1]) if len(rest) > 1 else len(text)
+            continue
+        position = found.end()
+        label, fields = found[1], found[2].split(";")
+        if label.startswith("'"):
+            label = label[1:-1].replace("''", "'")
+        value = _PERF_VALUE.match(fields[0])
+        if not value or label in seen:
+            ignored.append(found[0].strip())
+            continue
+        seen.add(label)
+        number = None if value[1] == "U" else float(value[1])
+        if number is not None and number.is_integer() and "." not in value[1] and "e" not in value[1].lower():
+            number = int(number)
+        uom = value[2]
+        limits = {}
+        for field_text, low_key, high_key in ((fields[1] if len(fields) > 1 else "", "warn_low", "warn_high"),
+                                              (fields[2] if len(fields) > 2 else "", "error_low", "error_high")):
+            if not field_text:
+                continue
+            parsed = _range(field_text)
+            if parsed is None or parsed[2]:  # WHY "@" (alert inside) has no low/high limit form: kept as text
+                values.append(KeyValue(f"{label} {'warn' if low_key == 'warn_low' else 'crit'}", field_text))
+                continue
+            limits[low_key], limits[high_key] = parsed[0], parsed[1]
+        ordered = [limits.get(key) for key in ("error_low", "warn_low", "warn_high", "error_high")]
+        present = [limit for limit in ordered if limit is not None]
+        if present != sorted(present):  # a warn range wider than the crit range is not limits the record can hold
+            values.append(KeyValue(f"{label} thresholds", ";".join(fields[1:3])))
+            limits = {}
+        measurements.append(Measurement(label, number, CHECK_UNITS.get(uom, uom), **limits))
+        bounds = fields[3:5]
+        if any(bounds):
+            values.append(KeyValue(f"{label} min..max", " .. ".join(part or "?" for part in (bounds + [""])[:2])))
+    return measurements, values, ignored
+
+
+def parse_check_output(stdout: str, returncode: int | None) -> tuple[str, str, str, list[KeyValue], list[Measurement]]:
+    """``(level, code, message, values, measurements)`` of one Monitoring Plugins run (§2, §2.4, §2.6)."""
+
+    lines = (stdout or "").splitlines()
+    first, _bar, perf = (lines[0] if lines else "").partition("|")
+    long_lines, more_perf, in_perf = [], [], False
+    for line in lines[1:]:
+        if in_perf:
+            more_perf.append(line)
+            continue
+        text, bar, rest = line.partition("|")
+        if text.strip():
+            long_lines.append(text.rstrip())
+        if bar:
+            in_perf = True
+            more_perf.append(rest)
+    level, code = CHECK_LEVEL.get(returncode, (UNKNOWN, "CheckUnknown"))
+    message = first.strip() or "the check printed nothing"
+    values = [KeyValue("exit_code", str(returncode))]
+    if returncode not in CHECK_LEVEL:
+        message = f"exit code {returncode} is not 0-3 (UNKNOWN by the guidelines' catch-all) · {message}"
+    measurements, perf_values, ignored = parse_perfdata(" ".join([perf, *more_perf]))
+    if long_lines:
+        values.append(KeyValue("long_output", "\n".join(long_lines)))
+    values += perf_values
+    if ignored:
+        values.append(KeyValue("perfdata_ignored", " ".join(ignored)))
+    return level, code, message, values, measurements
+
+
+def run_check(spec: PluginSpec, now: Callable[[], float], extra_env: dict[str, str] | None = None) -> DiagnosticStatus:
+    """Run one check's command once, bounded by ``timeout_s`` (its process group killed past it). Its result is ONE
+    status (path ``""``: the host rebases it onto the attached entity). Never raises for anything the command does."""
+
+    started, clock = now(), time.monotonic()
+    env = dict(os.environ)
+    env.pop("VIRTUAL_ENV", None)
+    env.update(spec.env)
+    env.update(extra_env or {})
+    stdout, returncode, timed_out, failed = "", None, False, ""
+    try:
+        process = subprocess.Popen(list(spec.command), cwd=spec.cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, text=True, errors="replace", env=env, start_new_session=True)
+    except OSError as error:
+        failed = f"could not start: {type(error).__name__}: {error}"
+    else:
+        stdout, _stderr, timed_out = _communicate(process, spec.timeout_s, f"check {spec.name}")
+        returncode = process.returncode
+    duration = time.monotonic() - clock
+    if failed or timed_out:
+        # WHY UNKNOWN, not CRITICAL: the check did not finish, so nothing says the service is broken ("can't tell",
+        # which never reads green and ranks above WARN here)
+        level, code = UNKNOWN, "CheckNotStarted" if failed else "CheckTimeout"
+        message = failed or f"no answer within {spec.timeout_s:g} s: killed"
+        values, measurements = [KeyValue("exit_code", "none")], []
+    else:
+        level, code, message, values, measurements = parse_check_output(stdout, returncode)
+    values = [KeyValue("command", " ".join(spec.command)), *values]
+    if not any(measurement.key == "check duration" for measurement in measurements):
+        measurements.append(Measurement("check duration", round(duration, 3), "s", warn_high=spec.timeout_s * 0.8))
+    return DiagnosticStatus(level=level, name=spec.name, message=message, path="", code=code, values=tuple(values),
+                            measurements=tuple(measurements), stamp=started, expected_period_s=spec.period_s,
+                            source=CHECK_SOURCE)
 
 
 class Gates:

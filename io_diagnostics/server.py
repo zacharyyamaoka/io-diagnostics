@@ -4,7 +4,9 @@ GET everywhere, plus ONE write: ``POST /api/v1/act``, the page's Utilities panel
 page"). Every click is a dry run first; a real run needs that dry run's token and must come from the page itself
 (same origin, the page's own header). Agents never call it: they use ``io-diagnostics act --dry-run``. The Expected
 setup card's ``POST /api/v1/expect | forget | retire`` rewrite the person's rig file under the same page-only rule
-(no device is touched, so no dry run and no token). Every other POST / PUT / DELETE / PATCH is 405. Binds to 127.0.0.1 by default; the page polls ``/api/v1/state`` once a second.
+(no device is touched, so no dry run and no token), and ``POST /api/v1/settings`` (the View options: the history
+window, written to settings.toml) likewise. Every other POST / PUT / DELETE / PATCH is 405. Binds to 127.0.0.1 by
+default; the page polls ``/api/v1/state`` once a second.
 """
 
 from __future__ import annotations
@@ -17,7 +19,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from io_diagnostics import WEB
+from io_diagnostics.history import MAX_BINS
 from io_diagnostics.host import Host
+from io_diagnostics.settings import SettingsError
 
 DEFAULT_PORT = 8812
 TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
@@ -103,6 +107,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(self.host.plugins())
             if parsed.path == "/api/v1/health":
                 return self._json(self.host.health())
+            if parsed.path in ("/api/v1/history", "/api/v1/history/bar"):
+                return self._history(parsed.path, query)
+            if parsed.path == "/api/v1/settings":
+                return self._json(self.host.settings_json())
             if parsed.path == "/api/v1/act" or parsed.path in SETUP_EDITS:
                 return self._json({"error": "POST only, and only from the page (docs/api-v1.md)"}, 405, extra={"Allow": "POST"})
             if parsed.path.startswith("/api/"):
@@ -117,12 +125,40 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):  # noqa: N802 - http.server's name
         endpoint = urlparse(self.path).path
-        if endpoint not in ("/api/v1/act", *SETUP_EDITS):
+        if endpoint not in ("/api/v1/act", "/api/v1/settings", *SETUP_EDITS):
             return self._refuse()
         try:
+            if endpoint == "/api/v1/settings":
+                return self._settings()
             return self._act() if endpoint == "/api/v1/act" else self._setup_edit(SETUP_EDITS[endpoint])
         except Exception as error:  # noqa: BLE001 - show the failure, keep serving
             return self._json({"error": f"{type(error).__name__}: {error}"}, 500)
+
+    # --- history and settings ------------------------------------------------------------------------------------
+    def _history(self, endpoint: str, query: dict):
+        path = (query.get("path") or [""])[0]
+        window = (query.get("window") or [None])[0]
+        try:
+            if endpoint == "/api/v1/history":
+                found = self.host.history_json(path, (query.get("status") or [None])[0], window)
+            else:
+                bins = (query.get("bins") or ["60"])[0]
+                if not bins.isdigit():
+                    return self._json({"error": f"bins is a whole number 1..{MAX_BINS}, got {bins!r}"}, 400)
+                found = self.host.bar_json(path, int(bins), window)
+        except SettingsError as error:
+            return self._json({"error": str(error)}, 400)
+        return self._json(found) if found else self._json({"error": f"no entity {path!r}"}, 404)
+
+    def _settings(self):
+        # WHY the same page-only rule as /act: a setting is the person's preference, written to their file
+        body, answer = self._body()
+        if body is None:
+            return self._json(*answer)
+        try:
+            return self._json(self.host.set_settings(body))
+        except SettingsError as error:
+            return self._json({"refused": "BadSetting", "error": str(error)}, 400)
 
     # --- the Expected setup card: host-side writes of the person's rig file, never a device --------------------------
     def _body(self) -> tuple[dict | None, tuple]:

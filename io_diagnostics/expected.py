@@ -601,6 +601,10 @@ def _rig_row(rig: Rig, path: str, members: list[Found], merged: tree.Merged, own
     kinds: dict[str, list[int]] = {}  # kind word -> [here, expected]
     boards = [0, 0]
     missing, unknown, extras, moved, mismatched, checks = [], [], [], [], [], []
+    # WHY: the rig's verdict is caused by its members' own reports (record v0.1 caused_by), so it names, per problem,
+    # the row that reports it; None = no row says it (the rig is then its own cause)
+    missing_rows: list[str | None] = []
+    unknown_rows: list[str | None] = []
     for found in members:
         word = found.device.kind or (kind_of_row(merged, found.path) if found.path else "device")
         count = kinds.setdefault(word, [0, 0])
@@ -612,10 +616,12 @@ def _rig_row(rig: Rig, path: str, members: list[Found], merged: tree.Merged, own
             count[0] += 1
         elif found.pending:
             unknown.append(f"{found.device.label()} (its driver has not reported yet)")
+            unknown_rows.append(None)
             boards[1] += len(found.device.nodes)
             continue
         else:
             missing.append(f"{found.device.label()} (not here)")
+            missing_rows.append(_absent_row(found.device, merged))
             if found.moved_to:
                 target = merged.entities[found.moved_to].name
                 moved.append(f"{found.device.label()}'s {_plural(len(found.device.nodes), NODE_WORD)} answer on {target} now")
@@ -637,8 +643,10 @@ def _rig_row(rig: Rig, path: str, members: list[Found], merged: tree.Merged, own
                     mismatched.append(f"{label} on {device_name} is {actual}, expected {node.model_id}")
             elif state == "unknown" and base:
                 unknown.append(f"{label} on {device_name}")
+                unknown_rows.append(f"{base}/{node.path}" if f"{base}/{node.path}" in merged.entities else None)
             elif found.path:
                 missing.append(f"{label} on {device_name}")
+                missing_rows.append(f"{base}/{node.path}" if f"{base}/{node.path}" in merged.entities else None)
                 checks.append(f"{label} on {device_name} does not answer: see its row for what to check (or Expect "
                               f"what's here on {device_name} if it was taken off on purpose)")
         if found.path:
@@ -653,11 +661,15 @@ def _rig_row(rig: Rig, path: str, members: list[Found], merged: tree.Merged, own
     values = [KeyValue(_plural(2, NODE_WORD if word == "_boards" else word), f"{here}/{total}") for word, (here, total) in kinds.items()]
     if missing:
         level, code, message = WARN, "ExpectedMissing", f"missing: {' · '.join(missing)}"
+        rows = missing_rows
     elif unknown:
         level, code = UNKNOWN, "ExpectedNotChecked"
         message = f"not checked: {' · '.join(unknown)} (no fresh answer either way)"
+        rows = unknown_rows
     else:
         level, code, message = OK, "", "everything expected is here" if members else "nothing expected yet: use Expect what's here on a device"
+        rows = []
+    caused_by = tuple(dict.fromkeys(rows)) if rows and None not in rows else ()
     notes = moved + [f"also here, not expected: {', '.join(extras)}"] * bool(extras) + mismatched
     if notes:
         message += " · " + " · ".join(notes)
@@ -674,8 +686,18 @@ def _rig_row(rig: Rig, path: str, members: list[Found], merged: tree.Merged, own
     values.append(KeyValue("file", str(setup.path) if setup.path else "none"))
     entity = Entity(path, name, RIG_KIND, via=tree.HOST_PATH, owner="io_diagnostics")
     status = DiagnosticStatus(level=level, name=f"{rig.name}: expected setup", code=code, message=message, path=path,
-                              values=tuple(values), stamp=now, received=now, source=SOURCE)
+                              values=tuple(values), stamp=now, received=now, source=SOURCE, caused_by=caused_by)
     return entity, status
+
+
+def _absent_row(device: ExpectedDevice, merged: tree.Merged) -> str | None:
+    """The "Expected, not connected" row that reports an absent device: the host's kernel-evidence row for a USB id,
+    else the serial-only row ``evaluate`` adds; None when no row will say it."""
+
+    if device.hardware_id:
+        return next((path for path, entity in merged.entities.items()
+                     if path.startswith(EXPECTED_PATH + "/") and same_id(entity.hardware_id, device.hardware_id)), None)
+    return f"{EXPECTED_PATH}/{tree.slug('serial-' + device.serial)}" if device.serial else None
 
 
 # ----- the panel's edits: Expect what's here / Forget / Retire... --------------------------------------------------

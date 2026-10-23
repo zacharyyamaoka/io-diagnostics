@@ -122,6 +122,7 @@ stock view:  to_diagnostic_status()  ──►  rqt · Lichtblick · Foxglove ·
 | `expected_period_s` | float or None | for periodic checks | The promise staleness is judged against (L3); your `dx_tick_hz` | stripped |
 | `uptime_s` | float | no | Exposes a restart or brown-out that a level hides: DroneCAN/Cyphal uptime | stripped |
 | `source` | str | no | Who reported it, when two observers report on one entity: medkit `source_id`, your `source_component` | stripped |
+| `caused_by` | path[] | composites (v0.1 addendum) | The members whose own reports caused this verdict, so one fact counts once (AUTOSAR DEM consecutive fault, Icinga `--root-cause`) | one value `caused_by`, appended last |
 
 `DiagnosticStatus.OK / WARN / ERROR / UNKNOWN` exist as class constants, so code reads like rclpy. There is
 deliberately no `DiagnosticStatus.STALE`.
@@ -465,3 +466,54 @@ how a reader tells.
 - **The stock projection is unchanged.** `model_id` lives on `Entity` and `moves` on `Action`, and neither reaches
   `DiagnosticStatus`. So stock → v0.1 → stock is still the identity; `tests/test_record.py` re-proves it for the
   real-world messages and the fuzz set, and checks that a status about a v0.1 entity projects to the stock five.
+
+## v0.1 addendum: `caused_by` (2026-10-23, additive)
+
+Why: knock-on collapse (rule 3) explains in ONE direction, down the parent edge. That is right for `via`: a dead
+adapter explains its silent boards. It is backwards for a composite, whose verdict is caused by its members. Three
+probes against this code showed it (`reports/diagnostics-rollup-proposals-2026-10-23.html`, "The barrier"): the rig
+row and CAN 15's own report counted one missing board twice; a spider at ERROR filed its failed leg as its own
+symptom; the Computer's checks written on the host swallowed the rack below.
+
+- **The field.** `DiagnosticStatus.caused_by: tuple[str, ...]`, default `()`: the entity paths of the members whose
+  own reports caused this record's verdict. Set it on a composite or rollup check, never on a leaf's own reading.
+  A plugin writes the paths the way it writes `path` (relative to its device, or the full tree path); the host
+  rebases both.
+- **The rule** (`summarize`), the contract text:
+  - A record is a **consequence** when it is not STALE and names members, and every member it names is an entity
+    that self-reports a problem (its own level is not `ok` and not `None`). An entity whose every non-OK record is a
+    consequence is its members' consequence: it goes in `knock_on` against the root cause of its worst member
+    (then the shallowest, then tree order), and it is not counted.
+  - A record that names nothing, names an `ok` entity, an entity with no records of its own, an entity nobody
+    describes or itself, or is STALE (silence is the wrapper's own failure), is its own cause. So a partial list
+    never hides a problem: a composite that cannot name every cause names none.
+  - A consequence **explains nothing below it**: its verdict is its members' problem, not a failure of its own. So
+    a spider at ERROR that names leg 3 no longer swallows leg 3; an unnamed WARN on leg 5 stays a cause too.
+  - The `via` / `part_of` direction is unchanged for everything else: an ERROR ancestor that names nothing still
+    explains everything below it, and a silent one only silence.
+  - Members naming each other (a producer's mistake) are broken at the first entity of the ring in tree order, so a
+    ring of consequences never explains a problem away.
+  - **The composite's row keeps its own level and message** (the black-box rule). Only the counts, the attention
+    list and `knock_on` change.
+- **Where the host sets it** (`io_diagnostics`):
+  - the rig row's `<rig>: expected setup` names, per missing item, the row that reports it: a board's own row
+    (`BoardNotAnswering`), or an absent device's row under `host/expected` (`ExpectedAbsent`); for
+    `ExpectedNotChecked`, the unchecked boards' rows. If any item has no row that says it, it names nothing;
+  - the Computer's `USB/PCIe links` line names the port, PCIe and camera rows whose problems it repeats (only when
+    it repeats them all);
+  - the Computer's own checks stay a leaf beside the tree (`tree.HOST_SELF`); a `caused_by` naming `host` follows
+    them there.
+- **Stock side.** `to_diagnostic_status` appends one value, key `caused_by` (`CAUSED_BY_KEY`), the paths joined by
+  `", "`, after the measurements, so a person in rqt still reads who caused it. `from_diagnostic_status` leaves a
+  `caused_by` value a plain value, so stock → v0 → stock stays the identity (re-proved for the real-world messages,
+  the fuzz set, and a stock message carrying a `caused_by` value anywhere). v0 → stock → v0 keeps it as that string,
+  as it keeps a measurement.
+- **Validation.** `validate` flags an empty member, a record naming its own entity, and a value or measurement
+  keyed `caused_by` beside a non-empty `caused_by` (the projection would repeat the key).
+- **Signalled** as v0.1 was: the schema string is unchanged and `RECORD_VERSION` stays `"0.1"`; a v0 reader ignores
+  the field (open world) and simply counts as before.
+- **Tests.** `tests/test_record.py` "v0.1 addendum": the three probes as regression tests (each also asserts the
+  count without `caused_by`), the counting conditions, a dead adapter under a rig's named boards, a ring, the stock
+  projection and validation. `tests/test_caused_by.py`: the same through the host (a plugin composite's relative
+  member, the rig naming an absent adapter's row and naming nothing when no row says it, the links line, a check
+  naming the host).

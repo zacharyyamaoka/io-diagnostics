@@ -62,7 +62,10 @@ def test_a_host_on_plugins_d_matches_the_rack_adapter_without_being_asked():
 
     specs, problems = load_plugins(PLUGINS_D)
     # the computer plugin (2026-10-23) matches only the host, never a device
-    assert {spec.name for spec in specs} == set(DRIVERS) | {"computer"} and problems == []
+    assert {spec.name for spec in specs} == set(DRIVERS) | {"computer", "check_root_disk"} and problems == []
+    # the Monitoring Plugins example (2026-10-23) ships disabled and matches nothing: it attaches to the host
+    example = next(spec for spec in specs if spec.name == "check_root_disk")
+    assert (example.kind, example.attach, example.enabled, example.matches) == ("check", "host", False, ())
     fdcanusb = usb_device("1-3", "0483", "5740", "272813EF", label="fdcanusb")
     d405 = usb_device("6-1", "8086", "0b5b", "219323070276", label="D405")
     assert [(spec.name, device["id"]) for spec, device in match_devices(specs, [fdcanusb, d405])] == [("moteus_servo", "usb:1-3")]

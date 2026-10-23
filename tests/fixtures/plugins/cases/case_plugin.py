@@ -2,8 +2,8 @@
 
     <python> case_plugin.py --case spider diagnose --device usb:9-1
 
-Cases: ``spider`` (Zach's black-box example), ``deadbus`` (an adapter whose bus dies after the first poll),
-``periodic`` (a periodic check + a forged ``received``), ``malformed`` (every kind of bad line), ``crash`` (a
+Cases: ``spider`` (Zach's black-box example; ``spider_named``: at ERROR, naming leg 3 in caused_by), ``deadbus``
+(an adapter whose bus dies after the first poll), ``periodic`` (a periodic check + a forged ``received``), ``malformed`` (every kind of bad line), ``crash`` (a
 traceback after one good line), ``hang`` (one good line, then sleeps with a child holding stdout), ``warn_replay``
 (a recorded periodic WARN), ``echo_argv`` (reports the options after ``--device``), ``hot_computer`` (the computer
 plugin's shape on the host: an ERROR on the device row itself). Never touches hardware.
@@ -34,6 +34,20 @@ def spider() -> None:
         failed = number == 3
         line("status", level="error" if failed else "ok", name=f"leg {number}: motor", path=f"leg{number}",
              message="motor fault" if failed else "ok", **({"code": "MotorFault"} if failed else {}))
+
+
+def spider_named() -> None:
+    """The spider at ERROR, naming its failed leg in caused_by (record v0.1), relative to its device like a path."""
+
+    line("entity", path="", name="spider", kind="device", identity={"model": "8-legged walker"})
+    for number in range(1, 9):
+        line("entity", path=f"leg{number}", name=f"leg {number}", kind="part", part_of="", icon="motor")
+    line("status", level="error", name="spider: gait", message="leg 3 failed: walking on 7", path="", code="LegFailed",
+         caused_by=["leg3"])
+    for number in range(1, 9):
+        failed = number == 3
+        line("status", level="error" if failed else "ok", name=f"leg {number}: motor", path=f"leg{number}",
+             message="fault 33" if failed else "ok", **({"code": "MoteusFault.33"} if failed else {}))
 
 
 def deadbus(now: float) -> None:
@@ -124,8 +138,8 @@ def main() -> int:
         print(json.dumps({"name": f"case_{args.case}", "version": "0", "schema": SCHEMA, "matches": matches, "actions": []}))
         return 0
     now = float(os.environ.get("IO_DIAGNOSTICS_NOW", "0"))
-    {"spider": spider, "deadbus": lambda: deadbus(now), "periodic": periodic, "malformed": malformed, "crash": crash,
-     "hang": hang, "warn_replay": warn_replay, "foreign": lambda: foreign(args.device),
+    {"spider": spider, "spider_named": spider_named, "deadbus": lambda: deadbus(now), "periodic": periodic,
+     "malformed": malformed, "crash": crash, "hang": hang, "warn_replay": warn_replay, "foreign": lambda: foreign(args.device),
      "echo_argv": lambda: echo_argv(extra), "hot_computer": lambda: hot_computer(args.device)}[args.case]()
     return 0
 

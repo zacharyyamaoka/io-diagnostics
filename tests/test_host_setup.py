@@ -184,8 +184,13 @@ def test_the_rig_row_counts_at_a_glance_and_names_what_is_missing(tmp_path):
     assert (rig["level"], check["code"]) == ("warn", "ExpectedMissing")
     assert check["message"] == f"missing: CAN 15 on fdcanusb {A}"
     assert values(check)["what_to_check"].startswith(f"1. CAN 15 on fdcanusb {A} does not answer: see its row")
+    # record v0.1 caused_by (2026-10-23): the rig names CAN 15's row, so one missing board is one cause, CAN 15's own
+    # report; the rig row keeps its WARN and its words (above) and reads as CAN 15's knock-on
+    can15 = f"{rack.path_of(A)}/can/15"
+    assert check["caused_by"] == [can15] and rig["knock_on_of"] == can15
     attention = rack.state()["summary"]["attention"]
-    assert any(item["path"] == rig["path"] and item["level"] == "warn" for item in attention)
+    assert [item["path"] for item in attention if item["path"] in (rig["path"], can15)] == [can15]
+    assert rack.state()["summary"]["counts"] == {"error": 1}
 
 
 def test_everything_here_is_ok_and_an_extra_node_is_a_note_not_a_problem(tmp_path):

@@ -1,0 +1,12 @@
+# A Monitoring Plugins (Nagios) check: any command whose exit code 0/1/2/3 is OK/WARN/CRITICAL/UNKNOWN, first stdout
+# line the message, perfdata after "|" (plugins.d/README.md "Checks"). Disabled: an example; `--enable check_root_disk`.
+# With the stock plugin installed (apt install monitoring-plugins-basic), the same entry runs it instead:
+#   command = ["/usr/lib/nagios/plugins/check_disk", "-w", "5%", "-c", "1%", "-p", "/"]
+name = "check_root_disk"
+kind = "check"
+description = "/ used, from df (WARN above 95 %, CRITICAL above 99 %: ROS hd_monitor's 5 % / 1 % free)"
+command = ["/bin/sh", "{root}/plugins/checks/check_root_disk.sh"]
+period_s = 60
+timeout_s = 10
+attach = "host"
+enabled = false
