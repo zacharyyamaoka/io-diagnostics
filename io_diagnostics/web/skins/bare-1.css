@@ -1,0 +1,134 @@
+/* STUB (orchestrator, 2026-10-23): a copy of High contrast until the Bare Metal lane replaces it. */
+/* Skin 11 · High contrast — WCAG AAA: pure white / pure black surfaces, every text token >= 7:1 on every surface it
+ * sits on, problem fills >= 4.5:1 so the four shapes read without their colour, a saturated focus colour, and a
+ * light mode that prints (white paper, black ink, no tinted panes).
+ * Defines every BASE token of web/tokens.css for both modes, and overrides the derived tokens whose 10-15 % tints
+ * would fall under AAA (level words, guides, controls, knock-on shapes).
+ * WHY borders and guides are drawn in full ink: separation here comes from lines, not from tinted surfaces. */
+[data-skin="bare-1"][data-mode="light"] {
+  --io-bg: #ffffff;
+  --io-surface: #ffffff;
+  --io-surface-2: #ffffff;
+  --io-surface-alt: #ffffff;
+  --io-field: #ffffff;
+  --io-popover: #ffffff;
+  --io-chrome-bg: #000000;
+  --io-chrome-text: #ffffff;
+
+  --io-text: #000000;
+  --io-text-strong: #000000;
+  --io-muted: #262626;
+  --io-faint: #333333;
+  --io-off: #595959;
+  --io-icon: #000000;
+
+  --io-border: #000000;
+  --io-border-soft: #6b6b6b;
+
+  --io-hover: #f0f0f0;
+  --io-selected: #e3e3e3;
+  --io-selected-line: #000000;
+  --io-accent: #0033cc;
+  --io-accent-text: #0029a3;
+  --io-focus: #0033cc;
+
+  --io-warn: #8a4b00;
+  --io-error: #b3000c;
+  --io-stale: #3d3d3d;
+  --io-unknown: #5a1f9e;
+  --io-on-status: #ffffff;
+  --io-ok: #005c1f;
+  --io-info: #0033cc;
+  --io-shadow: #000000;
+
+  --io-font-ui: system-ui, -apple-system, "Segoe UI", Ubuntu, Inter, sans-serif;
+  --io-font-mono: ui-monospace, "DejaVu Sans Mono", "Ubuntu Mono", monospace;
+  --io-font-display: system-ui, -apple-system, "Segoe UI", Ubuntu, Inter, sans-serif;
+  --io-font-size: 14px;
+
+  --io-radius: 4px;
+  --io-radius-sm: 2px;
+  --io-radius-lg: 6px;
+  --io-row-h: 30px;
+  --io-indent: 16px;
+  --io-focus-width: 3px;           /* WCAG 2.4.13: a thicker focus ring */
+  --io-link-decoration: underline; /* links never by colour alone (WCAG 1.4.1) */
+
+  --io-warn-text: #6b3a00;
+  --io-error-text: #8f000a;
+  --io-stale-text: #262626;
+  --io-unknown-text: #4b1a85;
+  --io-ok-text: #004d1a;
+  --io-info-text: #002b99;
+  --io-knock: #595959;
+  --io-guide: #8c8c8c;
+  --io-guide-strong: #000000;
+  --io-control: #ffffff;
+  --io-control-hover: #f0f0f0;
+  --io-pressed: #d9d9d9;
+  --io-mark: #ffe94d;
+}
+
+[data-skin="bare-1"][data-mode="dark"] {
+  --io-bg: #000000;
+  --io-surface: #000000;
+  --io-surface-2: #000000;
+  --io-surface-alt: #000000;
+  --io-field: #000000;
+  --io-popover: #000000;
+  --io-chrome-bg: #000000;
+  --io-chrome-text: #ffffff;
+
+  --io-text: #ffffff;
+  --io-text-strong: #ffffff;
+  --io-muted: #e6e6e6;
+  --io-faint: #d4d4d4;
+  --io-off: #a3a3a3;
+  --io-icon: #ffffff;
+
+  --io-border: #ffffff;
+  --io-border-soft: #8c8c8c;
+
+  --io-hover: #1a1a1a;
+  --io-selected: #2e2e2e;
+  --io-selected-line: #ffffff;
+  --io-accent: #ffff00;
+  --io-accent-text: #8cc8ff;
+  --io-focus: #ffff00;
+
+  --io-warn: #ffb000;
+  --io-error: #ff6b6b;
+  --io-stale: #c8c8c8;
+  --io-unknown: #d0a8ff;
+  --io-on-status: #000000;
+  --io-ok: #5ce08a;
+  --io-info: #8cc8ff;
+  --io-shadow: #000000;
+
+  --io-font-ui: system-ui, -apple-system, "Segoe UI", Ubuntu, Inter, sans-serif;
+  --io-font-mono: ui-monospace, "DejaVu Sans Mono", "Ubuntu Mono", monospace;
+  --io-font-display: system-ui, -apple-system, "Segoe UI", Ubuntu, Inter, sans-serif;
+  --io-font-size: 14px;
+
+  --io-radius: 4px;
+  --io-radius-sm: 2px;
+  --io-radius-lg: 6px;
+  --io-row-h: 30px;
+  --io-indent: 16px;
+  --io-focus-width: 3px;           /* WCAG 2.4.13: a thicker focus ring */
+  --io-link-decoration: underline; /* links never by colour alone (WCAG 1.4.1) */
+
+  --io-warn-text: #ffc24d;
+  --io-error-text: #ffadad;
+  --io-stale-text: #e0e0e0;
+  --io-unknown-text: #ddc0ff;
+  --io-ok-text: #7ee8a3;
+  --io-info-text: #a8d5ff;
+  --io-knock: #a3a3a3;
+  --io-guide: #737373;
+  --io-guide-strong: #ffffff;
+  --io-control: #000000;
+  --io-control-hover: #1a1a1a;
+  --io-pressed: #333333;
+  --io-mark: #5c4d00;
+}
