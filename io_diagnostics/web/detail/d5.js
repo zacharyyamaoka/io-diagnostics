@@ -4,10 +4,12 @@
 // rows); a status row pushes that diagnostic's own page (message, health bar and message history over the app-wide
 // window, every measurement's trend, values, metadata, what_to_check); a measurement pushes its trend; a child row
 // pushes that entity. A breadcrumb at the top (Computer › fdcanusb · 0607623A › moteus-c1 · CAN 21 › firmware) and
-// Back (the ‹ button, Esc, Backspace) walk it back up. The utilities sit behind one quiet "Maintenance" row.
-// WHY entity levels are real selections (data-go) and only the levels below an entity are this file's own stack: the
-// tree keeps showing where you are, and the page's utility flow (which runs on the selected entity) keeps working on
-// the Maintenance level. The pushed stack is module state, so the page's 1 s refresh redraws it in place.
+// Back (the ‹ button, Esc, Backspace) walk it back up. The utilities are the page's, in the entity header's
+// Utilities ▾ (round 3.5); the expected setup sits behind one quiet row.
+// WHY entity levels are real selections (data-go) and the levels below an entity are the page's drill (round 3.5:
+// ctx.diagnostic {name, path, measurement} for a diagnostic and its measurement, ctx.page for About / Events / Link
+// health / Expected setup): every level is a browser-history entry, so the mouse's back / forward buttons walk the same
+// trail as the breadcrumb, and the tree keeps showing where you are. The history comes from the page's shared cache.
 'use strict';
 (function (root) {
   const doc = root.document;
@@ -113,8 +115,9 @@
   }
 
   // -------------------------------------------------------------------- fetch cache ----
-  // The layout reads the history API itself (ctx carries no history): one cache entry per URL, refreshed at most every
-  // `everyMs`; a finished fetch redraws the pane. Entries nobody asked for in a minute are dropped.
+  // A folded part's /api/v1/node is read here: one cache entry per URL, refreshed at most every `everyMs`; a finished
+  // fetch redraws the pane. Entries nobody asked for in a minute are dropped. The history and the health bars are the
+  // page's shared cache (ctx.history, ctx.bar); these helpers hand back their data.
   const cache = new Map();
   function want(url, everyMs) {
     const now = Date.now();
@@ -136,22 +139,33 @@
   }
   const q = encodeURIComponent;
   const nodeOf = (path) => want(`${API}/node?path=${q(path)}`, 2500);
-  const historyOf = (path) => want(`${API}/history?path=${q(path)}`, 5000);
-  const statusHistory = (path, name) => want(`${API}/history?path=${q(path)}&status=${q(name)}`, 2000);
-  const barOf = (path, bins = BINS) => want(`${API}/history/bar?path=${q(path)}&bins=${bins}`, 3000);
+  const historyOf = (path) => last.ctx.history(path, { everyMs: 5000 }).data;
+  const statusHistory = (path, name) => last.ctx.history(path, { status: name, everyMs: 2000 }).data;
+  const barOf = (path, bins = BINS) => last.ctx.bar(path, bins, { everyMs: 3000 }).data;
 
   // ------------------------------------------------------------------ navigation state ----
-  // trail: the entity paths of the breadcrumb (the last one is the selection); sub: the levels pushed below it
-  // ({kind: diag | metric | maint | about | events | links, path, name, key}); pending: the child a row click is
-  // selecting, so the trail grows by exactly that row even where it is not a canonical descendant.
-  const N = { trail: [], sub: [], owner: null, pending: null, pendingAt: 0, at: '', scroll: new Map() };
+  // trail: the entity paths of the breadcrumb (the last one is the selection); pending: the child a row click is
+  // selecting, so the trail grows by exactly that row even where it is not a canonical descendant. The levels below the
+  // entity are the page's drill: N.sub is derived from ctx on every render ({kind: diag | metric | setup | about |
+  // events | links, path, name, key, label}).
+  const N = { trail: [], sub: [], owner: null, pending: null, pendingAt: 0 };
   let last = null; // {container, ctx}: what the next redraw() draws from
+  const PAGES = { setup: 'Expected setup', about: 'About', events: 'Events', links: 'Link health' };
 
   const active = () => Boolean(last && last.container.isConnected && last.container.querySelector('.d5-root')
     && (!doc.getElementById('detail-layout') || doc.getElementById('detail-layout').value === 'd5'));
   function redraw() {
     if (!active()) return;
-    try { root.IODetailLayouts.d5.render(last.container, last.ctx.detail, last.ctx); } catch (error) { console.error('detail layout d5:', error); }
+    last.ctx.redraw();
+  }
+  // the drill levels below the entity, from the page's drill state
+  function subOf(ctx) {
+    if (ctx.group || !ctx.node) return [];
+    if (ctx.page && PAGES[ctx.page]) return [{ kind: ctx.page, label: PAGES[ctx.page] }];
+    const open = ctx.diagnostic;
+    if (!open) return [];
+    const diag = { kind: 'diag', path: open.path, name: open.name, label: shortName(open.name, ownerName(ctx, open.path)), title: open.name };
+    return open.measurement ? [diag, { kind: 'metric', path: open.path, name: open.name, key: open.measurement, label: open.measurement, title: open.measurement }] : [diag];
   }
 
   // The layers p1 hides (a USB bus, a port, a hub, an interface, a plugin's CAN bus): never a breadcrumb of their own.
@@ -176,13 +190,14 @@
     else if (N.pending === current && N.trail.length) N.trail = [...N.trail, current];
     else N.trail = current.startsWith('group:') ? [current] : chainOf(current, ctx);
     if (N.pending === current) N.pending = null;
-    if (N.owner !== current) { N.sub = []; N.owner = current; }
+    N.owner = current;
   }
-  const levelKey = () => [N.trail[N.trail.length - 1], ...N.sub.map((item) => `${item.kind}:${item.path || ''}:${item.name || ''}:${item.key || ''}`)].join(' › ');
+  // one level down, through the page's drill (one browser-history entry)
   function push(item) {
-    N.sub.push(item);
-    N.scroll.delete(levelKey());
-    redraw();
+    const ctx = last.ctx;
+    if (item.kind === 'diag') ctx.openDiagnostic(item.name, { path: item.path });
+    else if (item.kind === 'metric') ctx.openDiagnostic(item.name, { path: item.path, measurement: item.key });
+    else if (PAGES[item.kind]) ctx.openPage(item.kind);
   }
 
   // ----------------------------------------------------------------------- formatting ----
@@ -275,8 +290,9 @@
       const label = labelFor(path, ctx);
       const own = at === N.trail.length - 1;
       const current = own && !N.sub.length;
-      // the selection's own crumb only pops this file's levels: selecting it again would reload the node
-      const go = own || path.startsWith('group:') ? '' : ` data-go="${esc(path)}"`;
+      // the selection's own crumb (below it a drill level is open) is the selection again: the page closes the drill
+      // and keeps the node loaded
+      const go = path.startsWith('group:') ? '' : ` data-go="${esc(path)}"`;
       return current ? `<span class="d5-crumb cur" title="${esc(titleFor(path, ctx))}">${esc(label)}</span>`
         : `<button class="d5-crumb"${go} data-d5-sub="0" data-d5-crumb="${at}" title="${esc(titleFor(path, ctx))}">${esc(label)}</button>`;
     });
@@ -384,15 +400,14 @@
   }
 
   // The quiet rows at the end: everything that is not the entity's diagnostics, one push away (Zach: "I don't like
-  // having the utilities here front and center").
+  // having the utilities here front and center"; the utilities themselves are the header's Utilities ▾).
   function quietRows(ctx) {
     const rows = [];
     const detail = ctx.detail;
     if (ctx.node) rows.push(['about', 'About', 'identity, connection, parts', '']);
     if (detail && (detail.events.length || detail.faults.length)) rows.push(['events', 'Events', 'this row and below', `${detail.events.length}${detail.faults.length ? ` · ${detail.faults.length} fault${detail.faults.length === 1 ? '' : 's'}` : ''}`]);
     if (ctx.isComputer && ctx.parts.links()) rows.push(['links', 'Link health', 'the computer diagnoses its own wires', '']);
-    const actions = detail ? detail.actions.length : 0;
-    if (detail && (actions || ctx.parts.setup())) rows.push(['maint', 'Maintenance', actions ? `${actions} utilit${actions === 1 ? 'y' : 'ies'}${ctx.parts.setup() ? ' · expected setup' : ''}` : 'expected setup', '']);
+    if (detail && ctx.parts.setup()) rows.push(['setup', 'Expected setup', 'the rig file, never the device', '']);
     if (!rows.length) return '';
     return `<div class="d5-list d5-quiet" role="list">${rows.map(([kind, label, note, count]) => `<button class="d5-row" role="listitem" data-d5-push="${kind}" data-d5-label="${esc(label)}">`
       + `<span class="d5-tx"><span class="d5-nm">${esc(label)}</span><span class="d5-ms">${esc(note)}</span></span>${count ? `<span class="d5-count">${esc(count)}</span>` : ''}${chev}</button>`).join('')}</div>`;
@@ -438,8 +453,7 @@
     const children = childrenFor(ctx);
     const bars = barsFor([node.path, ...children.map((child) => child.entity)], node.path);
     const part = ctx.row && ctx.row.status && ctx.row.status.part;
-    const problem = PROBLEM.has(node.level);
-    const head = `<div class="d-head"><div class="d-title"><svg class="ic"><use href="#i-${esc(node.icon || 'device')}"/></svg><span>${esc(title)}</span><span${problem ? ' data-diagnostic' : ''}>${ctx.h.pill(node.level)}</span></div>`
+    const head = `<div class="d-head"><div class="d-title"><svg class="ic"><use href="#i-${esc(node.icon || 'device')}"/></svg><span>${esc(title)}</span>${ctx.h.pill(node.level)}</div>`
       + `<div class="d-msg">${esc(node.message || '—')}${part && part.text && part.text !== node.message ? `<span class="muted"> · ${esc(part.text)}</span>` : ''}</div>`
       + rollLine(ctx, rows) + healthBlock(ctx, bars) + '</div>';
     const s = ctx.section;
@@ -535,7 +549,7 @@
     const problem = PROBLEM.has(level);
     const onPart = ctx.node && item.path !== ctx.node.path;
     const head = `<div class="d-head"><div class="d5-kicker">${onPart ? `on <a class="link" data-go="${esc(item.path)}">${esc(labelFor(item.path, ctx))}</a> · ` : ''}diagnostic</div>`
-      + `<div class="d-title"><span>${nameHtml(item.name, owner)}</span><span${problem ? ' data-diagnostic' : ''}>${ctx.h.pill(level)}</span></div>`
+      + `<div class="d-title"><span>${nameHtml(item.name, owner)}</span>${ctx.h.pill(level)}</div>`
       + `<div class="d5-msg">${check ? `${esc(check.message || '—')}${check.code ? ` <span class="d5-code">${esc(check.code)}</span>` : ''}` : '<span class="muted">not reported now: its source stopped computing it (the history below keeps what it said)</span>'}</div>`
       + (answer ? `<div class="d5-health"><span class="hl">health</span>${spanBar(status ? status.levels : [], answer.from, answer.to)}${axis(answer.from, answer.to)}</div>` : '')
       + '</div>';
@@ -563,9 +577,8 @@
     const status = answer && answer.statuses[0];
     const series = status && status.measurements.find((m) => m.key === item.key);
     const now = check && check.measurements.find((m) => m.key === item.key);
-    const problem = now && PROBLEM.has(now.level);
     const head = `<div class="d-head"><div class="d5-kicker">${esc(shortName(item.name, ownerName(ctx, item.path)))} · measurement</div>`
-      + `<div class="d-title"><span>${esc(item.key)}</span><span${problem ? ' data-diagnostic' : ''}>${now ? ctx.h.pill(now.level) : ''}</span></div>`
+      + `<div class="d-title"><span>${esc(item.key)}</span>${now ? ctx.h.pill(now.level) : ''}</div>`
       + `<div class="d5-msg">${esc(now ? now.text : series ? withUnit(lastValue(series), series.unit) : '—')}</div></div>`;
     if (!answer) return `${head}<div class="d-body"><div class="d5-empty">loading…</div></div>`;
     const values = series ? numericPoints(series).map(([, v]) => v).filter((v) => v !== null) : [];
@@ -580,12 +593,10 @@
   }
 
   // ------------------------------------------------------------------- quiet levels ----
-  function maintPage(ctx) {
-    const owner = ctx.detail && (ctx.detail.actions[0] || {}).owner;
-    return `<div class="d-head"><div class="d5-kicker">${esc(labelFor(N.owner, ctx))}</div><div class="d-title"><span>Maintenance</span></div></div><div class="d-body">`
-      + ctx.section('utilities', 'Utilities', ctx.parts.utilities(), { right: `${owner ? `${ctx.h.esc(owner)} runs them · ` : ''}every click is a dry run first` })
+  function setupPage(ctx) {
+    return `<div class="d-head"><div class="d5-kicker">${esc(labelFor(N.owner, ctx))}</div><div class="d-title"><span>Expected setup</span></div></div><div class="d-body">`
       + ctx.section('setup', 'Expected setup', ctx.parts.setup(), { right: 'the rig file, never the device' })
-      + (ctx.detail && !ctx.detail.actions.length && !ctx.parts.setup() ? '<div class="d5-empty">Nothing to maintain here.</div>' : '') + '</div>';
+      + (ctx.detail && !ctx.parts.setup() ? '<div class="d5-empty">Not in the expected setup.</div>' : '') + '</div>';
   }
   function aboutPage(ctx) {
     const node = ctx.node;
@@ -626,18 +637,16 @@
       const pushEl = t.closest('[data-d5-push]');
       if (pushEl) {
         own(event);
-        const kind = pushEl.dataset.d5Push;
-        const name = pushEl.dataset.d5Name || '';
-        const path = pushEl.dataset.d5Path || N.owner;
-        const label = kind === 'diag' ? shortName(name, ownerName(last.ctx, path)) : kind === 'metric' ? pushEl.dataset.d5Key : pushEl.dataset.d5Label || kind;
-        if (kind === 'diag') N.sub = []; // a diagnostic sits right below its entity, also from a link on a deeper page
-        push({ kind, path, name, key: pushEl.dataset.d5Key || '', label, title: kind === 'diag' ? name : label });
+        // a diagnostic sits right below its entity, also from a link on a deeper page (openDiagnostic replaces the drill)
+        push({ kind: pushEl.dataset.d5Push, path: pushEl.dataset.d5Path || N.owner, name: pushEl.dataset.d5Name || '', key: pushEl.dataset.d5Key || '' });
         return;
       }
+      // a crumb between the entity and the current level, and the ‹ button: one level up (the browser's Back when the
+      // viewer came down from it). The entity's own crumb carries data-go: the page closes the drill.
       const crumb = t.closest('[data-d5-sub]');
-      if (crumb && !crumb.dataset.go) { own(event); N.sub = N.sub.slice(0, Number(crumb.dataset.d5Sub)); redraw(); return; }
+      if (crumb && !crumb.dataset.go) { own(event); last.ctx.closeDiagnostic(); return; }
       const back = t.closest('[data-d5-back]');
-      if (back && !back.dataset.go) { own(event); N.sub.pop(); redraw(); return; }
+      if (back && !back.dataset.go) { own(event); last.ctx.closeDiagnostic(); return; }
       const child = t.closest('[data-d5-child]');
       if (child) { N.pending = child.dataset.d5Child; N.pendingAt = Date.now(); }
     });
@@ -653,7 +662,8 @@
       if (typing) return;
       const open = (id) => { const element = doc.getElementById(id); return element && !element.hidden; };
       if (open('modal') || open('chip-pop') || open('view-options')) return;
-      if (doc.querySelector('.u4-pal:not([hidden]), .u5-menu:not([hidden])')) return;
+      // the header's Utilities ▾ menu or its dry-run sheet take their Escape first (the page's handler)
+      if (doc.querySelector('.ent-menu, .ent-sheet, .u4-pal:not([hidden]), .u5-menu:not([hidden])')) return;
       const back = last.container.querySelector('[data-d5-back]:not([disabled])');
       if (!back) return;
       const table = doc.getElementById('main') && doc.getElementById('main').classList.contains('v-table');
@@ -668,7 +678,7 @@
   root.IODetailLayouts = root.IODetailLayouts || {};
   root.IODetailLayouts.d5 = {
     name: 'Drill',
-    description: 'Computer → entity → diagnostic, pushed inside the pane (Finder columns, iOS Settings): the entity\'s status table and its children as rows; a status opens its own page (message, health bar and history, every measurement\'s trend, values, metadata, what to check); breadcrumb + Esc / Backspace go back; utilities behind a quiet Maintenance row.',
+    description: 'Computer → entity → diagnostic, pushed inside the pane (Finder columns, iOS Settings): the entity\'s status table and its children as rows; a status opens its own page (message, health bar and history, every measurement\'s trend, values, metadata, what to check); breadcrumb + Esc / Backspace (and the browser\'s back / forward) go back; the expected setup behind a quiet row.',
     order: 5,
     render(container, detail, ctx) {
       injectStyle();
@@ -677,22 +687,21 @@
       sweep();
       if (!ctx.group && !ctx.node) { ctx.draw(`${ctx.parts.head()}<div class="d-body"><div class="muted">loading…</div></div>`); return; }
       const current = ctx.group ? `group:${ctx.group.key}` : ctx.node.path;
-      if (N.at) N.scroll.set(N.at, container.scrollTop);
       syncTrail(current, ctx);
+      N.sub = subOf(ctx);
       const top = N.sub[N.sub.length - 1];
       let body;
       if (ctx.group) body = groupPage(ctx);
       else if (!top) body = entityPage(ctx);
       else if (top.kind === 'diag') body = diagPage(ctx, top);
       else if (top.kind === 'metric') body = metricPage(ctx, top);
-      else if (top.kind === 'maint') body = maintPage(ctx);
+      else if (top.kind === 'setup') body = setupPage(ctx);
       else if (top.kind === 'about') body = aboutPage(ctx);
       else if (top.kind === 'events') body = eventsPage(ctx);
       else if (top.kind === 'links') body = linksPage(ctx);
       else body = entityPage(ctx);
+      // the scroll position of each level is the page's (it restores it on back / forward)
       ctx.draw(`<div class="d5-root" data-d5-level="${N.sub.length ? esc(top.kind) : 'entity'}">${crumbsHtml(ctx)}${body}</div>`);
-      const key = levelKey();
-      if (key !== N.at) { container.scrollTop = N.scroll.get(key) || 0; N.at = key; }
     },
   };
 })(typeof window !== 'undefined' ? window : globalThis);

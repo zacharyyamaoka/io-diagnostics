@@ -11,13 +11,13 @@
     var html = document.documentElement, skin = null, mode = null;
     try { skin = localStorage.getItem('io-diagnostics.skin'); mode = localStorage.getItem('io-diagnostics.mode'); } catch (_) {}
     var dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-    html.dataset.skin = skin || 'contrast';
+    html.dataset.skin = skin || 'shadcn';
     html.dataset.mode = mode === 'light' || mode === 'dark' ? mode : (dark ? 'dark' : 'light');
   })();
 </script>
 <!-- tokens first, then the default skin (other skins load from skins/index.json), then the page and the tree styles -->
 <link rel="stylesheet" href="tokens.css">
-<link rel="stylesheet" href="skins/contrast.css" data-skin-css="contrast">
+<link rel="stylesheet" href="skins/shadcn.css" data-skin-css="shadcn">
 <link rel="stylesheet" href="app.css">
 <!-- The tree styles (window.IOTreeRenderers); the bottom-right cluster switches them live. Linking every stylesheet
      here keeps the renderers from injecting their own (each class family is prefixed: t1-, t2-, v3-, v4-, v5-, t6-,
@@ -95,6 +95,7 @@
         <div class="vo-toggles" id="structure-toggles"></div>
         <div class="vo-sep"></div>
         <label class="vo-row" id="variant-switch" title="Tree style"><span class="vo-label">Tree style</span><select id="tree-variant" aria-label="Tree style"></select></label>
+        <label class="vo-row" id="window-switch" title="History window" hidden><span class="vo-label">History</span><select id="history-window" aria-label="History window"></select></label>
         <label class="vo-row" id="skin-switch" title="Skin"><span class="vo-label">Skin</span><select id="skin" aria-label="Skin"></select></label>
         <div class="vo-row"><span class="vo-label">Mode</span>
           <div class="ctl-seg" id="mode-switch" role="radiogroup" aria-label="Light or dark">
@@ -130,9 +131,14 @@
   <footer class="statusbar">
     <span id="lastmsg">—</span>
     <span class="sb-note">diagnoses passively · a utility runs only after its dry run and your click</span>
-    <!-- TEMPORARY Prototype picker (bottom-right; never a URL flag): the detail layout and the utility menu, live, remembered.
-         Everything else moved into View options (round 3). -->
+    <!-- The skin, at the bottom too (round 3.5: Zach, "please still give me the option to change the skin at the bottom"),
+         then the TEMPORARY Prototype picker (never a URL flag): the detail layout and the utility menu, live, remembered.
+         Everything else lives in View options. -->
     <div class="controls" id="controls">
+      <div class="ctl" id="skin-bar-switch" title="Skin: every skin (View options has the same list)">
+        <span class="ctl-label">Skin</span>
+        <select id="skin-bar" aria-label="Skin (bottom bar)"></select>
+      </div>
       <div class="ctl" id="proto-switch" title="Prototype: switch the detail layout and the utility menu">
         <span class="ctl-label">Prototype</span>
         <select id="detail-layout" aria-label="Detail layout" title="Detail layout"></select>

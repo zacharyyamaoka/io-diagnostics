@@ -24,11 +24,19 @@
 //   expected     (a second F1 server with its own temporary rig file, --expected) the rig row first with its counts and
 //                what is missing, the retired 28B3A25D a warn row with its reason, the Expected setup card's Retire…
 //                (reason first, Cancel writes nothing), Expect what's here and Forget rewriting the file
-//   round 3      (docs/round3-brief-2026-10-23.md) defaults skin contrast ("Bare Metal"), layout d0, menu u0, sort
+//   round 3      (docs/round3-brief-2026-10-23.md) defaults skin contrast ("Bare Metal"; shadcn since round 3.5), layout d0, menu u0, sort
 //                status; Group by's list and a remembered p3 falling back; u0's description tooltip (hover + keyboard
 //                focus), danger as a plain word, the greyed busy row with its quiet line; the panes: each sash dragged,
 //                reloaded and measured, minimum widths, double-click reset, the Table's inspector folding / unfolding /
 //                pinning (`]`, the toolbar toggle). Selects live in the View options popover: pick() opens it.
+//   round 3.5    (Zach, 2026-10-23) the default skin is stock shadcn/ui (statically linked, light / dark from the OS) and a
+//                skin switcher is back in the bottom-right bar, listing every skin; the utilities live ONLY in the entity
+//                header's Utilities ▾ (the same place on every layout and entity), a dry run reads in a sheet under it,
+//                a run is one quiet line under the header that becomes its result (Details ▸), lands in Activity and
+//                re-reads the entity; a failure is the one coloured (diagnostic-level) line; every drill-down is a
+//                browser-history entry (page.goBack / goForward and the mouse's back / forward buttons, as CDP mouse
+//                events); the Computer opens in d4 unless the Prototype picker says otherwise; the history window in
+//                View options (POST /api/v1/settings, page-only, on a server with its own config dir).
 // Screenshots: reports/media/round2/integration-*.png, expected-*.png, reports/media/round3/a-*-<light|dark>.png.
 // Exits 1 on any failed check. Nothing opens a CAN adapter.
 'use strict';
@@ -56,8 +64,8 @@ function check(name, ok, detail = '') {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name.padEnd(34)} ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`);
 }
 
-function startServer(fixture, extra = []) {
-  const env = { ...process.env };
+function startServer(fixture, extra = [], extraEnv = {}) {
+  const env = { ...process.env, ...extraEnv };
   delete env.VIRTUAL_ENV;
   const child = spawn(UV, ['run', '--project', ROOT, 'python', path.join(ROOT, 'io_diagnostics', 'cli.py'),
     'serve', '--fixture', fixture, '--port', '0', '--no-udev', ...extra], { cwd: ROOT, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -99,6 +107,13 @@ async function open(page, base, sel) {
   await page.waitForTimeout(300);
 }
 
+// Round 3.5: the utilities live in the entity header's Utilities ▾ menu (drawn by the page for every layout).
+async function utilities(page) {
+  await page.waitForSelector('#ent-util-btn:not([disabled])', { timeout: 15000 });
+  if (!(await page.$('.ent-menu'))) await page.click('#ent-util-btn');
+  await page.waitForSelector('.ent-menu [data-util]', { timeout: 5000 });
+}
+
 // ----------------------------------------------------------------------------------- ExpectedAbsent ----
 function injectAbsent(state) {
   const node = {
@@ -128,6 +143,7 @@ const ABSENT_DETAIL = {
 
 async function main() {
   fs.mkdirSync(SHOTS, { recursive: true });
+  fs.mkdirSync(ROUND3, { recursive: true });
   const { chromium } = require(PLAYWRIGHT);
   const browser = await chromium.launch({ executablePath: CHROME, headless: true });
   const server = await startServer('F1');
@@ -145,10 +161,52 @@ async function main() {
       await open(page, base);
       const fresh = await page.evaluate(() => ({ structure: S.structure, variant: S.variant, skin: document.documentElement.dataset.skin, mode: document.documentElement.dataset.mode, pref: S.mode,
         layout: S.layout, menu: S.menu, sort: S.sort }));
-      // round 3: the default skin is Bare Metal (contrast); the layout d0 and the menu u0; sort by status
-      check(`defaults (OS ${scheme})`, fresh.structure === 'p1' && fresh.variant === 'v6' && fresh.skin === 'contrast' && fresh.mode === scheme && fresh.pref === 'auto'
+      // round 3.5: the default skin is stock shadcn/ui (round 3 had Bare Metal = contrast); the layout d0 (the first
+      // selection is the attention line's CAN bus, not the Computer) and the menu u0; sort by status
+      check(`defaults (OS ${scheme})`, fresh.structure === 'p1' && fresh.variant === 'v6' && fresh.skin === 'shadcn' && fresh.mode === scheme && fresh.pref === 'auto'
         && fresh.layout === 'd0' && fresh.menu === 'u0' && fresh.sort === 'status', fresh);
+      // round 3.5: shadcn is the default skin, in light and dark following the OS (above), linked by index.html itself
+      {
+        const surface = await page.evaluate(() => {
+          const probe = document.createElement('i');
+          probe.style.color = 'var(--io-surface)';
+          document.body.appendChild(probe);
+          const rgb = getComputedStyle(probe).color.match(/[\d.]+/g).slice(0, 3).map(Number);
+          probe.remove();
+          return { rgb, lum: (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]) / 255 };
+        });
+        check(`skin: shadcn ${scheme} follows the OS`, scheme === 'dark' ? surface.lum < 0.25 : surface.lum > 0.85, surface);
+        await page.mouse.move(5, 995);
+        await page.screenshot({ path: path.join(ROUND3, `r35-shadcn-${scheme}.png`) });
+      }
       if (scheme === 'light') {
+        const html = await (await fetch(`${base}/`)).text();
+        const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'io_diagnostics', 'web', 'skins', 'index.json'), 'utf8'));
+        const readySkins = manifest.skins.filter((skin) => skin.ready).map((skin) => skin.id);
+        check('skin: shadcn is the default, linked statically', manifest.default === 'shadcn' && /<link rel="stylesheet" href="skins\/shadcn\.css" data-skin-css="shadcn">/.test(html)
+          && /html\.dataset\.skin = skin \|\| 'shadcn'/.test(html), { default: manifest.default });
+        // the skin switcher is back in the bottom-right bar: every ready skin (shadcn/ui, Pretty, the Bare Metal family, the rest)
+        const bar = await page.evaluate(() => {
+          const select = document.getElementById('skin-bar');
+          const rect = select.getBoundingClientRect();
+          return { groups: [...select.children].map((el) => (el.tagName === 'OPTGROUP' ? `${el.label}:${[...el.children].map((o) => o.value).join('+')}` : el.value)),
+            ids: [...select.options].map((o) => o.value), value: select.value, inControls: Boolean(select.closest('#controls .ctl')),
+            right: Math.round(innerWidth - rect.right), bottom: Math.round(innerHeight - rect.bottom), width: Math.round(rect.width) };
+        });
+        check('skin: the bottom bar lists every skin', bar.inControls && bar.width > 0 && bar.bottom < 40 && bar.right < 420 && bar.value === 'shadcn'
+          && bar.ids.length === readySkins.length && readySkins.every((id) => bar.ids.includes(id)) && bar.groups[0] === 'shadcn' && bar.groups[1] === 'notion'
+          && bar.groups[2] === 'Bare Metal:contrast+bare-1+bare-2+bare-3+bare-4+bare-5' && /^More skins:/.test(bar.groups[3] || ''), bar);
+        const box = await page.locator('#controls').boundingBox();
+        await page.screenshot({ path: path.join(ROUND3, 'r35-skin-switcher.png'), clip: { x: Math.max(0, box.x - 180), y: box.y - 10, width: Math.min(VIEWPORT.width - Math.max(0, box.x - 180), box.width + 190), height: box.height + 20 } });
+        await page.selectOption('#skin-bar', 'bare-3');
+        await page.waitForTimeout(300);
+        const switched = await page.evaluate(() => ({ skin: document.documentElement.dataset.skin, vo: document.getElementById('skin').value, stored: localStorage.getItem('io-diagnostics.skin') }));
+        await page.reload();
+        await ready(page);
+        const keptBar = await page.evaluate(() => ({ skin: document.documentElement.dataset.skin, bar: document.getElementById('skin-bar').value }));
+        check('skin: the bottom switcher switches, follows View options, is remembered', switched.skin === 'bare-3' && switched.vo === 'bare-3' && switched.stored === 'bare-3'
+          && keptBar.skin === 'bare-3' && keptBar.bar === 'bare-3', { switched, keptBar });
+        await page.evaluate(() => localStorage.removeItem('io-diagnostics.skin'));
         // round 3: p3 left the Group by picker, so a remembered p3 falls back to the default; p2 (Type) is remembered
         await page.evaluate(() => { localStorage.setItem('io-diagnostics.structure', 'p2'); localStorage.setItem('io-diagnostics.skin', 'notion'); });
         await page.reload();
@@ -202,13 +260,13 @@ async function main() {
     check('why: a folded part\'s checklist on its owner', /CAN bus/.test(why.head) && why.lines.length === 4 && /^1\. Motor supply/.test(why.lines[0]), why);
     check('seams: folded layers say Connection (folded)', /28B3A25D CAN bus|Port 1-5/.test(await page.evaluate(() => document.getElementById('detail').textContent)) && Boolean(why.connection), why.connection);
 
-    // ---- utilities on CAN 15: grouping, icons, the dry run of a moves action, its modal
+    // ---- utilities on CAN 15: grouping, icons, the dry run of a moves action, its modal (round 3.5: in the header's menu)
     await open(page, base, CAN15);
-    await page.waitForSelector('.sec.utilities .urow');
+    await utilities(page);
     const card = await page.evaluate(() => {
-      const groups = [...document.querySelectorAll('.sec.utilities .ugroup')].map((group) => ({ id: group.className.replace('ugroup ugroup-', ''),
+      const groups = [...document.querySelectorAll('.ent-menu .ugroup')].map((group) => ({ id: group.className.replace('ugroup ugroup-', ''),
         names: [...group.querySelectorAll('[data-util]')].map((button) => button.dataset.util) }));
-      const rows = [...document.querySelectorAll('.sec.utilities .u-btn')].map((button) => ({ name: button.dataset.util, icon: button.querySelector('svg.u-ic').innerHTML,
+      const rows = [...document.querySelectorAll('.ent-menu .u-btn')].map((button) => ({ name: button.dataset.util, icon: button.querySelector('svg.u-ic').innerHTML,
         title: button.querySelector('.u-title').textContent, desc: button.querySelector('.u-desc').textContent }));
       const motion = document.querySelector('.ugroup-motion');
       const style = motion && getComputedStyle(motion);
@@ -235,24 +293,33 @@ async function main() {
     await page.waitForTimeout(400);
     const onFocus = await tip();
     await page.evaluate(() => document.activeElement.blur());
-    const words = await page.evaluate(() => [...document.querySelectorAll('.sec.utilities .u-btn .danger')].map((el) => `${el.textContent}:${getComputedStyle(el).backgroundColor}`));
+    const words = await page.evaluate(() => [...document.querySelectorAll('.ent-menu .u-btn .danger')].map((el) => `${el.textContent}:${getComputedStyle(el).backgroundColor}`));
     check('utilities: description is a hover / focus tooltip', !atRest && onHover && onFocus, { atRest, onHover, onFocus });
     check('utilities: danger is a plain word', words.length > 0 && words.every((word) => /^(interrupts|changes|moves):rgba\(0, 0, 0, 0\)$/.test(word)), words);
     check('utilities: motion set apart', card.motionBorder >= 1 && card.motionGap >= 6, { border: card.motionBorder, gap: card.motionGap });
-    await page.click('[data-util="calibrate"]');
-    await page.waitForSelector('.u-panel .u-cmd', { timeout: 15000 });
+    await page.mouse.move(5, 995);
     await page.waitForTimeout(300);
+    const detail = await page.locator('#inspector').boundingBox();
+    await page.screenshot({ path: path.join(ROUND3, 'r35-header-menu.png'), clip: detail });
+    await page.click('[data-util="calibrate"]');
+    await page.waitForSelector('.ent-sheet .u-panel .u-cmd', { timeout: 15000 });
+    await page.waitForTimeout(300);
+    // round 3.5: the dry run reads in a small sheet under the button (the menu closes); its steps and the plugin
+    // command line are behind "How it runs ▸"
     const dry = await page.evaluate(() => ({ cmd: document.querySelector('.u-panel .u-cmd').textContent, steps: document.querySelectorAll('.u-panel .u-steps li').length,
       pre: [...document.querySelectorAll('.u-panel .pre li')].map((li) => li.textContent), confirm: (document.querySelector('.u-panel .confirm') || {}).textContent,
-      argv: document.querySelector('.u-panel .u-argv').textContent, button: (document.querySelector('[data-util-run]') || {}).textContent }));
+      argv: document.querySelector('.u-panel .u-argv').textContent, button: (document.querySelector('[data-util-run]') || {}).textContent,
+      cancel: (document.querySelector('.ent-sheet [data-util-close]') || {}).textContent, menu: Boolean(document.querySelector('.ent-menu')),
+      under: (() => { const b = document.getElementById('ent-util-btn').getBoundingClientRect(); const s = document.querySelector('.ent-sheet').getBoundingClientRect(); return Math.round(s.top - b.bottom) >= 0 && Math.round(s.top - b.bottom) <= 8 && Math.abs(Math.round(s.right - b.right)) <= 1; })() }));
     check('dry run: what will run', dry.cmd === 'moteus_tool --target 15 --calibrate --fdcanusb /dev/serial/by-id/usb-mjbots_fdcanusb_272813EF-if00'
       && dry.steps === 1 && dry.pre.some((text) => /joint is free to spin/.test(text) && /person confirms/.test(text)) && /rotor spins/.test(dry.confirm)
       && /--action calibrate --node 15 --dry-run$/.test(dry.argv) && dry.button === 'Continue…', dry);
+    check('dry run: a sheet under the button, Run / Cancel', dry.under && !dry.menu && dry.cancel === 'Cancel', dry);
     check('dry run: one POST, dry_run, from the page', posts.length === 1 && posts[0].body.dry_run === true && posts[0].headers['x-io-diagnostics'] === 'ui', posts.map((p) => p.body));
-    const detail = await page.locator('#detail').boundingBox();
-    const showActive = async () => { await page.evaluate(() => document.querySelector('.urow.active').scrollIntoView({ block: 'end' })); await page.mouse.move(5, 995); await page.waitForTimeout(300); };
-    await showActive();
+    await page.mouse.move(5, 995);
+    await page.waitForTimeout(300);
     await page.screenshot({ path: path.join(SHOTS, 'integration-utilities-dry-run.png'), clip: detail });
+    await page.screenshot({ path: path.join(ROUND3, 'r35-dry-run-sheet.png'), clip: detail });
     await page.click('[data-util-run]');
     await page.waitForSelector('#modal:not([hidden]) .modal', { timeout: 5000 });
     const modal = await page.evaluate(() => ({ danger: document.querySelector('#modal .danger').textContent, words: document.querySelector('#modal .m-danger').textContent,
@@ -268,48 +335,95 @@ async function main() {
     await page.waitForTimeout(200);
     const enabled = await page.evaluate(() => !document.querySelector('#modal [data-util-confirm]').disabled);
     await page.click('#modal [data-util-confirm]');
-    await page.waitForSelector('.u-panel .u-result', { timeout: 20000 });
-    const moved = await page.evaluate(() => ({ head: document.querySelector('.u-panel .u-result-h').textContent, records: document.querySelector('.u-panel .u-records').textContent,
-      modal: document.getElementById('modal').hidden }));
-    check('moves: ticked, pressed, the fixture answers', enabled && posts.length === 2 && posts[1].body.token && !('dry_run' in posts[1].body) && moved.modal
+    // round 3.5: the result is the line under the header (Details ▸ opens its records), not a panel
+    await page.waitForSelector('.ent-run.ok, .ent-run.fail', { timeout: 20000 });
+    await page.click('[data-run-details]');
+    await page.waitForSelector('.ent-run-details .u-records');
+    const moved = await page.evaluate(() => ({ line: document.querySelector('.ent-run').textContent, records: document.querySelector('.ent-run-details .u-records').textContent,
+      modal: document.getElementById('modal').hidden, sheet: Boolean(document.querySelector('.ent-sheet')) }));
+    check('moves: ticked, pressed, the fixture answers', enabled && posts.length === 2 && posts[1].body.token && !('dry_run' in posts[1].body) && moved.modal && !moved.sheet
       && /ActionCompleted/.test(moved.records) && /nothing ran/.test(moved.records), { enabled, run: posts[1] && posts[1].body, moved });
+    await page.click('[data-run-details]');
 
-    // ---- a query: one more click, the result inline
+    // ---- a query: one more click, then the quiet run line under the header and its result (round 3.5)
     await open(page, base, ADAPTER);
-    await page.waitForSelector('[data-util="check_comms"]');
-    const adapterGroups = await page.evaluate(() => [...document.querySelectorAll('.sec.utilities .ugroup')].map((group) => group.className.replace('ugroup ugroup-', '')));
+    await utilities(page);
+    const adapterGroups = await page.evaluate(() => [...document.querySelectorAll('.ent-menu .ugroup')].map((group) => group.className.replace('ugroup ugroup-', '')));
     check('utilities: checks come first', adapterGroups[0] === 'checks' && adapterGroups.join() === 'checks,maintenance', adapterGroups);
     await page.click('[data-util="check_comms"]');
     await page.waitForSelector('[data-util-run]');
     const runLabel = await page.textContent('[data-util-run]');
-    // round 3: the run is held 2.6 s at the network so the busy state can be read: the button greys out with one quiet
-    // line under its title, no live output anywhere
+    // the run is held 2.6 s at the network so the running state can be read: one quiet muted line under the header
+    // ("Checking communication on fdcanusb · 272813EF… N s"), the sheet gone, no live output, no other modal; in the
+    // menu its row greys out
     await page.route('**/api/v1/act', async (route) => {
       if (!JSON.parse(route.request().postData() || '{}').dry_run) await new Promise((resolve) => setTimeout(resolve, 2600));
       await route.continue();
     });
+    const nodeAfter = [];
+    page.on('request', (request) => { if (request.url().includes(`/api/v1/node?path=${encodeURIComponent(ADAPTER)}`)) nodeAfter.push(Date.now()); });
     await page.click('[data-util-run]');
     await page.waitForTimeout(1400);
     const busy = await page.evaluate(() => {
-      const button = document.querySelector('[data-util="check_comms"]');
-      const row = button.closest('.urow');
-      return { disabled: button.disabled, busy: row.classList.contains('busy'), line: (row.querySelector('.u-busy') || {}).textContent || '',
-        title: getComputedStyle(row.querySelector('.u-title')).color, muted: getComputedStyle(document.documentElement).getPropertyValue('--io-muted').trim(),
-        stream: document.querySelectorAll('.u-panel .u-tail, .u-panel .u-records').length, foot: (document.querySelector('.u-panel .u-foot') || {}).textContent || '' };
+      const line = document.querySelector('.ent-run.running');
+      const head = document.querySelector('#detail .d-head');
+      const color = (token) => { const probe = document.createElement('i'); probe.style.color = `var(${token})`; document.body.appendChild(probe); const c = getComputedStyle(probe).color; probe.remove(); return c; };
+      return { line: line ? line.textContent : '', under: Boolean(line && head && head.nextElementSibling === line), diagnostic: Boolean(line && line.hasAttribute('data-diagnostic')),
+        color: line ? getComputedStyle(line.querySelector('.ent-run-t')).color : '', muted: color('--io-muted'),
+        sheet: Boolean(document.querySelector('.ent-sheet')), modal: !document.getElementById('modal').hidden,
+        stream: document.querySelectorAll('#detail .u-tail, #detail .u-records').length };
     });
-    check('busy: greyed, one quiet line, no live output', busy.disabled && busy.busy && /^Checking communication… \d+ s$/.test(busy.line) && busy.stream === 0
-      && !/Run|Close/.test(busy.foot), busy);
-    await page.waitForSelector('.u-panel .u-result.ok', { timeout: 20000 });
+    await page.screenshot({ path: path.join(ROUND3, 'r35-progress-line.png'), clip: detail });
+    await page.click('#ent-util-btn');
+    const greyed = await page.evaluate(() => { const button = document.querySelector('.ent-menu [data-util="check_comms"]'); const row = button.closest('.urow');
+      return { disabled: button.disabled, busy: row.classList.contains('busy'), line: (row.querySelector('.u-busy') || {}).textContent || '' }; });
+    await page.keyboard.press('Escape');
+    check('running: one quiet line under the header, no live output', /^Checking communication on fdcanusb · 272813EF… \d+ s$/.test(busy.line) && busy.under && !busy.diagnostic
+      && busy.color === busy.muted && !busy.sheet && !busy.modal && busy.stream === 0, busy);
+    check('running: its menu row greys out', greyed.disabled && greyed.busy && /^Checking communication… \d+ s$/.test(greyed.line), greyed);
+    await page.waitForSelector('.ent-run.ok', { timeout: 20000 });
+    const doneAt = Date.now();
     await page.unroute('**/api/v1/act');
     await page.waitForTimeout(300);
-    const query = await page.evaluate(() => ({ head: document.querySelector('.u-panel .u-result-h').textContent, records: document.querySelector('.u-panel .u-records').textContent,
-      modalShown: !document.getElementById('modal').hidden }));
-    check('query: runs with one more click', runLabel === 'Run Check communication' && !query.modalShown && /ActionCompleted/.test(query.records) && posts.length === 4, { runLabel, query, posts: posts.length });
-    await showActive();
-    await page.screenshot({ path: path.join(SHOTS, 'integration-utilities-query-result.png'), clip: detail });
+    const result = await page.evaluate(() => ({ line: document.querySelector('.ent-run.ok').textContent, diagnostic: document.querySelector('.ent-run.ok').hasAttribute('data-diagnostic'),
+      modalShown: !document.getElementById('modal').hidden, details: Boolean(document.querySelector('.ent-run-details')) }));
+    await page.screenshot({ path: path.join(ROUND3, 'r35-result-line.png'), clip: detail });
+    await page.click('[data-run-details]');
+    await page.waitForSelector('.ent-run-details .u-records');
+    const records = await page.evaluate(() => document.querySelector('.ent-run-details').textContent);
+    await page.screenshot({ path: path.join(ROUND3, 'r35-result-details.png'), clip: detail });
+    check('query: runs with one more click, its result is the line', runLabel === 'Run Check communication' && !result.modalShown && /· just now · Details ▸$/.test(result.line)
+      && !result.diagnostic && !result.details && /ActionCompleted/.test(records) && posts.length === 4, { runLabel, result, records: records.slice(0, 160), posts: posts.length });
+    check('query: the entity re-reads its diagnostics at once', nodeAfter.some((at) => at >= doneAt - 400 && at <= doneAt + 600), { doneAt, nodeAfter: nodeAfter.map((at) => at - doneAt) });
+    await page.click('[data-view="activity"]');
+    await page.waitForSelector('.act .ev');
+    const logged = await page.evaluate(() => { const first = document.querySelector('.act .ev'); return { kind: first.querySelector('.kind').textContent, text: first.textContent, go: first.dataset.go }; });
+    check('query: the result lands in Activity', logged.kind === 'utility' && /Check communication: /.test(logged.text) && logged.go === ADAPTER, logged);
+    await page.click('[data-view="tree"]');
+    // a failed run is the one coloured line: diagnostic-level (data-diagnostic, the error shape, --io-error-text)
+    await utilities(page);
+    await page.click('[data-util="check_comms"]');
+    await page.waitForSelector('.ent-sheet [data-util-run]');
+    await page.route('**/api/v1/act', async (route) => {
+      if (JSON.parse(route.request().postData() || '{}').dry_run) return route.continue();
+      return route.fulfill({ status: 403, json: { refused: 'TokenExpired', error: 'the dry run is 400 s old (a token lasts 300 s): click the utility again' } });
+    });
+    const beforeFail = errors.length;
+    await page.click('[data-util-run]');
+    await page.waitForSelector('.ent-run.fail', { timeout: 10000 });
+    await page.unroute('**/api/v1/act');
+    errors.splice(beforeFail, errors.length - beforeFail, ...errors.slice(beforeFail).filter((text) => !/status of 403/.test(text))); // the refusal we injected
+    const fail = await page.evaluate(() => {
+      const line = document.querySelector('.ent-run.fail');
+      const probe = document.createElement('i'); probe.style.color = 'var(--io-error-text)'; document.body.appendChild(probe); const error = getComputedStyle(probe).color; probe.remove();
+      return { text: line.textContent, diagnostic: line.hasAttribute('data-diagnostic'), shape: Boolean(line.querySelector('.shape.lv-error')), color: getComputedStyle(line.querySelector('.ent-run-t')).color, error };
+    });
+    check('a failed run: a diagnostic-level line, the only colour', fail.diagnostic && fail.shape && fail.color === fail.error && /Check communication failed · not run · TokenExpired/.test(fail.text), fail);
+    await page.screenshot({ path: path.join(ROUND3, 'r35-result-failed.png'), clip: detail });
 
     // ---- set_id: the new id in its row gates the dry run; the dry run, the modal and the run all carry it
     await open(page, base, CAN15);
+    await utilities(page);
     await page.waitForSelector('[data-util-row="set_id"] [data-util-newid]');
     const idRow = async () => page.evaluate(() => {
       const row = document.querySelector('[data-util-row="set_id"]');
@@ -339,7 +453,7 @@ async function main() {
     await page.mouse.move(5, 995);
     await page.screenshot({ path: path.join(SHOTS, 'fix-set-id.png'), clip: { x: rowBox.x - 12, y: rowBox.y - 30, width: rowBox.width + 24, height: rowBox.height + 42 } });
     await page.click('[data-util="set_id"]');
-    await page.waitForSelector('[data-util-row="set_id"] .u-panel .u-cmd', { timeout: 15000 });
+    await page.waitForSelector('.ent-sheet .u-panel .u-cmd', { timeout: 15000 });
     await page.waitForTimeout(300);
     const idDry = await page.evaluate(() => ({ cmd: document.querySelector('.u-panel .u-cmd').textContent, confirm: (document.querySelector('.u-panel .confirm') || {}).textContent,
       argv: document.querySelector('.u-panel .u-argv').textContent }));
@@ -351,16 +465,22 @@ async function main() {
     check('set_id: the modal repeats CAN A → CAN B', idModal === 'CAN 15 → CAN 7', idModal);
     await page.screenshot({ path: path.join(SHOTS, 'fix-set-id-modal.png') });
     await page.click('#modal [data-util-confirm]');
-    await page.waitForSelector('[data-util-row="set_id"] .u-panel .u-result', { timeout: 20000 });
-    const idRun = await page.evaluate(() => (document.querySelector('[data-util-row="set_id"] .u-panel .u-records')
-      || document.querySelector('[data-util-row="set_id"] .u-panel .u-result') || {}).textContent);
+    await page.waitForSelector('.ent-run.ok, .ent-run.fail', { timeout: 20000 });
+    await page.click('[data-run-details]');
+    await page.waitForSelector('.ent-run-details');
+    const idRun = await page.evaluate(() => document.querySelector('.ent-run-details').textContent);
     check('set_id: the run carries the dry run\'s new id', posts.length === sent + 2 && posts[sent + 1].body.new_id === 7 && posts[sent + 1].body.token
       && !('dry_run' in posts[sent + 1].body) && /ActionCompleted/.test(idRun), { body: posts[sent + 1] && posts[sent + 1].body, idRun });
-    await page.click('[data-util-again]');
-    await page.waitForSelector('[data-util-row="set_id"] .u-panel .u-cmd', { timeout: 15000 });
+    // round 3.5: a dry run again is the menu again (the sheet has no "Dry run again"); typing another id in the menu closes it
+    await utilities(page);
+    await page.click('[data-util="set_id"]');
+    await page.waitForSelector('.ent-sheet .u-panel .u-cmd', { timeout: 15000 });
+    await utilities(page);
     await page.fill('[data-util-row="set_id"] [data-util-newid]', '9');
     await page.waitForTimeout(300);
-    check('set_id: another new id closes the dry run', await page.evaluate(() => !document.querySelector('[data-util-row="set_id"] .u-panel') && S.util === null), '');
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(200);
+    check('set_id: another new id closes the dry run', await page.evaluate(() => !document.querySelector('.ent-sheet') && S.util === null), '');
 
     // ---- the server refuses anything but the page's dry-run-then-click (the browser logs each 403: expected here)
     const before = errors.length;
@@ -459,11 +579,15 @@ async function main() {
     check('no page errors', errors.length === 0, errors.slice(0, 3).join(' | ') || 'none');
     await context.close();
     await panes(browser, base);
+    await headerEverywhere(browser, base);
+    await navigation(browser, base);
+    await computerDefault(browser, base);
     for (const scheme of ['light', 'dark']) await round3Shots(browser, base, scheme);
   } finally {
     stopServer(server.child);
   }
   try {
+    await historyWindow(browser);
     await expectedSetup(browser);
   } finally {
     await browser.close();
@@ -561,7 +685,8 @@ async function panes(browser, base) {
     pinned.dragged = await width('#inspector');
     pinned.saved = await stored('io-diagnostics.pane.inspector');
     await page.reload();
-    await ready(page);
+    // round 3.5: the URL carries the view (?view=table), so the reload comes back in the Table
+    await ready(page, 'table.grid tbody tr');
     await page.click('[data-view="table"]');
     await settle();
     pinned.reloaded = await width('#inspector');
@@ -585,6 +710,241 @@ async function panes(browser, base) {
   }
 }
 
+// ---- round 3.5: the Utilities ▾ is the shell's, at the same place in every layout's header, and nowhere else ----
+const LAYOUTS = ['d0', 'd1', 'd2', 'd3', 'd4', 'd5'];
+async function headerEverywhere(browser, base) {
+  const context = await browser.newContext({ viewport: VIEWPORT, colorScheme: 'light' });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(String(error)));
+  const seen = [];
+  try {
+    await page.goto(`${base}/`);
+    for (const layout of LAYOUTS) {
+      await page.evaluate((id) => localStorage.setItem('io-diagnostics.detail-layout', id), layout);
+      for (const entity of [CAN15, ADAPTER, 'host']) {
+        await open(page, base, entity);
+        await page.waitForTimeout(700); // the layout's history answers land
+        const at = await page.evaluate(() => {
+          const button = document.getElementById('ent-util-btn');
+          const head = button && button.closest('.d-head');
+          const pane = document.getElementById('detail');
+          const b = button.getBoundingClientRect();
+          const right = pane.getBoundingClientRect().left + pane.clientWidth;
+          return { layout: S.layout, buttons: document.querySelectorAll('#ent-util-btn').length, inHead: Boolean(head), dx: Math.round(right - b.right),
+            dy: head ? Math.round(b.top - head.getBoundingClientRect().top) : null, label: button.textContent.trim(),
+            outside: [...document.querySelectorAll('[data-util], .u-btn, .urow, [data-util-row], .u-panel')].filter((el) => !el.closest('.ent-tools')).length,
+            sections: document.querySelectorAll('#detail .sec.utilities, #detail [data-sec="utilities"]').length };
+        });
+        seen.push({ entity: entity.split('/').slice(-2).join('/'), ...at });
+      }
+      // the menu opens there and holds every utility; still nothing outside it
+      await open(page, base, CAN15);
+      await utilities(page);
+      const menu = await page.evaluate(() => ({ items: document.querySelectorAll('.ent-menu [data-util]').length, actions: S.node.actions.length,
+        outside: [...document.querySelectorAll('[data-util]')].filter((el) => !el.closest('.ent-menu')).length, layout: S.layout }));
+      seen.push({ entity: 'menu', ...menu });
+      if (layout === 'd5' || layout === 'd1') {
+        await page.mouse.move(5, 995);
+        await page.screenshot({ path: path.join(ROUND3, `r35-header-menu-${layout}.png`), clip: await page.locator('#inspector').boundingBox() });
+      }
+    }
+    const rows = seen.filter((item) => item.entity !== 'menu');
+    const menus = seen.filter((item) => item.entity === 'menu');
+    check('header: Utilities ▾ in every layout\'s header', rows.length === 18 && rows.every((item) => item.buttons === 1 && item.inHead && item.label === 'Utilities')
+      && LAYOUTS.every((id) => rows.some((item) => item.layout === id)), rows.map((item) => `${item.layout} ${item.entity}: ${item.inHead ? 'head' : 'NOT in head'}`).join(' · '));
+    check('header: the same place on every layout and entity', rows.every((item) => item.dx === rows[0].dx && item.dy === rows[0].dy) && rows[0].dx === 14 && rows[0].dy === 12,
+      rows.map((item) => `${item.layout} ${item.entity} ${item.dx},${item.dy}`).join(' · '));
+    check('header: the utilities live only there', rows.every((item) => item.outside === 0 && item.sections === 0)
+      && menus.length === 6 && menus.every((item) => item.items === item.actions && item.items >= 5 && item.outside === 0), { rows: rows.filter((item) => item.outside || item.sections), menus });
+    check('header: no page errors', errors.length === 0, errors.slice(0, 3).join(' | ') || 'none');
+  } finally {
+    await context.close();
+  }
+}
+
+// ---- round 3.5: back / forward through the drill-downs (pushState / popstate), and the mouse's own buttons ----
+async function navigation(browser, base) {
+  const context = await browser.newContext({ viewport: VIEWPORT, colorScheme: 'light' });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(String(error)));
+  const now = () => page.evaluate(() => ({ query: decodeURIComponent(location.search).replace(/\+/g, ' '), sel: S.sel, diag: S.drill.diag, m: S.drill.m, view: S.view,
+    title: (document.querySelector('#detail .d-title span') || {}).textContent || '', entityPage: Boolean(document.querySelector('#detail .d1-tab')),
+    level: (document.querySelector('#detail .d5-root') || { dataset: {} }).dataset.d5Level || '' }));
+  const settle = () => page.waitForTimeout(700);
+  // the mouse's back / forward buttons, as real input events through the browser (CDP): Chrome navigates on them
+  const cdp = await context.newCDPSession(page);
+  const mouse = async (button) => {
+    for (const type of ['mousePressed', 'mouseReleased']) {
+      await cdp.send('Input.dispatchMouseEvent', { type, x: 900, y: 700, button, buttons: type === 'mousePressed' ? (button === 'back' ? 8 : 16) : 0, clickCount: 1 });
+    }
+    await settle();
+  };
+  try {
+    await page.goto(`${base}/`);
+    await page.evaluate(() => localStorage.setItem('io-diagnostics.detail-layout', 'd1'));
+    await open(page, base, CAN15);
+    const start = await now();
+    await page.click(`.t6-row[data-t6-path="${ADAPTER}"] .t6-name`);
+    await page.waitForFunction((p) => S.node && S.node.node.path === p && document.querySelector('[data-d1-open]'), ADAPTER, { timeout: 15000 });
+    await settle();
+    const adapter = await now();
+    const name = await page.getAttribute('[data-d1-open]', 'data-d1-open');
+    await page.click(`a.d1-open[data-d1-open="${name}"]`);
+    await settle();
+    const drilled = await now();
+    await page.click('[data-view="table"]');
+    await settle();
+    const table = await now();
+    check('history: each step pushes a URL that says it', start.query === `?sel=${CAN15}&view=tree` && adapter.query === `?sel=${ADAPTER}&view=tree`
+      && drilled.query === `?sel=${ADAPTER}&diag=${name}&view=tree` && drilled.title === name && table.query === `?sel=${ADAPTER}&diag=${name}&view=table`,
+      { start: start.query, adapter: adapter.query, drilled: drilled.query, table: table.query });
+    const back = [];
+    for (let at = 0; at < 3; at += 1) { await page.goBack(); await settle(); back.push(await now()); }
+    check('history: page.goBack() walks view → diagnostic → entity → entity', back[0].view === 'tree' && back[0].diag === name && back[0].title === name
+      && back[1].sel === ADAPTER && !back[1].diag && back[1].entityPage && back[2].sel === CAN15 && !back[2].diag, back.map((item) => `${item.query} [${item.title}]`));
+    const forward = [];
+    for (let at = 0; at < 2; at += 1) { await page.goForward(); await settle(); forward.push(await now()); }
+    check('history: page.goForward() restores the entity, then its diagnostic page', forward[0].sel === ADAPTER && forward[0].entityPage
+      && forward[1].diag === name && forward[1].title === name && forward[1].view === 'tree', forward.map((item) => `${item.query} [${item.title}]`));
+    // the layout's own back link is the browser's Back when the viewer came down from that level: one linear list
+    await page.click('[data-d1-back]:not([data-go])');
+    await settle();
+    const link = await now();
+    await page.goForward();
+    await settle();
+    const relinked = await now();
+    check('history: the layout\'s ← is Back (forward returns)', link.sel === ADAPTER && !link.diag && link.entityPage && relinked.diag === name, { link: link.query, relinked: relinked.query });
+    await mouse('back');
+    const mouseBack = await now();
+    await mouse('forward');
+    const mouseForward = await now();
+    check('history: the mouse\'s back / forward buttons', !mouseBack.diag && mouseBack.sel === ADAPTER && mouseBack.entityPage && mouseForward.diag === name && mouseForward.title === name,
+      { back: mouseBack.query, forward: mouseForward.query });
+    await page.reload();
+    await ready(page);
+    await settle();
+    const reloaded = await now();
+    check('history: a reload lands on the same drill step', reloaded.sel === ADAPTER && reloaded.diag === name && reloaded.title === name, reloaded.query);
+    // a measurement page (d5): diagnostic → measurement → back → back
+    const target = await page.evaluate(async (paths) => {
+      for (const entity of paths) {
+        const node = await (await fetch(`/api/v1/node?path=${encodeURIComponent(entity)}`)).json();
+        const found = (node.checks || []).find((item) => (item.measurements || []).length);
+        if (found) return { entity, name: found.name, key: found.measurements[0].key };
+      }
+      return null;
+    }, [CAN15, ADAPTER, SECOND, `${SECOND}/can`, 'host', `${CAN15}/driver`]);
+    if (!target) check('history: a measurement page', false, 'no check with measurements in F1');
+    else {
+      await page.evaluate(() => localStorage.setItem('io-diagnostics.detail-layout', 'd5'));
+      await open(page, base, target.entity);
+      await page.waitForSelector(`[data-d5-push="diag"][data-d5-name="${target.name}"]`, { timeout: 15000 });
+      await page.click(`[data-d5-push="diag"][data-d5-name="${target.name}"]`);
+      await page.waitForSelector(`[data-d5-push="metric"][data-d5-key="${target.key}"]`, { timeout: 15000 });
+      await page.click(`[data-d5-push="metric"][data-d5-key="${target.key}"]`);
+      await settle();
+      const metric = await now();
+      await page.goBack();
+      await settle();
+      const up1 = await now();
+      await page.keyboard.press('Escape'); // d5's own Back: one level up
+      await settle();
+      const up2 = await now();
+      await page.goForward();
+      await settle();
+      const again = await now();
+      check('history: a measurement page is a step too', metric.level === 'metric' && metric.m === target.key && new RegExp(`&m=${target.key}`).test(metric.query)
+        && up1.level === 'diag' && up1.diag === target.name && !up1.m && up2.level === 'entity' && !up2.diag && again.level === 'diag', { target, metric: metric.query, up1: up1.level, up2: up2.level, again: again.level });
+    }
+    check('history: no page errors', errors.length === 0, errors.slice(0, 3).join(' | ') || 'none');
+  } finally {
+    await context.close();
+  }
+}
+
+// ---- the Computer opens in d4 "Resource monitor" by default; an explicit Prototype pick wins everywhere ----
+async function computerDefault(browser, base) {
+  const context = await browser.newContext({ viewport: VIEWPORT, colorScheme: 'light' });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(String(error)));
+  const state = () => page.evaluate(() => ({ layout: S.layout, picker: document.getElementById('detail-layout').value, d4: Boolean(document.querySelector('#detail .d4-root')),
+    stored: localStorage.getItem('io-diagnostics.detail-layout') }));
+  try {
+    await open(page, base, 'host');
+    await page.waitForSelector('#detail .d4-root', { timeout: 10000 });
+    const host = await state();
+    await page.mouse.move(5, 995);
+    await page.screenshot({ path: path.join(ROUND3, 'r35-computer-d4.png') });
+    await page.click(`.t6-row[data-t6-path="${CAN15}"] .t6-name`);
+    await page.waitForFunction((p) => S.node && S.node.node.path === p, CAN15, { timeout: 15000 });
+    await page.waitForTimeout(400);
+    const other = await state();
+    check('layout: a fresh profile opens the Computer in d4, the rest in d0', host.layout === 'd4' && host.picker === 'd4' && host.d4 && host.stored === null
+      && other.layout === 'd0' && other.picker === 'd0' && !other.d4 && other.stored === null, { host, other });
+    await page.goBack();
+    await page.waitForFunction(() => S.node && S.node.node.path === 'host', null, { timeout: 15000 });
+    await page.selectOption('#detail-layout', 'd2');
+    await page.waitForTimeout(500);
+    await page.reload();
+    await ready(page);
+    await page.waitForTimeout(500);
+    const picked = await state();
+    await page.click(`.t6-row[data-t6-path="${CAN15}"] .t6-name`);
+    await page.waitForFunction((p) => S.node && S.node.node.path === p, CAN15, { timeout: 15000 });
+    await page.waitForTimeout(400);
+    const pickedOther = await state();
+    check('layout: an explicit pick sticks, on the Computer and everywhere', picked.layout === 'd2' && picked.picker === 'd2' && !picked.d4 && picked.stored === 'd2'
+      && pickedOther.layout === 'd2', { picked, pickedOther });
+    check('layout: no page errors', errors.length === 0, errors.slice(0, 3).join(' | ') || 'none');
+  } finally {
+    await context.close();
+  }
+}
+
+// ---- the history window in View options: GET / POST /api/v1/settings (page-only), on a server with its own config dir ----
+async function historyWindow(browser) {
+  const os = require('os');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'io-diagnostics-settings-'));
+  const server = await startServer('F1', [], { IO_DIAGNOSTICS_CONFIG_DIR: dir });
+  const base = server.base;
+  const context = await browser.newContext({ viewport: VIEWPORT, colorScheme: 'light' });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(String(error)));
+  const posts = [];
+  page.on('request', (request) => { if (request.url().endsWith('/api/v1/settings') && request.method() === 'POST') posts.push({ body: JSON.parse(request.postData() || '{}'), headers: request.headers() }); });
+  try {
+    await page.goto(`${base}/`);
+    await page.evaluate(() => localStorage.setItem('io-diagnostics.detail-layout', 'd1'));
+    await open(page, base, ADAPTER);
+    await viewOptions(page);
+    await page.waitForSelector('#window-switch:not([hidden]) #history-window option', { state: 'attached' });
+    const before = await page.evaluate(() => ({ value: document.getElementById('history-window').value, options: [...document.querySelectorAll('#history-window option')].map((o) => o.textContent) }));
+    await page.screenshot({ path: path.join(ROUND3, 'r35-view-options-window.png'), clip: { x: 0, y: 0, width: 900, height: 620 } });
+    await page.selectOption('#history-window', '600');
+    await page.waitForFunction(() => S.settings && S.settings.history_window_s === 600, null, { timeout: 10000 });
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => /−10 min/.test((document.querySelector('#detail .d1-axis') || {}).textContent || ''), null, { timeout: 15000 });
+    const host = await (await fetch(`${base}/api/v1/settings`)).json();
+    const file = fs.existsSync(path.join(dir, 'settings.toml')) ? fs.readFileSync(path.join(dir, 'settings.toml'), 'utf8') : '';
+    await page.reload();
+    await ready(page);
+    await viewOptions(page);
+    const after = await page.evaluate(() => document.getElementById('history-window').value);
+    check('history window: View options sets it for the app', before.value === '900' && before.options.includes('15 min') && posts.length === 1 && posts[0].body.history_window_s === 600
+      && posts[0].headers['x-io-diagnostics'] === 'ui' && host.history_window_s === 600 && host.source === 'page' && /history_window_s = 600/.test(file) && after === '600',
+    { before, posts: posts.map((post) => post.body), host: { value: host.history_window_s, source: host.source }, file: file.trim(), after });
+    check('history window: no page errors', errors.length === 0, errors.slice(0, 3).join(' | ') || 'none');
+  } finally {
+    await context.close();
+    stopServer(server.child);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 // ---- round 3 screenshots for the report: reports/media/round3/a-*.png, light and dark ----
 async function round3Shots(browser, base, scheme) {
   fs.mkdirSync(ROUND3, { recursive: true });
@@ -600,27 +960,30 @@ async function round3Shots(browser, base, scheme) {
     const pop = await page.locator('#view-options').boundingBox();
     await shot('view-options', { x: 0, y: 0, width: Math.min(VIEWPORT.width, pop.x + pop.width + 40), height: pop.y + pop.height + 30 });
     await page.keyboard.press('Escape');
-    const util = async () => { const box = await page.locator('.sec.utilities').boundingBox(); return { x: box.x - 10, y: box.y - 6, width: box.width + 20, height: box.height + 12 }; };
-    await page.evaluate(() => document.querySelector('.sec.utilities').scrollIntoView({ block: 'start' }));
+    // round 3.5: the utilities are the header's Utilities ▾ menu; the shots frame the menu (and the header above it)
+    await utilities(page);
+    const util = async () => { const box = await page.locator('.ent-menu').boundingBox(); return { x: box.x - 10, y: box.y - 46, width: box.width + 20, height: box.height + 56 }; };
+    await page.mouse.move(5, 995);
     await page.waitForTimeout(200);
     await shot('utilities-quiet', await util());
     await page.hover('[data-util="update_firmware"] .u-title');
     await page.waitForTimeout(700);
     const tipBox = await util();
     await shot('utilities-tooltip', { ...tipBox, height: tipBox.height + 60 });
-    // busy: a query held 6 s at the network
+    // busy: a query held 6 s at the network: the quiet line under the header
     await open(page, base, ADAPTER);
     await page.route('**/api/v1/act', async (route) => {
       if (!JSON.parse(route.request().postData() || '{}').dry_run) await new Promise((resolve) => setTimeout(resolve, 6000));
       await route.continue();
     });
+    await utilities(page);
     await page.click('[data-util="check_comms"]');
     await page.waitForSelector('[data-util-run]');
     await page.click('[data-util-run]');
     await page.waitForTimeout(3200);
     await page.mouse.move(5, 995);
-    await shot('utilities-busy', await util());
-    await page.waitForSelector('.u-panel .u-result', { timeout: 20000 });
+    await shot('utilities-busy', await page.locator('#inspector').boundingBox());
+    await page.waitForSelector('.ent-run.ok, .ent-run.fail', { timeout: 20000 });
     await page.unroute('**/api/v1/act');
     await page.click('[data-view="table"]');
     await page.waitForTimeout(500);

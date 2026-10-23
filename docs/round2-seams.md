@@ -11,7 +11,7 @@ touches `app.js`, `app.css`, `tokens.css`, `core.js`, a tree style or the tests.
 |---|---|
 | inline `<script>` in `<head>` | sets `<html data-skin data-mode>` from storage before the first paint |
 | `tokens.css` | the token list (BASE + DERIVED), system-colour fallbacks |
-| `skins/contrast.css` | the default skin ("Bare Metal" since round 3; was Claude), linked statically (no flash); other ready skins load from `skins/index.json` |
+| `skins/shadcn.css` | the default skin (stock shadcn/ui since round 3.5; round 3 had "Bare Metal" = `contrast`, round 2 Claude), linked statically (no flash); other ready skins load from `skins/index.json` |
 | `app.css`, `tree/v1..v6.css` | the page and the tree styles; colours only through tokens |
 | `view/core.js` | `window.IOView` + the registry `window.IOStructures` |
 | `tree/v1..v6.js` | `window.IOTreeRenderers` |
@@ -230,14 +230,18 @@ Picker order: v6 (default), v1, v2, v3, v4, v5.
   (`{structureId: {key: bool}}`); v2 keeps its own `io-diagnostics.tree.v2.open`. Round 3 adds `io-diagnostics.sort`
   (`status|name|change`), `io-diagnostics.pane.tree` / `io-diagnostics.pane.inspector` (px), `io-diagnostics.inspector-pinned`
   (`1|0`), `io-diagnostics.detail-layout`, `io-diagnostics.utility-menu`, `io-diagnostics.detail-sections` (the folded
-  section ids, a JSON list).
+  section ids, a JSON list). Round 3.5 adds `io-diagnostics.detail-sections-open` (the ids of `defaultOpen: false`
+  sections the viewer opened); `io-diagnostics.detail-layout` is written only by an explicit Prototype pick.
 - Controls (round 3): the **View options** popover `#view-options` (opened by `#vo-btn` beside the search box; a click
   outside or Escape closes it) holds `#structure` (Group by), `#sort`, `#structure-toggles [data-opt=<key>]` (switch
-  rows), `#tree-variant`, `#skin` (the manifest's `primary` skins first, the rest in a "More skins" optgroup) and
-  `#mode-switch [data-mode=auto|light|dark]`. The bottom-right `#controls` keeps only the temporary Prototype picker
-  (`#detail-layout`, `#utility-menu`). Never a URL flag. Defaults: structure p1, sort status, tree v6, skin `contrast`
-  ("Bare Metal"), layout d0, menu u0, mode follows the OS. A test opens the popover before `selectOption` (the selects are
-  hidden until then): `tests/test_*.js` have a `pick(page, selector, value)` helper.
+  rows), `#tree-variant`, `#history-window` (round 3.5, in `#window-switch`), `#skin` and `#mode-switch
+  [data-mode=auto|light|dark]`. The bottom-right `#controls` holds `#skin-bar` (round 3.5: the same skin list, kept in
+  step with `#skin`) and the temporary Prototype picker (`#detail-layout`, `#utility-menu`). Both skin pickers list the
+  manifest's `primary` skins first (the default first: shadcn/ui, then Pretty), the `family: "bare-metal"` entries in a
+  "Bare Metal" optgroup, the rest under "More skins". Never a URL flag for a choice (the URL carries only the
+  navigation, §7). Defaults: structure p1, sort status, tree v6, skin `shadcn`, layout d0 (the Computer: d4), menu u0,
+  mode follows the OS. A test opens the popover before `selectOption` (the selects are hidden until then):
+  `tests/test_*.js` have a `pick(page, selector, value)` helper.
 - Panes (round 3): `#main` is `#left` · `#sash` (`role=separator`) · `#inspector` (`.insp-bar` with `#insp-pin`,
   `#insp-close`, then `#detail`). Tree view: the sash sets `--tree-w` (default 470, min 280, the detail keeps 360). Table
   view: it sets `--insp-w` (default 460, min 320, the table keeps 420); the inspector is folded (`#inspector` width 0) until a
@@ -248,19 +252,25 @@ Picker order: v6 (default), v1, v2, v3, v4, v5.
   (`.why-lines > div`, as authored), the others behind `[data-att]`. `S.why` caches each path's checklists from
   `/api/v1/node` (`what_to_check`, `kernel_evidence`). In d0 the detail's first section is `section.sec.why` ("What
   to check") for the selection and its folded problem parts.
-- Utilities (u0, inside d0's `section.sec.utilities`): `.ugroup.ugroup-{checks|maintenance|motion|more}` > `.urow`
-  (`.busy` while asking / running, `.blocked` when not runnable) > `button.u-btn[data-util=<name>]` (icon `svg.u-ic`,
-  `.u-title`, one muted line `.u-busy` or `.u-reason`, the danger word `.danger`, the tooltip `.u-desc[role=tooltip]`);
-  a click dry-runs (`S.util`, `POST /api/v1/act`), the panel `.u-panel` shows `.u-cmd`, `.u-steps`, `.pre` (`li.pre-<state>`),
-  `.confirm`, `.u-argv`; `[data-util-run]` runs a query or opens the modal (`#modal .modal.m-<danger>`, `[data-util-tick]`
-  for moves, `[data-util-confirm]`); while it runs the panel is gone and the row is greyed; the result is `.u-result`.
+- Utilities (round 3.5: only in the entity header's `.ent-tools`, §7; the rows are u0's): `#ent-util-btn` opens
+  `.ent-menu` > `.ugroup.ugroup-{checks|maintenance|motion|more}` > `.urow` (`.busy` while asking / running, `.blocked`
+  when not runnable) > `button.u-btn[data-util=<name>]` (icon `svg.u-ic`, `.u-title`, one muted line `.u-busy` or
+  `.u-reason`, the danger word `.danger`, the tooltip `.u-desc[role=tooltip]`); a click dry-runs (`S.util`, `POST
+  /api/v1/act`) and the sheet `.ent-sheet` shows `.u-panel`: `.u-cmd`, `.pre` (`li.pre-<state>`), `.confirm`, then
+  `[data-sheet-more]` "How it runs ▸" over `.u-how` (`.u-steps`, `.u-argv`, always in the DOM); `[data-util-run]` runs a
+  query or opens the modal (`#modal .modal.m-<danger>`, `[data-util-tick]` for moves, `[data-util-confirm]`),
+  `[data-util-close]` ("Cancel") closes it; while it runs the sheet is gone, the menu row greyed, and `.ent-run.running`
+  is the line under the header; done, `.ent-run.ok|.fail` with `[data-run-details]` over `.ent-run-details`.
 - Detail sections (d0): `section.sec.<id>[data-sec=<id>]` > `h3.sec-h` > `button.sec-t[data-sec-toggle=<id>]` (+ `.right`),
   then `.sec-b` when open. A check is `#detail .check` (`.check-h`, `.msg`, `table.vt`, `.meta`). Link health is the
   `links` section on the host entity (and on a structure's Computer group row); the Activity view is one column
   (`.act .ev`, a diagnostic event `[data-diagnostic].sev-<level>`) with the `[data-act-filter=all|faults]` filter.
 - In-page: `window.IOView`; the page's state `S` is a top-level `const` (reach it as `S` from `page.evaluate`, not
   `window.S`): `S.built` is the last `IOView.build(...)` result the page drew (`rows`, `flat`, `byKey`, `byEntity`,
-  `host`, `columns`, `options`), `S.structure`, `S.skin`, `S.mode`, `S.sel` (entity), `S.selKey` (group row).
+  `host`, `columns`, `options`), `S.structure`, `S.skin`, `S.mode`, `S.sel` (entity), `S.selKey` (group row); round 3.5:
+  `S.drill` (`{diag, dpath, m, page}`), `S.layout` (the layout drawing now), `S.layoutChoice` (the explicit pick or
+  `null`), `S.menuOpen`, `S.util` / `S.runs` (an entity's run kept while another is selected), `S.ran` (the page's runs,
+  drawn atop Activity), `S.settings` (`GET /api/v1/settings`), `S.cache` (the shared history cache).
 - DOM: v6 rows `.t6-row[data-t6-path=<key>]` > `.t6-name`, status `.t6-st > .t6-mark.t6-own|.t6-part > .t6-shape`,
   chevron `.t6-chev` (`.t6-leaf` on leaves); Table rows `table.grid tbody tr[data-key=<key>]` > `td.namecell .row`
   > `.name`, `.note`, `.st > .shape` (+ `.badge`); detail title `.d-title span` (the row's label).
@@ -362,11 +372,16 @@ lane: the page keeps the data, the polling, the selection, the dry-run / confirm
 | `isComputer` | the host entity, or a structure's Computer group row (link health belongs there) |
 | `counts` | `{connection, parts, checks, members}` for section titles |
 | `state`, `activity`, `byPath`, `view` | `/api/v1/state`, `/api/v1/activity`, path → state node, `tree|table` (the Table's inspector is narrower) |
-| `parts.<name>()` | one section's BODY html, `''` when there is nothing to show: `head` (title, level, message, path — not a section), `banners` (knock-on, stale, not connected), `whatToCheck`, `utilities` (the active utility menu), `setup` (Expected setup + its three edits), `status`, `identity`, `connection` (folded transport layers), `parts` (composition), `checks` (every check as `.check`), `faults`, `events`, `links` (link health; `''` unless `isComputer`), `members` (a group row's members) |
-| `section(id, title, body, {right})` | the collapsible section (`section.sec.<id>`, `h3.sec-h` > `button[data-sec-toggle]`); `''` when body is `''`; folded state remembered per id across entities |
-| `isOpen(id)` | whether that section is open |
-| `h` | helpers: `esc`, `icon(name)`, `shape(level, title)` (the status shape; `''` for OK), `pill(level)`, `ago(seconds)`, `kv([[k, v]])` (a key/value grid, values are HTML), `statusMark(row)`, `eventRow(event)`, `checkBlock(check)` |
-| `draw(html)` | write the panel (only what changed) |
+| `parts.<name>()` | one section's BODY html, `''` when there is nothing to show: `head` (title, level, message, path — not a section), `banners` (knock-on, stale, not connected), `whatToCheck`, `setup` (Expected setup + its three edits), `status`, `identity`, `connection` (folded transport layers), `parts` (composition), `checks` (every check as `.check`), `faults`, `events`, `links` (link health; `''` unless `isComputer`), `members` (a group row's members). Round 3.5: no `utilities` part (§7: they live in the header) |
+| `section(id, title, body, {right, defaultOpen})` | the collapsible section (`section.sec.<id>`, `h3.sec-h` > `button[data-sec-toggle]`); `''` when body is `''`; folded / opened state remembered per id across entities; `defaultOpen: false` (round 3.5) starts it folded until the viewer opens it |
+| `isOpen(id, byDefault = true)` | whether that section is open |
+| `h` | helpers: `esc`, `icon(name)`, `shape(level, title)` (the status shape; `''` for OK), `pill(level)` (round 3.5: a problem pill carries `data-diagnostic`), `ago(seconds)`, `kv([[k, v]])` (a key/value grid, values are HTML), `statusMark(row)`, `eventRow(event)`, `checkBlock(check)` |
+| `draw(html)` | write the panel (only what changed); the page adds its own header tools and run line (§7) |
+| `diagnostic`, `page` | (round 3.5) the page-level drill: the open diagnostic `{name, path, measurement}` (`path` = the entity whose check it is: the selection or one of its parts; `measurement` = a key, or `null`), or `null`; `page` = a layout's own sub-page id (d5: `about`, `events`, `links`, `setup`) or `null`. Both `null` on a grouping row |
+| `openDiagnostic(name, {path, measurement, select})`, `openPage(id)`, `closeDiagnostic()` | (round 3.5) one browser-history entry each: open a diagnostic (of `path`, default the selection; `select: true` selects `path` first, as d4's part measurements do), a measurement below it, a sub-page; `closeDiagnostic()` goes one level up (measurement → diagnostic → entity), and IS the browser's Back when the viewer came down from that level |
+| `history(path, {status, everyMs})`, `bar(path, bins = 60, {everyMs})` | (round 3.5) the shared history cache: `/api/v1/history` and `/api/v1/history/bar`, an entry `{data, error, loading, at}` (`data` `null` until the first answer; a failed refresh keeps the last answer and sets `error`); refreshed at most every `everyMs` (3 s) while asked for; a landed answer redraws the detail; cleared when the history window changes |
+| `redraw()` | (round 3.5) draw the detail again now (a layout's own click, a hover scrub) |
+| `settings` | (round 3.5) `GET /api/v1/settings` (`history_window_s`, `source`, `limits`), or `null` |
 
 Page hooks a layout's HTML may use: `[data-go=<entity path>]` selects an entity; `[data-sec-toggle=<id>]` folds a
 section; everything the parts emit carries its own hooks (utilities, setup). Classes: `.d-head`, `.d-body` (the compact
@@ -406,9 +421,82 @@ The flow is the page's and is not optional: a `[data-util=<name>]` click is ALWA
 `dry_run`); Run (a query) and Continue… live in `ctx.panel()`; anything but a query runs only from the confirm modal
 (moves: its `[data-util-tick]` box), with the dry run's token. A menu must render `ctx.panel(action)` for the open
 action and keep set_id's button disabled while `ctx.waiting(action)`. Warn / error colours are reserved for diagnostics:
-danger is a word or an icon (`.danger.<danger>` is neutral in app.css).
+danger is a word or an icon (`.danger.<danger>` is neutral in app.css). Round 3.5: a menu draws the ROWS of the header's
+Utilities ▾ dropdown (§7); `ctx.panel()` returns `''` there, the dry run being the page's sheet.
+
+## 7. Round 3.5: one Utilities place, action feedback, back / forward
+
+*2026-10-23, round-3.5 web lane (Zach's feedback: "Lets please just use stock shadcn for now ... what matters is the
+location of things"; "have that drop down button in the header of the entity page ... so I always know where it is";
+"what happens when you press update firmware"; "As I drill down please support forwards/backwards buttons on the
+mouse").*
+
+**Skins.** `shadcn` is the default (`skins/index.json` `default`, index.html's inline script and its static `<link>`),
+light / dark following the OS until the viewer picks a mode. Every skin stays one pick away in `#skin-bar` (bottom-right)
+and `#skin` (View options). A remembered choice wins.
+
+**The Utilities ▾ (drawn by app.js for every layout).** After a layout's `ctx.draw(html)` the page puts `.ent-tools` at
+the top-right of the html's first `.d-head` (`.d-head.has-tools`; 12 px from its top, 14 px from the pane's right edge,
+the same place on every entity and layout; a layout that drew no `.d-head` gets one), with `#ent-util-btn` "Utilities ▾"
+(disabled, never absent, where the entity has no actions or a grouping row is selected). The button opens `.ent-menu`:
+the active utility menu's rows (u0's quiet rows by default: icon + title, the description as its tooltip, Checks /
+Maintenance / Motion / More), light-dismissed by a click elsewhere or Escape. No layout draws utilities; `[data-util]`
+exists only inside `.ent-tools`. A layout may open the menu from its own words with `[data-util-menu]` (d3's "Update
+firmware is under Utilities").
+
+**The flow (feedback without another modal).**
+1. Picking an item closes the menu and dry-runs it (`POST /api/v1/act` `dry_run`, page-only): the sheet `.ent-sheet`,
+   anchored under the button, says "Asking <plugin> what it would run…", then what will run (`.u-cmd`), its
+   preconditions, the plugin's confirm text, a blocked reason in neutral words, "How it runs ▸" (steps, the plugin
+   command line), and Run <title> (a query) or Continue… plus Cancel. Escape or Cancel closes it; nothing ran.
+2. Anything but a query: Continue… opens the existing confirm modal (moves: its ticked precondition box; set_id: CAN A →
+   CAN B). That modal is a safety gate, not feedback; the run carries the dry run's token.
+3. Running: the sheet is gone; one quiet line `.ent-run.running` sits right under the entity header, in muted text:
+   "Updating firmware on moteus-c1 · CAN 21… 42 s" (the action's gerund, the row label, seconds). Its menu row greys
+   out. Never a warning colour (the `warn-colours` gate measures it).
+4. Done: the line becomes the result, `.ent-run.ok`: the host's own message ("Firmware updated to 1.1.2") · just now
+   (then "N s ago") · Details ▸ (`[data-run-details]`: the run's records, rejected lines, stderr tail, plugin · outcome ·
+   duration · exit · argv). A failure (refused, not run, a driver refusal) is `.ent-run.fail[data-diagnostic]` with the
+   error shape and `--io-error-text`: the only coloured line of the flow.
+5. The result lands in Activity (the page's own runs first, kind `utility`, newest first; the host logs no action runs
+   yet) and the entity re-reads its node at once (and the activity log). A run belongs to its entity: selecting another
+   keeps it (`S.runs`) and the line comes back with the entity.
+
+**Back / forward.** Every entity or grouping-row selection, entity → diagnostic drill, measurement page, layout sub-page
+and Tree / Table / Activity switch is `history.pushState` with a URL that restores it: `?sel=<path>` (or
+`group=<row key>`) `&diag=<status name>` `&dpath=<entity of that check, when not the selection>` `&m=<measurement key>`
+`&page=<sub-page id>` `&view=tree|table|activity`; popstate (and a reload) puts that exact state back, each step with the
+scroll position it had. The page's own first selection replaces rather than pushes. So the browser's Back / Forward, the
+mouse's back / forward buttons and Alt+← / → walk the drill-downs, in a tab and in the Chrome `--app` window (they are the
+browser's own; the page blocks none of them). Layouts drill only through `ctx.openDiagnostic` / `openPage` /
+`closeDiagnostic` (§6) and keep no stack of their own; d5's breadcrumb, Esc and Backspace go through it too.
+
+**Default detail layout.** `d0`, except the Computer (the host entity or a structure's Computer row): `d4` "Resource
+monitor" (Zach via the orchestrator, 2026-10-23: RAM, CPU, swap, load, disks, temperatures, GPU, network, USB). An
+explicit Prototype pick (`io-diagnostics.detail-layout`) wins on every entity.
+
+**History window.** View options' `#history-window` (1 min … 24 h within the host's `limits`) reads `GET /api/v1/settings`
+and writes `POST /api/v1/settings {"history_window_s": N}` with the page's `X-IO-Diagnostics: ui` header (the same
+page-only rule as `/api/v1/act`); the host writes settings.toml; the shared history cache is cleared and every bar and
+trend answers over the new window.
+
+Tests (`tests/test_utilities.js`): the shadcn default (light and dark), the bottom switcher (lists every ready skin,
+switches, follows View options, remembered); the Utilities ▾ in every layout's header at the same place on three entities
+and the utilities nowhere else; the sheet, the running line (held 2.6 s at the network), the result line and its
+Details, a failed run's coloured line, the Activity entry and the re-read; page.goBack / goForward, the layout's own ←, the
+mouse's back / forward buttons (CDP input events), a reload, a d5 measurement step; the Computer in d4 on a fresh profile
+and an explicit pick sticking; the history window on a server with its own `IO_DIAGNOSTICS_CONFIG_DIR`.
+Screenshots `reports/media/round3/r35-*.png`. Alt+← / → is a browser-UI accelerator headless Chrome does not have: not
+driven by the tests.
 
 ## Decisions taken here (reversible)
+
+- (round 3.5) The Utilities ▾ anchors to the layout's first `.d-head` (not the pane's corner): in d5 it sits below the
+  breadcrumb, at the header's own top-right. The utility-menu picker stays: its menu draws the dropdown's rows (u0 by
+  default); a menu that draws its own trigger (u2) then shows it inside the dropdown.
+- (round 3.5) The dry-run sheet keeps the steps and the plugin command line behind "How it runs ▸" (in the DOM, folded):
+  the brief asked for a small sheet (what will run, preconditions, Run / Cancel).
+- (round 3.5) A run's line shows the row label ("on moteus-c1 · CAN 21"), not only the id part.
 
 - (round 3) Sort by is stable at every level. A container row (a structure's grouping row, or the host's own row: P1's
   Computer) stays last under Name and Last change; under Status a problem anywhere comes first. A rig row (kind `rig`,

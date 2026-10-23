@@ -5,7 +5,9 @@
 // status table first (Zach, 2026-10-23: "the first thing you see on the entity is the table that shows the different
 // diagnostics, their current status and the message"). Hovering the axis scrubs every lane together; clicking a lane
 // opens that diagnostic's page, which puts its measurement trends on the same axis. The Computer's CPU, RAM and
-// temperature measurements are small line lanes under their status lanes; utilities fold away at the end.
+// temperature measurements are small line lanes under their status lanes. The utilities are the page's, in the entity
+// header's Utilities ▾ (round 3.5). Round 3.5 seams: the history is the page's shared cache (ctx.history, ctx.bar),
+// the diagnostic page is the page's drill (ctx.diagnostic, ctx.openDiagnostic / closeDiagnostic: back / forward work).
 'use strict';
 (function (root) {
   const RANK = { ok: 0, warn: 1, unknown: 2, stale: 3, error: 4 };
@@ -14,7 +16,6 @@
   const REFRESH_MS = 2500;     // /api/v1/history and /history/bar while the entity is shown (the API asks 2-5 s)
   const MAX_TICKS = 160;       // past this many arrivals in the window the ticks are a smear: drawn as none
   const QUIET_TICKS = 16;      // on the entity's lanes, only sparse reports get ticks (a 10 s period is a dotted rule)
-  const PREF_UTILS = 'io-diagnostics.d2.utilities-open';
 
   // ------------------------------------------------------------------------------------------ style ----
   // Tokens only. WHY height as well as colour: ISA-101 alarm priority by shape + position, and a logic analyser's
@@ -87,35 +88,17 @@
   }
 
   // ------------------------------------------------------------------------------------------- state ----
-  const cache = new Map();     // `${kind}:${path}` -> {data, at, loading, error}
-  const view = { path: null, diag: null };   // the diagnostic page open on this entity (null = the entity's lanes)
   let hoverT = null;           // the scrubbed instant (host clock, s), or null
-  let last = null;             // the last render's arguments, to redraw on hover and when history arrives
-  let utilsOpen = readPref();
-  function readPref() { try { return root.localStorage.getItem(PREF_UTILS) === '1'; } catch (error) { return false; } }
-  function writePref(open) { try { root.localStorage.setItem(PREF_UTILS, open ? '1' : '0'); } catch (error) { /* this page only */ } }
+  let last = null;             // the last render's arguments, to redraw on hover
 
-  function want(kind, path) {
-    const key = `${kind}:${path}`;
-    const entry = cache.get(key) || {};
-    if (entry.loading || (entry.at && Date.now() - entry.at < REFRESH_MS)) return entry;
-    entry.loading = true;
-    cache.set(key, entry);
-    const url = kind === 'hist' ? `/api/v1/history?path=${encodeURIComponent(path)}`
-      : `/api/v1/history/bar?path=${encodeURIComponent(path)}&bins=${BINS}`;
-    fetch(url, { cache: 'no-store' })
-      .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`))))
-      .then((data) => { entry.data = data; entry.error = ''; })
-      .catch((error) => { entry.error = String(error.message || error); })
-      .finally(() => { entry.loading = false; entry.at = Date.now(); redraw(); });
-    return entry;
-  }
-  const got = (kind, path) => (cache.get(`${kind}:${path}`) || {});
+  // the page's shared history cache: an entry {data, error, loading, at}; an answer that lands redraws the detail
+  const want = (kind, path) => (kind === 'hist' ? last.ctx.history(path, { everyMs: REFRESH_MS }) : last.ctx.bar(path, BINS, { everyMs: REFRESH_MS }));
+  const got = want;
 
   function redraw() {
     if (!last || typeof document === 'undefined') return;
     if (!last.container.querySelector('.d2-root')) return; // another layout is drawing the panel now
-    root.IODetailLayouts.d2.render(last.container, last.detail, last.ctx);
+    last.ctx.redraw();
   }
 
   // ------------------------------------------------------------------------------------------ helpers ----
@@ -445,7 +428,7 @@
       ...check.values.filter((v) => v.key !== 'what_to_check').map((v) => [v.key, h.esc(v.value)]),
     ] : [];
     const meta = check ? h.kv([
-      ['level', `<span data-diagnostic>${h.pill(check.effective_level)}</span>${check.level !== check.effective_level ? ` <span class="muted">reported ${h.esc(check.level)}</span>` : ''}`],
+      ['level', `${h.pill(check.effective_level)}${check.level !== check.effective_level ? ` <span class="muted">reported ${h.esc(check.level)}</span>` : ''}`],
       ['code', check.code ? `<span class="mono">${h.esc(check.code)}</span>` : '<span class="muted">none</span>'],
       ['source', h.esc(check.source || '—')],
       check.hardware_id ? ['hardware id', `<span class="mono">${h.esc(check.hardware_id)}</span>`] : null,
@@ -485,34 +468,22 @@
     return `<div class="d2-tl">${html}</div>`;
   }
 
-  // ------------------------------------------------------------------------------- utilities, folded ----
-  function utilitiesSection(ctx, owner) {
-    const body = ctx.parts.utilities();
-    if (!body) return '';
-    // a dry run or a run in progress keeps the section open: the person opened it
-    const open = utilsOpen || /class="u-panel|class="u-busy/.test(body);
-    return `<section class="sec utilities d2-utilities" data-sec="utilities"><h3 class="sec-h"><button class="sec-t" data-d2-fold="utilities" aria-expanded="${open}">`
-      + `<svg class="ic sec-chev"><use href="#i-chev"/></svg><span>Utilities · ${(ctx.detail.actions || []).length}</span></button>`
-      + `<span class="right">${ctx.h.esc(owner)} runs them · every click is a dry run first</span></h3>${open ? `<div class="sec-b">${body}</div>` : ''}</section>`;
-  }
-
   // ---------------------------------------------------------------------------------- the events ----
+  // a lane opens its diagnostic, the crumb goes back: both through the page's drill (one history entry each)
   if (typeof document !== 'undefined') {
     document.addEventListener('click', (event) => {
       const t = event.target;
-      if (!t.closest || !t.closest('#detail .d2-root, #detail .d-head')) return;
-      if (t.closest('[data-d2-back]')) { view.diag = null; hoverT = null; redraw(); return; }
-      const fold = t.closest('[data-d2-fold]');
-      if (fold) { utilsOpen = fold.getAttribute('aria-expanded') !== 'true'; writePref(utilsOpen); redraw(); return; }
+      if (!t.closest || !t.closest('#detail .d2-root, #detail .d-head') || t.closest('.ent-tools')) return;
+      if (t.closest('[data-d2-back]')) { hoverT = null; if (last) last.ctx.closeDiagnostic(); return; }
       if (t.closest('[data-go]')) return; // the page selects that entity
       const lane = t.closest('[data-d2-diag]');
-      if (lane && last && last.ctx.node) { view.path = last.ctx.node.path; view.diag = lane.dataset.d2Diag; hoverT = null; redraw(); }
+      if (lane && last && last.ctx.node) { hoverT = null; last.ctx.openDiagnostic(lane.dataset.d2Diag); }
     });
     document.addEventListener('keydown', (event) => {
       const lane = event.target.closest && event.target.closest('#detail .d2-root [data-d2-diag]');
       if (!lane || (event.key !== 'Enter' && event.key !== ' ')) return;
       event.preventDefault();
-      if (last && last.ctx.node) { view.path = last.ctx.node.path; view.diag = lane.dataset.d2Diag; hoverT = null; redraw(); }
+      if (last && last.ctx.node) { hoverT = null; last.ctx.openDiagnostic(lane.dataset.d2Diag); }
     });
     // scrub: only over the track column (the names and messages stay readable under the pointer)
     let frame = 0;
@@ -540,7 +511,7 @@
   root.IODetailLayouts = root.IODetailLayouts || {};
   root.IODetailLayouts.d2 = {
     name: 'State timeline',
-    description: 'Grafana state-timeline / logic analyser: each diagnostic is a lane on one time axis over the app-wide window, its current level and message to the right; hover scrubs every lane, a click opens the diagnostic with its trends on the same axis. Children under a header; utilities folded at the end.',
+    description: 'Grafana state-timeline / logic analyser: each diagnostic is a lane on one time axis over the app-wide window, its current level and message to the right; hover scrubs every lane, a click opens the diagnostic with its trends on the same axis. Children under a header.',
     order: 2,
     // container = #detail; detail = GET /api/v1/node for the selection (null while it loads, or for a grouping row);
     // ctx = the page's building blocks (docs/round2-seams.md §6). Called every second: ctx.draw() skips an unchanged page.
@@ -561,20 +532,19 @@
         return;
       }
       const path = ctx.node.path;
-      if (view.path !== path) { view.path = path; view.diag = null; }
       const histEntry = got('hist', path);
-      if (view.diag) {
-        const known = detail.checks.some((check) => check.name === view.diag)
-          || (histEntry.data && histEntry.data.statuses.some((status) => status.name === view.diag));
+      // the page's drill: a diagnostic of this entity that it reports, or that its history still holds
+      const open = ctx.diagnostic && ctx.diagnostic.path === path ? ctx.diagnostic.name : null;
+      if (open) {
+        const known = detail.checks.some((check) => check.name === open)
+          || (histEntry.data && histEntry.data.statuses.some((status) => status.name === open));
         if (known) {
-          const html = diagnosticPage(ctx, detail, view.diag);
+          const html = diagnosticPage(ctx, detail, open);
           last.axis = entityAxis(got('hist', path), null);
           ctx.draw(html);
           return;
         }
-        view.diag = null;
       }
-      const owner = (detail.actions[0] || {}).owner || '';
       const timeline = entityTimeline(ctx, detail);
       last.axis = entityAxis(got('hist', path), got('bar', path));
       const windowS = last.axis ? last.axis.window || last.axis.to - last.axis.from : null;
@@ -591,7 +561,6 @@
         + s('connection', `Connection (folded) · ${ctx.counts.connection}`, p.connection(), { right: 'the layers this row is reached through, folded into it' })
         + s('parts', `Parts · ${ctx.counts.parts}`, p.parts(), { right: 'composition (part_of), folded into this row' })
         + s('events', 'Events · this row and below', p.events())
-        + utilitiesSection(ctx, owner)
         + '</div>');
     },
   };

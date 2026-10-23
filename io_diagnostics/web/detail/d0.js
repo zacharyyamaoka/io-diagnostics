@@ -1,13 +1,14 @@
 // Detail layout d0 · Top to bottom (round 3 baseline; contract: docs/round2-seams.md §6).
 // The entity's detail as one column of collapsible sections, read top to bottom (Zach, 2026-10-23: "the eye easily
 // reads top to bottom not in these grid patterns"), compact width. The page owns the data and the flows; this file
-// only chooses which sections show, in which order, with which titles.
+// only chooses which sections show, in which order, with which titles. The utilities are not one of them: they live in
+// the entity header's Utilities ▾, which the page draws for every layout (round 3.5).
 'use strict';
 (function (root) {
   root.IODetailLayouts = root.IODetailLayouts || {};
   root.IODetailLayouts.d0 = {
     name: 'Top to bottom',
-    description: 'Sections with collapsible headers, one column: what to check, utilities, expected setup, status, identity, connection, parts, checks, faults, link health, events.',
+    description: 'Sections with collapsible headers, one column: what to check, expected setup, status, identity, connection, parts, checks, faults, link health, events.',
     order: 0,
     // container = #detail; detail = GET /api/v1/node for the selection (null while it loads, or for a grouping row);
     // ctx = the page's building blocks (docs/round2-seams.md §6). Called every second: ctx.draw() skips an unchanged page.
@@ -23,10 +24,8 @@
         ctx.draw(`${p.head()}${p.banners()}<div class="d-body"><div class="muted">loading…</div></div>`);
         return;
       }
-      const owner = (detail.actions[0] || {}).owner || '';
       ctx.draw(`${p.head()}${p.banners()}<div class="d-body">`
         + s('why', 'What to check', p.whatToCheck())
-        + s('utilities', 'Utilities', p.utilities(), { right: `${ctx.h.esc(owner)} runs them · every click is a dry run first` })
         + s('setup', 'Expected setup', p.setup(), { right: 'the rig file, never the device' })
         + s('status', 'Status', p.status())
         + s('identity', 'Identity', p.identity())

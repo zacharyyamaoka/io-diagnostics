@@ -2,14 +2,15 @@
 // A Notion-like page that reads as sentences first (precedents: Linear's issue page, Apple's Battery-health line):
 // one plain sentence of what is wrong and what to do, then the diagnostics status table (each row a toggle block that
 // opens in place: values, sparklines, what to check), then "What changed" over the app-wide history window as dated
-// sentences, then the entity's children, and one quiet "Maintenance…" line at the end. A diagnostic's title opens its
-// own page (breadcrumb Computer › entity › diagnostic). The Computer leads with its busiest resource.
+// sentences, then the entity's children. A diagnostic's title opens its own page (breadcrumb Computer › entity ›
+// diagnostic). The Computer leads with its busiest resource. The utilities are the page's, in the entity header's
+// Utilities ▾ (round 3.5); the lead sentence's "Update firmware" opens that menu.
 // WHY sentences before the table: Zach, 2026-10-23: "What are the most important things to first show as soon as you
 // click it? … it tells me specifically the diagnostics message", and "quiet by default and only call out the things
 // with errors": every OK row is muted text, colour only on true diagnostic results ([data-diagnostic]).
-// The page owns the data, the selection and the utility flows; this file reads /api/v1/history, /api/v1/history/bar,
-// /api/v1/settings and a folded part's /api/v1/node itself (cached, refreshed every few seconds; the page redraws every
-// second, so a fresh answer shows on the next tick).
+// The page owns the data, the selection, the drill (ctx.diagnostic: back / forward work) and the utility flows; the
+// history and health bar come from its shared cache (ctx.history, ctx.bar), the window from ctx.settings; this file
+// reads only a folded part's /api/v1/node itself (cached, refreshed every few seconds; the page redraws every second).
 'use strict';
 (function (root) {
   const PROBLEM = new Set(['warn', 'unknown', 'stale', 'error']);
@@ -22,7 +23,6 @@
   const D3 = {
     open: new Set(),      // diagnostic blocks opened in place
     shut: new Set(),      // blocks the viewer closed (the first problem's block opens by itself)
-    focus: null,          // the diagnostic page: {owner, entity, name}
     folds: new Set(['inside']), // toggle blocks below the table that are open (Inside open, the rest folded)
     allChanges: false,
     cache: new Map(),     // url → {data, error, at, loading}
@@ -50,10 +50,10 @@
     return entry;
   }
   const q = encodeURIComponent;
-  const history = (path) => want(`/api/v1/history?path=${q(path)}`, 4000);
-  const bar = (path) => want(`/api/v1/history/bar?path=${q(path)}&bins=${BINS}`, 4000);
+  // the history and the health bar come from the page's shared cache (round 3.5); a folded part's node stays ours
+  const history = (path) => D3.last.ctx.history(path, { everyMs: 4000 });
+  const bar = (path) => D3.last.ctx.bar(path, BINS, { everyMs: 4000 });
   const nodeOf = (path) => want(`/api/v1/node?path=${q(path)}`, 3000);
-  const settings = () => want('/api/v1/settings', 30000);
 
   // ---------------------------------------------------------------------------------------- words ----
   const clock = (t) => {
@@ -207,7 +207,7 @@
       const subject = first.part ? `Its ${h.esc(first.part.label)}` : h.esc(info.list.filter((item) => !item.part).length > 1 ? `${info.label} · ${first.label}` : info.label);
       let sentence = `${h.shape(level, level)}<b>${subject}</b> ${verb[level]}: ${h.esc(first.check.message || first.check.code || '—')}`;
       const hint = actionHint(first, actions);
-      if (hint && hint.action) sentence += `; <button class="d3-plain d3-act" data-d3-maint>${h.esc(plainTitle(hint.action.title))}</button> is under Maintenance.`;
+      if (hint && hint.action) sentence += `; <button class="d3-plain d3-act" data-util-menu>${h.esc(plainTitle(hint.action.title))}</button> is under Utilities.`;
       else if (hint && hint.steps) {
         sentence += `. Check first: ${h.esc(hint.steps[0].replace(/^\s*\d+[.)]\s*/, ''))}`;
         sentence += hint.steps.length > 1 ? ` <button class="d3-plain d3-act" data-d3-toggle="${h.esc(first.key)}" data-d3-force="1">${hint.steps.length - 1} more step${hint.steps.length > 2 ? 's' : ''}</button>.` : '.';
@@ -496,33 +496,29 @@
     ensureStyle();
     wire(container);
     D3.last = { container, detail, ctx };
-    if (ctx.group) { D3.focus = null; renderGroup(ctx); return; }
+    if (ctx.group) { renderGroup(ctx); return; }
     if (!detail) {
       ctx.draw(`${ctx.parts.head()}<div class="d-body"><div class="d3-quiet">loading…</div></div>`);
       return;
     }
     const h = ctx.h;
     const node = ctx.node;
-    if (D3.focus && D3.focus.owner !== node.path) D3.focus = null;
     const info = diagnostics(ctx);
     // history for the row and every part folded into it
     const hists = new Map([[node.path, history(node.path)]]);
     for (const part of info.parts) if (part.node && part.node.checks > 0) hists.set(part.entity, history(part.entity));
     const barEntry = bar(node.path);
-    const windowS = (settings().data || {}).history_window_s || (hists.get(node.path).data || {}).window_s || 900;
+    const windowS = (ctx.settings || {}).history_window_s || (hists.get(node.path).data || {}).window_s || 900;
 
-    if (D3.focus) {
-      const item = info.list.find((candidate) => candidate.entity === D3.focus.entity && candidate.check.name === D3.focus.name);
+    // the page's drill: a diagnostic of this row or of a part folded into it (ctx.diagnostic.path is its entity)
+    const focus = ctx.diagnostic;
+    if (focus) {
+      const item = info.list.find((candidate) => candidate.entity === focus.path && candidate.check.name === focus.name);
       if (item) { ctx.draw(diagnosticPage(ctx, info, item, hists)); return; }
-      if (!info.loading) D3.focus = null;
     }
 
     const inside = insideHtml(ctx, info, barEntry);
     const links = ctx.parts.links();
-    const utilities = ctx.parts.utilities();
-    const actionCount = detail.actions.length;
-    // a utility mid-flow (asked, shown, running, done) keeps Maintenance open, so its panel never hides
-    const utilBusy = /u-panel|u-busy|u-result/.test(utilities);
     const setup = ctx.parts.setup();
     const setupBusy = /s-panel/.test(setup);
     const details = [
@@ -531,11 +527,6 @@
       ctx.parts.faults() ? `<h4 class="d3-h">Faults</h4>${ctx.parts.faults()}` : '',
       `<h4 class="d3-h">Events · this row and below</h4>${ctx.parts.events()}`,
     ].join('');
-    const owner = (detail.actions[0] || {}).owner || '';
-    const maintenance = actionCount
-      ? `<section class="sec utilities d3-maint" data-sec="utilities">${fold('maint', 'Maintenance…', `<div class="d3-quiet d3-maint-note">${h.esc(owner)} runs them · every click is a dry run first</div>${utilities}`,
-        { force: utilBusy, right: `${actionCount} utilit${actionCount === 1 ? 'y' : 'ies'}`, cls: 'd3-fold-maint' })}</section>`
-      : '';
     ctx.draw(head(ctx, info) + `<div class="d-body d3-page">`
       + leadHtml(ctx, info)
       + tableHtml(ctx, info, hists)
@@ -546,7 +537,6 @@
       + fold('inside', `Inside · ${inside.count}`, inside.html)
       + (links ? fold('links', 'Link health', links, { right: 'the computer diagnoses its own wires' }) : '')
       + fold('details', 'Details', details, { force: setupBusy, right: 'identity, expected setup, faults, events' })
-      + maintenance
       + '</div></div>');
   }
 
@@ -556,30 +546,27 @@
     container.__d3wired = true;
     container.addEventListener('click', (event) => {
       const t = event.target;
-      const hit = t.closest('[data-d3-open], [data-d3-toggle], [data-d3-back], [data-d3-fold], [data-d3-maint], [data-d3-allchanges]');
+      const hit = t.closest('[data-d3-open], [data-d3-toggle], [data-d3-back], [data-d3-fold], [data-d3-allchanges]');
       if (!hit || !container.contains(hit) || t.closest('[data-go]') || !D3.last) return;
       event.stopPropagation();
+      // a diagnostic's page and back are the page's drill (one browser-history entry each)
       if (hit.dataset.d3Open) {
         const [entity, name] = hit.dataset.d3Open.split('␟');
-        D3.focus = { owner: D3.last.ctx.node.path, entity, name };
-        container.scrollTop = 0;
-      } else if (hit.hasAttribute('data-d3-back')) {
-        D3.focus = null;
-      } else if (hit.dataset.d3Toggle) {
+        D3.last.ctx.openDiagnostic(name, { path: entity });
+        return;
+      }
+      if (hit.hasAttribute('data-d3-back')) { D3.last.ctx.closeDiagnostic(); return; }
+      if (hit.dataset.d3Toggle) {
         const key = hit.dataset.d3Toggle;
         const shown = hit.closest('.d3-row') ? hit.closest('.d3-row').classList.contains('open') : false;
         if (hit.dataset.d3Force || !shown) { D3.open.add(key); D3.shut.delete(key); } else { D3.open.delete(key); D3.shut.add(key); }
       } else if (hit.dataset.d3Fold) {
         const id = hit.dataset.d3Fold;
         if (D3.folds.has(id)) D3.folds.delete(id); else D3.folds.add(id);
-      } else if (hit.hasAttribute('data-d3-maint')) {
-        D3.folds.add('maint');
-        setTimeout(() => { const box = container.querySelector('[data-d3-foldbox="maint"]'); if (box && box.scrollIntoView) box.scrollIntoView({ block: 'nearest' }); }, 0);
       } else if (hit.hasAttribute('data-d3-allchanges')) {
         D3.allChanges = !D3.allChanges;
       }
-      const { container: box, detail, ctx } = D3.last;
-      render(box, detail, ctx);
+      D3.last.ctx.redraw();
     });
   }
 
@@ -677,9 +664,6 @@
 .d3-fold-t:hover { color: var(--io-text-strong); }
 .d3-fold-b { padding: 0 0 12px 18px; min-width: 0; }
 .d3-fold-b .d3-h:first-child { margin-top: 2px; }
-.d3-maint { border-bottom: 0; padding-bottom: 0; }
-.d3-fold-maint .d3-fold-t { color: var(--io-muted); }
-.d3-maint-note { margin-bottom: 6px; }
 .d3-child { display: grid; grid-template-columns: 16px minmax(80px, max-content) minmax(0, 1fr) minmax(60px, 28%) 18px; gap: 8px; align-items: center; min-height: var(--io-row-h); padding: 0 6px; margin: 0 -6px; border-radius: var(--io-radius-sm); cursor: pointer; }
 .d3-child:hover { background: var(--io-hover); }
 .d3-child .ic { color: var(--io-icon); }
@@ -694,7 +678,7 @@
   root.IODetailLayouts = root.IODetailLayouts || {};
   root.IODetailLayouts.d3 = {
     name: 'Readable summary',
-    description: 'A Notion-like page: one plain sentence of what is wrong and what to do, the status table (each row opens in place: values, sparklines, what to check; its title opens its own page), What changed in the history window as sentences, children, and a quiet Maintenance… line at the end.',
+    description: 'A Notion-like page: one plain sentence of what is wrong and what to do, the status table (each row opens in place: values, sparklines, what to check; its title opens its own page), What changed in the history window as sentences, children; the utilities are in the header.',
     order: 3,
     render,
   };

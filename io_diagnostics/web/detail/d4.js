@@ -1,12 +1,13 @@
 // Detail layout d4 · Resource monitor (round 3 proposal; contract: docs/round2-seams.md §6).
 // The ROS2 System Webview's Resource view (Pasted image 20261023084333) and nvtop, stacked top to bottom: first the
 // diagnostics status table (level · name · message, quiet), then one full-width row per measurement group (name, big
-// current value, a sparkline over the app-wide window with its limits as faint lines), then the rest folded, the
-// utilities last and collapsed. A status or a measurement opens that diagnostic's own page: a larger trend with its
-// limits, its message history, values and metadata. WHY stacked rows and not the webview's cards: Zach, 2026-10-23:
-// "the eye easily reads top to bottom not in these grid patterns".
-// The page hands no history to a layout, so this file reads /api/v1/history and /api/v1/history/bar itself (every
-// 3 s for the selection and its parts) and shows what arrived on the next 1 s render.
+// current value, a sparkline over the app-wide window with its limits as faint lines), then the rest folded. A status
+// or a measurement opens that diagnostic's own page: a larger trend with its limits, its message history, values and
+// metadata. WHY stacked rows and not the webview's cards: Zach, 2026-10-23: "the eye easily reads top to bottom not in
+// these grid patterns". The default for the Computer (round 3.5); the utilities are the page's, in the header's
+// Utilities ▾. The history and health bars come from the page's shared cache (ctx.history, ctx.bar, every 3 s for the
+// selection and its parts); a folded part's node is read here; the diagnostic page is the page's drill
+// (ctx.diagnostic: back / forward work).
 'use strict';
 (function (root) {
   const ID = 'd4';
@@ -15,7 +16,6 @@
   const MAX_PARTS = 8;
   const PROBLEM = new Set(['warn', 'error', 'stale', 'unknown']);
   const RANK = { ok: 0, warn: 1, unknown: 2, stale: 3, error: 4 };
-  const UTIL_PREF = 'io-diagnostics.d4.utilities-open';
 
   // ------------------------------------------------------------------------------- styles ----
   // Tokens only, no colour literals. Warn / error colours appear only inside [data-diagnostic] (the warn-colours gate).
@@ -119,14 +119,13 @@
   }
 
   // ------------------------------------------------------------------------ history cache ----
-  // path -> {at, loading, data, error}; one per kind (node detail of a part, history, health bar).
-  const cache = { node: new Map(), hist: new Map(), bar: new Map() };
-  const URLS = {
-    node: (path) => `/api/v1/node?path=${encodeURIComponent(path)}`,
-    hist: (path) => `/api/v1/history?path=${encodeURIComponent(path)}`,
-    bar: (path) => `/api/v1/history/bar?path=${encodeURIComponent(path)}&bins=${BINS}`,
-  };
+  // path -> {at, loading, data, error}: a folded part's node detail; the history and the health bar are the page's
+  // shared cache (ctx.history, ctx.bar), the same entry shape
+  const cache = { node: new Map() };
+  const URLS = { node: (path) => `/api/v1/node?path=${encodeURIComponent(path)}` };
   function want(kind, path) {
+    if (kind === 'hist') return last.ctx.history(path, { everyMs: POLL_MS });
+    if (kind === 'bar') return last.ctx.bar(path, BINS, { everyMs: POLL_MS });
     const map = cache[kind];
     const known = map.get(path);
     const now = Date.now();
@@ -138,40 +137,32 @@
       .catch((error) => map.set(path, { at: Date.now(), loading: false, data: (known && known.data) || null, error: String(error.message || error) }));
     return entry;
   }
-  const got = (kind, path) => (cache[kind].get(path) || {}).data || null;
+  const got = (kind, path) => (kind === 'node' ? (cache.node.get(path) || {}).data || null : want(kind, path).data || null);
 
   // ------------------------------------------------------------------------------- state ----
-  // drill = {path, status}: the diagnostic page open for that entity; any other selection shows the entity page.
-  let drill = null;
   let last = null;
-  let utilOpen = false;
-  try { utilOpen = localStorage.getItem(UTIL_PREF) === '1'; } catch (_) { utilOpen = false; }
 
+  // A status or a measurement opens its diagnostic's page through the page's drill (one browser-history entry); a part's
+  // measurement (it also carries data-go) selects that part and opens its diagnostic there, in ONE entry: this handler
+  // runs before the page's and stops the click.
   function wire(container) {
     if (container.dataset.d4Wired) return;
     container.dataset.d4Wired = '1';
     container.addEventListener('click', (event) => {
-      if (!last) return;
+      if (!last || !container.querySelector('.d4-root')) return;
       const t = event.target;
       const back = t.closest('[data-d4-back]');
       const diag = t.closest('[data-d4-diag]');
-      const util = t.closest('[data-d4-util]');
-      if (!back && !diag && !util) return;
-      if (back) drill = null;
-      else if (util) {
-        utilOpen = !utilOpen;
-        try { localStorage.setItem(UTIL_PREF, utilOpen ? '1' : '0'); } catch (_) { /* this page only */ }
-      } else drill = { path: diag.dataset.d4Path, status: diag.dataset.d4Diag };
-      // a part's measurement also carries data-go: the page selects the part and draws its diagnostic page then
-      if (diag && diag.dataset.go) return;
-      const layout = root.IODetailLayouts[ID];
-      if (layout === undefined) return;
-      layout.render(last.container, last.detail, last.ctx);
-      if (back || diag) container.scrollTop = 0;
+      if (!back && !diag) return;
+      event.stopPropagation();
+      if (back) { last.ctx.closeDiagnostic(); return; }
+      last.ctx.openDiagnostic(diag.dataset.d4Diag, { path: diag.dataset.d4Path, select: Boolean(diag.dataset.go) });
     });
     container.addEventListener('keydown', (event) => {
+      if (!last || !container.querySelector('.d4-root')) return;
       if ((event.key === 'Enter' || event.key === ' ') && event.target.matches('[data-d4-diag]')) { event.preventDefault(); event.target.click(); }
-      if (event.key === 'Escape' && drill) { const back = container.querySelector('[data-d4-back]'); if (back) back.click(); }
+      // the header's Utilities ▾ menu or its dry-run sheet take their Escape first (the page's handler)
+      if (event.key === 'Escape' && last.ctx.diagnostic && !container.querySelector('.ent-menu, .ent-sheet')) { const back = container.querySelector('[data-d4-back]'); if (back) { event.stopPropagation(); back.click(); } }
     });
   }
 
@@ -596,9 +587,7 @@
     const resBody = groups.map((group) => groupHtml(group, win, ctx)).join('');
     // the graceful fallback: few measurement groups, so the values of the statuses without measurements show here
     const valuesBody = groups.length < 3 ? valuesBlock(plain, ctx) : '';
-    const owner = (detail.actions[0] || {}).owner || '';
-    const utilBody = p.utilities();
-    return `${p.head()}${p.banners()}<div class="d-body">`
+    return `${p.head()}${p.banners()}<div class="d-body d4-root">`
       + s('d4-status', `Diagnostics · ${detail.checks.length}`, statusBody, { right: `${winText} · click a row for its page` })
       + s('why', 'What to check', p.whatToCheck())
       + s('d4-res', `${resTitle} · ${groups.length}`, resBody, { right: winText })
@@ -610,21 +599,7 @@
       + s('identity', 'Identity', p.identity())
       + s('events', 'Events · this row and below', p.events())
       + s('setup', 'Expected setup', p.setup(), { right: 'the rig file, never the device' })
-      + utilities(utilBody, detail, owner, ctx)
       + '</div>';
-  }
-
-  // Utilities: last and collapsed by default (Zach, 2026-10-23: "I don't like having the utilities here front and
-  // center"). The page's own utility menu draws the body; this file only folds it (remembered, default folded). An
-  // open utility of this entity (a dry run in flight) keeps the fold open so its panel is never hidden.
-  function utilities(body, detail, owner, ctx) {
-    if (!body) return '';
-    const h = ctx.h;
-    const busy = /u-panel|data-util-run|data-util-close/.test(body);
-    const open = utilOpen || busy;
-    return `<section class="sec utilities d4-util" data-sec="utilities"><h3 class="sec-h"><button class="sec-t" data-d4-util="1" aria-expanded="${open}">`
-      + `<svg class="ic sec-chev"><use href="#i-chev"/></svg><span>Utilities · ${detail.actions.length}</span></button>`
-      + `<span class="right">${h.esc(owner)} runs them · every click is a dry run first</span></h3>${open ? `<div class="sec-b">${body}</div>` : ''}</section>`;
   }
 
   // ---------------------------------------------------------------- one diagnostic's page ----
@@ -697,7 +672,7 @@
       causes ? ['caused by', causes] : null,
       ['entity', `<a class="link" data-go="${h.esc(node.path)}">${h.esc(node.name)}</a> <span class="mono muted">${h.esc(node.path)}</span>`],
     ]);
-    return `${p.head()}<div class="d-body">${back}${title}`
+    return `${p.head()}<div class="d-body d4-root">${back}${title}`
       + s('d4-trend', 'Trend', trend, { right: hist ? `last ${spanText(hist.window_s)} · limits as dashed lines` : '' })
       + s('d4-why', 'What to check', why)
       + s('d4-msgs', `Message history · ${spans.filter((span) => span.level).length}`, msgs, { right: 'newest first · each span held until it went stale' })
@@ -710,7 +685,7 @@
   root.IODetailLayouts = root.IODetailLayouts || {};
   root.IODetailLayouts[ID] = {
     name: 'Resource monitor',
-    description: 'The ROS2 System Webview / nvtop stacked top to bottom: the diagnostics status table first, then one row per measurement group with its big value, a sparkline over the history window and its limits; a status or a measurement opens its own page (trend, message history); utilities folded at the end.',
+    description: 'The ROS2 System Webview / nvtop stacked top to bottom: the diagnostics status table first, then one row per measurement group with its big value, a sparkline over the history window and its limits; a status or a measurement opens its own page (trend, message history). The Computer\'s default.',
     order: 4,
     render(container, detail, ctx) {
       injectStyle();
@@ -719,17 +694,17 @@
       const p = ctx.parts;
       const s = ctx.section;
       if (ctx.group) {
-        drill = null;
-        ctx.draw(`${p.head()}<div class="d-body">${s('members', `Members · ${ctx.counts.members}`, p.members())}`
+        ctx.draw(`${p.head()}<div class="d-body d4-root">${s('members', `Members · ${ctx.counts.members}`, p.members())}`
           + `${s('links', 'Link health', p.links(), { right: 'the computer diagnoses its own wires' })}</div>`);
         return;
       }
       if (!detail) {
-        ctx.draw(`${p.head()}${p.banners()}<div class="d-body"><div class="muted">loading…</div></div>`);
+        ctx.draw(`${p.head()}${p.banners()}<div class="d-body d4-root"><div class="muted">loading…</div></div>`);
         return;
       }
-      if (drill && drill.path !== detail.node.path) drill = null;
-      const check = drill && detail.checks.find((c) => c.name === drill.status);
+      // the page's drill: a diagnostic of this entity (a part's opens as that part's own page: openDiagnostic select)
+      const open = ctx.diagnostic && ctx.diagnostic.path === detail.node.path ? ctx.diagnostic : null;
+      const check = open && detail.checks.find((c) => c.name === open.name);
       ctx.draw(check ? diagnosticPage(detail, ctx, check) : entityPage(detail, ctx));
     },
   };

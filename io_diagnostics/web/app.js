@@ -15,12 +15,18 @@
 // the Table's inspector folds away; the detail panel is drawn by a DETAIL LAYOUT (window.IODetailLayouts,
 // detail/*.js) and its utilities by a UTILITY MENU (window.IOUtilityMenus, utilities/*.js), both switched from the
 // temporary bottom-right Prototype picker.
+//
+// Round 3.5 (docs/round2-seams.md §6-§7): the default skin is stock shadcn/ui, with a skin switcher back in the
+// bottom-right bar; the utilities live in ONE place, a Utilities ▾ dropdown the shell draws in every entity page's
+// header (a dry-run sheet under it, a quiet run line under the header, the result in Activity); every drill-down is a
+// browser-history entry (back / forward, the mouse's buttons); one shared history cache and a page-level drill seam
+// for the layouts; the Computer opens in d4 unless the picker says otherwise.
 'use strict';
 
 const params = new URLSearchParams(location.search);
 const S = {
-  view: params.get('view') || 'tree',
-  sel: params.get('sel'),
+  view: ['tree', 'table', 'activity'].includes(params.get('view')) ? params.get('view') : 'tree',
+  sel: params.get('group') ? null : params.get('sel'),
   query: '',
   data: null,          // /api/v1/state
   act: null,           // /api/v1/activity
@@ -28,7 +34,9 @@ const S = {
   node: null,          // /api/v1/node for S.sel
   nodeAt: 0,
   open: new Map(),     // row key -> true/false, for the table and the built-in fallback tree
-  selKey: null,        // the selected row when it stands for no entity (a structure's own grouping row)
+  selKey: params.get('group'), // the selected row when it stands for no entity (a structure's own grouping row)
+  // the page-level drill below the selection (ctx.diagnostic / ctx.page): one browser-history entry per step
+  drill: { diag: params.get('diag'), dpath: params.get('dpath'), m: params.get('m'), page: params.get('page') },
   built: null,         // IOView.build(...) of the active structure for the current state
   structure: null,     // active structure id (view/structure/*.js)
   toggles: {},         // structure id -> {option key: bool}: the structure's own declared toggles
@@ -57,6 +65,18 @@ const S = {
   menu: null,          // the utility menu drawing the Utilities section (utilities/*.js)
   closed: new Set(),   // detail section ids the viewer folded (remembered per section)
   actFilter: 'all',    // the activity log's filter: all | faults
+  opened: new Set(),   // detail section ids the viewer opened that start folded (ctx.section(..., {defaultOpen: false}))
+  layoutChoice: null,  // the Prototype picker's explicit detail layout (remembered), or null: the per-entity default
+  menuOpen: false,     // the entity header's Utilities ▾ dropdown
+  runs: new Map(),     // entity path -> its utility run (running / done) while the viewer looks at another entity
+  ran: [],             // the utility runs this page made, newest first: drawn at the top of the Activity log
+  runDetails: false,   // the result line's Details ▸ is open
+  sheetMore: false,    // the dry-run sheet's "How it runs ▸" (its steps, the plugin command line) is open
+  settings: null,      // GET /api/v1/settings (the app-wide history window)
+  cache: new Map(),    // url -> {data, error, loading, at, used}: the shared history cache (ctx.history, ctx.bar)
+  byPath: null,        // path -> state node, of the last render
+  scrolls: new Map(),  // a drill step (its URL) -> the detail's scroll position, restored on back / forward
+  drawnAt: '',         // the drill step the detail last drew
 };
 const RANK = { ok: 0, warn: 1, unknown: 2, stale: 3, error: 4 };
 const PROBLEM = new Set(['warn', 'unknown', 'stale', 'error']);
@@ -64,7 +84,8 @@ const $ = (id) => document.getElementById(id);
 const esc = (text) => String(text ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const icon = (name, cls = 'ic') => `<svg class="${cls}"><use href="#i-${name || 'device'}"/></svg>`;
 const lvl = (level) => level || 'none';
-const pill = (level) => `<span class="pill ${lvl(level)}">${level || '—'}</span>`;
+// a problem pill IS a diagnostic result: tagged so (the warn-colours rule), for every layout that draws one
+const pill = (level) => `<span class="pill ${lvl(level)}"${PROBLEM.has(level) ? ' data-diagnostic' : ''}>${level || '—'}</span>`;
 // Rule 3 + 4 (Zach, 2026-10-22): a problem is a SHAPE; OK draws nothing at all.
 const shape = (level, title = '') => (PROBLEM.has(level)
   ? `<svg class="shape lv-${level}" role="img" aria-label="${esc(title || level)}"><use href="#s-${level}"/></svg>` : '');
@@ -86,6 +107,7 @@ const PREFS = {
   layout: 'io-diagnostics.detail-layout',
   menu: 'io-diagnostics.utility-menu',
   sections: 'io-diagnostics.detail-sections',
+  sectionsOpen: 'io-diagnostics.detail-sections-open',
 };
 function readPref(key) {
   try { return localStorage.getItem(key); } catch (_) { return null; }
@@ -138,8 +160,11 @@ function loadScript(src) {
 }
 
 // WHY p1: Zach's "fdcanusb → Moteus c1 · CAN 15" (entities, transport as columns, a Ports toggle one click away)
-// WHY contrast ("Bare Metal"): Zach, 2026-10-23: "one step above unstyled", the default of the two (Pretty = Notion)
-const DEFAULTS = { skin: 'contrast', structure: 'p1', variant: 'v6', sort: 'status', layout: 'd0', menu: 'u0' };
+// WHY shadcn: Zach, 2026-10-23: "I have outgrown the bare metal, it's honestly hurting my eyes now. Lets please just use
+// stock shadcn for now ... what matters is the location of things"; every other skin stays one pick away (bottom-right)
+// WHY d4 for the Computer (Zach, 2026-10-23, via the orchestrator): its page is the ROS2 System Webview's data (RAM, CPU,
+// swap, load, disks, temperatures, GPU, network, USB); every other entity keeps d0 until he picks one
+const DEFAULTS = { skin: 'shadcn', structure: 'p1', variant: 'v6', sort: 'status', layout: 'd0', computerLayout: 'd4', menu: 'u0' };
 const darkQuery = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
 
 // <html data-skin data-mode>: the skin's tokens for the mode. Auto follows the OS until the viewer picks one.
@@ -155,7 +180,11 @@ async function tick() {
     S.data = await getJson('/api/v1/state');
     S.lastOk = performance.now();
     S.lastError = '';
-    if (!S.sel) S.sel = (S.data.summary.attention[0] || {}).path || S.data.tree.path;
+    if (!S.sel && !S.selKey) {
+      S.sel = (S.data.summary.attention[0] || {}).path || S.data.tree.path;
+      replaceNav(); // the first selection is the page's, not a step the viewer took: Back leaves the page
+    }
+    if (!history.state) replaceNav(); // a URL that came with ?sel=… starts the history at that exact state
     if (performance.now() - S.actAt > 4000 || !S.act) {
       S.actAt = performance.now();
       getJson('/api/v1/activity').then((act) => { S.act = act; render(); }).catch(() => {});
@@ -175,7 +204,159 @@ function loadNode() {
   S.nodeAt = performance.now();
   getJson(`/api/v1/node?path=${encodeURIComponent(path)}`)
     .then((node) => { if (S.sel === path) { S.node = node; render(); } })
-    .catch(() => { if (S.sel === path) { S.sel = S.data.tree.path; S.node = null; } });
+    .catch(() => { if (S.sel === path) { S.sel = S.data.tree.path; S.node = null; S.drill = { ...NO_DRILL }; replaceNav(); } });
+}
+
+// ----------------------------------------------------------------------------------- back / forward ----
+// Every drill-down is a page of the browser's history (Zach, 2026-10-23: "As I drill down please support
+// forwards/backwards buttons on the mouse"): an entity (or grouping row) selection, a diagnostic or measurement page
+// below it, a layout's own sub-page and the Tree / Table / Activity switch each push a URL that restores them
+// (?sel=<path>&diag=<status name>&view=tree), and popstate puts that exact state back. The mouse's back / forward
+// buttons and Alt+← / → are then the browser's own, in a tab and in the Chrome --app window.
+// WHY in the shell, once: d1-d5 each kept a private drill stack the browser could not see; they read ctx.diagnostic.
+const NAV_KEYS = ['sel', 'group', 'diag', 'dpath', 'm', 'page', 'view'];
+const NO_DRILL = { diag: null, dpath: null, m: null, page: null };
+const navNow = () => ({ sel: S.selKey ? null : S.sel || null, group: S.selKey || null, ...S.drill, view: S.view });
+function navUrl(nav) {
+  const query = new URLSearchParams();
+  for (const key of NAV_KEYS) if (nav[key]) query.set(key, nav[key]);
+  return `${location.pathname}?${query}`;
+}
+const sameNav = (a, b) => Boolean(a && b) && NAV_KEYS.every((key) => (a[key] || null) === (b[key] || null));
+// one level up: a measurement's diagnostic, a diagnostic's (or a sub-page's) entity; an entity has none
+function parentNav(nav) {
+  if (nav.m) return { ...nav, m: null };
+  if (nav.diag || nav.page) return { ...nav, ...NO_DRILL };
+  return null;
+}
+// `up`: the entry before this one is its parent, so the layout's own Back can be the browser's Back
+function pushNav() {
+  const nav = navNow();
+  if (sameNav(history.state, nav)) return;
+  history.pushState({ ...nav, up: sameNav(parentNav(nav), history.state) }, '', navUrl(nav));
+}
+function replaceNav() {
+  const nav = navNow();
+  history.replaceState({ ...nav, up: Boolean(history.state && history.state.up) }, '', navUrl(nav));
+}
+function applyNav(nav) {
+  S.view = ['tree', 'table', 'activity'].includes(nav.view) ? nav.view : 'tree';
+  if (nav.group) {
+    if (S.selKey !== nav.group) { stashRun(null); S.selKey = nav.group; S.sel = null; S.node = null; S.menuOpen = false; }
+  } else if (nav.sel && (nav.sel !== S.sel || S.selKey)) select(nav.sel);
+  S.drill = { diag: nav.diag || null, dpath: nav.dpath || null, m: nav.m || null, page: nav.page || null };
+  // a drill step restored in the Table is read in its inspector
+  if (S.view === 'table' && (S.drill.diag || S.drill.page)) S.inspOpen = true;
+}
+window.addEventListener('popstate', (event) => {
+  const nav = event.state || Object.fromEntries(NAV_KEYS.map((key) => [key, new URLSearchParams(location.search).get(key)]));
+  applyNav(nav);
+  S.menuOpen = false;
+  render();
+});
+
+// The drill seam (ctx.openDiagnostic / ctx.openPage / ctx.closeDiagnostic): a diagnostic of the selection (or, with
+// opts.path, of one of its parts), optionally one of its measurements; opts.select also selects opts.path first (a
+// part's diagnostic opened as that part's own page).
+function openDiagnostic(name, opts = {}) {
+  if (!name) return;
+  if (opts.select && opts.path && (opts.path !== S.sel || S.selKey)) select(opts.path);
+  const dpath = opts.path && opts.path !== S.sel ? opts.path : null;
+  S.drill = { diag: name, dpath, m: opts.measurement || null, page: null };
+  S.menuOpen = false;
+  pushNav();
+  render();
+}
+function openPage(id) {
+  if (!id) return;
+  S.drill = { ...NO_DRILL, page: id };
+  pushNav();
+  render();
+}
+// One level up. When the entry before is that level (the viewer came down from it), this IS the browser's Back, so
+// back / forward stay one linear list; otherwise the level above is pushed.
+function closeDiagnostic() {
+  if (history.state && history.state.up && sameNav(history.state, navNow())) { history.back(); return; }
+  const up = parentNav(navNow());
+  if (!up) return;
+  S.drill = { diag: up.diag || null, dpath: up.dpath || null, m: up.m || null, page: up.page || null };
+  pushNav();
+  render();
+}
+const diagnosticOf = () => (S.drill.diag ? { name: S.drill.diag, path: S.drill.dpath || S.sel, measurement: S.drill.m || null } : null);
+
+// --------------------------------------------------------------------------- the shared history cache ----
+// One cache for every layout (the round-3 lanes' ask): /api/v1/history and /api/v1/history/bar, each URL fetched at
+// most every HISTORY_EVERY_MS while a layout asks for it (the API asks 2-5 s); an answer that lands redraws the
+// detail; an entry nobody asked for in a minute is dropped. A failed refresh keeps the last answer with its error.
+const HISTORY_EVERY_MS = 3000;
+function cached(url, everyMs = HISTORY_EVERY_MS) {
+  const now = Date.now();
+  let entry = S.cache.get(url);
+  if (!entry) { entry = { data: null, error: '', loading: false, at: 0, used: now }; S.cache.set(url, entry); }
+  entry.used = now;
+  if (!entry.loading && now - entry.at >= everyMs) {
+    entry.loading = true;
+    fetch(url, { cache: 'no-store' })
+      .then(async (response) => {
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok || body.error) throw new Error(body.error || `HTTP ${response.status}`);
+        return body;
+      })
+      .then((data) => { entry.data = data; entry.error = ''; }, (error) => { entry.error = String(error.message || error); })
+      .finally(() => { entry.loading = false; entry.at = Date.now(); queueRedraw(); });
+  }
+  if (S.cache.size > 96) for (const [key, old] of S.cache) if (!old.loading && now - old.used > 60000) S.cache.delete(key);
+  return entry;
+}
+const historyOf = (path, opts = {}) => cached(`/api/v1/history?path=${encodeURIComponent(path)}${opts.status ? `&status=${encodeURIComponent(opts.status)}` : ''}`, opts.everyMs);
+const barOf = (path, bins = 60, opts = {}) => cached(`/api/v1/history/bar?path=${encodeURIComponent(path)}&bins=${bins}`, opts.everyMs);
+
+// ctx.redraw(): the detail again, now (a layout's own click, a hover scrub). Landed fetches coalesce into one.
+function redrawDetail() { if (S.data && S.byPath) renderDetail(S.byPath); }
+let redrawQueued = false;
+function queueRedraw() {
+  if (redrawQueued) return;
+  redrawQueued = true;
+  setTimeout(() => { redrawQueued = false; redrawDetail(); }, 0);
+}
+
+// The app-wide history window (GET / POST /api/v1/settings; View options). POST is page-only, as /api/v1/act.
+const WINDOW_CHOICES = [60, 300, 600, 900, 1800, 3600, 10800, 21600, 43200, 86400];
+const windowWords = (s) => (s < 3600 ? `${Math.round(s / 60)} min` : `${+(s / 3600).toFixed(1)} h`);
+async function loadSettings() {
+  try { S.settings = await getJson('/api/v1/settings'); } catch (error) { S.settings = null; }
+  renderWindowPicker();
+}
+function renderWindowPicker() {
+  const picker = $('history-window');
+  const settings = S.settings;
+  $('window-switch').hidden = !settings;
+  if (!settings) return;
+  const limits = (settings.limits || {}).history_window_s || { min: 60, max: 86400 };
+  const now = Number(settings.history_window_s);
+  const choices = [...new Set([...WINDOW_CHOICES.filter((s) => s >= limits.min && s <= limits.max), now])].sort((a, b) => a - b);
+  const html = choices.map((s) => `<option value="${s}">${esc(windowWords(s))}</option>`).join('');
+  if (picker.innerHTML !== html) picker.innerHTML = html;
+  picker.value = String(now);
+  picker.title = `History window: every health bar and trend (${esc(settings.source || '')}${settings.note ? ` · ${settings.note}` : ''})`;
+}
+async function setWindow(seconds) {
+  let answer;
+  try {
+    const response = await fetch('/api/v1/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-IO-Diagnostics': 'ui' },
+      body: JSON.stringify({ history_window_s: seconds }) });
+    answer = await response.json();
+    if (!response.ok) throw new Error(answer.error || answer.refused || `HTTP ${response.status}`);
+  } catch (error) {
+    console.warn('history window:', error);
+    renderWindowPicker(); // back to what the host holds
+    return;
+  }
+  S.settings = answer;
+  S.cache.clear(); // every bar and trend now answers over the new window
+  renderWindowPicker();
+  render();
 }
 
 function index(tree) {
@@ -225,18 +406,22 @@ function onTreeSelect(key) {
   const row = S.built && S.built.byKey.get(key);
   if (row && !row.entity) { // a structure's own grouping row: nothing to load from /api/v1/node
     if (S.selKey === key) return;
-    S.selKey = key; S.sel = null; S.node = null;
+    stashRun(null);
+    S.selKey = key; S.sel = null; S.node = null; S.drill = { ...NO_DRILL }; S.menuOpen = false;
+    pushNav();
     render();
     return;
   }
   const entity = row ? row.entity : key;
   if (!entity || (entity === S.sel && !S.selKey)) return;
   select(entity);
+  pushNav();
   render();
 }
 function onSelectEntity(entity) {
-  if (!entity || entity === S.sel) return;
+  if (!entity || (entity === S.sel && !S.selKey)) return;
   select(entity);
+  pushNav();
   render();
 }
 // the row key a rows renderer should mark selected
@@ -361,14 +546,26 @@ function setupSkins(manifestDefault) {
   const ids = S.skins.map((skin) => skin.id);
   const stored = readPref(PREFS.skin);
   S.skin = ids.includes(stored) ? stored : ids.includes(manifestDefault) ? manifestDefault : ids[0] || DEFAULTS.skin;
-  const picker = $('skin');
-  // the two default skins first (Bare Metal, then Pretty), every other ready skin under "More skins"
+  // the primary skins first (the default first: shadcn/ui, then Pretty), the Bare Metal family together, every other
+  // ready skin under "More skins"; the same list in View options and in the bottom-right bar (Zach, 2026-10-23: "please
+  // still give me the option to change the skin at the bottom"), kept in step
   const primary = S.skins.filter((skin) => skin.primary).sort((a, b) => (b.id === manifestDefault) - (a.id === manifestDefault));
-  const more = S.skins.filter((skin) => !skin.primary);
+  const family = S.skins.filter((skin) => !skin.primary && skin.family === 'bare-metal');
+  const more = S.skins.filter((skin) => !skin.primary && skin.family !== 'bare-metal');
   const option = (skin) => `<option value="${esc(skin.id)}">${esc(skin.name || skin.id)}</option>`;
-  picker.innerHTML = primary.map(option).join('') + (more.length ? `<optgroup label="More skins">${more.map(option).join('')}</optgroup>` : '');
-  picker.value = S.skin;
-  picker.addEventListener('change', () => { S.skin = picker.value; writePref(PREFS.skin, S.skin); applyTheme(); });
+  const html = primary.map(option).join('') + (family.length ? `<optgroup label="Bare Metal">${family.map(option).join('')}</optgroup>` : '')
+    + (more.length ? `<optgroup label="More skins">${more.map(option).join('')}</optgroup>` : '');
+  for (const picker of [$('skin'), $('skin-bar')]) {
+    picker.innerHTML = html;
+    picker.value = S.skin;
+    picker.addEventListener('change', () => {
+      S.skin = picker.value;
+      writePref(PREFS.skin, S.skin);
+      $('skin').value = S.skin;
+      $('skin-bar').value = S.skin;
+      applyTheme();
+    });
+  }
   const storedMode = readPref(PREFS.mode);
   S.mode = ['auto', 'light', 'dark'].includes(storedMode) ? storedMode : 'auto';
   if (darkQuery) darkQuery.addEventListener('change', () => { if (S.mode === 'auto') { applyTheme(); renderModeSwitch(); } });
@@ -397,6 +594,7 @@ function switchVariant(id) {
   scrollTops.set(S.variant, $('left').scrollTop);
   S.variant = id;
   S.view = 'tree'; // a proposal only draws the Tree view: show the change at once
+  pushNav();
   render();
   $('left').scrollTop = scrollTops.get(id) || 0;
 }
@@ -495,13 +693,28 @@ function setupPrototype(layoutDefault, menuDefault) {
     S[key] = ids.includes(stored) ? stored : ids.includes(fallback) ? fallback : ids[0] || null;
     select.innerHTML = ids.map((id) => `<option value="${esc(id)}" title="${esc(registry[id].description || '')}">${esc(id)} · ${esc(registry[id].name || id)}</option>`).join('');
     select.value = S[key] || '';
-    select.addEventListener('change', () => { if (!registry[select.value]) return; S[key] = select.value; writePref(pref, select.value); render(); });
+    select.addEventListener('change', () => {
+      if (!registry[select.value]) return;
+      S[key] = select.value;
+      writePref(pref, select.value);
+      if (key === 'layout') S.layoutChoice = select.value; // an explicit pick wins on every entity, the Computer too
+      render();
+    });
     return ids.length;
   };
   const shown = wire($('detail-layout'), layouts(), 'render', PREFS.layout, layoutDefault || DEFAULTS.layout, 'layout')
     + wire($('utility-menu'), menus(), 'html', PREFS.menu, menuDefault || DEFAULTS.menu, 'menu');
+  // no stored layout: the per-entity default (layoutFor) decides, and the picker shows what it chose
+  S.layoutChoice = registryIds(layouts(), 'render').includes(readPref(PREFS.layout)) ? readPref(PREFS.layout) : null;
   $('proto-switch').hidden = shown < 3; // one layout and one menu: nothing to switch
   try { S.closed = new Set(JSON.parse(readPref(PREFS.sections) || '[]')); } catch (_) { S.closed = new Set(); }
+  try { S.opened = new Set(JSON.parse(readPref(PREFS.sectionsOpen) || '[]')); } catch (_) { S.opened = new Set(); }
+}
+// The detail layout for the selection: the picker's explicit choice, else d4 for the Computer and d0 for the rest.
+function layoutFor(isComputer) {
+  if (S.layoutChoice && layouts()[S.layoutChoice]) return S.layoutChoice;
+  const id = isComputer ? DEFAULTS.computerLayout : DEFAULTS.layout;
+  return layouts()[id] ? id : (layouts()[DEFAULTS.layout] ? DEFAULTS.layout : registryIds(layouts(), 'render')[0] || null);
 }
 
 // ------------------------------------------------------- the page's own rows (table + fallback) --
@@ -630,7 +843,8 @@ function renderActivity() {
   const act = S.act;
   if (!act) return '<div class="err muted">loading activity…</div>';
   const faults = S.actFilter === 'faults';
-  const events = faults ? act.events.filter(isFaultEvent) : act.events;
+  // the utilities this page ran come first (newest first): the host logs no action runs of its own yet
+  const events = faults ? act.events.filter(isFaultEvent) : [...S.ran, ...act.events];
   const active = act.faults.filter((fault) => fault.active).length;
   const filter = `<div class="seg small act-filter" role="radiogroup" aria-label="Show">${[['all', 'All events'], ['faults', 'Faults']].map(([id, label]) => `<button data-act-filter="${id}" role="radio" aria-checked="${S.actFilter === id}" class="${S.actFilter === id ? 'on' : ''}">${label}</button>`).join('')}</div>`;
   const memory = faults ? `<div class="act-note muted">The host's fault memory holds ${act.faults.length} fault${act.faults.length === 1 ? '' : 's'}${act.faults.length ? ` (${active} active)` : ''}: pending → confirmed → healed, as logged below.</div>` : '';
@@ -650,16 +864,19 @@ const kv = (rows) => {
 
 // One collapsible section. WHY sections and not a card grid: Zach, 2026-10-23: "the eye easily reads top to bottom
 // not in these grid patterns"; a folded header stays folded on every entity (per section id) until reopened.
+// opts.defaultOpen: false starts the section folded until the viewer opens it (remembered too, per section id).
+const sectionOpen = (id, byDefault = true) => (S.closed.has(id) ? false : S.opened.has(id) ? true : byDefault);
 function section(id, title, body, opts = {}) {
   if (!body) return '';
-  const open = !S.closed.has(id);
+  const open = sectionOpen(id, opts.defaultOpen !== false);
   return `<section class="sec ${esc(id)}" data-sec="${esc(id)}"><h3 class="sec-h"><button class="sec-t" data-sec-toggle="${esc(id)}" aria-expanded="${open}">`
     + `<svg class="ic sec-chev"><use href="#i-chev"/></svg><span>${esc(title)}</span></button>${opts.right ? `<span class="right">${opts.right}</span>` : ''}</h3>`
     + `${open ? `<div class="sec-b">${body}</div>` : ''}</section>`;
 }
-function toggleSection(id) {
-  if (S.closed.has(id)) S.closed.delete(id); else S.closed.add(id);
+function toggleSection(id, wasOpen) {
+  if (wasOpen) { S.closed.add(id); S.opened.delete(id); } else { S.closed.delete(id); S.opened.add(id); }
   writePref(PREFS.sections, JSON.stringify([...S.closed]));
+  writePref(PREFS.sectionsOpen, JSON.stringify([...S.opened]));
   render();
 }
 
@@ -721,12 +938,12 @@ function detailContext(byPath) {
         const cause = byPath.get(node.knock_on_of);
         html += `<div class="banner knock">↳ <span>Explained by <a class="link" data-go="${esc(node.knock_on_of)}">${esc(cause ? cause.name : node.knock_on_of)}</a> above: counted once, as that cause.</span></div>`;
       }
-      if (node.stale) html += `<div class="banner stale">◷ <span><b>Stale:</b> nothing received for ${ago(node.age_s)} (expected every ${esc(node.expected_period_s)} s). The last values stay visible with their age.</span></div>`;
+      if (node.stale) html += `<div class="banner stale" data-diagnostic>◷ <span><b>Stale:</b> nothing received for ${ago(node.age_s)} (expected every ${esc(node.expected_period_s)} s). The last values stay visible with their age.</span></div>`;
       if (!node.connected) html += '<div class="banner osonly">Not connected.</div>';
       return html;
     },
     whatToCheck: () => (detail ? whatToCheckBody(detail, row) : ''),
-    utilities: () => (detail ? renderUtilities(detail.actions, detail.node.path) : ''),
+    // (round 3.5: no `utilities` part: the utilities live only in the entity header's Utilities ▾, drawn by the shell)
     setup: () => (detail ? setupBody(detail) : ''),
     status() {
       if (!node) return '';
@@ -770,7 +987,13 @@ function detailContext(byPath) {
     members: group ? group.children.length : 0,
   };
   return { node, detail, row, group, isComputer, counts, byPath, state: S.data, activity: S.act, view: S.view, parts, section,
-    isOpen: (id) => !S.closed.has(id), h: HELPERS, draw: drawDetail };
+    isOpen: (id, byDefault = true) => sectionOpen(id, byDefault), h: HELPERS, draw: drawDetail,
+    // the drill seam: the open diagnostic {name, path, measurement} (or null) and a layout's own sub-page id (or null);
+    // each open / close is one browser-history entry (back / forward, the mouse's buttons)
+    diagnostic: group ? null : diagnosticOf(), page: group ? null : S.drill.page || null, openDiagnostic, openPage, closeDiagnostic,
+    // the shared history cache: an entry {data, error, loading, at}, data null until the first answer lands
+    history: (path, opts = {}) => historyOf(path, opts), bar: (path, bins = 60, opts = {}) => barOf(path, bins, opts),
+    settings: S.settings, redraw: redrawDetail };
 }
 
 // Write the detail panel only when its HTML changed: the dry-run panel and the What to check list are read, not
@@ -799,21 +1022,51 @@ function morph(from, to) {
   for (const extra of old.slice(fresh.length)) extra.remove();
 }
 
+// The shell's own part of every entity page, whatever the layout drew: the Utilities ▾ button at the top-right of the
+// page's header (`.d-head`), its menu and its dry-run sheet anchored under it, and the quiet run line right under the
+// header. WHY drawn here and not by a layout: Zach, 2026-10-23: "have that drop down button in the header of the entity
+// page ... so I always know where it is. It makes sense to have it in a different location from where the rest of the
+// things are" — one place for every entity and every layout, and the utilities nowhere else.
+function decorate(root, extra) {
+  let head = root.querySelector('.d-head');
+  if (!head) { // a layout that drew no header (an error): the tools still sit at the top
+    head = document.createElement('div');
+    head.className = 'd-head';
+    root.prepend(head);
+  }
+  head.classList.add('has-tools');
+  const box = document.createElement('div');
+  box.innerHTML = extra.tools;
+  head.appendChild(box.firstElementChild);
+  if (extra.run) {
+    box.innerHTML = extra.run;
+    head.after(...box.childNodes);
+  }
+}
+
 function drawDetail(html) {
-  if (html === S.detailHtml) return;
+  const extra = { tools: entityTools(), run: runLine() };
+  const key = `${html}\u0000${extra.tools}\u0000${extra.run}`;
+  if (key === S.detailHtml) return;
   const typing = document.activeElement && document.activeElement.matches('[data-util-newid], [data-setup-reason]')
     ? (document.activeElement.matches('[data-setup-reason]') ? '[data-setup-reason]' : '[data-util-newid]') : null;
   const next = document.createElement('div');
   next.innerHTML = html;
+  decorate(next, extra);
   morph($('detail'), next);
-  S.detailHtml = html;
+  S.detailHtml = key;
   const box = typing && $('detail').querySelector(typing);
   if (box) { const typed = box.value; box.focus(); box.value = ''; box.value = typed; }
 }
 
+// the drill step the detail shows (its URL without the view): each keeps its own scroll position
+const drillAt = () => navUrl({ ...navNow(), view: null });
 function renderDetail(byPath) {
   const ctx = detailContext(byPath);
-  const layout = layouts()[S.layout] || layouts()[DEFAULTS.layout];
+  S.layout = layoutFor(ctx.isComputer);
+  const picker = $('detail-layout');
+  if (S.layout && picker.value !== S.layout && document.activeElement !== picker) picker.value = S.layout;
+  const layout = layouts()[S.layout];
   if (!layout) {
     drawDetail(`${ctx.parts.head()}<div class="d-body"><div class="err">No detail layout loaded (detail/*.js).</div></div>`);
     return;
@@ -823,6 +1076,12 @@ function renderDetail(byPath) {
   } catch (error) {
     console.error(`detail layout ${S.layout}:`, error);
     drawDetail(`${ctx.parts.head()}<div class="d-body"><div class="err">detail layout ${esc(S.layout)} failed: ${esc(error)}</div></div>`);
+  }
+  // a new drill step starts at the top; one the viewer comes back to (back / forward) where they left it
+  const at = drillAt();
+  if (at !== S.drawnAt && (ctx.detail || ctx.group)) {
+    $('detail').scrollTop = S.scrolls.get(at) || 0;
+    S.drawnAt = at;
   }
 }
 
@@ -906,8 +1165,11 @@ async function startDryRun(name) {
   const path = S.node.node.path;
   const newId = newIdOf(path, action);
   if (name === 'set_id' && newId === null) return; // no dry run until the row holds a valid new id
-  const util = { path, name, node: nodeOf(path, action), newId, phase: 'dry', dry: null, result: null, error: '', refused: '', ticked: false };
+  const util = { path, name, node: nodeOf(path, action), newId, phase: 'dry', dry: null, result: null, error: '', refused: '', ticked: false,
+    title: action.title, danger: action.danger, owner: action.owner, label: entityLabel(path) };
   S.util = util;
+  S.menuOpen = false; // the dry run reads in the sheet under the button
+  S.runs.delete(path);
   render();
   const { status, data } = await postAct({ path, action: name, node: util.node, ...(newId !== null ? { new_id: newId } : {}), dry_run: true });
   if (S.util !== util) return;
@@ -921,15 +1183,50 @@ async function runUtility() {
   if (!util || !util.dry || !util.dry.token || util.phase === 'running') return;
   util.phase = 'running';
   util.startedAt = Date.now();
+  S.runDetails = false;
   render();
   // the run repeats the dry run's new id: the server's token is bound to it (a token for CAN 7 never runs CAN 9)
   const { status, data } = await postAct({ path: util.path, action: util.name, node: util.node, ...(util.newId !== null ? { new_id: util.newId } : {}), token: util.dry.token });
-  if (S.util !== util) return;
+  // WHY no "is it still the open one" return: the run happened; its result belongs to its entity's run line (kept in
+  // S.runs while the viewer looks elsewhere) and to the Activity log either way
   util.phase = 'done';
+  util.doneAt = Date.now();
   if (status === 200) util.result = data.result; else { util.refused = data.refused || `HTTP ${status}`; util.error = data.error || ''; }
-  S.nodeAt = 0; // refresh the node now: the action may have changed what it reports
-  loadNode();
+  const outcome = runOutcome(util);
+  S.ran.unshift({ time: new Date(util.doneAt).toTimeString().slice(0, 8), kind: 'utility', port: util.label, message: `${plainTitle(util.title)}: ${outcome.text}`,
+    severity: outcome.ok ? 'info' : 'error', source: 'this page (POST /api/v1/act)', path: util.path, stamp: util.doneAt / 1000 });
+  S.ran = S.ran.slice(0, 50);
+  S.actAt = 0; // the Activity log and the entity's diagnostics are read again now: the action may have changed them
+  if (S.sel === util.path) { S.nodeAt = 0; loadNode(); }
   render();
+}
+
+// What a finished run says, in one line: ok + its own message ("Firmware updated to 1.1.2"), or why it failed.
+function runOutcome(util) {
+  if (!util.result) return { ok: false, text: `not run · ${util.refused}${util.error ? ` · ${util.error}` : ''}` };
+  const result = util.result;
+  const refusedByDriver = (result.records || []).find((record) => FAILED_CODES.has(record.code));
+  if (!result.refused && result.outcome === 'ok' && !refusedByDriver) return { ok: true, text: result.message || `done in ${result.duration_s} s` };
+  const why = result.refused ? `refused: ${result.refused}` : refusedByDriver ? refusedByDriver.code : result.outcome;
+  return { ok: false, text: `${why}${(result.message || (refusedByDriver && refusedByDriver.message)) ? ` · ${result.message || refusedByDriver.message}` : ''}` };
+}
+
+// The row label of an entity (moteus-c1 · CAN 15), else its API name.
+function entityLabel(path) {
+  const key = S.built && S.built.byEntity.get(path);
+  const row = key && S.built.byKey.get(key);
+  if (row && row.entity === path) return row.label;
+  const node = S.byPath && S.byPath.get(path);
+  return node ? node.name : path;
+}
+
+// A run of another entity is kept with its entity (S.runs) while the viewer looks elsewhere, and comes back with it.
+function stashRun(path) {
+  if (S.util && S.util.path !== path) {
+    if (S.util.phase === 'running' || S.util.phase === 'done') S.runs.set(S.util.path, S.util);
+    S.util = null;
+  }
+  if (path && !S.util && S.runs.has(path)) { S.util = S.runs.get(path); S.runs.delete(path); }
 }
 
 // The host's passive evaluation (pass / fail / unknown + detail) beside the plugin's own reading, by check name.
@@ -983,7 +1280,7 @@ function resultHtml(util) {
 
 function dryRunPanel(action) {
   const util = S.util;
-  const close = '<button class="btn" data-util-close>Close</button>';
+  const close = '<button class="btn" data-util-close>Cancel</button>';
   // asking / running: no panel and no live output; the row itself greys out with one quiet line ("Asking … what it would
   // run…", "Checking communication… 3 s"; Zach, 2026-10-23), and the panel comes back with the result
   if (util.phase === 'dry' || util.phase === 'running') return '';
@@ -1003,15 +1300,19 @@ function dryRunPanel(action) {
   if (util.phase === 'done') foot = `<button class="btn" data-util-again>Dry run again</button>${close}`;
   else if (action.danger === 'query') foot = `<button class="btn primary query" data-util-run${runnable ? '' : ' disabled'}>Run ${esc(plainTitle(action.title))}</button>${close}`;
   else foot = `<button class="btn primary ${esc(action.danger)}" data-util-run${runnable ? '' : ' disabled'}>Continue…</button>${close}`;
+  // the sheet stays small (round 3.5): what will run, its preconditions, the confirm text, Run / Cancel; the steps and
+  // the plugin command line it runs through are one click further ("How it runs ▸")
+  const how = `${stepsHtml(answer) ? `<div class="u-k">Steps</div><div class="u-v">${stepsHtml(answer)}</div>` : ''}`
+    + `<div class="u-k">Through</div><div class="u-v"><code class="u-argv">${esc((result.argv || []).join(' '))}</code></div>`;
   return `<div class="u-panel">`
     + `<div class="u-panel-h">Dry run · nothing ran<span class="right muted">its token is good for ${esc(expires)}</span></div>`
     + `<div class="u-k">Will run</div><div class="u-v"><code class="u-cmd">${esc(command || 'in-process (no command line)')}</code>`
     + `${answer.command_kind ? ` <span class="tag recorded">${esc(answer.command_kind)}</span>` : ''}</div>`
-    + `${stepsHtml(answer) ? `<div class="u-k">Steps</div><div class="u-v">${stepsHtml(answer)}</div>` : ''}`
     + `<div class="u-k">Preconditions</div><div class="u-v">${preconditionsHtml(preconditionRows(action, answer))}</div>`
     + `${confirm ? `<div class="u-k">Confirm</div><div class="u-v"><div class="confirm">${esc(confirm)}</div></div>` : ''}`
     + `${!runnable ? `<div class="banner blocked">◌ <span><b>${esc(action.reason || action.state)}</b></span></div>` : ''}`
-    + `<div class="u-k">Through</div><div class="u-v"><code class="u-argv">${esc((result.argv || []).join(' '))}</code></div>`
+    + `<button class="u-how-t" data-sheet-more aria-expanded="${S.sheetMore}">How it runs ${S.sheetMore ? '▾' : '▸'}</button>`
+    + `<div class="u-how${S.sheetMore ? ' open' : ''}">${how}</div>`
     + `${util.phase === 'done' ? resultHtml(util) : ''}`
     + `<div class="u-foot">${foot}</div></div>`;
 }
@@ -1059,10 +1360,13 @@ function utilityContext(actions, path) {
       if (now === 'running') return `${gerund(action.title)}… ${Math.max(0, Math.round((Date.now() - active.startedAt) / 1000))} s`;
       return '';
     },
-    panel: (action) => (isActive(action) ? dryRunPanel(action) : ''),
+    // round 3.5: the dry run reads in the sheet under the Utilities ▾ button, never inside the menu's rows
+    panel: () => '',
   };
 }
 
+// The menu's rows: the active utility menu (u0's quiet rows by default: icon + title, the description as a tooltip,
+// Checks / Maintenance / Motion) inside the header's dropdown.
 function renderUtilities(actions, path) {
   if (!actions || !actions.length) return '';
   const menu = menus()[S.menu] || menus()[DEFAULTS.menu];
@@ -1073,6 +1377,68 @@ function renderUtilities(actions, path) {
     console.error(`utility menu ${S.menu}:`, error);
     return `<div class="err">utility menu ${esc(S.menu)} failed: ${esc(error)}</div>`;
   }
+}
+
+// The entity header's tools: Utilities ▾ at the same place on every entity page (disabled where there are none), its
+// menu, and the dry-run sheet anchored under it. The sheet is the dry run (what will run, preconditions, Run / Cancel);
+// anything but a query then confirms in the modal, a safety gate and not feedback.
+const CARET = '<svg class="ent-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
+function entityTools() {
+  const detail = S.sel && !S.selKey && S.node && S.node.node.path === S.sel ? S.node : null;
+  const actions = (detail && detail.actions) || [];
+  const path = detail ? detail.node.path : null;
+  const none = !actions.length;
+  const open = S.menuOpen && !none;
+  const title = S.selKey ? 'A grouping row has no utilities' : !detail ? 'Utilities (loading…)'
+    : none ? 'No utilities for this entity' : `${actions.length} utilit${actions.length === 1 ? 'y' : 'ies'} · ${actions[0].owner || 'its plugin'} runs them · every one is a dry run first`;
+  const button = `<button class="ent-util-btn${open ? ' on' : ''}" id="ent-util-btn" aria-haspopup="menu" aria-expanded="${open}" aria-controls="ent-menu"${none ? ' disabled' : ''} title="${esc(title)}">`
+    + `<span>Utilities</span>${CARET}</button>`;
+  const menu = open ? `<div class="ent-menu" id="ent-menu" role="menu" aria-label="Utilities">${renderUtilities(actions, path)}</div>` : '';
+  const util = S.util && S.util.path === path ? S.util : null;
+  const sheet = !open && util && ['dry', 'shown', 'confirm'].includes(util.phase) ? sheetHtml(util, actions) : '';
+  return `<div class="ent-tools">${button}${menu}${sheet}</div>`;
+}
+
+function sheetHtml(util, actions) {
+  const action = actions.find((item) => item.name === util.name);
+  if (!action) return '';
+  const danger = action.danger !== 'query' ? `<span class="danger ${esc(action.danger)}">${esc(action.danger)}</span>` : '';
+  const body = util.phase === 'dry' ? `<div class="ent-asking u-busy">Asking ${esc(action.owner)} what it would run…</div>` : dryRunPanel(action);
+  return `<div class="ent-sheet" role="dialog" aria-label="${esc(`Dry run: ${plainTitle(action.title)}`)}">`
+    + `<div class="ent-sheet-h">${utilIcon(action.name)}<b>${esc(plainTitle(action.title))}</b>${danger}</div>${body}</div>`;
+}
+
+// The quiet one-line run status under the entity header: "Updating firmware on moteus-c1 · CAN 21… 42 s" while it runs
+// (muted, never a warning colour), then its result ("Firmware updated to 1.1.2 · just now · Details ▸"); Details opens
+// the run's records and output tail. Only a failure is a diagnostic-level line, the one place colour is allowed.
+function runLine() {
+  const path = S.selKey ? null : S.sel;
+  const util = S.util && S.util.path === path && (S.util.phase === 'running' || S.util.phase === 'done') ? S.util : null;
+  if (!util) return '';
+  if (util.phase === 'running') {
+    const seconds = Math.max(0, Math.round((Date.now() - util.startedAt) / 1000));
+    return `<div class="ent-run running" role="status" aria-live="polite"><span class="ent-run-t">${esc(gerund(util.title))} on ${esc(util.label)}… ${seconds} s</span></div>`;
+  }
+  const outcome = runOutcome(util);
+  const age = (Date.now() - util.doneAt) / 1000;
+  const when = age < 10 ? 'just now' : `${ago(age)} ago`;
+  const words = outcome.ok ? outcome.text : `${plainTitle(util.title)} failed · ${outcome.text}`;
+  const more = `<button class="ent-run-more" data-run-details aria-expanded="${S.runDetails}">Details ${S.runDetails ? '▾' : '▸'}</button>`;
+  return `<div class="ent-run ${outcome.ok ? 'ok' : 'fail'}" role="status"${outcome.ok ? '' : ' data-diagnostic'}>`
+    + `${outcome.ok ? '' : shape('error', 'failed')}<span class="ent-run-t" title="${esc(words)}">${esc(words)} · ${esc(when)} · </span>${more}</div>`
+    + (S.runDetails ? `<div class="ent-run-details">${runDetailsHtml(util)}</div>` : '');
+}
+
+// the run's events and output tail, as the host answered (Details ▸)
+function runDetailsHtml(util) {
+  if (!util.result) return `<div>${esc(util.refused)}${util.error ? ` · ${esc(util.error)}` : ''}</div>`;
+  const result = util.result;
+  const lines = (result.records || []).map((record) => `<li><span class="mono">${esc(record.code || record.record || '')}</span> ${esc(record.message || record.name || '')}</li>`).join('');
+  return `${lines ? `<ul class="u-records">${lines}</ul>` : '<div class="muted">No records.</div>'}`
+    + `${(result.rejected || []).length ? `<pre class="u-tail">${esc(result.rejected.join('\n'))}</pre>` : ''}`
+    + `${result.stderr_tail ? `<pre class="u-tail">${esc(result.stderr_tail)}</pre>` : ''}`
+    + `<div class="muted">${esc(result.plugin || '')} · ${esc(result.outcome)} · ${esc(result.duration_s)} s · exit ${esc(result.returncode)}`
+    + `${(result.argv || []).length ? ` · <code>${esc(result.argv.join(' '))}</code>` : ''}</div>`;
 }
 
 // The confirm modal for anything but a query: the danger repeated in words, the plugin's confirm text, what runs,
@@ -1182,6 +1548,7 @@ async function saveSetup() {
     const rigs = (S.data && S.data.expected_setup && S.data.expected_setup.rigs) || [];
     const target = (rigs.find((rig) => rig.name === edit.rig) || {}).path || S.data.tree.path;
     select(target);
+    pushNav();
     S.setup = { ...edit, path: target };
     render();
     return;
@@ -1288,6 +1655,7 @@ function renderStatusbar() {
 function render() {
   if (!S.data) return;
   const byPath = index(S.data.tree);
+  S.byPath = byPath;
   S.built = IOView.build(S.data, S.structure, { ...structureOptions(), query: S.query, sort: S.sort, changes: changesOf(S.act) });
   $('clock').textContent = S.data.clock.iso ? `${S.data.clock.iso.slice(5, 10)}  ${S.data.clock.time}` : '—';
   const fixture = S.data.fixture;
@@ -1325,12 +1693,17 @@ function render() {
   renderStatusbar();
 }
 
+// A new selection: its node loads, the drill below the old one closes. A utility belongs to the entity it was opened
+// on: a dry run closes, a run (running or done) stays with its entity and comes back with it; so does a setup edit.
+// The caller pushes the history entry (pushNav), or replaces it when the page chose the selection itself.
 function select(path) {
   S.sel = path;
   S.selKey = null;
   S.node = null;
-  if (S.util && S.util.path !== path) S.util = null; // a utility belongs to the entity it was opened on
-  if (S.setup && S.setup.path !== path) S.setup = null; // so does an Expected setup edit
+  S.drill = { ...NO_DRILL };
+  S.menuOpen = false;
+  stashRun(path);
+  if (S.setup && S.setup.path !== path) S.setup = null;
   loadNode();
 }
 
@@ -1340,6 +1713,12 @@ document.addEventListener('click', (event) => {
   // View options: its button toggles it, a click anywhere else closes it (and still does what it clicked)
   if (t.closest('#vo-btn')) { setViewOptions(!S.vo); return; }
   if (S.vo && !t.closest('#view-options')) setViewOptions(false);
+  // the entity header's Utilities ▾: its button toggles the menu, a click anywhere else closes it (light dismiss)
+  if (t.closest('#ent-util-btn')) { S.menuOpen = !S.menuOpen; return render(); }
+  if (t.closest('[data-util-menu]')) { S.menuOpen = true; event.stopPropagation(); return render(); }
+  if (S.menuOpen && !t.closest('.ent-menu')) { S.menuOpen = false; render(); }
+  if (t.closest('[data-run-details]')) { S.runDetails = !S.runDetails; return render(); }
+  if (t.closest('[data-sheet-more]')) { S.sheetMore = !S.sheetMore; return render(); }
   // a tree proposal handles its own clicks (selection reaches the page through onSelect); act only on the chip
   if (t.closest('.tree-pane')) { if (S.chip) { S.chip = false; render(); } return; }
   const toggle = t.closest('[data-toggle]');
@@ -1357,15 +1736,22 @@ document.addEventListener('click', (event) => {
   if (t.closest('#insp-pin')) return setPinned(!S.inspPinned);
   if (t.closest('#insp-close')) { S.inspPinned = false; writePref(PREFS.inspectorPinned, '0'); return setInspector(false); }
   const sec = t.closest('[data-sec-toggle]');
-  if (sec) return toggleSection(sec.dataset.secToggle);
+  if (sec) return toggleSection(sec.dataset.secToggle, sec.getAttribute('aria-expanded') === 'true');
   const filter = t.closest('[data-act-filter]');
   if (filter) { S.actFilter = filter.dataset.actFilter; return render(); }
   const view = t.closest('[data-view]');
-  if (view) { S.view = view.dataset.view; return render(); }
+  if (view) { S.view = view.dataset.view; pushNav(); return render(); }
   if (t.closest('#chip')) { S.chip = !S.chip; return render(); }
   const go = t.closest('[data-go]');
-  if (go) { select(go.dataset.go); S.chip = false; if (S.view === 'activity') S.view = 'tree'; return render(); }
-  if (t.closest('[data-tab]')) { S.view = t.closest('[data-tab]').dataset.tab; S.chip = false; return render(); }
+  if (go) {
+    // the selection itself again (a "back to this entity" link): only its drill closes, the node stays loaded
+    if (go.dataset.go === S.sel && !S.selKey) { S.drill = { ...NO_DRILL }; S.menuOpen = false; } else select(go.dataset.go);
+    S.chip = false;
+    if (S.view === 'activity') S.view = 'tree';
+    pushNav();
+    return render();
+  }
+  if (t.closest('[data-tab]')) { S.view = t.closest('[data-tab]').dataset.tab; S.chip = false; pushNav(); return render(); }
   if (t.closest('[data-close]')) { S.chip = false; return render(); }
   // utilities: a click dry-runs; Run (a query) or Continue… (the confirm modal) only after it
   const util = t.closest('[data-util]');
@@ -1414,12 +1800,16 @@ document.addEventListener('click', (event) => {
     onTreeSelect(row.dataset.key);
     return render();
   }
-  if (row) { if (S.view === 'activity') S.view = 'tree'; onTreeSelect(row.dataset.key); return render(); }
+  if (row) { if (S.view === 'activity') S.view = 'tree'; onTreeSelect(row.dataset.key); pushNav(); return render(); }
   // a click back into the table's empty space folds the inspector
   if (S.view === 'table' && t.closest('#left') && S.inspOpen && !S.inspPinned) return setInspector(false);
   if (S.chip && !t.closest('#chip-pop')) { S.chip = false; render(); }
 });
 $('search').addEventListener('input', (event) => { S.query = event.target.value; render(); });
+$('history-window').addEventListener('change', (event) => { const seconds = Number(event.target.value); if (seconds > 0) setWindow(seconds); });
+// the scroll position of the drill step on screen (restored when back / forward returns to it); a scroll while another
+// step is still loading belongs to no step
+$('detail').addEventListener('scroll', () => { if (S.drawnAt && S.drawnAt === drillAt()) S.scrolls.set(S.drawnAt, $('detail').scrollTop); }, { passive: true });
 $('structure-toggles').addEventListener('change', (event) => {
   const box = event.target.closest('[data-opt]');
   if (box) setToggle(box.dataset.opt, box.checked);
@@ -1449,8 +1839,11 @@ document.addEventListener('keydown', (event) => {
     return;
   }
   if (event.key !== 'Escape') return;
-  // one layer at a time, innermost first: the confirm, the setup edit, the chip, View options, then the inspector
+  // one layer at a time, innermost first: the confirm, the Utilities menu, its dry-run sheet, the setup edit, the
+  // chip, View options, then the inspector
   if (S.util && S.util.phase === 'confirm') S.util.phase = 'shown';
+  else if (S.menuOpen) { S.menuOpen = false; render(); $('ent-util-btn') && $('ent-util-btn').focus(); event.preventDefault(); return; }
+  else if (S.util && (S.util.phase === 'shown' || S.util.phase === 'dry') && S.util.path === S.sel) S.util = null;
   else if (S.setup && S.setup.phase === 'confirm') S.setup = null;
   else if (S.chip) S.chip = false;
   else if (S.vo) setViewOptions(false);
@@ -1462,7 +1855,7 @@ async function boot() {
   // index.html's inline script already set data-skin / data-mode from storage, so the first paint is right
   const [skins, structures, detailLayouts, utilityMenus] = await Promise.all([readManifest('skins/index.json', 'skins'),
     readManifest('view/structure/index.json', 'structures'), readManifest('detail/index.json', 'layouts'), readManifest('utilities/index.json', 'menus')]);
-  S.skins = skins.entries.length ? skins.entries : [{ id: DEFAULTS.skin, name: 'Bare Metal', file: 'contrast.css', primary: true }];
+  S.skins = skins.entries.length ? skins.entries : [{ id: DEFAULTS.skin, name: 'shadcn/ui', file: 'shadcn.css', primary: true }];
   await Promise.all([
     ...S.skins.map((skin) => loadStylesheet(`skins/${skin.file}`, skin.id)),
     ...structures.entries.map((entry) => loadScript(`view/structure/${entry.file}`)),
@@ -1474,7 +1867,9 @@ async function boot() {
   setupSwitcher();
   setupPrototype(detailLayouts.default, utilityMenus.default);
   S.inspPinned = readPref(PREFS.inspectorPinned) === '1';
+  if (S.view === 'table' && (S.sel || S.selKey) && (S.drill.diag || S.drill.page)) S.inspOpen = true;
   setupPanes();
+  loadSettings();
   tick();
   setInterval(tick, 1000);
 }

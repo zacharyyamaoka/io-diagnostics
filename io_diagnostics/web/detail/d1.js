@@ -4,7 +4,10 @@
 // · message, problems first, OK rows quiet. A row expands in place to its values, measurements (one sparkline each,
 // from /api/v1/history) and metadata; its name opens that one diagnostic's own page (message history, trends,
 // metadata, what to check) with a back link. Below: the children with their own mini bars, then everything else folded
-// (identity, connection, utilities last).
+// (identity, connection). The utilities are the page's, in the entity header's Utilities ▾ (round 3.5).
+// Round 3.5 seams: the history comes from the page's shared cache (ctx.history, ctx.bar), the diagnostic page is the
+// page's drill (ctx.diagnostic, ctx.openDiagnostic / closeDiagnostic: back / forward work), folded sections are
+// ctx.section(..., {defaultOpen: false}).
 // WHY this order: Zach, 2026-10-23: "the first thing you see on the entity is the table that shows the different
 // diagnostics, their current status and the message. and then if you click it will maybe drop down and you can see the
 // attached values etc or meta data … perhaps little spark lines? or if you click to expand into the diagnostic that
@@ -15,44 +18,12 @@
   const RANK = { ok: 0, warn: 1, unknown: 2, stale: 3, error: 4 };
   const PROBLEM = new Set(['warn', 'unknown', 'stale', 'error']);
   const BINS = 60;            // the entity's health bar; the children's mini bars reuse the same bins
-  const BAR_EVERY_MS = 3000;  // the bar and the history refresh at the API's suggested 2-5 s
-  const HISTORY_EVERY_MS = 3000;
-  const OPEN_PREF = 'io-diagnostics.d1.open'; // the folded sections this viewer opened (they start folded)
   const HIDDEN_VALUES = new Set(['what_to_check', 'kernel_evidence']); // drawn as the checklist, not as values
 
   // ------------------------------------------------------------------------------------------ state ----
   const expanded = new Set();   // `${entity path}\u0001${check name}`: rows opened in place
-  let drill = null;             // {path, name}: the diagnostic whose own page is shown
-  let opened = new Set();
-  try { opened = new Set(JSON.parse(localStorage.getItem(OPEN_PREF) || '[]')); } catch (_) { opened = new Set(); }
-  const saveOpened = () => { try { localStorage.setItem(OPEN_PREF, JSON.stringify([...opened])); } catch (_) { /* this page only */ } };
-  let last = null;              // {container, detail, ctx}: the last draw, so a click or a fetch can draw again
+  let last = null;              // {container, detail, ctx}: the last draw, so a click can draw again
   const wired = new WeakSet();
-
-  // ------------------------------------------------------------------------------- history fetches ----
-  // One small cache per URL; a fetch that lands draws again (only while this layout owns the panel).
-  const cache = new Map();
-  function want(url, everyMs) {
-    const now = Date.now();
-    const known = cache.get(url);
-    if (known && (known.loading || now - known.at < everyMs)) return known;
-    const entry = { data: known ? known.data : null, error: known ? known.error : '', at: now, loading: true };
-    cache.set(url, entry);
-    fetch(url).then((response) => response.json()).then((data) => {
-      entry.loading = false; entry.at = Date.now();
-      if (data && data.error) { entry.error = String(data.error); entry.data = null; } else { entry.data = data; entry.error = ''; }
-      redraw();
-    }).catch((error) => { entry.loading = false; entry.at = Date.now(); entry.error = String(error); redraw(); });
-    if (cache.size > 64) for (const [key, value] of cache) if (now - value.at > 60000) cache.delete(key);
-    return entry;
-  }
-  const barUrl = (path) => `/api/v1/history/bar?path=${encodeURIComponent(path)}&bins=${BINS}`;
-  const historyUrl = (path, status) => `/api/v1/history?path=${encodeURIComponent(path)}${status ? `&status=${encodeURIComponent(status)}` : ''}`;
-
-  function redraw() {
-    if (!last || !last.container.querySelector('[data-d1]')) return; // another layout draws the panel now
-    root.IODetailLayouts.d1.render(last.container, last.detail, last.ctx);
-  }
 
   // ---------------------------------------------------------------------------------- formatting ----
   const pad = (n) => String(n).padStart(2, '0');
@@ -67,9 +38,6 @@
     const at = String(name).indexOf(': ');
     return at > 0 ? `<span class="d1-pre">${h.esc(name.slice(0, at + 2))}</span>${h.esc(name.slice(at + 2))}` : h.esc(name);
   }
-  // A level pill IS a diagnostic result (the entity's or the check's level): mark it so, as the warn-colours gate reads.
-  const tagPills = (html) => html.replace(/<span class="pill (warn|error|stale|unknown)">/g, '<span class="pill $1" data-diagnostic>')
-    .replace(/<div class="banner stale">/g, '<div class="banner stale" data-diagnostic>');
 
   // ---------------------------------------------------------------------------------- the marks ----
   // The health bar: one cell per bin, the worst level any status held in it, as the API computed it. null = no data
@@ -128,13 +96,8 @@
   }
 
   // --------------------------------------------------------------------------------- the pieces ----
-  function fold(id, title, body, right) {
-    if (!body) return '';
-    const open = opened.has(id);
-    return `<section class="sec ${id}" data-sec="${id}"><h3 class="sec-h"><button class="sec-t" data-d1-fold="${id}" aria-expanded="${open}">`
-      + `<svg class="ic sec-chev"><use href="#i-chev"/></svg><span>${title}</span></button>${right ? `<span class="right">${right}</span>` : ''}</h3>`
-      + `${open ? `<div class="sec-b">${body}</div>` : ''}</section>`;
-  }
+  // the rest of the entity starts folded: the page's collapsible section, remembered per id once opened
+  const fold = (ctx, id, title, body, right) => ctx.section(id, title, body, { right, defaultOpen: false });
   const plain = (id, title, body, right) => (body ? `<section class="sec ${id}"><h3 class="sec-h d1-h"><span>${title}</span>${right ? `<span class="right">${right}</span>` : ''}</h3><div class="sec-b">${body}</div></section>` : '');
 
   function checklist(check, h) {
@@ -210,7 +173,7 @@
 
   function healthBar(path, ctx, label) {
     const h = ctx.h;
-    const entry = want(barUrl(path), BAR_EVERY_MS);
+    const entry = ctx.bar(path, BINS);
     const data = entry.data && entry.data.path === path ? entry.data : null;
     if (!data) return `<div class="d1-bar"><div class="d1-axis"><span>${entry.error ? `no history: ${h.esc(entry.error)}` : 'history loading…'}</span></div></div>`;
     const own = data.rows.find((row) => row.depth === 0);
@@ -227,7 +190,7 @@
     if (!checks.length) return '';
     const sets = node && PROBLEM.has(node.level) && node.own.level !== null ? node.level : null;
     const anyOpen = checks.some((c) => expanded.has(`${node.path}\u0001${c.name}`));
-    const history = anyOpen ? want(historyUrl(node.path), HISTORY_EVERY_MS) : null;
+    const history = anyOpen ? ctx.history(node.path) : null;
     const data = history && history.data && history.data.path === node.path ? history.data : null;
     const rows = checks.map((check) => {
       const level = check.effective_level;
@@ -255,7 +218,7 @@
     const h = ctx.h;
     const children = (node && node.children) || [];
     if (!children.length) return '';
-    const entry = cache.get(barUrl(node.path));
+    const entry = ctx.bar(node.path, BINS);
     const data = entry && entry.data && entry.data.path === node.path ? entry.data : null;
     const bars = new Map(data ? data.rows.filter((row) => row.depth === 1).map((row) => [row.path, row]) : []);
     const worst = (child) => Math.max(rankOf(child.level), child.hint ? rankOf(child.hint.level) : -1);
@@ -280,35 +243,33 @@
     const checks = detail.checks.map((check, at) => ({ check, at }))
       .sort((a, b) => (rankOf(b.check.effective_level) - rankOf(a.check.effective_level)) || (a.at - b.at)).map(({ check }) => check);
     const problems = checks.filter((c) => PROBLEM.has(c.effective_level)).length;
-    const owner = (detail.actions[0] || {}).owner || '';
     const kids = (node.children || []).length;
-    return `${tagPills(p.head())}${tagPills(p.banners())}<div class="d-body" data-d1>`
+    return `${p.head()}${p.banners()}<div class="d-body" data-d1>`
       + rollsUp(node, checks, ctx)
       + healthBar(node.path, ctx)
       + plain('d1-diag', `Diagnostics · ${checks.length}`, statusTable(node, checks, ctx) || '<div class="muted">No diagnostics of its own.</div>',
         problems ? `${problems} problem${problems === 1 ? '' : 's'} first · click a row for its values` : 'click a row for its values, a name for its page')
       + plain('d1-children', `Below · ${kids}`, childrenList(node, ctx), 'each row\'s own health over the same window')
-      + fold('faults', `Faults · ${detail.faults.length}`, p.faults())
-      + fold('events', `Events · ${detail.events.length}`, detail.events.length ? p.events() : '')
-      + fold('links', 'Link health', p.links(), 'the computer diagnoses its own wires')
-      + fold('setup', 'Expected setup', p.setup(), 'the rig file, never the device')
-      + fold('status', 'Rollup', p.status())
-      + fold('identity', 'Identity', p.identity())
-      + fold('connection', `Connection · ${ctx.counts.connection}`, p.connection(), 'the layers this row is reached through')
-      + fold('utilities', `Utilities · ${detail.actions.length}`, p.utilities(), owner ? `${h.esc(owner)} runs them · every click is a dry run first` : '')
+      + fold(ctx, 'faults', `Faults · ${detail.faults.length}`, p.faults())
+      + fold(ctx, 'events', `Events · ${detail.events.length}`, detail.events.length ? p.events() : '')
+      + fold(ctx, 'links', 'Link health', p.links(), 'the computer diagnoses its own wires')
+      + fold(ctx, 'setup', 'Expected setup', p.setup(), 'the rig file, never the device')
+      + fold(ctx, 'status', 'Rollup', p.status())
+      + fold(ctx, 'identity', 'Identity', p.identity())
+      + fold(ctx, 'connection', `Connection · ${ctx.counts.connection}`, p.connection(), 'the layers this row is reached through')
       + '</div>';
   }
 
   // --------------------------------------------------------------------------- the diagnostic page ----
   function diagnosticPage(node, detail, check, ctx) {
     const h = ctx.h;
-    const name = drill.name;
+    const name = ctx.diagnostic.name;
     const back = `<div class="d1-back"><a class="link" data-d1-back tabindex="0">← ${h.esc(ctx.row ? ctx.row.label : node.name)}</a><span class="d1-crumb"> › diagnostic</span></div>`;
-    const history = want(historyUrl(node.path, name), HISTORY_EVERY_MS / 1.5);
+    const history = ctx.history(node.path, { status: name, everyMs: 2000 });
     const data = history.data && history.data.path === node.path ? history.data : null;
     const status = data ? (data.statuses || []).find((s) => s.name === name) || null : null;
     const level = check ? check.effective_level : null;
-    const head = `<div class="d-head">${back}<div class="d-title">${h.icon(node.icon)}<span>${h.esc(name)}</span>${tagPills(h.pill(level))}</div>`
+    const head = `<div class="d-head">${back}<div class="d-title">${h.icon(node.icon)}<span>${h.esc(name)}</span>${h.pill(level)}</div>`
       + `<div class="d-msg">${check ? h.esc(check.message || '—') : '<span class="muted">This diagnostic is no longer reported; its history stays.</span>'}`
       + `${check && check.code ? ` <span class="mono muted">${h.esc(check.code)}</span>` : ''}</div>`
       + `<div class="d-path">${h.esc(node.name)} · ${h.esc(node.path)}</div></div>`;
@@ -326,7 +287,7 @@
         + `<span class="d1-hl">${lv}</span><span class="d1-hm">${h.esc(item.message || '')}${item.code ? ` <span class="mono d1-code">${h.esc(item.code)}</span>` : ''}</span></div>`;
     }).join('') : '';
     const meta = check ? h.kv([
-      ['level now', `${tagPills(h.pill(check.effective_level))}${check.level !== check.effective_level ? ` <span class="muted">reported ${h.esc(check.level)}</span>` : ''}`],
+      ['level now', `${h.pill(check.effective_level)}${check.level !== check.effective_level ? ` <span class="muted">reported ${h.esc(check.level)}</span>` : ''}`],
       ['code', check.code ? `<span class="mono">${h.esc(check.code)}</span>` : '<span class="muted">—</span>'],
       ['source', h.esc(check.source || '—')],
       check.hardware_id ? ['hardware id', `<span class="mono">${h.esc(check.hardware_id)}</span>`] : null,
@@ -342,7 +303,7 @@
       + plain('d1-history', `Message history · ${status ? status.levels.length : 0}`, changes, 'newest first; a run of equal reports is one line')
       + (check ? plain('d1-values', 'Values', valuesKv(check, h)) : '')
       + plain('d1-metadata', 'Metadata', meta)
-      + (check && !PROBLEM.has(level) ? fold('why', 'What to check', checklist(check, h)) : '')
+      + (check && !PROBLEM.has(level) ? fold(ctx, 'why', 'What to check', checklist(check, h)) : '')
       + '</div>';
   }
 
@@ -439,31 +400,25 @@
     if (wired.has(container)) return;
     wired.add(container);
     const act = (target) => {
+      if (!last || !container.querySelector('[data-d1]')) return false; // another layout draws the panel now
       const openEl = target.closest('[data-d1-open]');
       const backEl = target.closest('[data-d1-back]');
       const expandEl = target.closest('[data-d1-expand]');
-      const foldEl = target.closest('[data-d1-fold]');
-      const path = last && last.ctx.node && last.ctx.node.path;
-      if (backEl) { drill = null; if (!backEl.hasAttribute('data-go')) redraw(); return true; }
-      if (openEl && path) { drill = { path, name: openEl.dataset.d1Open }; redraw(); if (last) last.container.scrollTop = 0; return true; }
+      const path = last.ctx.node && last.ctx.node.path;
+      // the entity link carries data-go too: the page closes the drill then (the same entity again)
+      if (backEl) { if (!backEl.hasAttribute('data-go')) last.ctx.closeDiagnostic(); return true; }
+      if (openEl && path) { last.ctx.openDiagnostic(openEl.dataset.d1Open); return true; }
       if (expandEl && path) {
         const key = `${path}\u0001${expandEl.dataset.d1Expand}`;
         if (expanded.has(key)) expanded.delete(key); else expanded.add(key);
-        redraw();
-        return true;
-      }
-      if (foldEl) {
-        const id = foldEl.dataset.d1Fold;
-        if (opened.has(id)) opened.delete(id); else opened.add(id);
-        saveOpened();
-        redraw();
+        last.ctx.redraw();
         return true;
       }
       return false;
     };
     container.addEventListener('click', (event) => {
       const target = event.target;
-      if (!(target instanceof Element) || target.closest('[data-util], .u-panel, input, select, textarea')) return;
+      if (!(target instanceof Element) || target.closest('.ent-tools, [data-util], .u-panel, input, select, textarea')) return;
       act(target);
     });
     container.addEventListener('keydown', (event) => {
@@ -477,7 +432,7 @@
   root.IODetailLayouts = root.IODetailLayouts || {};
   root.IODetailLayouts.d1 = {
     name: 'Status monitor',
-    description: 'rqt_robot_monitor done quietly: level and reason, a health bar over the history window, then the diagnostics table (problems first, OK quiet); a row expands to its values and sparklines, a name opens that diagnostic\'s own page. Children with mini bars below; the rest folded, utilities last.',
+    description: 'rqt_robot_monitor done quietly: level and reason, a health bar over the history window, then the diagnostics table (problems first, OK quiet); a row expands to its values and sparklines, a name opens that diagnostic\'s own page. Children with mini bars below; the rest folded.',
     order: 1,
     // container = #detail; detail = GET /api/v1/node for the selection (null while it loads, or for a grouping row);
     // ctx = the page's building blocks (docs/round2-seams.md §6). Called every second: ctx.draw() skips an unchanged page.
@@ -487,19 +442,19 @@
       last = { container, detail, ctx };
       const p = ctx.parts;
       if (ctx.group) {
-        drill = null;
-        ctx.draw(`${tagPills(p.head())}<div class="d-body" data-d1>${plain('members', `Members · ${ctx.counts.members}`, p.members())}`
-          + `${fold('links', 'Link health', p.links(), 'the computer diagnoses its own wires')}</div>`);
+        ctx.draw(`${p.head()}<div class="d-body" data-d1>${plain('members', `Members · ${ctx.counts.members}`, p.members())}`
+          + `${fold(ctx, 'links', 'Link health', p.links(), 'the computer diagnoses its own wires')}</div>`);
         return;
       }
       const node = ctx.node;
-      if (drill && (!node || drill.path !== node.path)) drill = null;
       if (!detail) {
-        ctx.draw(`${tagPills(p.head())}${tagPills(p.banners())}<div class="d-body" data-d1>${node ? healthBar(node.path, ctx) : ''}<div class="muted">loading…</div></div>`);
+        ctx.draw(`${p.head()}${p.banners()}<div class="d-body" data-d1>${node ? healthBar(node.path, ctx) : ''}<div class="muted">loading…</div></div>`);
         return;
       }
-      if (drill) {
-        const check = detail.checks.find((c) => c.name === drill.name) || null;
+      // the page's drill: a diagnostic of this entity (a part's diagnostic is that part's own page here)
+      const open = ctx.diagnostic && ctx.diagnostic.path === node.path ? ctx.diagnostic : null;
+      if (open) {
+        const check = detail.checks.find((c) => c.name === open.name) || null;
         ctx.draw(diagnosticPage(node, detail, check, ctx));
         return;
       }

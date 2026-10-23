@@ -1,6 +1,6 @@
 {
-  "about": "Skins (docs/round2-seams.md). One entry per skin, pre-listed; the page loads only entries with ready=true. A skin lane writes skins/<id>.css and flips ONLY its own entry's ready to true (entries are blank-line separated so parallel lanes merge cleanly). Round 3: the Skin picker lists the `primary` entries first (the default first), every other ready skin under \"More skins\".",
-  "default": "contrast",
+  "about": "Skins (docs/round2-seams.md). One entry per skin, pre-listed; the page loads only entries with ready=true. A skin lane writes skins/<id>.css and flips ONLY its own entry's ready to true (entries are blank-line separated so parallel lanes merge cleanly). Round 3.5: the Skin pickers (View options and the bottom-right bar) list the `primary` entries first (the default first: shadcn/ui, then Pretty), the `family: bare-metal` entries together under \"Bare Metal\", every other ready skin under \"More skins\".",
+  "default": "shadcn",
   "skins": [
     {"id": "claude", "name": "Claude", "file": "claude.css", "ready": true},
 
@@ -12,7 +12,7 @@
 
     {"id": "foxglove", "name": "Foxglove / medkit", "file": "foxglove.css", "ready": true},
 
-    {"id": "shadcn", "name": "shadcn/ui", "file": "shadcn.css", "ready": true},
+    {"id": "shadcn", "name": "shadcn/ui", "file": "shadcn.css", "ready": true, "primary": true},
 
     {"id": "unstyled", "name": "Unstyled", "file": "unstyled.css", "ready": true},
 
@@ -22,16 +22,16 @@
 
     {"id": "linear", "name": "Linear", "file": "linear.css", "ready": true},
 
-    {"id": "contrast", "name": "Bare Metal", "file": "contrast.css", "ready": true, "primary": true},
+    {"id": "contrast", "name": "Bare Metal", "file": "contrast.css", "ready": true, "family": "bare-metal"},
 
-    {"id": "bare-1", "name": "Bare Metal · Ink", "file": "bare-1.css", "ready": true},
+    {"id": "bare-1", "name": "Bare Metal · Ink", "file": "bare-1.css", "ready": true, "family": "bare-metal"},
 
-    {"id": "bare-2", "name": "Bare Metal · Phosphor", "file": "bare-2.css", "ready": true},
+    {"id": "bare-2", "name": "Bare Metal · Phosphor", "file": "bare-2.css", "ready": true, "family": "bare-metal"},
 
-    {"id": "bare-3", "name": "Bare Metal · Operator Grey", "file": "bare-3.css", "ready": true},
+    {"id": "bare-3", "name": "Bare Metal · Operator Grey", "file": "bare-3.css", "ready": true, "family": "bare-metal"},
 
-    {"id": "bare-4", "name": "Bare Metal · Paper", "file": "bare-4.css", "ready": true},
+    {"id": "bare-4", "name": "Bare Metal · Paper", "file": "bare-4.css", "ready": true, "family": "bare-metal"},
 
-    {"id": "bare-5", "name": "Bare Metal · Top", "file": "bare-5.css", "ready": true}
+    {"id": "bare-5", "name": "Bare Metal · Top", "file": "bare-5.css", "ready": true, "family": "bare-metal"}
   ]
 }
