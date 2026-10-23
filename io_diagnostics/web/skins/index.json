@@ -24,14 +24,14 @@
 
     {"id": "contrast", "name": "Bare Metal", "file": "contrast.css", "ready": true, "primary": true},
 
-    {"id": "bare-1", "name": "Bare Metal 1 (stub)", "file": "bare-1.css", "ready": true},
+    {"id": "bare-1", "name": "Bare Metal · Ink", "file": "bare-1.css", "ready": true},
 
-    {"id": "bare-2", "name": "Bare Metal 2 (stub)", "file": "bare-2.css", "ready": true},
+    {"id": "bare-2", "name": "Bare Metal · Phosphor", "file": "bare-2.css", "ready": true},
 
-    {"id": "bare-3", "name": "Bare Metal 3 (stub)", "file": "bare-3.css", "ready": true},
+    {"id": "bare-3", "name": "Bare Metal · Operator Grey", "file": "bare-3.css", "ready": true},
 
-    {"id": "bare-4", "name": "Bare Metal 4 (stub)", "file": "bare-4.css", "ready": true},
+    {"id": "bare-4", "name": "Bare Metal · Paper", "file": "bare-4.css", "ready": true},
 
-    {"id": "bare-5", "name": "Bare Metal 5 (stub)", "file": "bare-5.css", "ready": true}
+    {"id": "bare-5", "name": "Bare Metal · Top", "file": "bare-5.css", "ready": true}
   ]
 }
