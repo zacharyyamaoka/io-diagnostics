@@ -4,14 +4,14 @@
   "layouts": [
     {"id": "d0", "name": "Top to bottom", "file": "d0.js", "ready": true},
 
-    {"id": "d1", "name": "Stub (= d0)", "file": "d1.js", "ready": true},
+    {"id": "d1", "name": "Status monitor", "file": "d1.js", "ready": true},
 
-    {"id": "d2", "name": "Stub (= d0)", "file": "d2.js", "ready": true},
+    {"id": "d2", "name": "State timeline", "file": "d2.js", "ready": true},
 
-    {"id": "d3", "name": "Stub (= d0)", "file": "d3.js", "ready": true},
+    {"id": "d3", "name": "Readable summary", "file": "d3.js", "ready": true},
 
-    {"id": "d4", "name": "Stub (= d0)", "file": "d4.js", "ready": true},
+    {"id": "d4", "name": "Resource monitor", "file": "d4.js", "ready": true},
 
-    {"id": "d5", "name": "Stub (= d0)", "file": "d5.js", "ready": true}
+    {"id": "d5", "name": "Drill", "file": "d5.js", "ready": true}
   ]
 }
