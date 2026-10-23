@@ -1,100 +1,106 @@
-/* STUB (orchestrator, 2026-10-22): a copy of Claude until the Linear skin lane replaces this file. */
-/* Skin 1 · Claude — the default (docs/round2-brief-2026-10-22.md: warm neutrals, serif display, generous spacing).
- * Defines every BASE token of web/tokens.css for both modes; derived tokens come from tokens.css.
- * WHY the selection is a warm grey, not the clay accent: OK rows carry no colour (quiet when OK), and a clay
- * selection would read as a warning next to the amber triangle. Clay stays for focus and the active control. */
+/* Skin 10 · Linear — Linear's app UI: dense 13px rows, hairline borders, its indigo #5e6ad2 as the only accent,
+ * near-black dark-first greys, plus a real light mode. Defines every BASE token of web/tokens.css for both modes;
+ * derived tokens come from tokens.css.
+ * Published / observable values used: indigo #5e6ad2 and its light tint #828fff, the dark greys #08090a (desk),
+ * #f7f8f8 (primary text), #d0d6e0 (secondary text), #8a8f98 (tertiary text), #23252a (border), the status colours
+ * red #eb5757, orange #f2994a, green #4cb782, blue #4ea7fc, grey #95a2b3, the Inter / Berkeley Mono stacks.
+ * Estimated: the dark panel greys (#0f1011 surface, #141516 raised), hover / selected, every light-mode grey, the
+ * light-mode status shades (Linear's orange, grey and blue darkened until they hold 3:1 on white), row height
+ * 28px, indent 14px, radii 6 / 4 / 10px.
+ * WHY unknown is Linear's blue and not a purple: purple sits next to the indigo accent and would read as the
+ * active control. WHY faint is not Linear's quaternary #62666d: it measures under 4.5:1 on the dark panel. */
 [data-skin="linear"][data-mode="light"] {
-  --io-bg: #e9e6dc;
-  --io-surface: #faf9f5;
-  --io-surface-2: #f4f2eb;
-  --io-surface-alt: #f5f3ec;
+  --io-bg: #f4f5f8;
+  --io-surface: #ffffff;
+  --io-surface-2: #fafafb;
+  --io-surface-alt: #f7f8f9;
   --io-field: #ffffff;
   --io-popover: #ffffff;
-  --io-chrome-bg: #1f1e1d;
-  --io-chrome-text: #edebe3;
+  --io-chrome-bg: #08090a;
+  --io-chrome-text: #f7f8f8;
 
-  --io-text: #3d3c37;
-  --io-text-strong: #141413;
-  --io-muted: #5f5d56;
-  --io-faint: #74726a;
-  --io-off: #b0ada3;
-  --io-icon: #85837b;
+  --io-text: #3c4149;
+  --io-text-strong: #1b1c1f;
+  --io-muted: #5f636b;
+  --io-faint: #6b6f76;
+  --io-off: #b4b7bd;
+  --io-icon: #6b6f76;
 
-  --io-border: #e0ddd2;
-  --io-border-soft: #ebe9e1;
+  --io-border: #e4e5e9;
+  --io-border-soft: #eeeff1;
 
-  --io-hover: #f1efe8;
-  --io-selected: #e8e5db;
-  --io-selected-line: #c5c1b4;
-  --io-accent: #c96442;
-  --io-accent-text: #a8502f;
-  --io-focus: #d97757;
+  --io-hover: #f2f2f4;
+  --io-selected: #eaebee;
+  --io-selected-line: #cfd1d6;
+  --io-accent: #5e6ad2;
+  --io-accent-text: #4f5bc4;
+  --io-focus: #5e6ad2;
 
-  --io-warn: #b7791f;
-  --io-error: #c83e32;
-  --io-stale: #8c897f;
-  --io-unknown: #7466b8;
+  --io-warn: #c4650f;
+  --io-error: #e5484d;
+  --io-stale: #7a8494;
+  --io-unknown: #2f80d9;
   --io-on-status: #ffffff;
-  --io-ok: #5e8c4a;
-  --io-info: #3f6fa8;
-  --io-shadow: #3d3929;
+  --io-ok: #2f9e6a;
+  --io-info: #5e6ad2;
+  --io-shadow: #08090a;
 
-  --io-font-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Ubuntu, Inter, sans-serif;
-  --io-font-mono: "JetBrains Mono", "Ubuntu Mono", ui-monospace, monospace;
-  --io-font-display: ui-serif, Georgia, Cambria, "Times New Roman", serif;
+  --io-font-ui: Inter, "Inter Variable", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --io-font-mono: "Berkeley Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --io-font-display: Inter, "Inter Variable", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --io-font-size: 13px;
 
-  --io-radius: 8px;
-  --io-radius-sm: 6px;
-  --io-radius-lg: 12px;
+  --io-radius: 6px;
+  --io-radius-sm: 4px;
+  --io-radius-lg: 10px;
   --io-row-h: 28px;
   --io-indent: 14px;
 }
 
 [data-skin="linear"][data-mode="dark"] {
-  --io-bg: #1f1e1d;
-  --io-surface: #262624;
-  --io-surface-2: #2b2a27;
-  --io-surface-alt: #232321;
-  --io-field: #1f1e1d;
-  --io-popover: #30302e;
-  --io-chrome-bg: #141413;
-  --io-chrome-text: #e5e3da;
+  --io-bg: #08090a;
+  --io-surface: #0f1011;
+  --io-surface-2: #141516;
+  --io-surface-alt: #0c0d0e;
+  --io-field: #141516;
+  --io-popover: #1c1d20;
+  --io-chrome-bg: #000000;
+  --io-chrome-text: #f7f8f8;
 
-  --io-text: #cfccc2;
-  --io-text-strong: #f5f4ee;
-  --io-muted: #a3a097;
-  --io-faint: #8f8c83;
-  --io-off: #5e5c56;
-  --io-icon: #9a978d;
+  --io-text: #d0d6e0;
+  --io-text-strong: #f7f8f8;
+  --io-muted: #8a8f98;
+  --io-faint: #80858e;
+  --io-off: #3e4047;
+  --io-icon: #8a8f98;
 
-  --io-border: #3a3935;
-  --io-border-soft: #31302d;
+  --io-border: #23252a;
+  --io-border-soft: #1a1b1e;
 
-  --io-hover: #2f2e2b;
-  --io-selected: #383733;
-  --io-selected-line: #5a5852;
-  --io-accent: #d97757;
-  --io-accent-text: #e39a7c;
-  --io-focus: #d97757;
+  --io-hover: #18191b;
+  --io-selected: #212225;
+  --io-selected-line: #3a3c42;
+  --io-accent: #5e6ad2;
+  --io-accent-text: #828fff;
+  --io-focus: #5e6ad2;
 
-  --io-warn: #e3a33a;
-  --io-error: #e5594e;
-  --io-stale: #9d9a90;
-  --io-unknown: #a497e0;
-  --io-on-status: #1f1e1d;
-  --io-ok: #7fb069;
-  --io-info: #78a6da;
+  --io-warn: #f2994a;
+  --io-error: #eb5757;
+  --io-stale: #95a2b3;
+  --io-unknown: #4ea7fc;
+  --io-on-status: #0f1011;
+  --io-ok: #4cb782;
+  --io-info: #828fff;
   --io-shadow: #000000;
 
-  --io-font-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Ubuntu, Inter, sans-serif;
-  --io-font-mono: "JetBrains Mono", "Ubuntu Mono", ui-monospace, monospace;
-  --io-font-display: ui-serif, Georgia, Cambria, "Times New Roman", serif;
+  --io-font-ui: Inter, "Inter Variable", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --io-font-mono: "Berkeley Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --io-font-display: Inter, "Inter Variable", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --io-font-size: 13px;
 
-  --io-radius: 8px;
-  --io-radius-sm: 6px;
-  --io-radius-lg: 12px;
+  --io-radius: 6px;
+  --io-radius-sm: 4px;
+  --io-radius-lg: 10px;
   --io-row-h: 28px;
   --io-indent: 14px;
 }

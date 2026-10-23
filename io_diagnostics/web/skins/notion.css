@@ -1,100 +1,105 @@
-/* STUB (orchestrator, 2026-10-22): a copy of Claude until the Notion skin lane replaces this file. */
-/* Skin 1 · Claude — the default (docs/round2-brief-2026-10-22.md: warm neutrals, serif display, generous spacing).
+/* Skin 3 · Notion — Notion's restraint: warm near-black text rgb(55 53 47) on white, light-grey hover, 4px radius,
+ * no colour anywhere except status (the accent, links and focus are the text colour, not Notion's button blue).
  * Defines every BASE token of web/tokens.css for both modes; derived tokens come from tokens.css.
- * WHY the selection is a warm grey, not the clay accent: OK rows carry no colour (quiet when OK), and a clay
- * selection would read as a warning next to the amber triangle. Clay stays for focus and the active control. */
+ * Published / observed values used: text #37352f, page #ffffff, sidebar #f7f7f5, divider #e9e9e7, grey background
+ * #f1f1ef, the red / orange / purple / green / blue text colours, the dark page #191919 + sidebar #202020 with
+ * text rgba(255 255 255 .81), the font stacks. Estimated: the selected row, the desk, the dark borders and hover
+ * (Notion's white-alpha modifiers flattened onto #191919), row height 28px, indent 12px, popover radius 6px.
+ * WHY muted / faint are darker than Notion's secondary #787774 and tertiary #9b9a97: those measure under 4.5:1 on
+ * white, and ids and messages are text the viewer must read. WHY the dark page is #191919, not the older #2f3437:
+ * it is Notion's dark grey since the 2023 redesign. */
 [data-skin="notion"][data-mode="light"] {
-  --io-bg: #e9e6dc;
-  --io-surface: #faf9f5;
-  --io-surface-2: #f4f2eb;
-  --io-surface-alt: #f5f3ec;
+  --io-bg: #f7f7f5;
+  --io-surface: #ffffff;
+  --io-surface-2: #fbfbfa;
+  --io-surface-alt: #f7f7f5;
   --io-field: #ffffff;
   --io-popover: #ffffff;
-  --io-chrome-bg: #1f1e1d;
-  --io-chrome-text: #edebe3;
+  --io-chrome-bg: #191919;
+  --io-chrome-text: #e6e6e5;
 
-  --io-text: #3d3c37;
-  --io-text-strong: #141413;
-  --io-muted: #5f5d56;
-  --io-faint: #74726a;
-  --io-off: #b0ada3;
-  --io-icon: #85837b;
+  --io-text: #37352f;
+  --io-text-strong: #1f1e1b;
+  --io-muted: #6b6a65;
+  --io-faint: #6f6e69;
+  --io-off: #b4b4b0;
+  --io-icon: #91918e;
 
-  --io-border: #e0ddd2;
-  --io-border-soft: #ebe9e1;
+  --io-border: #e9e9e7;
+  --io-border-soft: #f1f1ef;
 
-  --io-hover: #f1efe8;
-  --io-selected: #e8e5db;
-  --io-selected-line: #c5c1b4;
-  --io-accent: #c96442;
-  --io-accent-text: #a8502f;
-  --io-focus: #d97757;
+  --io-hover: #f1f1ef;
+  --io-selected: #e9e9e7;
+  --io-selected-line: #d3d3d0;
+  --io-accent: #37352f;
+  --io-accent-text: #37352f;
+  --io-focus: #37352f;
 
-  --io-warn: #b7791f;
-  --io-error: #c83e32;
-  --io-stale: #8c897f;
-  --io-unknown: #7466b8;
+  --io-warn: #c4670b;
+  --io-error: #d44c47;
+  --io-stale: #787774;
+  --io-unknown: #9065b0;
   --io-on-status: #ffffff;
-  --io-ok: #5e8c4a;
-  --io-info: #3f6fa8;
-  --io-shadow: #3d3929;
+  --io-ok: #448361;
+  --io-info: #337ea9;
+  --io-shadow: #0f0f0f;
 
-  --io-font-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Ubuntu, Inter, sans-serif;
-  --io-font-mono: "JetBrains Mono", "Ubuntu Mono", ui-monospace, monospace;
-  --io-font-display: ui-serif, Georgia, Cambria, "Times New Roman", serif;
-  --io-font-size: 13px;
+  --io-font-ui: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Helvetica, Arial, sans-serif;
+  --io-font-mono: SFMono-Regular, Menlo, Consolas, "PT Mono", "Liberation Mono", Courier, monospace;
+  --io-font-display: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Helvetica, Arial, sans-serif;
+  --io-font-size: 14px;
 
-  --io-radius: 8px;
-  --io-radius-sm: 6px;
-  --io-radius-lg: 12px;
+  --io-radius: 4px;
+  --io-radius-sm: 4px;
+  --io-radius-lg: 6px;
   --io-row-h: 28px;
-  --io-indent: 14px;
+  --io-indent: 12px;
 }
 
 [data-skin="notion"][data-mode="dark"] {
-  --io-bg: #1f1e1d;
-  --io-surface: #262624;
-  --io-surface-2: #2b2a27;
-  --io-surface-alt: #232321;
-  --io-field: #1f1e1d;
-  --io-popover: #30302e;
-  --io-chrome-bg: #141413;
-  --io-chrome-text: #e5e3da;
+  --io-bg: #202020;
+  --io-surface: #191919;
+  --io-surface-2: #202020;
+  --io-surface-alt: #1d1d1d;
+  --io-field: #252525;
+  --io-popover: #252525;
+  --io-chrome-bg: #0f0f0f;
+  --io-chrome-text: #d4d4d4;
 
-  --io-text: #cfccc2;
-  --io-text-strong: #f5f4ee;
-  --io-muted: #a3a097;
-  --io-faint: #8f8c83;
-  --io-off: #5e5c56;
-  --io-icon: #9a978d;
+  --io-text: #d4d4d4;
+  --io-text-strong: #ebebeb;
+  --io-muted: #9b9b9b;
+  --io-faint: #8c8c8c;
+  --io-off: #5a5a5a;
+  --io-icon: #8c8c8c;
 
-  --io-border: #3a3935;
-  --io-border-soft: #31302d;
+  --io-border: #2f2f2f;
+  --io-border-soft: #262626;
 
-  --io-hover: #2f2e2b;
-  --io-selected: #383733;
-  --io-selected-line: #5a5852;
-  --io-accent: #d97757;
-  --io-accent-text: #e39a7c;
-  --io-focus: #d97757;
+  --io-hover: #262626;
+  --io-selected: #2f2f2f;
+  --io-selected-line: #474747;
+  --io-accent: #d4d4d4;
+  --io-accent-text: #d4d4d4;
+  --io-focus: #d4d4d4;
 
-  --io-warn: #e3a33a;
-  --io-error: #e5594e;
-  --io-stale: #9d9a90;
-  --io-unknown: #a497e0;
-  --io-on-status: #1f1e1d;
-  --io-ok: #7fb069;
-  --io-info: #78a6da;
+  --io-warn: #dc8c47;
+  --io-error: #e5605a;
+  --io-stale: #9b9b9b;
+  --io-unknown: #a97bdc;
+  --io-on-status: #191919;
+  --io-ok: #4dab9a;
+  --io-info: #529cca;
   --io-shadow: #000000;
 
-  --io-font-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Ubuntu, Inter, sans-serif;
-  --io-font-mono: "JetBrains Mono", "Ubuntu Mono", ui-monospace, monospace;
-  --io-font-display: ui-serif, Georgia, Cambria, "Times New Roman", serif;
-  --io-font-size: 13px;
+  --io-font-ui: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Helvetica, Arial, sans-serif;
+  --io-font-mono: SFMono-Regular, Menlo, Consolas, "PT Mono", "Liberation Mono", Courier, monospace;
+  --io-font-display: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Helvetica, Arial, sans-serif;
+  --io-font-size: 14px;
 
-  --io-radius: 8px;
-  --io-radius-sm: 6px;
-  --io-radius-lg: 12px;
+  --io-radius: 4px;
+  --io-radius-sm: 4px;
+  --io-radius-lg: 6px;
   --io-row-h: 28px;
-  --io-indent: 14px;
+  --io-indent: 12px;
 }
