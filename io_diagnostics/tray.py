@@ -1,4 +1,5 @@
-"""The top-bar chip: "IO n ⚠" + Recent + what needs you + "Open dashboard", through V2's real AppIndicator.
+"""The top-bar chip: the face with a status dot + Recent + what needs you + "Open dashboard", through V2's real
+AppIndicator. (The model's "IO n ⚠" label is the page's chip; the top bar shows no text since 2026-10-23.)
 
 ``chip_model`` is pure (no GTK) and is what ``/api/v1/state`` returns as ``chip``, so the page and the tray show
 one model. ``run_tray`` renders it with ``contract/indicator.py`` (Ayatana AppIndicator, system python's ``gi``);
@@ -49,8 +50,28 @@ def chip_model(summary: dict, recent: list[dict], url: str = "") -> dict:
     if url:
         menu.append({"text": "Open dashboard", "action": f"open:{url}"})
     menu.append({"text": "Quit", "action": "quit"})
-    return {"icon": "attention" if count else "ok", "label": f"IO {count} ⚠" if count else "IO ✓", "label_guide": LABEL_GUIDE,
-            "title": "IO diagnostics", "menu": menu}
+    return {"icon": "attention" if count else "ok", "status": dot_status(attention), "label": f"IO {count} ⚠" if count else "IO ✓",
+            "label_guide": LABEL_GUIDE, "title": "IO diagnostics", "menu": menu}
+
+
+def dot_status(attention: list[dict]) -> str:
+    """The top-bar dot's colour: error (red) over warn (amber) over stale / unknown (grey); "ok" = no dot.
+    WHY warn over stale here, unlike the host's rank (stale outranks warn there): the dot says "something needs you",
+    and an actionable warning should not hide behind a grey "no fresh data"."""
+
+    levels = {item.get("level") for item in attention}
+    for status in ("error", "warn"):
+        if status in levels:
+            return status
+    return "stale" if levels & {"stale", "unknown"} else "ok"
+
+
+def top_bar(model: dict) -> dict:
+    """The chip as the top bar draws it: the face with a status dot and no text. WHY (Zach, 2026-10-23): "get rid of
+    the IO and the count... just a simple icon that shows a color for the status similar to discord". The model's
+    label stays for the page's own chip; the menu still lists what needs you."""
+
+    return {**model, "icon": model.get("status", model.get("icon", "ok")), "label": "", "label_guide": ""}
 
 
 def gi_available() -> bool:
@@ -88,7 +109,7 @@ def run_tray(model_source, *, interval_s: float = 2.0, on_quit=None) -> None:
 
     def update() -> bool:
         try:
-            model = as_installed(model_source())
+            model = top_bar(as_installed(model_source()))
         except Exception:  # noqa: BLE001 - keep the last menu rather than kill the tray
             return True
         if state["model"] is None:
