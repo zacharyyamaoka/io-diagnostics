@@ -1,0 +1,12 @@
+[project]
+name = "io-diagnostics-computer"
+version = "0.1.0"
+description = "IO diagnostics plugin: the Computer's own health (CPU, memory, disks, temperatures, GPU, clock, uptime, network, USB bandwidth)"
+requires-python = ">=3.12"
+# WHY psutil: the stock cross-platform reader ROS's diagnostic_common_diagnostics monitors use, so no /proc is
+# hand-parsed. The GPU is read through nvidia-smi (a subprocess), so this env needs no NVML binding and the plugin
+# process itself opens no /dev node. The record contract comes from the io-diagnostics checkout two levels up.
+dependencies = ["psutil>=5.9"]
+
+[tool.uv]
+package = false

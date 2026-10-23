@@ -167,11 +167,23 @@ class OsLayer:
     physical: set[str] = field(default_factory=set)  # device ids that are hardware, not a function node of one
     port_paths: dict[str, str] = field(default_factory=dict)  # USB port name ("1-5") -> path
     port_devices: dict[str, str] = field(default_factory=dict)  # USB port name -> device id plugged there
+    # the skeleton's host node (or one made from the hostname): what a ``host`` match sees. Its id maps to HOST_PATH
+    # in device_paths / device_of_path so a computer plugin's job is located like any device's; it is never in
+    # ``devices`` (no presence check) nor ``physical`` (not counted as a device, never a holder-check target).
+    host_device: dict | None = None
 
     def matchable(self, device_id: str) -> dict:
         """The skeleton dict a plugin sees: the device plus its function nodes (``functions``, an added key)."""
 
+        if device_id not in self.devices and self.host_device is not None and device_id == str(self.host_device.get("id")):
+            return {**self.host_device, "functions": []}
         return {**self.devices[device_id], "functions": self.functions.get(device_id, [])}
+
+    def matchables(self) -> list[dict]:
+        """Every device a plugin may match: the skeleton devices, then the host (the Computer)."""
+
+        return [self.matchable(device_id) for device_id in self.devices] + (
+            [self.matchable(str(self.host_device.get("id")))] if self.host_device is not None else [])
 
 
 def _identity(device: dict) -> dict[str, str]:
@@ -242,6 +254,9 @@ def build_os_layer(hostname: str, skeleton: list[dict], extra_ports: set[str] | 
     add(Entity(unique(HOST_PATH), hostname or (hosts[0].get("label") if hosts else "host"), "host",
                identity={"sw_version": software} if software else {}, owner="io_diagnostics"), "host")
     placed: dict[str, str] = {str(host.get("id")): HOST_PATH for host in hosts}
+    layer.host_device = dict(hosts[0]) if hosts else {"bus": "host", "id": "host", "path": "host", "label": hostname or "host",
+                                                      "vendor": None, "product": None, "serial": None, "parent": None,
+                                                      "attrs": {"kind": "host"}}
     nodes = [device for device in skeleton if device not in hosts]
     by_id = {str(device.get("id")): device for device in nodes}
 
@@ -301,8 +316,11 @@ def build_os_layer(hostname: str, skeleton: list[dict], extra_ports: set[str] | 
             layer.functions.setdefault(parent, []).append(device)
         else:
             layer.physical.add(device_id)
-    for device_id, path in layer.device_paths.items():
-        layer.icons[path] = device_icon(layer.devices[device_id], layer.functions.get(device_id, []))
+    for device_id, device in layer.devices.items():
+        layer.icons[layer.device_paths[device_id]] = device_icon(device, layer.functions.get(device_id, []))
+    host_id = str(layer.host_device.get("id"))
+    if host_id not in layer.devices:
+        layer.device_paths[host_id], layer.device_of_path[HOST_PATH] = HOST_PATH, host_id
 
     for port in sorted(set(extra_ports) - set(layer.port_paths), key=lambda name: (name.count("."), _port_key(name))):
         parent_port = port.rsplit(".", 1)[0] if "." in port else None
@@ -380,8 +398,8 @@ def os_statuses(layer: OsLayer, history: dict[str, PortHistory], now: float, plu
     (``expected_period_s=None``): presence comes from sysfs + udev, so it never goes stale."""
 
     statuses = []
-    for device_id, path in layer.device_paths.items():
-        device = layer.devices[device_id]
+    for device_id, device in layer.devices.items():
+        path = layer.device_paths[device_id]
         attrs = device.get("attrs") or {}
         bits = []
         if attrs.get("port"):
@@ -559,9 +577,28 @@ class Rows:
     depth: dict[str, int]
 
 
-def build_rows(merged: Merged, now: float) -> Rows:
+# The host's own checks (the computer plugin, the USB/PCIe links line) as summarize sees them: a leaf beside the
+# host's children. WHY (2026-10-23): summarize collapses every problem below a failed ancestor into it, and the host
+# is everyone's ancestor; a hot CPU or a crashed computer plugin explains nothing about a dead CAN bus, so the
+# Computer's own report is one more cause, never the cause of the rest. ":" never occurs in a slugged path.
+HOST_SELF = f"{HOST_PATH}/:self"
+
+
+def _summaries(merged: Merged, now: float) -> dict[str, Summary]:
     entities = list(merged.entities.values())
-    summaries = summarize(entities, merged.statuses, now)
+    if not any(status.path == HOST_PATH for status in merged.statuses):
+        return summarize(entities, merged.statuses, now)
+    host = merged.entities[HOST_PATH]
+    statuses = [dataclasses.replace(status, path=HOST_SELF) if status.path == HOST_PATH else status for status in merged.statuses]
+    summaries = summarize([*entities, Entity(HOST_SELF, host.name, host.kind, via=HOST_PATH)], statuses, now)
+    own, root = summaries.pop(HOST_SELF), summaries[HOST_PATH]
+    rollup = dataclasses.replace(root.rollup, origin=HOST_PATH) if root.rollup.origin == HOST_SELF else root.rollup
+    summaries[HOST_PATH] = Summary(HOST_PATH, own.own, own.own, own.message, rollup)
+    return summaries
+
+
+def build_rows(merged: Merged, now: float) -> Rows:
+    summaries = _summaries(merged, now)
     latest: dict[tuple[str, str], DiagnosticStatus] = {}
     for status in merged.statuses:
         latest[(status.path, status.name)] = status

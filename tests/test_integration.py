@@ -61,7 +61,8 @@ def test_a_host_on_plugins_d_matches_the_rack_adapter_without_being_asked():
     """Matching only (a pure function): no test runs plugins.d. intel_rgbd takes its matches from its describe."""
 
     specs, problems = load_plugins(PLUGINS_D)
-    assert {spec.name for spec in specs} == set(DRIVERS) and problems == []
+    # the computer plugin (2026-10-23) matches only the host, never a device
+    assert {spec.name for spec in specs} == set(DRIVERS) | {"computer"} and problems == []
     fdcanusb = usb_device("1-3", "0483", "5740", "272813EF", label="fdcanusb")
     d405 = usb_device("6-1", "8086", "0b5b", "219323070276", label="D405")
     assert [(spec.name, device["id"]) for spec, device in match_devices(specs, [fdcanusb, d405])] == [("moteus_servo", "usb:1-3")]

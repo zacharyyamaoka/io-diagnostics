@@ -56,9 +56,14 @@ shipped files write the `_s` spelling.
 | `by-id:<glob>` | a device whose own or function nodes' `/dev/serial/by-id` / `/dev/v4l/by-id` links match | `by-id:*fdcanusb*` |
 | `tty:<glob>` / `v4l:<glob>` | a device exposing that tty / video node, or the node itself | `tty:/dev/ttyACM*` |
 | `netdev:<glob>` | a network interface | `netdev:enp*` |
+| `host` (or `host:<hostname glob>`) | THE host entity, the Computer, and nothing else; no other kind ever matches it | `host` (`computer.toml`) |
 
 The host passes the PHYSICAL device when a match is through one of its function nodes (the fdcanusb, not its
-`/dev/ttyACM0`). Host structure (the host, buses, groups, ports) never matches.
+`/dev/ttyACM0`). Host structure (buses, groups, ports) never matches; the host itself matches only `host`, and its
+records land on the host row (`--device` is the skeleton's host id, `""` is the Computer). `computer.toml` (enabled:
+passive, read-only, no actions) runs `plugins/computer` that way: CPU, RAM, HD Usage, temperatures, GPU, NTP offset,
+uptime, network and USB bandwidth, named after ROS's `diagnostic_common_diagnostics`; while a plugin diagnoses the
+host, the host adds its own `USB/PCIe links` line there.
 
 ## The boundary (docs/build-plan-v1.md, "Plugin boundary")
 

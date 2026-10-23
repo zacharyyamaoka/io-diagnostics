@@ -30,7 +30,7 @@ from io_diagnostics.runner import (RUNNER_SOURCE, Gates, Job, Scheduler, absolut
                                    run_act, run_plugin)
 
 from contract.record import (OK, RANK, RECORD_VERSION, SCHEMA, STALE, STALE_FACTOR, STALE_FLOOR_S, WARN, Action,
-                             DiagnosticStatus, Entity, Event, KeyValue, effective_level, from_dict, to_dict)
+                             DiagnosticStatus, Entity, Event, KeyValue, Measurement, effective_level, from_dict, to_dict)
 
 HOST_SOURCE = "io_diagnostics.host"
 # WHY a code and not a driver name: any driver that says "my frames never reached the wire" this way gets the
@@ -430,7 +430,7 @@ class Host:
         layer = tree.build_os_layer(self.os.hostname, devices, extra_ports=frozenset(usb.recent_ports))
         usb.events = [dataclasses.replace(event, path=layer.port_paths.get(str(event.args.get("port")), event.path))
                       if event.args.get("port") else event for event in usb.events]
-        pairs = match_devices(self.specs, [layer.matchable(device_id) for device_id in layer.devices])
+        pairs = match_devices(self.specs, layer.matchables())
         claimed = {layer.entities[path].hardware_id: layer.entities[path].name
                    for path in {layer.device_paths[str(device.get("id"))] for _spec, device in pairs}
                    if activity_module.usb_id(layer.entities[path].hardware_id)}
@@ -626,7 +626,7 @@ class Host:
             # WHY judged on the merged tree, every view: a rig counts boards and matches cameras by the serial their
             # DRIVER reports (the RealSense SDK serial), which only the plugins' records carry
             setup = expected_module.evaluate(self.setup, merged, layer, now, RUNNER_SOURCE)
-            notes = self._host_notes(merged, now)
+            notes = self._host_notes(merged, now) + self._links_summary(merged, now)
             if setup.entities or setup.statuses or notes:
                 layer = self._layer_with(setup.entities)
                 merged = tree.merge(layer, jobs, self.os_records + setup.statuses + notes)
@@ -693,6 +693,63 @@ class Host:
                         KeyValue("working_adapter", other))))
         return notes
 
+    def _links_summary(self, merged: tree.Merged, now: float) -> list[DiagnosticStatus]:
+        """The Computer's one "USB/PCIe links" line (Zach, 2026-10-23: the computer diagnostics belong to its entity):
+        how many USB ports and PCIe links the OS skeleton measures and which are unhappy (a flapping port, a PCIe link
+        narrower than the card or with AER errors, a USB 3 device linked at USB 2 speed). Only while a plugin
+        diagnoses the host (the computer plugin), so a host without one stays a pure grouping row.
+
+        WHY OK while every unhappy link already reports on its own row: the line is a roll-up, and a problem counts
+        once, where it lives (one dead bus is one cause). It is WARN ``UsbLinkDowngraded`` only for what no row says:
+        a USB 3 device (bcdUSB >= 3) linked below 5 Gb/s with no driver's ``Usb2Link`` on its row."""
+
+        if not any(self.layer.device_paths.get(str(job.device.get("id"))) == tree.HOST_PATH for job in self.jobs.values()):
+            return []
+        own = expected_module.latest_statuses(merged.statuses)
+        port_paths = list(self.layer.port_paths.values())
+        port_checks = [(path, status) for path in port_paths for status in own.get(path, []) if status.name.endswith(": link")]
+        pcie_checks = [(path, status) for path, statuses in own.items() for status in statuses if status.name.endswith(": PCIe link")]
+        unhappy: list[tuple[str, bool]] = []  # (text, counted on a row of its own)
+        for path, status in port_checks + pcie_checks:
+            if status.level != OK:
+                unhappy.append((f"{merged.entities[path].name}: {status.message}", True))
+        driver_usb2 = set()
+        for path, statuses in own.items():
+            for status in statuses:
+                if status.code == "Usb2Link" and effective_level(status, now) != STALE:
+                    driver_usb2.add(tree.nearest_device(path, merged, self.layer))
+                    unhappy.append((f"{merged.entities[path].name}: {status.message}", True))
+        for device_id, device in self.layer.devices.items():
+            attrs, path = device.get("attrs") or {}, self.layer.device_paths[device_id]
+            speed = attrs.get("speed_mbps")
+            try:
+                major = int(str(attrs.get("usb_version") or "0").strip().split(".")[0])
+            except ValueError:
+                major = 0
+            if device.get("bus") != "usb" or major < 3 or not isinstance(speed, (int, float)) or not 0 < speed < 5000 or path in driver_usb2:
+                continue
+            unhappy.append((f"{merged.entities[path].name} on {attrs.get('port') or '?'}: a USB {str(attrs['usb_version']).strip()}"
+                            f" device linked at {tree.speed_text(speed)}", False))
+        unreported = [text for text, counted in unhappy if not counted]
+        message = f"{len(port_paths)} USB port{'s' if len(port_paths) != 1 else ''} · {len(pcie_checks)} PCIe link{'s' if len(pcie_checks) != 1 else ''}"
+        if not unhappy:
+            message += " · all OK"
+        else:
+            message += f" · {len(unhappy)} unhappy: " + "; ".join(text for text, _counted in unhappy)
+            if not unreported:
+                message += " (each counted on its own row)"
+        values = [KeyValue("unhappy", "\n".join(text for text, _counted in unhappy) or "none")]
+        if unreported:
+            values.append(KeyValue("what_to_check", "1. Plug it straight into a USB 3 port on the computer (not through a USB 2 hub)\n"
+                                                    "2. Try a USB 3 data cable: a USB 2 cable links at 480 Mb/s"))
+        name = merged.entities[tree.HOST_PATH].name
+        return [DiagnosticStatus(level=WARN if unreported else OK, name=f"{name}: USB/PCIe links", message=message,
+                                 code="UsbLinkDowngraded" if unreported else "", path=tree.HOST_PATH, stamp=now, received=now,
+                                 source=HOST_SOURCE, values=tuple(values),
+                                 measurements=(Measurement("usb ports", len(port_paths), "1"),
+                                               Measurement("pcie links", len(pcie_checks), "1"),
+                                               Measurement("unhappy links", len(unhappy), "1")))]
+
     def clock_json(self, now: float) -> dict:
         when = activity_module.iso(now, self.utc_offset_s)
         offset = self.utc_offset_s if self.utc_offset_s is not None else local_offset_s()
@@ -711,7 +768,9 @@ class Host:
             attention.append({"path": path, "name": entity.name, "kind": entity.kind, "icon": view.merged.icons.get(path, "device"),
                               "level": summary.own, "message": summary.message,
                               "device": {"path": device, "name": view.merged.entities[device].name} if device else None})
-        return {"level": root.level, "counts": dict(root.rollup.counts), "attention": attention,
+        # WHY the rollup: with the computer plugin the host self-reports, and its row's level is then ITS report; the
+        # chip's question stays "the worst independent cause anywhere" (equal to root.level for a pure grouping host)
+        return {"level": root.rollup.level, "counts": dict(root.rollup.counts), "attention": attention,
                 "entities": len(view.merged.entities), "devices": len(view.layer.physical)}
 
     def events_json(self, view: View, limit: int) -> list[dict]:
@@ -1127,7 +1186,9 @@ class Host:
             candidates = []
             for job in self.jobs.values():
                 device_path = self.layer.device_paths.get(str(job.device.get("id")), job.device_path)
-                if path == device_path or path.startswith(device_path + "/"):
+                # WHY the host's own row only: every path is below the host, and the computer plugin owns nothing below it
+                below = device_path != tree.HOST_PATH and path.startswith(device_path + "/")
+                if path == device_path or below:
                     candidates.append((len(device_path), job))
         if not candidates:
             return None

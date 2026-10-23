@@ -34,7 +34,7 @@ DEFAULT_PERIOD_S = 30.0
 # WHY far longer than a diagnose: an act may flash firmware (rs-fw-update is given 300 s) or calibrate (~30-120 s);
 # a diagnose timeout would kill it half-way. Used only by act, never by diagnose.
 DEFAULT_ACT_TIMEOUT_S = 900.0
-MATCH_KINDS = ("usb", "pci", "pci-class", "by-id", "tty", "v4l", "netdev")
+MATCH_KINDS = ("usb", "pci", "pci-class", "by-id", "tty", "v4l", "netdev", "host")
 KNOWN_KEYS = {"name", "command", "cwd", "timeout_s", "period_s", "timeout", "period", "matches", "enabled", "replay", "env",
               "description", "diagnose_args", "exclusive", "act_timeout_s", "act_timeout"}
 # WHY aliases: docs/build-plan-v1.md names the keys "timeout, period"; the lane spec and this README say timeout_s /
@@ -87,6 +87,11 @@ class Match:
     def accepts(self, device: dict) -> bool:
         attrs = device.get("attrs") or {}
         bus = device.get("bus")
+        # WHY host is its own kind, and the only one that sees the host: the Computer is THE host entity (Zach,
+        # 2026-10-23: "we kinda have the Computer as an entity"); a device glob must never claim it by accident
+        if self.kind == "host" or is_host(device):
+            names = [str(device.get("label") or ""), str(device.get("id") or "")]
+            return self.kind == "host" and is_host(device) and any(fnmatch.fnmatchcase(name, self.pattern) for name in names)
         if self.kind == "usb":
             if bus != "usb":
                 return False
@@ -131,10 +136,18 @@ class Match:
         return False
 
 
+def is_host(device: dict) -> bool:
+    """The skeleton's host node (lane B: bus "host", attrs.kind "host"): the Computer itself."""
+
+    return device.get("bus") == "host" or (device.get("attrs") or {}).get("kind") == "host"
+
+
 def _match_from_bus_dict(item: dict) -> tuple[str, str]:
     """``{"bus": "usb", "vid": "8086", "pid": "0b*"}`` (the shape a plugin's ``describe`` may use) -> kind, pattern."""
 
     bus = str(item["bus"]).lower()
+    if bus == "host":
+        return "host", str(item.get("name") or "*")
     if bus == "usb":
         return "usb", f"{item.get('vid', '*')}:{item.get('pid', '*')}"
     if bus == "pci":
@@ -145,7 +158,7 @@ def _match_from_bus_dict(item: dict) -> tuple[str, str]:
         return "netdev", str(item.get("interface") or item.get("name") or "*")
     if bus in ("tty", "v4l"):
         return bus, str(item.get("devnode") or item.get("name") or "*")
-    raise PluginConfigError(f"match {item!r}: bus {bus!r} must be usb, pci, net, tty or v4l")
+    raise PluginConfigError(f"match {item!r}: bus {bus!r} must be host, usb, pci, net, tty or v4l")
 
 
 def parse_match(item: Any) -> Match:
@@ -153,6 +166,8 @@ def parse_match(item: Any) -> Match:
         kind, pattern = _match_from_bus_dict(item)
     elif isinstance(item, dict) and len(item) == 1:
         (kind, pattern), = item.items()
+    elif isinstance(item, str) and item.strip().lower() == "host":
+        kind, pattern = "host", "*"  # `matches = ["host"]`: this computer, whatever its name
     elif isinstance(item, str) and ":" in item:
         kind, _, pattern = item.partition(":")
     else:
@@ -282,13 +297,13 @@ STRUCTURE_KINDS = ("host", "bus", "group", "port")
 
 
 def match_devices(specs: list[PluginSpec], devices: list[dict]) -> list[tuple[PluginSpec, dict]]:
-    """Every (plugin, device) pair to diagnose. A device may have several plugins. Host structure (the host, buses,
-    groups, ports) never matches; a function node never matches a plugin that already matched the device exposing
-    it (the fdcanusb, not also its /dev/ttyACM0)."""
+    """Every (plugin, device) pair to diagnose. A device may have several plugins. Host structure (buses, groups,
+    ports) never matches; the host itself matches only a ``host`` match (the computer plugin); a function node never
+    matches a plugin that already matched the device exposing it (the fdcanusb, not also its /dev/ttyACM0)."""
 
     pairs = []
     for device in devices:
-        if (device.get("attrs") or {}).get("kind", "device") in STRUCTURE_KINDS:
+        if (device.get("attrs") or {}).get("kind", "device") in STRUCTURE_KINDS and not is_host(device):
             continue
         for spec in specs:
             if spec.accepts(device):

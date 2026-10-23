@@ -156,11 +156,9 @@
     const entity = !isLayer(node);
     const children = walkable(node).filter((child) => options.showEmpty || !V.isEmpty(child))
       .map((child) => physicalRow(child, options, entity || node.kind === 'host' ? [] : [...trail, node]));
-    const row = V.entityRow(seen(node, []), options, { node, children });
-    // p0's expansion (the frame open, a device only when something below needs attention), plus an adapter's bus
-    if (!children.length) row.defaultOpen = false;
-    else if (node.kind === 'host' || node.kind === 'group' || node.kind === 'bus' || node.kind === 'port') row.defaultOpen = true;
-    else row.defaultOpen = Boolean(row.status.hint) || (entity && children.some((child) => child.kind === 'bus'));
+    // WHY open whenever it has children (Zach, 2026-10-23: "by default it should be expanded so you see the things
+    // inside"): the frame, every device and an adapter with its bus and boards
+    const row = V.entityRow(seen(node, []), options, { node, children, defaultOpen: children.length > 0 });
     return entity ? withConnection(row, connectionOf(node, trail)) : row;
   }
 
@@ -176,12 +174,33 @@
     return !(node.children || []).some((child) => isInterface(child) && (child.icon === 'net' || child.icon === 'video'));
   }
 
-  function withComputer(rows, key) {
+  // With one host (elided), the Computer row IS the host entity (Zach, 2026-10-23: "in our entity chart we kinda have
+  // the Computer as an entity"): selecting it opens the host's detail (the computer plugin's CPU, memory, disk,
+  // temperature, GPU, clock and USB/PCIe links checks), and its own problem shows on it like any entity's ("CPU Tctl
+  // 92 °C: High Temperature" beside the label). Its hint is only about the built-in devices it holds: the host's API
+  // hint is the worst anywhere, which the rows above already show. With several hosts each host is its own row, so
+  // its Computer stays a plain group (the host must not show twice).
+  function computerRow(host, inside, key) {
+    const message = `${inside.length} built-in PCI device${inside.length === 1 ? '' : 's'}`;
+    const group = V.groupRow({ key, label: 'Computer', icon: 'host', children: inside, defaultOpen: false, message });
+    if (!host) return group;
+    const row = V.entityRow(seen({ ...host, children: [] }, []), {}, { key, children: inside, defaultOpen: false });
+    const own = V.ownProblem(host);
+    return Object.assign(row, {
+      label: 'Computer', icon: 'host', idText: '', lead: own ? String(host.message || '') : '',
+      message: own ? host.message : message,
+      hint: null, rollup: group.rollup,
+      status: { ...row.status, hint: group.status.hint },
+      title: ['Computer', host.name, own ? host.message : message, group.status.hint ? `below: ${group.status.hint.level} · ${group.status.hint.message}` : '']
+        .filter(Boolean).join('\n'),
+    });
+  }
+
+  function withComputer(rows, key, host = null) {
     const inside = rows.filter((row) => row.node && builtIn(row.node));
-    if (!inside.length) return rows;
-    const computer = V.groupRow({ key, label: 'Computer', icon: 'host', children: inside, defaultOpen: false,
-      message: `${inside.length} built-in PCI device${inside.length === 1 ? '' : 's'}` });
-    return [...rows.filter((row) => !inside.includes(row)), computer];
+    const reports = host && !V.isGrouping(host); // the host has checks of its own (the computer plugin)
+    if (!inside.length && !reports) return rows;
+    return [...rows.filter((row) => !inside.includes(row)), computerRow(host, inside, key)];
   }
 
   root.IOStructures = root.IOStructures || {};
@@ -202,7 +221,7 @@
         rows = top.nodes.filter((node) => options.showEmpty || !V.isEmpty(node)).map((node) => physicalRow(node, options, []));
       } else if (top.elided) {
         // one host: its children are the top level, walked as the host's own children would be
-        rows = withComputer(lift({ children: top.nodes }, options, [], []), 'p1:computer');
+        rows = withComputer(lift({ children: top.nodes }, options, [], []), 'p1:computer', top.hosts[0]);
       } else {
         // several hosts: one row each (no connection of its own), its entities below
         rows = top.nodes.map((host) => V.entityRow(seen(host, []), options,

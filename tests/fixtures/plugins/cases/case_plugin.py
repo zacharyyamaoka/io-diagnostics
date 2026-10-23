@@ -5,7 +5,8 @@
 Cases: ``spider`` (Zach's black-box example), ``deadbus`` (an adapter whose bus dies after the first poll),
 ``periodic`` (a periodic check + a forged ``received``), ``malformed`` (every kind of bad line), ``crash`` (a
 traceback after one good line), ``hang`` (one good line, then sleeps with a child holding stdout), ``warn_replay``
-(a recorded periodic WARN), ``echo_argv`` (reports the options after ``--device``). Never touches hardware.
+(a recorded periodic WARN), ``echo_argv`` (reports the options after ``--device``), ``hot_computer`` (the computer
+plugin's shape on the host: an ERROR on the device row itself). Never touches hardware.
 """
 
 from __future__ import annotations
@@ -100,6 +101,16 @@ def warn_replay() -> None:
          expected_period_s=60, stamp=1000.0, received=1000.0)
 
 
+def hot_computer(device: str) -> None:
+    """Like the computer plugin on the host: checks on the device row itself (""), one ERROR, one OK."""
+
+    line("status", level="error", name="rig: Temperature CPU (k10temp)", message="CPU Tctl 99 °C: Critical Temperature",
+         path="", code="CriticalTemperature", expected_period_s=10,
+         measurements=[{"key": "Tctl", "value": 99.0, "unit": "Cel", "warn_high": 85.0, "error_high": 95.0}])
+    line("status", level="ok", name="rig: RAM Information", message=f"RAM Average 40.0 percent (device {device})", path="",
+         expected_period_s=10)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--case", required=True)
@@ -115,7 +126,7 @@ def main() -> int:
     now = float(os.environ.get("IO_DIAGNOSTICS_NOW", "0"))
     {"spider": spider, "deadbus": lambda: deadbus(now), "periodic": periodic, "malformed": malformed, "crash": crash,
      "hang": hang, "warn_replay": warn_replay, "foreign": lambda: foreign(args.device),
-     "echo_argv": lambda: echo_argv(extra)}[args.case]()
+     "echo_argv": lambda: echo_argv(extra), "hot_computer": lambda: hot_computer(args.device)}[args.case]()
     return 0
 
 
