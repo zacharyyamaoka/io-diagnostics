@@ -21,7 +21,11 @@
 //   server       a fetch without the page header, or without a dry run's token, is refused with a plain reason
 //   seams        subtitle / suffix (p3), attrs (p4), lead (p5), toggles[].when (p2), box guides (Terminal), mono
 //                columns and the folded Connection card (p1)
-// Screenshots: reports/media/round2/integration-*.png. Exits 1 on any failed check. Nothing opens a CAN adapter.
+//   expected     (a second F1 server with its own temporary rig file, --expected) the rig row first with its counts and
+//                what is missing, the retired 28B3A25D a warn row with its reason, the Expected setup card's Retire…
+//                (reason first, Cancel writes nothing), Expect what's here and Forget rewriting the file
+// Screenshots: reports/media/round2/integration-*.png, expected-*.png. Exits 1 on any failed check. Nothing opens a
+// CAN adapter.
 'use strict';
 
 const fs = require('fs');
@@ -46,11 +50,11 @@ function check(name, ok, detail = '') {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name.padEnd(34)} ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`);
 }
 
-function startServer(fixture) {
+function startServer(fixture, extra = []) {
   const env = { ...process.env };
   delete env.VIRTUAL_ENV;
   const child = spawn(UV, ['run', '--project', ROOT, 'python', path.join(ROOT, 'io_diagnostics', 'cli.py'),
-    'serve', '--fixture', fixture, '--port', '0', '--no-udev'], { cwd: ROOT, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    'serve', '--fixture', fixture, '--port', '0', '--no-udev', ...extra], { cwd: ROOT, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
   return new Promise((resolve, reject) => {
     let output = '';
     const timer = setTimeout(() => { stopServer(child); reject(new Error(`${fixture} did not start: ${output}`)); }, 60000);
@@ -384,11 +388,152 @@ async function main() {
     check('no page errors', errors.length === 0, errors.slice(0, 3).join(' | ') || 'none');
     await context.close();
   } finally {
-    await browser.close();
     stopServer(server.child);
+  }
+  try {
+    await expectedSetup(browser);
+  } finally {
+    await browser.close();
   }
   console.log(`\n${passed}/${passed + failed} checks passed · screenshots in ${SHOTS}`);
   process.exitCode = failed ? 1 : 0;
+}
+
+// ---- the expected setup (docs/expected-setup.md), on F1 with a rig file of its own (a temporary copy) ----
+// F1: 272813EF answers CAN 1, 14, 15 (the file also expects 16), 28B3A25D is plugged in on 1-5 (the file retires it),
+// fdcanusb 99990000 is expected and never there.
+const RIG = 'host/rig-1-dof-test-rack';
+const LOST = 'host/expected/usb-0483-5740-99990000';
+const RIG_FILE = `version = 1
+
+[[rig]]
+name = "1-DOF test rack"
+
+[[rig.device]]
+name = "fdcanusb 272813EF"
+kind = "adapter"
+hardware_id = "usb:0483:5740:272813EF"
+nodes = ["can/1", "can/14", "can/15", "can/16"]
+
+[[rig.device]]
+name = "fdcanusb 99990000"
+kind = "adapter"
+hardware_id = "usb:0483:5740:99990000"
+nodes = []
+
+[[rig.device]]
+name = "RealSense D405 218622276036"
+kind = "camera"
+hardware_id = "usb:8086:0b5b:219323070276"
+nodes = []
+
+[[rig.device]]
+name = "RealSense D405 218622274411"
+kind = "camera"
+hardware_id = "usb:8086:0b5b:130523071221"
+nodes = []
+
+[[retired]]
+name = "fdcanusb 28B3A25D"
+hardware_id = "usb:0483:5740:28B3A25D"
+date = "2026-10-23"
+reason = "frames never reached the bus (2026-10-22); replaced by 0607623A"
+`;
+
+async function expectedSetup(browser) {
+  const os = require('os');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'io-diagnostics-expected-'));
+  const file = path.join(dir, 'expected.toml');
+  fs.writeFileSync(file, RIG_FILE);
+  const server = await startServer('F1', ['--expected', file]);
+  const base = server.base;
+  const context = await browser.newContext({ viewport: VIEWPORT, colorScheme: 'light' });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(String(error)));
+  page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
+  const rigRow = () => page.evaluate((key) => {
+    const row = document.querySelector(`.t6-row[data-t6-path="${key}"]`);
+    return row ? { name: row.querySelector('.t6-name').textContent, shape: Boolean(row.querySelector('.t6-st .t6-shape')), first: row === document.querySelector('.t6-row') } : null;
+  }, RIG);
+  try {
+    const plugins = await (await fetch(`${base}/api/v1/plugins`)).json();
+    check('expected: only the fixture plugin is loaded', plugins.plugins.map((plugin) => plugin.name).join() === 'v6_scenario');
+
+    // the rig row: first, the counts in its name, a warn shape; its card offers Expect what's here
+    await open(page, base, RIG);
+    await page.waitForSelector('.card.setup [data-setup="expect"]', { timeout: 15000 });
+    const rig = await rigRow();
+    const rigCard = await page.evaluate(() => ({ buttons: [...document.querySelectorAll('.card.setup [data-setup]')].map((b) => b.dataset.setup), why: (document.querySelector('.card.why') || {}).textContent || '' }));
+    check('expected: the rig row counts at a glance', rig && rig.name === '1-DOF test rack · 1/2 adapters · 3/4 boards · 2/2 cameras' && rig.shape && rig.first, rig);
+    check('expected: the rig row names what is missing', /can\/16 on fdcanusb 272813EF/.test(rigCard.why) && /fdcanusb 99990000: not on this PC/.test(rigCard.why)
+      && rigCard.buttons.join() === 'expect', rigCard);
+    await page.screenshot({ path: path.join(SHOTS, 'expected-rig-row.png'), clip: { x: 0, y: 0, width: VIEWPORT.width, height: 560 } });
+
+    // the retired adapter, plugged in again (F1's 28B3A25D on 1-5): a warning on its own row, the reason in its card
+    await open(page, base, SECOND);
+    await page.waitForSelector('.card.setup .s-retired', { timeout: 15000 });
+    const retired = await page.evaluate((entity) => {
+      const row = S.built.byKey.get(S.built.byEntity.get(entity));
+      return { own: row.status.own, card: document.querySelector('.card.setup .s-retired').textContent,
+        check: [...document.querySelectorAll('.card.check')].map((card) => card.textContent).find((text) => /: retired/.test(text)) || '' };
+    }, SECOND);
+    check('expected: a retired adapter plugged in again is a warn row with its reason', retired.own === 'warn'
+      && retired.card === 'Retired 2026-10-23: frames never reached the bus (2026-10-22); replaced by 0607623A' && /RetiredDevice/.test(retired.check), retired);
+    await page.screenshot({ path: path.join(SHOTS, 'expected-retired-row.png'), clip: { x: 0, y: 0, width: VIEWPORT.width, height: 760 } });
+
+    // Retire…: a reason first (typed key by key: the box keeps its focus while the card redraws), Cancel writes nothing
+    await open(page, base, ADAPTER);
+    await page.click('.card.setup [data-setup="retire"]');
+    await page.waitForSelector('.card.setup [data-setup-reason]');
+    const disabledFirst = await page.$eval('[data-setup-confirm]', (button) => button.disabled);
+    await page.click('[data-setup-reason]');
+    await page.keyboard.type('loose USB socket', { delay: 30 });
+    const typed = await page.evaluate(() => ({ value: document.querySelector('[data-setup-reason]').value, focus: document.activeElement.matches('[data-setup-reason]'),
+      enabled: !document.querySelector('[data-setup-confirm]').disabled, confirm: document.querySelector('.s-panel .confirm').textContent }));
+    check('expected: Retire… needs a reason and says it in the confirm', disabledFirst && typed.value === 'loose USB socket' && typed.focus && typed.enabled
+      && typed.confirm === 'Retire fdcanusb 272813EF? It leaves 1-DOF test rack. Plugged in again, its row says “retired 2026-10-21: loose USB socket” (a warning).', { disabledFirst, ...typed });
+    await page.locator('.card.setup').scrollIntoViewIfNeeded();
+    await page.locator('.card.setup').screenshot({ path: path.join(SHOTS, 'expected-controls-retire.png') });
+    await page.click('[data-setup-cancel]');
+    check('expected: Cancel writes nothing', fs.readFileSync(file, 'utf8') === RIG_FILE);
+
+    // Expect what's here on the adapter: the confirm names the change; the file and the rig row follow
+    await page.click('.card.setup [data-setup="expect"]');
+    await page.waitForSelector('.s-panel .confirm');
+    const expectText = await page.textContent('.s-panel .confirm');
+    check('expected: Expect what\'s here says exactly what changes', expectText === 'Expect fdcanusb 272813EF in 1-DOF test rack with can/1, can/14, can/15 (can/16 no longer expected)?', expectText);
+    await page.locator('.card.setup').screenshot({ path: path.join(SHOTS, 'expected-controls-expect.png') });
+    await page.click('[data-setup-confirm]');
+    await page.waitForSelector('.s-panel .u-result.ok', { timeout: 15000 });
+    await page.waitForFunction((key) => /3\/3 boards/.test((document.querySelector(`.t6-row[data-t6-path="${key}"] .t6-name`) || {}).textContent || ''), RIG, { timeout: 15000 });
+    const written = fs.readFileSync(file, 'utf8');
+    check('expected: Expect what\'s here rewrote the file and the rig row', /"can\/15"/.test(written) && !/can\/16/.test(written)
+      && (await rigRow()).name === '1-DOF test rack · 1/2 adapters · 3/3 boards · 2/2 cameras', (await rigRow()).name);
+
+    // Forget on the adapter that is never there
+    await open(page, base, LOST);
+    await page.waitForSelector('.card.setup [data-setup="forget"]', { timeout: 15000 });
+    const lostButtons = await page.evaluate(() => [...document.querySelectorAll('.card.setup [data-setup]')].map((b) => b.dataset.setup));
+    await page.click('.card.setup [data-setup="forget"]');
+    const forgetText = await page.textContent('.s-panel .confirm');
+    await page.locator('.card.setup').screenshot({ path: path.join(SHOTS, 'expected-controls-forget.png') });
+    await page.click('[data-setup-confirm]');
+    await page.waitForSelector('.s-panel .u-result.ok', { timeout: 15000 });
+    await page.waitForFunction((key) => /1\/1 adapter /.test((document.querySelector(`.t6-row[data-t6-path="${key}"] .t6-name`) || {}).textContent || ''), RIG, { timeout: 15000 });
+    const lostRowGone = await page.evaluate(({ entity, rig }) => !S.built.byEntity.has(entity) && !S.data.summary.attention.some((item) => item.path === entity)
+      && S.sel === rig && /Saved/.test(document.querySelector('.card.setup .u-result.ok').textContent), { entity: LOST, rig: RIG });
+    await page.locator('.card.setup').screenshot({ path: path.join(SHOTS, 'expected-controls-forget-done.png') });
+    check('expected: Forget on an absent row drops it from the file and the page', lostButtons.join() === 'forget,retire' && lostRowGone
+      && forgetText.startsWith('Forget fdcanusb 99990000? It leaves the expected setup (1-DOF test rack)') && !/99990000/.test(fs.readFileSync(file, 'utf8')), { lostButtons, forgetText });
+    await open(page, base, RIG);
+    await page.screenshot({ path: path.join(SHOTS, 'expected-rig-row-after.png'), clip: { x: 0, y: 0, width: VIEWPORT.width, height: 560 } });
+    check('expected: no page errors', errors.length === 0, errors.slice(0, 3).join(' | ') || 'none');
+  } finally {
+    await context.close();
+    stopServer(server.child);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 main().catch((error) => { console.error(error); process.exitCode = 1; });

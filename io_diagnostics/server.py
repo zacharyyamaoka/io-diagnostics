@@ -2,8 +2,9 @@
 
 GET everywhere, plus ONE write: ``POST /api/v1/act``, the page's Utilities panel (docs/api-v1.md "Actions from the
 page"). Every click is a dry run first; a real run needs that dry run's token and must come from the page itself
-(same origin, the page's own header). Agents never call it: they use ``io-diagnostics act --dry-run``. Every other
-POST / PUT / DELETE / PATCH is 405. Binds to 127.0.0.1 by default; the page polls ``/api/v1/state`` once a second.
+(same origin, the page's own header). Agents never call it: they use ``io-diagnostics act --dry-run``. The Expected
+setup card's ``POST /api/v1/expect | forget | retire`` rewrite the person's rig file under the same page-only rule
+(no device is touched, so no dry run and no token). Every other POST / PUT / DELETE / PATCH is 405. Binds to 127.0.0.1 by default; the page polls ``/api/v1/state`` once a second.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ NO_ACTIONS = ("actions never execute through this endpoint: the page runs one on
 # WHY 300 s: a moteus confirm token names one 5-minute window and is honoured for the next one too, so a run within
 # 300 s of its dry run always carries a token the plugin still accepts; a page left open longer dry-runs again.
 TOKEN_WINDOW_S = 300.0
+SETUP_EDITS = {"/api/v1/expect": "expect", "/api/v1/forget": "forget", "/api/v1/retire": "retire"}
 UI_HEADER = "X-IO-Diagnostics"
 UI_HEADER_VALUE = "ui"
 MAX_BODY = 64 * 1024
@@ -101,7 +103,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(self.host.plugins())
             if parsed.path == "/api/v1/health":
                 return self._json(self.host.health())
-            if parsed.path == "/api/v1/act":
+            if parsed.path == "/api/v1/act" or parsed.path in SETUP_EDITS:
                 return self._json({"error": "POST only, and only from the page (docs/api-v1.md)"}, 405, extra={"Allow": "POST"})
             if parsed.path.startswith("/api/"):
                 return self._json({"error": f"no endpoint {parsed.path!r} (see docs/api-v1.md)"}, 404)
@@ -114,12 +116,45 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(200, path.read_bytes(), TYPES.get(path.suffix, "application/octet-stream"))
 
     def do_POST(self):  # noqa: N802 - http.server's name
-        if urlparse(self.path).path != "/api/v1/act":
+        endpoint = urlparse(self.path).path
+        if endpoint not in ("/api/v1/act", *SETUP_EDITS):
             return self._refuse()
         try:
-            return self._act()
+            return self._act() if endpoint == "/api/v1/act" else self._setup_edit(SETUP_EDITS[endpoint])
         except Exception as error:  # noqa: BLE001 - show the failure, keep serving
             return self._json({"error": f"{type(error).__name__}: {error}"}, 500)
+
+    # --- the Expected setup card: host-side writes of the person's rig file, never a device --------------------------
+    def _body(self) -> tuple[dict | None, tuple]:
+        """The page's JSON body, or ``(None, (payload, code))`` to answer with."""
+
+        refused, reason = self._from_page()
+        if refused:
+            return None, ({"refused": refused, "error": reason}, 403)
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= 0 or length > MAX_BODY:
+            return None, ({"refused": "BadRequest", "error": f"a JSON body of 1..{MAX_BODY} bytes is required"}, 400)
+        try:
+            body = json.loads(self.rfile.read(length))
+        except json.JSONDecodeError as error:
+            return None, ({"refused": "BadRequest", "error": f"not JSON: {error.msg}"}, 400)
+        if not isinstance(body, dict):
+            return None, ({"refused": "BadRequest", "error": "the body is a JSON object"}, 400)
+        return body, ()
+
+    def _setup_edit(self, op: str):
+        # WHY the same page-only rule as /act and no token: the write is the person's own file, never a device, so a
+        # plain confirm on the page is enough (Zach, 2026-10-23); a script still cannot reach it from another origin
+        body, answer = self._body()
+        if body is None:
+            return self._json(*answer)
+        path, rig, reason = body.get("path"), body.get("rig"), body.get("reason", "")
+        if not isinstance(path, str) or not (rig is None or isinstance(rig, str)) or not isinstance(reason, str):
+            return self._json({"refused": "BadRequest", "error": "path is a string; rig a string or null; reason a string"}, 400)
+        if self.host.node(path) is None:
+            return self._json({"refused": "NoSuchEntity", "error": f"no entity {path!r}"}, 404)
+        result = self.host.setup_edit(op, path, rig=rig, reason=reason)
+        return self._json(result, 200 if result["ok"] else 400)
 
     # --- the one write: a utility from the page ------------------------------------------------------------------
     def _from_page(self) -> tuple[str, str]:

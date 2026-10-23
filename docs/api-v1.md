@@ -4,9 +4,10 @@
 `io_diagnostics/server.py` (stdlib `http.server`, default `http://127.0.0.1:8812/`). Tests:
 `tests/test_host_api.py` checks every endpoint against the shapes below; `tests/test_server_act.py` the one write.*
 
-Every endpoint is `GET` and returns JSON (`Content-Type: application/json`, `Cache-Control: no-store`), except ONE
-write: `POST /api/v1/act`, the page's Utilities panel (see "Actions from the page" below). Any other method or path
-returns **405**. **Agents never call `POST /api/v1/act`**: they dry-run with `io-diagnostics act --dry-run`; a real
+Every endpoint is `GET` and returns JSON (`Content-Type: application/json`, `Cache-Control: no-store`), except the
+page's writes: `POST /api/v1/act`, the Utilities panel (see "Actions from the page" below), and `POST
+/api/v1/expect | forget | retire`, the Expected setup card (host-side writes of the person's rig file, never a
+device; "Editing the expected setup" below). Any other method or path returns **405**. **Agents never call `POST /api/v1/act`**: they dry-run with `io-diagnostics act --dry-run`; a real
 action runs only from a person's click on the page (or `io-diagnostics act` typed by a person at a TTY). The record contract underneath is `contract/record.py`
 (`SCHEMA = "diagnostics-record/0"`, `RECORD_VERSION = "0.1"`); `docs/diagnostics-record-v0.md` explains every rule
 this API applies.
@@ -24,6 +25,7 @@ uv run --project /home/bam/io-diagnostics python /home/bam/io-diagnostics/io_dia
 | `GET /api/v1/plugins` | Plugin registry: loaded `plugins.d/*.toml`, matched devices, last run per device | rarely |
 | `GET /api/v1/health` | `{"ok": true, ...}` liveness | — |
 | `POST /api/v1/act` | The Utilities panel ONLY: a dry run, then a person's confirmed run with the dry run's token | on click |
+| `POST /api/v1/expect`, `/forget`, `/retire` | The Expected setup card ONLY: one edit of the rig file after a person's confirm | on click |
 | `GET /`, `/<file>` | The page in `io_diagnostics/web/` | — |
 
 Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while building a response → **500**
@@ -66,7 +68,12 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
   "chip": {"label": "IO 5 ⚠", "label_guide": "IO 00 ⚠", "icon": "attention", "title": "IO diagnostics",
            "menu": [{"text": "5 need you · 10 devices"}, {"sep": true}, "..."]},
   "tree": {"...": "node, see below; children nested"},
-  "recent": [{"...": "event, see Activity"}]
+  "recent": [{"...": "event, see Activity"}],
+  "expected_setup": {"file": "/home/bam/.config/io-diagnostics/expected.toml", "editable": true, "note": "",
+                     "rigs": [{"name": "1-DOF test rack", "path": "host/rig-1-dof-test-rack", "devices": 4}],
+                     "retired": [{"name": "fdcanusb 28B3A25D", "hardware_id": "usb:0483:5740:28B3A25D", "serial": "",
+                                  "date": "2026-10-23", "reason": "frames never reached the bus (2026-10-22) ...",
+                                  "path": null}]}
 }
 ```
 
@@ -97,6 +104,25 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
   `"ok" | "attention"`, `menu` items `{"text", "enabled"?, "children"?, "action"?}` or `{"sep": true}`). The web page
   may draw its own chip from `summary`; the `menu` is what the tray shows.
 - `recent`: the 6 newest events (same shape as in `/api/v1/activity`).
+- `expected_setup` (2026-10-23): the person's rig manifest (docs/expected-setup.md): its `file` (`null` = none on
+  this host: a fixture or a fake machine without `--expected`), whether the panel may `editable`-ly rewrite it, the
+  `note` saying why it does not read, its `rigs` (each with its rig row's `path`) and its `retired` devices (`path`
+  = the row of one that is plugged in again, else `null`).
+- **Expected setup** rows: one composite row per rig, `host/rig-<name>` (`kind` `"rig"`, `icon` `"group"`), first
+  under the host. Its `name` self-reports the counts ("1-DOF test rack · 2/2 adapters · 6/7 boards · 2/2 cameras");
+  its one check `<rig>: expected setup` is `warn` `ExpectedMissing` naming what is missing (with `what_to_check`),
+  `unknown` `ExpectedNotChecked` when an expected node's check could not run, else `ok`. An unexpected extra node, a
+  model that differs and "its boards answer on fdcanusb 0607623A now" (an absent adapter's boards on another one)
+  are notes in its message and values, never a level. A retired device that is plugged in again carries a `warn`
+  check `<name>: retired` (`RetiredDevice`, "retired 2026-10-23: <reason>"). An expected device matched only by a
+  driver's serial (the RealSense SDK serial) that is not here gets a row under `host/expected` (`ExpectedAbsent`,
+  "no connected device reports serial …"); one with a USB `hardware_id` gets the kernel-evidence row above. A node
+  the file gives a `rotor_to_output_ratio` whose fresh config reading differs carries one `warn` check
+  `<node>: expected ratio` (`RatioMismatch`, "config ratio 0.1667, expected 0.1 (10:1 gearbox)").
+- **Another adapter works**: when a device's check says `FramesNotSent` (its frames never reached the wire) while
+  another device of the same plugin on this PC has nodes answering, the host adds a `warn` check
+  `<device>: another adapter` (`OtherAdapterWorks`, source `io_diagnostics.host`) on the same row: "fdcanusb 272813EF
+  works on this PC: plug this bus into it to tell adapter from bus".
 
 ### The node (one tree row)
 
@@ -133,7 +159,7 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
 | Field | Meaning |
 |---|---|
 | `path`, `name` | The entity key (Conventions: changes on replug; key selections on it) and the name to show. A plugin may rename its device's OS row ("fdcanusb" → "D405 ·6036"); the name is rendered as authored. |
-| `kind` | What the entity is (open string; the record contract's vocabulary plus `group`): `host`; `bus` (an OS bus from `io_facts.skeleton`: a USB root hub "USB bus 1", a PCI root bus; or a plugin's bus, e.g. a CAN bus); `group` (on-board / parentless nodes of one source, e.g. "On-board serial ports", or "USB" when the fallback reader is used); `port` (a USB port, added by the host between a device and its hub or root bus); `device` (every OS hardware or function node: a USB device, a hub, a PCI function, a tty, a video node, a NIC); and plugin kinds `node`, `part`, `stream`. |
+| `kind` | What the entity is (open string; the record contract's vocabulary plus `group`): `host`; `bus` (an OS bus from `io_facts.skeleton`: a USB root hub "USB bus 1", a PCI root bus; or a plugin's bus, e.g. a CAN bus); `group` (on-board / parentless nodes of one source, e.g. "On-board serial ports", or "USB" when the fallback reader is used); `port` (a USB port, added by the host between a device and its hub or root bus); `device` (every OS hardware or function node: a USB device, a hub, a PCI function, a tty, a video node, a NIC); plugin kinds `node`, `part`, `stream`; and `rig` (a rig row of the expected setup, first under the host). |
 | `icon` | The icon TYPE to draw (closed vocabulary; unknown → draw `device`): `host`, `group`, `usb`, `pci`, `net`, `tty`, `video`, `port`, `hub`, `adapter`, `bus`, `servo`, `chip`, `motor`, `camera`, `stream`, `webcam`, `hid`, `device`. A plugin may hint it; otherwise the host derives it from kind, bus and USB class. |
 | `parent`, `edge` | The ONE parent edge (contract `Entity`): `"via"` = connectivity (port, hub, adapter, bus it is reached through), `"part_of"` = composition (a node's driver / motor; a camera's streams). Draw them differently if you like; both nest in `children`. `null` for the root. |
 | `depth` | 0 at `host`. |
@@ -177,7 +203,15 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
   ],
   "faults": [{"...": "fault, see Activity"}],
   "events": [{"...": "event for this path or below, newest first, at most 20"}],
-  "entity": {"schema": "diagnostics-record/0", "record": "entity", "path": "...", "...": "contract to_dict(Entity)"}
+  "entity": {"schema": "diagnostics-record/0", "record": "entity", "path": "...", "...": "contract to_dict(Entity)"},
+  "setup": {"role": "device", "file": "/home/bam/.config/io-diagnostics/expected.toml", "note": "", "editable": true,
+            "rigs": ["1-DOF test rack"], "rig": "1-DOF test rack", "expected": true, "retired": null,
+            "nodes_expected": ["can/1", "can/14", "can/15"], "node_notes": {"can/15": "being replaced"},
+            "nodes_here": ["can/1", "can/14"],
+            "can": {"expect": true, "forget": false, "retire": true},
+            "confirm": {"expect": "Expect fdcanusb 272813EF in 1-DOF test rack with can/1, can/14 (can/15 no longer expected)?",
+                        "retire": "Retire fdcanusb 272813EF? It leaves 1-DOF test rack. Plugged in again, ..."},
+            "needs_rig": false}
 }
 ```
 
@@ -210,6 +244,13 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
   - `executable` is always `false`: nothing runs from a `GET`. The page runs one only through `POST /api/v1/act`
     (a dry run first, then a person's click; "Actions from the page"), a person at a TTY through `io-diagnostics act`.
 - `faults`: the host's `FaultManager` memory for this entity (see Activity).
+- `setup` (2026-10-23): the row's Expected setup card, or `null` for a row it is not about. `role` is `device` (a
+  physical device row itself), `rig` (a rig row) or `absent` (a row under "Expected, not connected"). `rig` /
+  `expected` / `nodes_expected` (with the file's `node_notes`) say where the manifest has it, `nodes_here` the nodes answering below it now,
+  `retired` its `{date, reason}`. `can` is what the card offers: a device row Expect what's here and Retire…, a rig
+  row Expect what's here (every present device's nodes as they answer now), an absent row Forget and Retire…; all
+  `false` while the file is not `editable`. `confirm[op]` is the exact sentence the confirm shows, built from the same
+  plan the edit runs. `needs_rig`: the device is in no rig and there are several, so the page asks which.
 
 ## `GET /api/v1/activity[?limit=N]`
 
@@ -391,6 +432,32 @@ disabled until the box holds a whole number 1-126 other than the board's own id,
 "CAN 15 → CAN 7", and typing another id closes a dry run shown for the old one. Agents must not
 replay this flow: the headers are what a browser sends, and a command-line client can forge them, which is why the
 rule is written here and not only enforced.
+
+## Editing the expected setup: `POST /api/v1/expect`, `/forget`, `/retire`
+
+The Expected setup card's three buttons (docs/expected-setup.md). Each rewrites the person's rig file
+(`~/.config/io-diagnostics/expected.toml`, atomically) and nothing else: no device is touched, so there is no dry run
+and no token. The page asks one plain confirm first, showing `setup.confirm[op]` from `/api/v1/node`. The same
+same-origin rule as `/api/v1/act` applies (`NotFromPage`, `NotSameOrigin`, `NotJson`: **403**), and agents never call
+them (the CLI has `io-diagnostics expect | forget | retire`).
+
+```json
+{"path": "host/usb1/port-1-5/usb-1-5", "rig": null, "reason": ""}
+```
+
+- `expect` (Expect what's here): on a device row, adds it (or updates it) with the nodes answering below it now, into
+  its rig, else `rig`, else the only rig (several rigs and none named: `RigRequired` with `rigs`); it also takes a
+  retired device back into service. On a rig row: every present device's nodes as they answer now.
+- `forget`: on a row under "Expected, not connected" only (`NotAbsent` otherwise): removes it from the file and from
+  the devices this host remembers (`seen.json`), and keeps a plugin's own list from bringing it back until it is
+  seen again.
+- `retire` (Retire…): on a device or absent row, with a non-empty `reason` (`ReasonRequired`): removes it from every
+  rig and lists it under `[[retired]]` with today's date; plugged in again, its row says "retired <date>: <reason>".
+
+The answer is **200** `{"ok": true, "op", "path", "refused": null, "message": "done: ...", "file"}`, or **400**
+`{"ok": false, "refused": "<Code>", "message": "<plain reason>", ...}` (`NotADevice`, `NotHere`, `NotAbsent`,
+`ReasonRequired`, `RigRequired`, `ManifestUnavailable` when the file does not read or this host has none,
+`NotWritten`), or **404** when no row has that `path`.
 
 ## `GET /api/v1/health`
 

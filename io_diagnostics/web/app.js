@@ -31,6 +31,7 @@ const S = {
   mode: 'auto',        // 'auto' (prefers-color-scheme) | 'light' | 'dark'
   util: null,          // the utility being dry-run / confirmed / run: {path, name, node, newId, phase, dry, result, ...}
   newIds: new Map(),   // entity path -> what the person typed in set_id's "New id (1-126)" box
+  setup: null,         // the Expected setup edit being confirmed / saved: {path, op, phase, reason, rig, result}
   modalHtml: '',
   why: new Map(),      // entity path -> {checks: [{name, level, message, lines, evidence}], message, at}: what_to_check
   attOpen: new Set(),  // attention items whose checklist the viewer opened (the first one is open unless closed)
@@ -527,6 +528,7 @@ function renderDetail(byPath) {
   html += whatToCheckCard(detail, ownRow);
   // the utilities right under the problem: what to check, then the buttons that check or fix it (printer style)
   html += renderUtilities(detail.actions, detail.node.path);
+  html += setupCard(detail);
   const status = [
     ['shows', `${pill(node.level)} <span class="muted">${node.own.level === null ? 'grouping: worst below' : 'its own self-report'}</span>`],
     ['worst below', node.rollup.level ? `${pill(node.rollup.level)} ${node.rollup.origin && node.rollup.origin !== node.path ? `<a class="link" data-go="${esc(node.rollup.origin)}">${esc(node.rollup.origin_name)}</a>` : ''}` : '<span class="muted">nothing reports</span>'],
@@ -799,6 +801,88 @@ function renderModal() {
   if (html !== S.modalHtml) { back.innerHTML = html; S.modalHtml = html; }
 }
 
+// ------------------------------------------------------------------------ the expected setup ----
+// The selected row's place in the person's rig file (docs/expected-setup.md) and the three edits: Expect what's here
+// (a device or a rig row), Forget (an absent row), Retire… (a device, with a reason). WHY a plain confirm and no dry
+// run: they rewrite the person's own file and never touch a device (Zach, 2026-10-23); the confirm shows the host's
+// own sentence for the exact edit (/api/v1/node setup.confirm), the same plan the POST runs.
+const SETUP_TITLES = { expect: "Expect what's here", forget: 'Forget', retire: 'Retire…' };
+const SETUP_VERBS = { expect: 'Expect', forget: 'Forget', retire: 'Retire' };
+const SETUP_OPS = { device: ['expect', 'retire'], rig: ['expect'], absent: ['forget', 'retire'] };  // disabled unless setup.can[op]
+
+function setupWhere(setup) {
+  const nodes = (list) => (list.length ? list.join(', ') : 'no nodes');
+  if (setup.role === 'rig') return `<div class="s-line">Rig <b>${esc(setup.rig)}</b> · one row that counts what it expects</div>`;
+  const lines = [];
+  if (setup.retired) lines.push(`<div class="s-line s-retired">Retired ${esc(setup.retired.date)}: ${esc(setup.retired.reason)}</div>`);
+  const notes = setup.node_notes || {};
+  const expected = setup.nodes_expected.map((node) => (notes[node] ? `${node} (${notes[node]})` : node));
+  if (setup.expected) lines.push(`<div class="s-line">In <b>${esc(setup.rig)}</b> · expects ${esc(nodes(expected))}</div>`);
+  else if (!setup.retired) lines.push(`<div class="s-line muted">${setup.role === 'absent' ? 'Remembered by this host or listed by its driver, not in the rig file' : 'Not in the expected setup'}</div>`);
+  if (setup.role === 'device') lines.push(`<div class="s-line muted">Answering now: ${esc(nodes(setup.nodes_here))}</div>`);
+  return lines.join('');
+}
+
+function setupPanel(setup, edit) {
+  const confirm = String(setup.confirm[edit.op] || '').replace('<reason>', edit.reason.trim() || '<reason>');
+  const reason = edit.op === 'retire'
+    ? `<label class="s-reason"><span>Reason</span><input type="text" data-setup-reason value="${esc(edit.reason)}" placeholder="why it is retired" aria-label="Why it is retired"></label>` : '';
+  const rig = edit.op === 'expect' && setup.needs_rig
+    ? `<label class="s-reason"><span>Rig</span><select data-setup-rig>${setup.rigs.map((name) => `<option${name === edit.rig ? ' selected' : ''}>${esc(name)}</option>`).join('')}</select></label>` : '';
+  const ready = edit.op !== 'retire' || edit.reason.trim();
+  if (edit.phase === 'done') {
+    const result = edit.result || {};
+    return `<div class="s-panel"><div class="u-result ${result.ok ? 'ok' : 'fail'}"><div class="u-result-h">${result.ok ? '' : shape('error', 'not written')}`
+      + `<b>${result.ok ? 'Saved' : `Not saved: ${esc(result.refused || 'error')}`}</b> · ${esc(result.message || result.error || '')}</div></div>`
+      + `<div class="u-foot"><button class="btn" data-setup-close>Close</button></div></div>`;
+  }
+  return `<div class="s-panel"><div class="confirm">${esc(confirm)}</div>${reason}${rig}`
+    + `<div class="s-note muted">Writes ${esc(setup.file || 'the rig file')} · nothing is sent to a device</div>`
+    + `<div class="u-foot"><button class="btn" data-setup-cancel>Cancel</button>`
+    + `<button class="btn primary query" data-setup-confirm${ready && edit.phase !== 'saving' ? '' : ' disabled'}>${esc(SETUP_VERBS[edit.op])}</button></div></div>`;
+}
+
+function setupCard(detail) {
+  const setup = detail && detail.setup;
+  if (!setup) return '';
+  const path = detail.node.path;
+  const edit = S.setup && S.setup.path === path ? S.setup : null;
+  const buttons = (SETUP_OPS[setup.role] || []).map((op) => `<button class="btn${edit && edit.op === op ? ' on' : ''}" data-setup="${op}"${setup.can[op] ? '' : ' disabled'} title="${esc(setup.confirm[op] || '')}">${esc(SETUP_TITLES[op])}</button>`).join('');
+  const note = !setup.editable ? `<div class="s-line muted">${esc(setup.note || 'No rig file on this host (a replay without --expected): nothing to edit')}</div>` : '';
+  return `<div class="card wide setup"><h3>Expected setup<span class="right muted">the rig file, never the device</span></h3>`
+    + `${setupWhere(setup)}${note}<div class="s-actions">${buttons}</div>${edit ? setupPanel(setup, edit) : ''}</div>`;
+}
+
+async function saveSetup() {
+  const edit = S.setup;
+  if (!edit || edit.phase !== 'confirm' || (edit.op === 'retire' && !edit.reason.trim())) return;
+  edit.phase = 'saving';
+  render();
+  let result;
+  try {
+    const response = await fetch(`/api/v1/${edit.op}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-IO-Diagnostics': 'ui' },
+      body: JSON.stringify({ path: edit.path, rig: edit.rig || null, reason: edit.reason.trim() }) });
+    result = await response.json();
+  } catch (error) {
+    result = { ok: false, refused: 'Unreachable', message: `the host did not answer: ${error}` };
+  }
+  if (S.setup !== edit) return;
+  edit.phase = 'done';
+  edit.result = result;
+  if (result.ok && edit.op === 'forget') {
+    // a forgotten row is gone: show the result on its rig's row (else the host), which is what changed
+    const rigs = (S.data && S.data.expected_setup && S.data.expected_setup.rigs) || [];
+    const target = (rigs.find((rig) => rig.name === edit.rig) || {}).path || S.data.tree.path;
+    select(target);
+    S.setup = { ...edit, path: target };
+    render();
+    return;
+  }
+  S.nodeAt = 0; // the row's card and the rig row change at once
+  loadNode();
+  render();
+}
+
 // ------------------------------------------------------------------- what to check (plain words) ----
 // A status whose cause has a checklist carries the value `what_to_check` (numbered lines, newline-separated, in the
 // order to check them; moteus_servo docs/io_diagnostics_actions.md, the host's ExpectedAbsent rows). The page's top
@@ -922,12 +1006,13 @@ function render() {
   // WHY compare: the dry-run panel and the What to check list are read, not glanced at; an unchanged detail is not
   // rewritten every second (selection, focus and scroll stay)
   if (detailHtml !== S.detailHtml) {
-    // set_id's new-id box is rewritten with the detail as the person types: keep the focus in it and the caret at
-    // its end (a number input has no selection API; re-setting its value is what moves the caret there)
-    const typing = document.activeElement && document.activeElement.matches('[data-util-newid]');
+    // set_id's new-id box and Retire…'s reason box are rewritten with the detail as the person types: keep the focus
+    // in it and the caret at its end (a number input has no selection API; re-setting its value moves the caret there)
+    const typing = document.activeElement && document.activeElement.matches('[data-util-newid], [data-setup-reason]')
+      ? (document.activeElement.matches('[data-setup-reason]') ? '[data-setup-reason]' : '[data-util-newid]') : null;
     $('detail').innerHTML = detailHtml;
     S.detailHtml = detailHtml;
-    const box = typing && $('detail').querySelector('[data-util-newid]');
+    const box = typing && $('detail').querySelector(typing);
     if (box) { const typed = box.value; box.focus(); box.value = ''; box.value = typed; }
   }
   renderChip();
@@ -940,6 +1025,7 @@ function select(path) {
   S.selKey = null;
   S.node = null;
   if (S.util && S.util.path !== path) S.util = null; // a utility belongs to the entity it was opened on
+  if (S.setup && S.setup.path !== path) S.setup = null; // so does an Expected setup edit
   loadNode();
 }
 
@@ -985,6 +1071,18 @@ document.addEventListener('click', (event) => {
   if (t.closest('[data-util-cancel]') || t.id === 'modal') { if (S.util && S.util.phase === 'confirm') S.util.phase = 'shown'; return render(); }
   if (t.closest('[data-util-close]')) { S.util = null; return render(); }
   if (t.closest('[data-util-tick]')) return undefined; // its change event records the tick
+  // the Expected setup card: a click opens its confirm; only the confirm's button writes the file
+  const setupButton = t.closest('[data-setup]');
+  if (setupButton && S.node && S.node.setup) {
+    const setup = S.node.setup;
+    // rig: the one to add to when the host asks which (needs_rig); for Forget, the rig it leaves (its result shows there)
+    S.setup = { path: S.node.node.path, op: setupButton.dataset.setup, phase: 'confirm', reason: '',
+      rig: setup.needs_rig ? setup.rigs[0] : (setupButton.dataset.setup === 'forget' ? setup.rig : null), result: null };
+    return render();
+  }
+  if (t.closest('[data-setup-confirm]')) { saveSetup(); return undefined; }
+  if (t.closest('[data-setup-cancel]') || t.closest('[data-setup-close]')) { S.setup = null; return render(); }
+  if (t.closest('[data-setup-reason]') || t.closest('[data-setup-rig]')) return undefined;
   const att = t.closest('[data-att]');
   if (att) {
     const key = att.dataset.att;
@@ -1003,8 +1101,10 @@ $('structure-toggles').addEventListener('change', (event) => {
 });
 document.addEventListener('change', (event) => {
   if (event.target.closest('[data-util-tick]') && S.util) { S.util.ticked = event.target.checked; render(); }
+  if (event.target.closest('[data-setup-rig]') && S.setup) { S.setup.rig = event.target.value; render(); }
 });
 document.addEventListener('input', (event) => {
+  if (event.target.closest('[data-setup-reason]') && S.setup) { S.setup.reason = event.target.value; render(); return; }
   const box = event.target.closest('[data-util-newid]');
   const action = box && S.node && (S.node.actions || []).find((item) => item.name === 'set_id');
   if (!action) return;
@@ -1018,6 +1118,7 @@ document.addEventListener('input', (event) => {
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return;
   if (S.util && S.util.phase === 'confirm') S.util.phase = 'shown';
+  if (S.setup && S.setup.phase === 'confirm') S.setup = null;
   S.chip = false;
   render();
 });

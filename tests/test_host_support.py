@@ -28,7 +28,7 @@ CASES = ROOT / "tests" / "fixtures" / "plugins" / "cases" / "case_plugin.py"
 # (which allows only describe / diagnose --passive), and an io-diagnostics once/serve/tray/act that names neither
 # --plugins nor --fixture (it would load plugins.d). pytest imports this module at collection, so it covers the suite.
 REAL_DRIVER_MODULES = ("moteus_servo.diagnostics", "intel_rgbd.diagnostics")
-HOST_VERBS = ("once", "serve", "tray", "act")
+HOST_VERBS = ("once", "serve", "tray", "act", "expect", "forget", "retire")
 TRIPPED: list[list[str]] = []
 
 
@@ -65,6 +65,11 @@ if not issubclass(subprocess.Popen, _TripwirePopen):
 _STATE_DIR = tempfile.mkdtemp(prefix="io-diagnostics-test-state-")
 atexit.register(shutil.rmtree, _STATE_DIR, ignore_errors=True)
 os.environ["IO_DIAGNOSTICS_STATE_DIR"] = _STATE_DIR
+# WHY: likewise a live-mode host reads the person's rig manifest (~/.config/io-diagnostics/expected.toml); a test must
+# neither see Zach's rig nor ever write to it
+_CONFIG_DIR = tempfile.mkdtemp(prefix="io-diagnostics-test-config-")
+atexit.register(shutil.rmtree, _CONFIG_DIR, ignore_errors=True)
+os.environ["IO_DIAGNOSTICS_CONFIG_DIR"] = _CONFIG_DIR
 
 
 class SetClock(Clock):

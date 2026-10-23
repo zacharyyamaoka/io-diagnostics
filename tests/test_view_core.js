@@ -182,7 +182,32 @@ function withExpected(state) {
   return { ...state, tree, summary: { ...state.summary, attention: [...state.summary.attention, { path: absent.path, name: absent.name, level: 'warn', message: absent.message, device: null }] } };
 }
 
+// The expected setup's rig row (host, docs/expected-setup.md): kind `rig`, first under the host, its name the counts.
+const RIG = 'host/rig-1-dof-test-rack';
+const RIG_NAME = '1-DOF test rack · 2/2 adapters · 6/7 boards · 2/2 cameras';
+function withRig(state) {
+  const rig = node(RIG, RIG_NAME, { kind: 'rig', icon: 'group', level: 'warn', own: { level: 'warn', message: 'missing: CAN 15 on fdcanusb 272813EF' },
+    message: 'missing: CAN 15 on fdcanusb 272813EF' });
+  const tree = { ...state.tree, children: [rig, ...state.tree.children] };
+  return { ...state, tree, summary: { ...state.summary, attention: [...state.summary.attention, { path: RIG, name: RIG_NAME, level: 'warn', message: rig.message, device: null }] } };
+}
+
+function rigUnit() {
+  const state = withRig(withExpected(liveRackState()));
+  const seen = [];
+  for (const id of STRUCTURES) {
+    const built = V.build(state, id, {});
+    const row = built.flat.find((each) => each.entity === RIG);
+    seen.push({ id, label: row && row.label, own: row && row.status.own, top: built.rows.indexOf(row), leaf: row && row.children.length === 0 });
+  }
+  check('rig row: in every structure, its counts verbatim, a warn of its own, a leaf', seen.every((item) => item.label === RIG_NAME && item.own === 'warn' && item.leaf), seen);
+  check('rig row: first at the top level of p0 and p1 (the at-a-glance answer)', seen.filter((item) => ['p0', 'p1'].includes(item.id)).every((item) => item.top === 0), seen);
+  const ok = V.build(withRig(liveRackState()), 'p1', {}).flat.find((each) => each.entity === RIG);
+  check('rig row: searchable by its name', V.applyQuery(V.build(state, 'p1', {}).rows, '6/7 boards').some((each) => each.entity === RIG) && Boolean(ok));
+}
+
 function liveShapeUnit() {
+  rigUnit();
   const state = liveRackState();
   const p0 = V.build(state, 'p0', {});
   const adapter = p0.flat.find((row) => row.entity === 'host/usb1/port-1-3/usb-1-3');

@@ -377,6 +377,17 @@ table.grid td.mono.xcol { font-size: 11.5px; }
 .btn.primary.interrupts { background: var(--io-warn-soft); border-color: var(--io-warn-line); color: var(--io-warn-text); }
 .btn.primary.moves { background: var(--io-error); border-color: var(--io-error); color: var(--io-on-status); font-weight: 600; }
 
+/* ---- the Expected setup card: where the row stands in the rig file, and its three edits ----------------------- */
+.card.setup .s-line { font-size: 12.5px; padding: 1px 0; }
+.card.setup .s-retired { color: var(--io-warn-text); }
+.card.setup .s-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.card.setup .s-actions .btn.on { border-color: var(--io-selected-line); }
+.card.setup .s-panel { display: grid; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--io-border); font-size: 12.5px; }
+.card.setup .s-panel .confirm { padding: 8px 10px; border-radius: var(--io-radius); background: var(--io-surface-alt); border: 1px solid var(--io-border); color: var(--io-text-strong); }
+.card.setup .s-reason { display: flex; align-items: center; gap: 8px; color: var(--io-muted); }
+.card.setup .s-reason input, .card.setup .s-reason select { flex: 1; min-width: 0; padding: 5px 8px; font: inherit; color: var(--io-text-strong); background: var(--io-field); border: 1px solid var(--io-border); border-radius: var(--io-radius-sm); }
+.card.setup .s-note { font-size: 11.5px; }
+
 /* ---- the confirm modal repeats the danger; moves gets the strongest treatment -------------------------------- */
 .modal.m-moves { border: 2px solid var(--io-error); }
 .m-danger { display: flex; align-items: center; gap: 8px; margin: 2px 0 10px; color: var(--io-text-strong); }

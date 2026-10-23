@@ -22,6 +22,7 @@ from pathlib import Path
 
 from io_diagnostics import API, FIXTURE_PLUGINS_DIR, PLUGINS_DIR
 from io_diagnostics import activity as activity_module
+from io_diagnostics import expected as expected_module
 from io_diagnostics import tree
 from io_diagnostics.faults import Faults
 from io_diagnostics.plugins import load_plugins, match_devices
@@ -31,6 +32,11 @@ from io_diagnostics.runner import (RUNNER_SOURCE, Gates, Job, Scheduler, absolut
 from contract.record import (OK, RANK, RECORD_VERSION, SCHEMA, STALE, STALE_FACTOR, STALE_FLOOR_S, WARN, Action,
                              DiagnosticStatus, Entity, Event, KeyValue, effective_level, from_dict, to_dict)
 
+HOST_SOURCE = "io_diagnostics.host"
+# WHY a code and not a driver name: any driver that says "my frames never reached the wire" this way gets the
+# other-adapter comparison (moteus_servo's FramesNotSent: fdcanusb 28B3A25D, 2026-10-22)
+FRAMES_NOT_SENT = "FramesNotSent"
+DEFAULT_RIG = "Rig"
 FIXTURE_FILE = FIXTURE_PLUGINS_DIR / "v6_frames.json"
 FIXTURE_ALIASES = {"plug": "F1", "bus-busy": "F2", "after-restart": "F3", "f1": "F1", "f2": "F2", "f3": "F3",
                    "v6-f1": "F1", "v6-f2": "F2", "v6-f3": "F3"}
@@ -255,6 +261,9 @@ class SeenDevices:
     def __init__(self, path: Path | None):
         self.path = Path(path) if path else None
         self.devices: dict[str, dict] = {}
+        # hardware_id -> when a person chose Forget: kept out of the absent rows (a plugin's describe may still list
+        # it) until the device is seen again, when it is remembered as any device is
+        self.forgotten: dict[str, float] = {}
         self.note = ""  # why the file could not be read at start (sticky: the old content was dropped)
         self.write_note = ""  # why the latest write failed; cleared by the next good one
         self._written = -1e18
@@ -263,6 +272,8 @@ class SeenDevices:
                 data = json.loads(self.path.read_text())
                 self.devices = {str(key): dict(value) for key, value in (data.get("devices") or {}).items()
                                 if isinstance(value, dict)}
+                self.forgotten = {str(key): float(value) for key, value in (data.get("forgotten") or {}).items()
+                                  if isinstance(value, (int, float))}
             except (OSError, ValueError, AttributeError) as error:
                 self.note = f"{self.path}: unreadable ({type(error).__name__}: {error}); starting empty"
 
@@ -275,16 +286,28 @@ class SeenDevices:
             if entry is None:
                 entry, new = {"first_seen": now}, True
                 self.devices[hardware_id] = entry
+            if self.forgotten.pop(hardware_id, None) is not None:
+                new = True
             entry.update(name=name, last_seen=now)
         if self.path and seen and (new or time.monotonic() - self._written > SEEN_WRITE_S):
             self._write()
+
+    def forget(self, hardware_id: str, now: float) -> bool:
+        """Drop a device from the memory and keep it out of the absent rows until it is seen again; True if it was
+        remembered. Written at once (a person asked)."""
+
+        known = self.devices.pop(hardware_id, None) is not None
+        self.forgotten[hardware_id] = now
+        if self.path:
+            self._write()
+        return known
 
     def _write(self) -> None:
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             handle, temporary = tempfile.mkstemp(prefix=f".{self.path.name}.", dir=self.path.parent)
             with os.fdopen(handle, "w") as file:
-                json.dump({"version": 1, "devices": self.devices}, file, indent=1, sort_keys=True)
+                json.dump({"version": 1, "devices": self.devices, "forgotten": self.forgotten}, file, indent=1, sort_keys=True)
                 file.flush()
                 os.fsync(file.fileno())
             os.replace(temporary, self.path)
@@ -309,6 +332,7 @@ class View:
     rows: tree.Rows
     events: list[Event]
     faults_by_path: dict[str, int]
+    setup: expected_module.SetupView | None = None
 
 
 class _Blank(dict):
@@ -319,7 +343,7 @@ class _Blank(dict):
 class Host:
     def __init__(self, *, plugins_dir: Path = PLUGINS_DIR, clock: Clock | None = None, os_source=None,
                  fixture: dict | None = None, plugin_env: dict[str, str] | None = None, enable: tuple[str, ...] = (),
-                 state_file: Path | None = None):
+                 state_file: Path | None = None, expected_file: Path | None = None):
         self.plugins_dir = Path(plugins_dir)
         self.clock = clock or Clock()
         self.os = os_source or LiveOs()
@@ -335,6 +359,8 @@ class Host:
         self.jobs: dict[tuple[str, str], Job] = {}
         self.gates = Gates()  # one per host: `once`, the scheduler and act all take turns per `exclusive` group
         self.seen = SeenDevices(state_file)  # USB devices a plugin diagnosed, remembered across runs (None: memory)
+        # the person's rig manifest (docs/expected-setup.md); None = nothing expected and no edits (fixture / machine)
+        self.setup = expected_module.ExpectedSetup(expected_file)
         self.layer = tree.OsLayer()
         self.sources: list[dict] = []
         self.os_records: list[DiagnosticStatus] = []
@@ -396,6 +422,7 @@ class Host:
     # --- refresh: OS skeleton + kernel log -> layer, jobs, OS checks ----------------------------------------------
     def refresh(self) -> None:
         self.adopt_described_matches()
+        self.setup.reload_if_changed()  # a hand edit of expected.toml shows within one refresh
         now = self.clock.now()
         devices, sources = self.os.skeleton()
         boots = self.os.boots()
@@ -412,6 +439,8 @@ class Host:
         if self.seen.note or self.seen.write_note:
             note = " · ".join(text for text in (self.seen.note, self.seen.write_note) if text)
             sources = [*sources, {"name": "seen devices", "state": "skipped", "note": note}]
+        if self.setup.note:
+            sources = [*sources, {"name": "expected setup", "state": "skipped", "note": self.setup.note}]
         with self.lock:
             wanted = {}
             for spec, device in pairs:
@@ -433,7 +462,9 @@ class Host:
     # --- expected but absent ------------------------------------------------------------------------------------
     def expected_devices(self) -> dict[str, dict]:
         """``hardware_id -> {name, last_seen, source, owner}``: the devices this host has seen a plugin diagnose, plus
-        every enabled plugin's describe ``expected`` (record v0.1; the plugin's entry wins over the memory)."""
+        every enabled plugin's describe ``expected`` (record v0.1; the plugin's entry wins over the memory), plus the
+        expected setup's devices that have a hardware_id (docs/expected-setup.md; the person's file wins over both).
+        A retired device, or one a person chose to Forget, is never expected."""
 
         out = {hardware_id: {"name": str(entry.get("name") or hardware_id), "last_seen": entry.get("last_seen"),
                              "source": "seen by this host", "owner": "io_diagnostics"}
@@ -449,7 +480,21 @@ class Host:
                 out[hardware_id] = {"name": str(item.get("name") or remembered.get("name") or hardware_id),
                                     "last_seen": item.get("last_seen") or remembered.get("last_seen"),
                                     "source": str(item.get("source") or spec.name), "owner": spec.name}
-        return out
+        for rig, device in self.setup.manifest.entries():
+            if not device.hardware_id:
+                continue  # a serial-only entry is judged on the merged tree (expected.evaluate)
+            known = next((key for key in out if expected_module.same_id(key, device.hardware_id)), device.hardware_id)
+            remembered = out.pop(known, {})
+            out[device.hardware_id] = {"name": device.label(), "last_seen": remembered.get("last_seen"),
+                                       "source": f"expected setup: {rig.name}", "owner": remembered.get("owner", "io_diagnostics")}
+        forgotten = set(self.seen.forgotten)
+        return {hardware_id: entry for hardware_id, entry in out.items()
+                if hardware_id not in forgotten and self.setup.retired_entry(hardware_id, self._usb_serial(hardware_id)) is None}
+
+    @staticmethod
+    def _usb_serial(hardware_id: str) -> tuple[str, ...]:
+        ids = activity_module.usb_id(hardware_id)
+        return (ids[2],) if ids else ()
 
     def _absent_rows(self, layer: tree.OsLayer, boots: list, now: float) -> list[DiagnosticStatus]:
         """One row (entity + WARN status) per expected USB device that is not on USB now, under ``host/expected``,
@@ -486,8 +531,24 @@ class Host:
         return statuses
 
     # --- plugin runs -----------------------------------------------------------------------------------------------
-    def _job_env(self) -> dict[str, str]:
-        return dict(self.plugin_env)
+    def _job_env(self, job: Job | None = None) -> dict[str, str]:
+        """What every plugin call gets beside the runner's own variables; for a job's diagnose and act, also
+        ``IO_DIAGNOSTICS_EXPECTED`` when the expected setup lists its device (``{"nodes": [...], "rig": "..."}``).
+        WHY "" when not listed: the runner copies this process's environment, and a stray value must not reach a
+        driver as if the person had said it (an empty value is "no expected setup": the driver uses its own source)."""
+
+        env = dict(self.plugin_env)
+        if job is None:
+            return env
+        with self.lock:
+            device_path = self.layer.device_paths.get(str(job.device.get("id")), job.device_path)
+            entity = self.layer.entities.get(device_path)
+            plugin_row = job.cache.entities.get("")
+        hardware_id = entity.hardware_id if entity else str((job.device.get("attrs") or {}).get("hardware_id") or "")
+        serials = [str(job.device.get("serial") or ""), str(((plugin_row.identity if plugin_row else {}) or {}).get("serial_number") or "")]
+        env["IO_DIAGNOSTICS_EXPECTED"] = self.setup.plugin_env(hardware_id, tuple(serial for serial in serials if serial)).get(
+            "IO_DIAGNOSTICS_EXPECTED", "")
+        return env
 
     def run_job(self, job: Job) -> None:
         """Run one job, waiting first for its ``exclusive`` group (queued, never failed)."""
@@ -500,7 +561,7 @@ class Host:
 
         with self.lock:
             entity = self.layer.entities.get(job.device_path)
-        outcome = run_plugin(job.spec, job.device, job.device_path, self.clock.now, self._job_env(),
+        outcome = run_plugin(job.spec, job.device, job.device_path, self.clock.now, self._job_env(job),
                              hardware_id=entity.hardware_id if entity else "")
         now = self.clock.now()
         with self.lock:
@@ -559,7 +620,16 @@ class Host:
     def view(self) -> View:
         with self.lock:
             now = self.clock.now()
-            merged = tree.merge(self.layer, list(self.jobs.values()), self.os_records)
+            jobs = list(self.jobs.values())
+            layer = self.layer
+            merged = tree.merge(layer, jobs, self.os_records)
+            # WHY judged on the merged tree, every view: a rig counts boards and matches cameras by the serial their
+            # DRIVER reports (the RealSense SDK serial), which only the plugins' records carry
+            setup = expected_module.evaluate(self.setup, merged, layer, now, RUNNER_SOURCE)
+            notes = self._host_notes(merged, now)
+            if setup.entities or setup.statuses or notes:
+                layer = self._layer_with(setup.entities)
+                merged = tree.merge(layer, jobs, self.os_records + setup.statuses + notes)
             rows = tree.build_rows(merged, now)
             events = list(self.usb.events) + self.faults.events
             for job in self.jobs.values():
@@ -568,7 +638,60 @@ class Host:
                     events += [dataclasses.replace(event, path=absolute(event.path, device_path)) for event in job.cache.events.values()]
         events = [event for event in events if event.stamp is None or event.stamp <= now]
         events.sort(key=lambda event: (event.stamp or 0.0, event.seq or 0), reverse=True)
-        return View(now, self.layer, merged, rows, events, self.faults.open_by_path())
+        return View(now, layer, merged, rows, events, self.faults.open_by_path(), setup)
+
+    def _layer_with(self, extra: list[tuple[Entity, str]]) -> tree.OsLayer:
+        """The OS layer plus the expected setup's rows: rig rows first under the host (the at-a-glance answer), the
+        serial-only absent rows under "Expected, not connected"."""
+
+        entities, icons = {}, dict(self.layer.icons)
+        for path, entity in self.layer.entities.items():
+            entities[path] = entity
+            if path == tree.HOST_PATH:
+                for row, icon in extra:
+                    if row.kind == expected_module.RIG_KIND:
+                        entities[row.path], icons[row.path] = row, icon
+        for row, icon in extra:
+            if row.kind == expected_module.RIG_KIND:
+                continue
+            if row.via == EXPECTED_PATH and EXPECTED_PATH not in entities:
+                entities[EXPECTED_PATH] = Entity(EXPECTED_PATH, "Expected, not connected", "group", via=tree.HOST_PATH,
+                                                 owner="io_diagnostics")
+                icons[EXPECTED_PATH] = "group"
+            entities[row.path], icons[row.path] = row, icon
+        return dataclasses.replace(self.layer, entities=entities, icons=icons)
+
+    def _host_notes(self, merged: tree.Merged, now: float) -> list[DiagnosticStatus]:
+        """A device whose frames never reached the wire while another adapter of the same plugin on this PC has boards
+        answering: name that one, so one swap tells adapter from bus (28B3A25D vs 272813EF, 2026-10-22)."""
+
+        own = expected_module.latest_statuses(merged.statuses)
+        devices: dict[str, list[str]] = {}  # plugin -> its device rows, in job order
+        for job in self.jobs.values():
+            path = self.layer.device_paths.get(str(job.device.get("id")))
+            if path in merged.entities:
+                devices.setdefault(job.spec.name, []).append(path)
+        notes = []
+        for path, statuses in own.items():
+            dead = next((status for status in statuses if status.code == FRAMES_NOT_SENT and effective_level(status, now) != STALE), None)
+            if dead is None:
+                continue
+            device = tree.nearest_device(path, merged, self.layer)
+            plugin = next((name for name, paths in devices.items() if device in paths), None)
+            healthy = [other for other in devices.get(plugin, []) if other != device
+                       and expected_module.answering_nodes(other, merged, own, now, RUNNER_SOURCE)]
+            if not device or not healthy:
+                continue
+            other = merged.entities[healthy[0]].name
+            notes.append(DiagnosticStatus(
+                level=WARN, name=f"{merged.entities[device].name}: another adapter", code="OtherAdapterWorks", path=path,
+                message=f"{other} works on this PC: plug this bus into it to tell adapter from bus",
+                hardware_id=merged.entities[device].hardware_id, stamp=now, received=now, source=HOST_SOURCE,
+                values=(KeyValue("what_to_check", f"1. Plug this bus into {other} and run Check communication there: if its"
+                                                  " boards answer, this adapter is dead; if they do not, the bus or a board"
+                                                  " holds it"),
+                        KeyValue("working_adapter", other))))
+        return notes
 
     def clock_json(self, now: float) -> dict:
         when = activity_module.iso(now, self.utc_offset_s)
@@ -605,7 +728,16 @@ class Host:
                 "host": {"name": self.os.hostname, "sources": list(self.sources)}, "summary": summary,
                 "chip": chip_model(summary, recent, self.url),
                 "tree": tree.node_json(tree.HOST_PATH, view.rows, view.layer, view.faults_by_path, nested=True),
-                "recent": recent}
+                "recent": recent, "expected_setup": self.setup_summary(view)}
+
+    def setup_summary(self, view: View) -> dict:
+        manifest = self.setup.manifest
+        return {"file": str(self.setup.path) if self.setup.path else None, "editable": bool(self.setup.path) and not self.setup.note,
+                "note": self.setup.note,
+                "rigs": [{"name": rig.name, "path": expected_module.rig_path(rig), "devices": len(rig.devices)} for rig in manifest.rigs],
+                "retired": [{"name": entry.name, "hardware_id": entry.hardware_id, "serial": entry.serial, "date": entry.date,
+                             "reason": entry.reason, "path": next((path for path, retired in (view.setup.retired if view.setup else {}).items()
+                                                                   if retired is entry), None)} for entry in manifest.retired]}
 
     # --- one row's detail ------------------------------------------------------------------------------------------
     def node(self, path: str) -> dict | None:
@@ -623,7 +755,264 @@ class Host:
                 "faults": [self.fault_json(fault, view) for fault in self.faults.all() if fault.path == path],
                 "events": [activity_module.event_json(event, self.utc_offset_s, self._names(view)) for event in view.events
                            if event.path == path or event.path.startswith(path + "/")][:20],
-                "entity": to_dict(merged.entities[path])}
+                "entity": to_dict(merged.entities[path]), "setup": self.setup_json(path, view)}
+
+    # --- the expected setup: what a row offers, and the edits (host-side file writes; never a device) -----------------
+    def _setup_target(self, path: str, view: View) -> tuple[str, dict] | None:
+        """``(role, ids)`` for a row the Expected setup card is about: ``rig`` (a rig row), ``absent`` (a row under
+        Expected, not connected) or ``device`` (a physical device row itself); None for anything else."""
+
+        merged, layer = view.merged, view.layer
+        entity = merged.entities.get(path)
+        if entity is None:
+            return None
+        if view.setup and path in view.setup.rigs:
+            return "rig", {"rig": view.setup.rigs[path]}
+        if path.startswith(EXPECTED_PATH + "/"):
+            serials = tuple(serial for serial in ((entity.identity or {}).get("serial_number", ""),) + self._usb_serial(entity.hardware_id) if serial)
+            return "absent", {"hardware_id": entity.hardware_id, "serials": serials, "name": entity.name}
+        if layer.device_of_path.get(path) in layer.physical:
+            return "device", {"hardware_id": entity.hardware_id, "serials": expected_module.device_serials(entity, layer, path),
+                              "name": entity.name}
+        return None
+
+    def _device_entry(self, path: str, view: View) -> expected_module.ExpectedDevice:
+        """What "Expect what's here" records for a device row: its ids, the word the rig row counts it as, and the
+        nodes that answer below it now (relative paths, with their model and repeatable ids)."""
+
+        merged, layer = view.merged, view.layer
+        entity = merged.entities[path]
+        own = expected_module.latest_statuses(merged.statuses)
+        usb_serial = self._usb_serial(entity.hardware_id)
+        serial = str((entity.identity or {}).get("serial_number") or "")
+        nodes = [expected_module.ExpectedNode(expected_module.relative(node, path),
+                                              str(merged.entities[node].identity.get("model_id", "")),
+                                              merged.entities[node].hardware_id)
+                 for node in expected_module.answering_nodes(path, merged, own, view.now, RUNNER_SOURCE)]
+        return expected_module.ExpectedDevice(
+            name=entity.name, hardware_id=entity.hardware_id, kind=expected_module.kind_of_row(merged, path),
+            # WHY a driver's serial too when it differs from the USB one: a camera is named by the RealSense serial
+            serial=serial if serial and serial not in usb_serial else "", model_id=str(entity.identity.get("model_id", "")),
+            nodes=nodes)
+
+    @staticmethod
+    def _nodes_text(nodes: list) -> str:
+        return ", ".join(node.path for node in nodes) or "no nodes"
+
+    def _plan(self, op: str, path: str, view: View, *, rig: str | None = None, reason: str = "") -> dict:
+        """``{"manifest", "text", "forget"}`` for one edit, or ``{"refused", "error"}``. The confirm text the page shows
+        and the edit that runs come from this one plan."""
+
+        target = self._setup_target(path, view)
+        if target is None:
+            return {"refused": "NotADevice", "error": f"{path!r} is not a device row, a rig row or an absent row"}
+        role, ids = target
+        try:
+            manifest = self.setup.editable()
+        except expected_module.ManifestError as error:
+            return {"refused": "ManifestUnavailable", "error": str(error)}
+        if op == "expect":
+            if role == "rig":
+                return self._plan_expect_rig(ids["rig"], manifest, view)
+            if role != "device":
+                return {"refused": "NotHere", "error": f"{ids['name']} is not connected: Expect what's here needs it plugged in"}
+            entry = self._device_entry(path, view)
+            current = next(((index, device) for index, found in enumerate(manifest.rigs) for device in found.devices
+                            if (device.hardware_id and expected_module.same_id(device.hardware_id, entry.hardware_id))
+                            or (device.serial and device.serial in ids["serials"])), None)
+            back = expected_module.unretire(manifest, entry.hardware_id, ids["serials"])
+            if current is not None:
+                target_rig = manifest.rigs[current[0]]
+                old = current[1]
+                gone = sorted({node.path for node in old.nodes} - {node.path for node in entry.nodes})
+                old.nodes, old.name = expected_module.carry_over(old.nodes, entry.nodes), entry.name
+                old.kind, old.model_id = old.kind or entry.kind, entry.model_id or old.model_id
+                if entry.serial and not old.serial:
+                    old.serial = entry.serial
+                if not old.hardware_id:
+                    old.hardware_id = entry.hardware_id
+                text =f"Expect {entry.name} in {target_rig.name} with {self._nodes_text(entry.nodes)}"
+            else:
+                names = [found.name for found in manifest.rigs]
+                if rig is None and len(names) > 1:
+                    return {"refused": "RigRequired", "error": f"choose a rig: {', '.join(names)}", "rigs": names}
+                name = rig or (names[0] if names else DEFAULT_RIG)
+                target_rig = next((found for found in manifest.rigs if found.name == name), None)
+                if target_rig is None:
+                    target_rig = expected_module.Rig(name)
+                    manifest.rigs.append(target_rig)
+                target_rig.devices.append(entry)
+                gone = []
+                text = f"Add {entry.name} to {target_rig.name}, expecting {self._nodes_text(entry.nodes)}"
+            if gone:
+                text += f" ({', '.join(gone)} no longer expected)"
+            if back:
+                text += " · takes it back into service (it was retired)"
+            return {"manifest": manifest, "text": text + "?", "unforget": entry.hardware_id}
+        if op == "forget":
+            if role != "absent":
+                return {"refused": "NotAbsent", "error": "Forget is for a device that is not connected (a row under Expected, not connected)"}
+            rigs = expected_module.remove_device(manifest, ids["hardware_id"], ids["serials"])
+            where = f"the expected setup ({', '.join(rigs)}) and " if rigs else ""
+            return {"manifest": manifest, "forget": ids["hardware_id"],
+                    "text": f"Forget {ids['name']}? It leaves {where}the devices this host remembers; plugged in again, it is "
+                            "simply a device again."}
+        if op == "retire":
+            if role not in ("device", "absent"):
+                return {"refused": "NotADevice", "error": "Retire… is for a device row"}
+            reason = " ".join(str(reason or "").split())
+            rigs = expected_module.remove_device(manifest, ids["hardware_id"], ids["serials"])
+            expected_module.unretire(manifest, ids["hardware_id"], ids["serials"])
+            date = expected_module.today(view.now, self.utc_offset_s)
+            serial = next((serial for serial in ids["serials"] if serial not in self._usb_serial(ids["hardware_id"])), "")
+            manifest.retired.append(expected_module.Retired(name=ids["name"], hardware_id=ids["hardware_id"], serial=serial,
+                                                            date=date, reason=reason))
+            where = f"It leaves {', '.join(rigs)}. " if rigs else ""
+            plan = {"manifest": manifest,
+                    "text": f"Retire {ids['name']}? {where}Plugged in again, its row says “retired {date}: "
+                            f"{reason or '<reason>'}” (a warning)."}
+            if not reason:
+                plan.update(refused="ReasonRequired", error="say why it is retired (the reason shows when it is plugged in again)")
+            return plan
+        return {"refused": "UnknownEdit", "error": f"no edit {op!r}: expect, forget or retire"}
+
+    def _plan_expect_rig(self, rig: expected_module.Rig, manifest: expected_module.Manifest, view: View) -> dict:
+        target = next((found for found in manifest.rigs if found.name == rig.name), None)
+        if target is None:
+            return {"refused": "NoSuchRig", "error": f"no rig {rig.name!r} in the file"}
+        changes = []
+        for device in target.devices:
+            path = expected_module.locate(device, view.merged, view.layer)
+            if path is None:
+                continue
+            entry = self._device_entry(path, view)
+            before, after = {node.path for node in device.nodes}, {node.path for node in entry.nodes}
+            bits = [f"also {', '.join(sorted(after - before))}"] * bool(after - before) + \
+                   [f"{', '.join(sorted(before - after))} no longer expected"] * bool(before - after)
+            if bits:
+                changes.append(f"{device.label()}: {'; '.join(bits)}")
+            device.nodes = expected_module.carry_over(device.nodes, entry.nodes)
+        text = (f"Expect what is here now in {target.name}: {' · '.join(changes)}?" if changes
+                else f"Expect what is here now in {target.name}? Nothing changes: every present device's nodes are as expected.")
+        return {"manifest": manifest, "text": text}
+
+    def setup_json(self, path: str, view: View) -> dict | None:
+        """The Expected setup card of one row: where it stands, what it offers, and each edit's confirm text."""
+
+        target = self._setup_target(path, view)
+        if target is None:
+            return None
+        role, ids = target
+        merged = view.merged
+        out = {"role": role, "file": str(self.setup.path) if self.setup.path else None, "note": self.setup.note,
+               "editable": bool(self.setup.path) and not self.setup.note,
+               "rigs": [rig.name for rig in self.setup.manifest.rigs], "rig": None, "expected": False, "retired": None,
+               "nodes_expected": [], "node_notes": {}, "nodes_here": [],
+               "can": {"expect": False, "forget": False, "retire": False},
+               "confirm": {}, "needs_rig": False}
+        if role == "rig":
+            out.update(rig=ids["rig"].name, expected=True, can={"expect": True, "forget": False, "retire": False})
+        else:
+            found = self.setup.entry_for(ids["hardware_id"], ids["serials"])
+            if found:
+                out.update(rig=found[0].name, expected=True, nodes_expected=[node.path for node in found[1].nodes],
+                           node_notes={node.path: node.note for node in found[1].nodes if node.note})
+            retired = self.setup.retired_entry(ids["hardware_id"], ids["serials"])
+            if retired:
+                out["retired"] = {"date": retired.date, "reason": retired.reason}
+            if role == "device":
+                own = expected_module.latest_statuses(merged.statuses)
+                out["nodes_here"] = [expected_module.relative(node, path) for node in
+                                     expected_module.answering_nodes(path, merged, own, view.now, RUNNER_SOURCE)]
+                out["can"] = {"expect": True, "forget": False, "retire": True}
+                out["needs_rig"] = not found and len(out["rigs"]) > 1
+            else:
+                out["can"] = {"expect": False, "forget": True, "retire": True}
+        for op, allowed in out["can"].items():
+            if allowed:
+                plan = self._plan(op, path, view, rig=out["rigs"][0] if out["needs_rig"] else None, reason="")
+                out["confirm"][op] = plan.get("text") or plan.get("error", "")
+        if not out["editable"]:
+            out["can"] = {op: False for op in out["can"]}
+        return out
+
+    def setup_edit(self, op: str, path: str, *, rig: str | None = None, reason: str = "") -> dict:
+        """Run one edit of the expected setup for the row at ``path``: ``expect`` (Expect what's here), ``forget`` or
+        ``retire`` (with ``reason``). A host-side file write: it never touches a device. Returns
+        ``{"ok", "op", "path", "refused", "message", "file"}``."""
+
+        view = self.view()
+        plan = self._plan(op, path, view, rig=rig, reason=reason)
+        out = {"ok": False, "op": op, "path": path, "refused": plan.get("refused"), "message": plan.get("error", ""),
+               "file": str(self.setup.path) if self.setup.path else None}
+        if plan.get("refused"):
+            return {**out, **({"rigs": plan["rigs"]} if "rigs" in plan else {})}
+        result = self._apply(plan, view.now)
+        if result.get("ok"):
+            self.refresh()  # WHY now: the absent rows are judged at refresh; a forgotten row must not linger 2 s
+        return {**out, **result}
+
+    def _apply(self, plan: dict, now: float) -> dict:
+        try:
+            self.setup.save(plan["manifest"])
+        except (OSError, expected_module.ManifestError) as error:
+            return {"refused": "NotWritten", "message": f"{type(error).__name__}: {error}"}
+        if plan.get("forget"):
+            self.seen.forget(plan["forget"], now)
+        if plan.get("unforget"):
+            self.seen.forgotten.pop(plan["unforget"], None)
+        return {"ok": True, "message": f"done: {plan['text'].split('?', 1)[0]}"}  # the confirm's question, as a fact
+
+    def setup_edit_ids(self, op: str, *, hardware_id: str = "", serial: str = "", name: str = "", rig: str | None = None,
+                       reason: str = "", nodes: tuple[str, ...] = (), kind: str = "") -> dict:
+        """The same three edits by id, for the CLI (``--hardware-id`` / ``--serial``): no row needed, nothing runs."""
+
+        out = {"ok": False, "op": op, "path": None, "refused": None, "message": "",
+               "file": str(self.setup.path) if self.setup.path else None}
+        if not hardware_id and not serial:
+            return {**out, "refused": "NoId", "message": "name the device: --hardware-id or --serial"}
+        try:
+            manifest = self.setup.editable()
+        except expected_module.ManifestError as error:
+            return {**out, "refused": "ManifestUnavailable", "message": str(error)}
+        serials = tuple(value for value in (serial, *self._usb_serial(hardware_id)) if value)
+        label = name or hardware_id or serial
+        if op == "expect":
+            expected_module.remove_device(manifest, hardware_id, serials)
+            back = expected_module.unretire(manifest, hardware_id, serials)
+            names = [found.name for found in manifest.rigs]
+            if rig is None and len(names) > 1:
+                return {**out, "refused": "RigRequired", "message": f"choose a rig with --rig: {', '.join(names)}"}
+            rig_name = rig or (names[0] if names else DEFAULT_RIG)
+            target = next((found for found in manifest.rigs if found.name == rig_name), None)
+            if target is None:
+                target = expected_module.Rig(rig_name)
+                manifest.rigs.append(target)
+            target.devices.append(expected_module.ExpectedDevice(name=label, hardware_id=hardware_id, serial=serial, kind=kind,
+                                                                 nodes=[expected_module.ExpectedNode(node.strip("/")) for node in nodes]))
+            text = f"Add {label} to {rig_name}, expecting {', '.join(nodes) or 'no nodes'}" + (" (back into service)" if back else "")
+            plan = {"manifest": manifest, "text": text, "unforget": hardware_id}
+        elif op == "forget":
+            rigs = expected_module.remove_device(manifest, hardware_id, serials)
+            plan = {"manifest": manifest, "text": f"Forget {label}" + (f" (left {', '.join(rigs)})" if rigs else ""),
+                    "forget": hardware_id}
+        elif op == "retire":
+            reason = " ".join(str(reason or "").split())
+            if not reason:
+                return {**out, "refused": "ReasonRequired", "message": "say why it is retired: --reason TEXT"}
+            existing = next((entry for entry in manifest.retired if (hardware_id and expected_module.same_id(entry.hardware_id, hardware_id))
+                             or (serial and entry.serial == serial)), None) or next(
+                (device for _rig, device in manifest.entries() if (hardware_id and expected_module.same_id(device.hardware_id, hardware_id))
+                 or (serial and device.serial == serial)), None)
+            rigs = expected_module.remove_device(manifest, hardware_id, serials)
+            expected_module.unretire(manifest, hardware_id, serials)
+            date = expected_module.today(self.clock.now(), self.utc_offset_s)
+            manifest.retired.append(expected_module.Retired(name=name or (existing.name if existing else label), hardware_id=hardware_id,
+                                                            serial=serial, date=date, reason=reason))
+            plan = {"manifest": manifest, "text": f"Retire {label} on {date}: {reason}" + (f" (left {', '.join(rigs)})" if rigs else "")}
+        else:
+            return {**out, "refused": "UnknownEdit", "message": f"no edit {op!r}: expect, forget or retire"}
+        return {**out, **self._apply(plan, self.clock.now())}
 
     def check_json(self, status: DiagnosticStatus, now: float) -> dict:
         level = effective_level(status, now)
@@ -809,7 +1198,7 @@ class Host:
             return refuse("ConfirmRequired", f"{registered.danger}: pass --confirm <token> after reading: {text}")
         device_path = self.layer.device_paths.get(str(job.device.get("id")), job.device_path)
         with self.gates.hold(job.spec.exclusive):
-            result = run_act(job.spec, job.device, device_path, argv, self.clock.now, self._job_env())
+            result = run_act(job.spec, job.device, device_path, argv, self.clock.now, self._job_env(job))
         return {**out, **result}
 
     # --- activity, records, plugins -----------------------------------------------------------------------------
@@ -856,27 +1245,33 @@ def fixture_info(document: dict, frame: dict) -> dict:
 
 
 def make_host(*, fixture: str | None = None, plugins_dir: Path | None = None, once: bool = False, at_s: float = 0.0,
-              offset_s: float = 0.0, enable: tuple[str, ...] = (), machine: Path | None = None) -> Host:
+              offset_s: float = 0.0, enable: tuple[str, ...] = (), machine: Path | None = None,
+              expected: Path | None = None) -> Host:
     """Live: ``plugins.d`` on this machine's clock. Fixture: the recorded frame's OS side, its clock, and the fixture
     plugin directory (``tests/fixtures/plugins``), whose plugin learns the frame from ``IO_DIAGNOSTICS_FIXTURE``.
     Machine: a fake machine's skeleton (``MachineOs``) on this clock. ``enable`` turns on plugins their declaration
-    disables, for this host only."""
+    disables, for this host only. ``expected``: the expected-setup file; live mode defaults to
+    ``~/.config/io-diagnostics/expected.toml``, a fixture or a fake machine reads one only when it is named."""
 
     if machine is not None:
         if fixture is not None:
             raise SystemExit("--machine and --fixture are two different OS sides: pick one")
         clock = FixedClock(time.time()) if once else Clock()
-        return Host(plugins_dir=plugins_dir or PLUGINS_DIR, clock=clock, os_source=MachineOs(machine), enable=enable)
+        return Host(plugins_dir=plugins_dir or PLUGINS_DIR, clock=clock, os_source=MachineOs(machine), enable=enable,
+                    expected_file=expected)
     if fixture is None:
         # WHY live only: the remembered devices are this machine's; a fixture or a fake machine must never add to them
         clock = FixedClock(time.time()) if once else Clock()
         return Host(plugins_dir=plugins_dir or PLUGINS_DIR, clock=clock, os_source=LiveOs(), enable=enable,
-                    state_file=default_state_dir() / SEEN_FILE)
+                    state_file=default_state_dir() / SEEN_FILE,
+                    expected_file=expected or expected_module.default_config_dir() / expected_module.EXPECTED_FILE)
     document, frame = load_fixture(fixture)
     offset = frame.get("utc_offset_s")
     clock = FixedClock(frame["clock"] + at_s, offset, "fixture") if once else ReplayClock(frame["clock"], offset, offset_s)
+    # WHY no default manifest here: a recorded frame is replayed as it was; the person's rig file would add rows
+    # the recording never had (a test or a screenshot names its own file with --expected)
     return Host(plugins_dir=plugins_dir or FIXTURE_PLUGINS_DIR, clock=clock, os_source=FixtureOs(frame),
-                fixture=fixture_info(document, frame), enable=enable,
+                fixture=fixture_info(document, frame), enable=enable, expected_file=expected,
                 plugin_env={"IO_DIAGNOSTICS_FIXTURE": frame["name"], "IO_DIAGNOSTICS_FIXTURE_FILE": str(FIXTURE_FILE)})
 
 

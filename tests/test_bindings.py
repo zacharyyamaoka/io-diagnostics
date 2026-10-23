@@ -80,7 +80,10 @@ def test_entry_point_binding(tmp_path):
     assert obsbot_recognised_python(with_unit)
 
 
-def test_station_binding(tmp_path):
+def test_station_binding(tmp_path, monkeypatch):
+    # WHY no live USB: demo_devices() adds whatever rack device is plugged in, so a new adapter (0607623A, 2026-10-23)
+    # turned up as unassigned and failed this ruler; the recorded scenario devices are the fixed input.
+    monkeypatch.setattr(demo, "list_usb_devices", lambda: [])
     binding = load("v5-station")
     text = (PROTOTYPES / "v5-station" / "station.toml").read_text()
     without = tmp_path / "station.toml"
