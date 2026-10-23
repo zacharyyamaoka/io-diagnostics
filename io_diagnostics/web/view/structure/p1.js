@@ -164,6 +164,26 @@
     return entity ? withConnection(row, connectionOf(node, trail)) : row;
   }
 
+  // ---------------------------------------------------------------------- built into the computer ----
+  // WHY: on the live PC 16 built-in PCI functions (IOMMU, SMBus, GPU, audio, NVMe, USB controllers) sat beside the
+  // fdcanusb at the top level (2026-10-22). Zach's view is "the things I plugged in": a PCI function with no capture /
+  // network interface, no plugin owning it and no problem of its own goes into one quiet, closed "Computer" row.
+  const CAPTURE = /frame ?grabber|capture/i;
+  function builtIn(node) {
+    if (!String(node.hardware_id || '').startsWith('pci:') || V.ownProblem(node)) return false;
+    if (node.owner && !String(node.owner).startsWith('io_facts')) return false;
+    if (CAPTURE.test(`${node.name || ''} ${node.message || ''}`)) return false;
+    return !(node.children || []).some((child) => isInterface(child) && (child.icon === 'net' || child.icon === 'video'));
+  }
+
+  function withComputer(rows, key) {
+    const inside = rows.filter((row) => row.node && builtIn(row.node));
+    if (!inside.length) return rows;
+    const computer = V.groupRow({ key, label: 'Computer', icon: 'host', children: inside, defaultOpen: false,
+      message: `${inside.length} built-in PCI device${inside.length === 1 ? '' : 's'}` });
+    return [...rows.filter((row) => !inside.includes(row)), computer];
+  }
+
   root.IOStructures = root.IOStructures || {};
   root.IOStructures.p1 = {
     name: 'Devices, transport as columns',
@@ -182,10 +202,11 @@
         rows = top.nodes.filter((node) => options.showEmpty || !V.isEmpty(node)).map((node) => physicalRow(node, options, []));
       } else if (top.elided) {
         // one host: its children are the top level, walked as the host's own children would be
-        rows = lift({ children: top.nodes }, options, [], []);
+        rows = withComputer(lift({ children: top.nodes }, options, [], []), 'p1:computer');
       } else {
         // several hosts: one row each (no connection of its own), its entities below
-        rows = top.nodes.map((host) => V.entityRow(seen(host, []), options, { node: host, children: lift(host, options, [], []), defaultOpen: true }));
+        rows = top.nodes.map((host) => V.entityRow(seen(host, []), options,
+          { node: host, children: withComputer(lift(host, options, [], []), `p1:${host.path}:computer`), defaultOpen: true }));
       }
       return rows; // core's search reads the Connection column too (row.columns), so "ttyACM0" finds the adapter
     },

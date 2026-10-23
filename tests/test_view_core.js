@@ -360,6 +360,13 @@ function liveFrame() {
     && Boolean(adapter.status.part) && /error-passive/.test(adapter.status.part.text), adapter && { kids: adapter.children.map((row) => row.label), part: adapter.status.part });
   const cameras = p1.flat.filter((row) => row.model === 'RealSense D405').map((row) => row.label);
   check('live 17:41: RealSense labels', cameras.join(' | ') === 'RealSense D405 · USB 219323070276 | RealSense D405 · USB 130523071221', cameras);
+  // the built-in PCI functions (IOMMU, SMBus, GPU, NVMe, USB controllers ...) fold into one closed Computer row last;
+  // the NICs (they carry a net interface) stay at the top level
+  const top = p1.rows.map((row) => row.label);
+  const computer = p1.rows[p1.rows.length - 1];
+  check('live 17:41 p1: built-in PCI devices in one closed Computer row, NICs stay', computer.label === 'Computer' && !computer.defaultOpen
+    && computer.children.some((row) => /IOMMU/.test(row.label)) && !top.some((label) => /IOMMU|SMBus|NVMe/.test(label))
+    && top.some((label) => /Ethernet|RTL8111/.test(label)) && top.indexOf('fdcanusb · 272813EF') < top.indexOf('Computer'), top);
 }
 
 (async () => {
