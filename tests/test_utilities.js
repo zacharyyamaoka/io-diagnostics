@@ -276,7 +276,7 @@ async function main() {
     });
     const ids = card.groups.map((group) => group.id);
     const standardIcons = new Set(card.rows.filter((row) => row.name !== 'reset').map((row) => row.icon));
-    check('utilities: groups and order', ids.join() === 'maintenance,motion,more' && card.groups[1].names.join() === 'calibrate' && card.groups[2].names.join() === 'reset'
+    check('utilities: groups and order', ids.join() === 'maintenance,motion,more' && card.groups[1].names.join() === 'calibrate,identify' && card.groups[2].names.join() === 'reset'
       && card.groups[0].names.join() === 'update_firmware,update_config,clear_faults,set_id', card.groups);
     check('utilities: icon + title + description', card.rows.every((row) => row.icon && row.title && row.desc) && standardIcons.size === card.rows.length - 1, card.rows.map((row) => row.title));
     // round 3 (u0): the description is a tooltip (hidden at rest, shown on hover and on keyboard focus); danger is a word
@@ -351,7 +351,7 @@ async function main() {
     await open(page, base, ADAPTER);
     await utilities(page);
     const adapterGroups = await page.evaluate(() => [...document.querySelectorAll('.ent-menu .ugroup')].map((group) => group.className.replace('ugroup ugroup-', '')));
-    check('utilities: checks come first', adapterGroups[0] === 'checks' && adapterGroups.join() === 'checks,maintenance', adapterGroups);
+    check('utilities: checks come first', adapterGroups[0] === 'checks' && adapterGroups.join() === 'checks,maintenance,motion', adapterGroups);
     await page.click('[data-util="check_comms"]');
     await page.waitForSelector('[data-util-run]');
     const runLabel = await page.textContent('[data-util-run]');

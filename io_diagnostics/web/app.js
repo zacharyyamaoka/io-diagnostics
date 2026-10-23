@@ -1091,7 +1091,7 @@ function renderDetail(byPath) {
 // confirm modal that repeats the danger (moves: a ticked box that states the physical precondition). The server
 // runs a real action only with the dry run's token, from this page (io_diagnostics/server.py, docs/api-v1.md).
 const STANDARD_ORDER = ['check_comms', 'check_firmware', 'update_firmware', 'update_config', 'clear_faults', 'set_id', 'reboot',
-  'stop_all', 'open_console', 'calibrate'];
+  'stop_all', 'open_console', 'calibrate', 'identify'];
 const STANDARD = new Set(STANDARD_ORDER);
 const DANGER_WORDS = {
   query: 'Reads only.',
@@ -1100,7 +1100,7 @@ const DANGER_WORDS = {
   moves: 'Makes hardware move: a motor spins, and a loaded joint can fall.',
 };
 // a precondition only a person can check (the host cannot read it passively): what the moves box states
-const PHYSICAL = new Set(['joint_free', 'target_in_view']);
+const PHYSICAL = new Set(['joint_free', 'joint_clear', 'joints_clear', 'target_in_view']);
 const RUNNABLE = new Set(['ready', 'unknown']); // blocked / nothing_to_do keep the Run button disabled
 const UTIL_ICONS = {
   check_comms: '<path d="M4.9 19.1a10 10 0 0 1 0-14.2M7.8 16.2a6 6 0 0 1 0-8.4M16.2 7.8a6 6 0 0 1 0 8.4M19.1 4.9a10 10 0 0 1 0 14.2"/><circle cx="12" cy="12" r="2"/>',
@@ -1113,6 +1113,7 @@ const UTIL_ICONS = {
   stop_all: '<path d="M7.9 2h8.2L22 7.9v8.2L16.1 22H7.9L2 16.1V7.9Z"/><rect x="9" y="9" width="6" height="6" rx="1"/>',
   open_console: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 9 3 3-3 3M11 15h6"/>',
   calibrate: '<circle cx="12" cy="12" r="8"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/><circle cx="12" cy="12" r="1.5"/>',
+  identify: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
   more: '<circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/><rect x="2" y="5" width="20" height="14" rx="3"/>',
 };
 const utilIcon = (name) => `<svg class="u-ic" viewBox="0 0 24 24" aria-hidden="true">${UTIL_ICONS[STANDARD.has(name) ? name : 'more']}</svg>`;
