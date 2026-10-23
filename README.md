@@ -54,6 +54,15 @@ The top-bar chip ("IO 3 ⚠", with a Recent list; it opens the dashboard). It re
 uv run --project /home/bam/io-diagnostics io-diagnostics tray
 ```
 
+The installed app, RobotDiagnostics, runs in Stable / Preview release channels (`stable-preview.json`, the shared
+stable_preview_switcher runtime): Stable on :8820 with the tray, Preview (the main checkout, live) on :8821, agent
+lanes with `sps dev`. The dock icon opens Stable; its right-click opens Preview, makes Preview Stable, rolls Stable
+back. Why each setting is what it is: `docs/release-channels.md`.
+
+```bash
+sps --root /home/bam/io-diagnostics status
+```
+
 One snapshot as JSON (state, records, activity, plugins), for scripts and tests:
 
 ```bash
@@ -193,6 +202,7 @@ they become `/home/bam/bam_ws/src/core/mdp/agent/...` (also in `plugins.d/*.toml
 | Path | What |
 |---|---|
 | `io_diagnostics/` | The host: plugin registry + runner, tree, faults, activity, server (`docs/api-v1.md`), tray, CLI |
+| `stable-preview.json` | The Stable / Preview channels (data for the stable_preview_switcher runtime; `docs/release-channels.md`) |
 | `io_diagnostics/web/` | The dashboard page; `tree/v1..v5` are the five tree proposals (bottom-right switch, v1 default) |
 | `io_diagnostics/interop/` | Stock adapter, foxglove bridge, Lichtblick + ROS 2 checks |
 | `io_facts/` | Passive OS layer: `skeleton.py` (one tree from usb / pci / netdev / tty / v4l), kernel log, holders, locks |

@@ -6,7 +6,8 @@ page"). Every click is a dry run first; a real run needs that dry run's token an
 setup card's ``POST /api/v1/expect | forget | retire`` rewrite the person's rig file under the same page-only rule
 (no device is touched, so no dry run and no token), and ``POST /api/v1/settings`` (the View options: the history
 window, written to settings.toml) likewise. Every other POST / PUT / DELETE / PATCH is 405. Binds to 127.0.0.1 by
-default; the page polls ``/api/v1/state`` once a second.
+default; the page polls ``/api/v1/state`` once a second. Run by the release-channels runtime as Preview or an agent's
+lane, it also answers ``/__sps/*`` for the Stable / Preview chip (release_channels.py, docs/release-channels.md).
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from io_diagnostics import WEB
+from io_diagnostics import release_channels
 from io_diagnostics.history import MAX_BINS
 from io_diagnostics.host import Host
 from io_diagnostics.settings import SettingsError
@@ -91,6 +93,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802 - http.server's name
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
+        if release_channels.is_sps_path(parsed.path):
+            return self._sps("GET")
         try:
             if parsed.path == "/api/v1/state":
                 return self._json(self.host.state())
@@ -121,10 +125,15 @@ class Handler(BaseHTTPRequestHandler):
         path = (WEB / name).resolve()
         if WEB.resolve() not in path.parents or not path.is_file():
             return self._send(404, b"not found", "text/plain; charset=utf-8")
-        return self._send(200, path.read_bytes(), TYPES.get(path.suffix, "application/octet-stream"))
+        body = path.read_bytes()
+        if path.suffix == ".html" and release_channels.runtime():
+            body = release_channels.tag_page(body)  # Preview / an agent's lane: the channel chip (release_channels.py)
+        return self._send(200, body, TYPES.get(path.suffix, "application/octet-stream"))
 
     def do_POST(self):  # noqa: N802 - http.server's name
         endpoint = urlparse(self.path).path
+        if release_channels.is_sps_path(endpoint):
+            return self._sps("POST")
         if endpoint not in ("/api/v1/act", "/api/v1/settings", *SETUP_EDITS):
             return self._refuse()
         try:
@@ -133,6 +142,24 @@ class Handler(BaseHTTPRequestHandler):
             return self._act() if endpoint == "/api/v1/act" else self._setup_edit(SETUP_EDITS[endpoint])
         except Exception as error:  # noqa: BLE001 - show the failure, keep serving
             return self._json({"error": f"{type(error).__name__}: {error}"}, 500)
+
+    # --- the Stable / Preview chip, under the release-channels runtime only (release_channels.py) -------------------
+    def _sps(self, method: str):
+        script = release_channels.runtime()
+        if script is None:
+            return self._json({"error": "not running under stable-preview-switcher"}, 404)
+        if urlparse(self.path).path == release_channels.CHIP_PATH and method == "GET":
+            try:
+                bundle = release_channels.chip_bundle(script).read_bytes()
+            except OSError:
+                return self._json({"error": "the runtime has no chip bundle"}, 404)
+            return self._send(200, bundle, "text/javascript")
+        length = int(self.headers.get("Content-Length") or 0)
+        if length < 0 or length > release_channels.MAX_BODY:
+            return self._json({"error": f"a body of at most {release_channels.MAX_BODY} bytes"}, 413)
+        body = self.rfile.read(length) if length else b""
+        status, payload = release_channels.api(script, method, self.path, self.headers, body)
+        return self._json(payload, status)
 
     # --- history and settings ------------------------------------------------------------------------------------
     def _history(self, endpoint: str, query: dict):
@@ -206,7 +233,9 @@ class Handler(BaseHTTPRequestHandler):
             return "NotSameOrigin", (f"not a same-origin request from the page (Sec-Fetch-Site: "
                                      f"{self.headers.get('Sec-Fetch-Site') or 'absent'})")
         origin = self.headers.get("Origin")
-        if origin and origin != f"http://{self.headers.get('Host', '')}":
+        # WHY the page origins too: on Stable the page is the runtime's Stable server's, which forwards /api/ here
+        # with Host rewritten to this port (release_channels.page_origins, docs/release-channels.md)
+        if origin and origin != f"http://{self.headers.get('Host', '')}" and origin not in release_channels.page_origins():
             return "NotSameOrigin", f"the request comes from {origin}, not from this page"
         if not (self.headers.get("Content-Type") or "").startswith("application/json"):
             return "NotJson", "the body must be JSON (Content-Type: application/json)"
