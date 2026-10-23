@@ -421,3 +421,47 @@ The traps it hit, which v0 closes:
 - **Nagios Core 4, network reachability:** hosts beneath a DOWN router are UNREACHABLE, not DOWN.
 - **Not re-checked here; taken from the research lanes:** AUTOSAR DEM consecutive-fault storage (paywalled ISO text
   behind it), Redfish `Sensor` threshold fields, Greenwave keys, Lichtblick's 5 s default, the Apex.Grace blog posts.
+
+## v0.1 (2026-10-22, additive)
+
+The decisions are frozen in `docs/actions-vocabulary-v0.1.md`; this section says what changed in the contract and
+how a reader tells.
+
+- **What changed** (`contract/record.py`):
+  - `IDENTITY_KEYS` gains `model_id`: the robotparts part id (`mjbots-moteus-c1`) as a plain string, Home
+    Assistant `DeviceInfo`'s own key for a model identifier. The record never imports robotparts.
+  - `DANGERS` gains `moves`: the action makes hardware move (a rotor spins, a loaded joint can fall). Danger is per
+    driver: the same standard name can be `query` on one device and `moves` on another.
+  - `STANDARD_ACTIONS`: the standard action names → the host's label, as data (`check_comms` "Check
+    communication", `check_firmware`, `update_firmware`, `calibrate`, `update_config`, `clear_faults`, `reboot`,
+    `stop_all`, `set_id`, `open_console`). `validate(Action)` flags a standard name whose `title` differs from its
+    label. A non-standard name is allowed and is not checked.
+- **How v0.1 is signalled: the schema string does not change.**
+  - Every line still says `"schema": "diagnostics-record/0"`. Rule 8 already allows a new string enum value under
+    the same number, and v0.1 adds only values (one identity key, one danger) and a table.
+  - So a v0 reader still reads every v0.1 line. It does not refuse it; at worst its `validate` lists `model_id` or
+    `moves` as a problem, and the host keeps the record.
+  - The revision is a constant, `RECORD_VERSION = "0.1"`, and it never travels in a record line. A producer states
+    the revision it writes once, in its `describe` answer (`"record_version": "0.1"`). The host states the one it
+    validates against in `GET /api/v1/state` (`record_version`).
+- **`expected` in `describe` (v0.1, optional):** the devices a plugin expects to find, so an absent one is named in
+  plain words instead of simply not showing.
+  - Shape: a list of `{hardware_id, name, last_seen, source}`. `hardware_id` is the repeatable id
+    (`usb:<vid>:<pid>:<serial>`, what sysfs shows). `last_seen` is Unix seconds or the producer's own text.
+    `source` says who knows (`"rack_inventory"`). The moteus lane fills it from its rack inventory.
+  - The host adds the USB devices it has itself seen a plugin diagnose. It keeps them, with first and last seen,
+    in `~/.local/state/io-diagnostics/seen.json` (`$IO_DIAGNOSTICS_STATE_DIR`; live mode only, written atomically).
+  - Each expected or remembered device that is not on USB now gets an entity under `host/expected` ("Expected, not
+    connected") and one status, `<name>: presence`. It is `warn` (absent, not broken) with code `ExpectedAbsent`.
+    The message says what the kernel saw this boot (`journalctl -k`, passive):
+    - never enumerated: `expected (last seen 2026-10-21 18:24, rack_inventory) · not on USB · the kernel saw no plug
+      event since boot (2026-10-22 07:00): try a data cable or another port`;
+    - came and went: `… · not on USB · plugged in at 09:00:01 on 1-5, gone at 09:30:00`;
+    - the log is unreadable: `… · the kernel log could not be read (<why>): no evidence whether it ever enumerated`.
+  - Its values: `what_to_check`, `kernel_evidence` (`never | left | unknown`), `expected_by`, `last_seen`.
+  - In v0.1 only USB ids are judged. A non-USB expected id (a CAN board) stays the plugin's own diagnose to report.
+  - WHY not `diagnostics-record/0.1` in every line: every v0 reader compares the string exactly and would refuse
+    the whole stream for two new enum values. That is a break, which is what `/1` is for.
+- **The stock projection is unchanged.** `model_id` lives on `Entity` and `moves` on `Action`, and neither reaches
+  `DiagnosticStatus`. So stock → v0.1 → stock is still the identity; `tests/test_record.py` re-proves it for the
+  real-world messages and the fuzz set, and checks that a status about a v0.1 entity projects to the stock five.

@@ -10,8 +10,11 @@ from __future__ import annotations
 import dataclasses
 import datetime as dt
 import json
+import os
 import socket
 import string
+import sys
+import tempfile
 import threading
 import time
 from dataclasses import dataclass
@@ -22,10 +25,11 @@ from io_diagnostics import activity as activity_module
 from io_diagnostics import tree
 from io_diagnostics.faults import Faults
 from io_diagnostics.plugins import load_plugins, match_devices
-from io_diagnostics.runner import RUNNER_SOURCE, Job, Scheduler, absolute, describe, host_status, run_plugin
+from io_diagnostics.runner import (RUNNER_SOURCE, Gates, Job, Scheduler, absolute, act_argv, describe, host_status,
+                                   run_act, run_plugin)
 
-from contract.record import (OK, RANK, SCHEMA, STALE, STALE_FACTOR, STALE_FLOOR_S, DiagnosticStatus, Event,
-                             effective_level, to_dict)
+from contract.record import (OK, RANK, RECORD_VERSION, SCHEMA, STALE, STALE_FACTOR, STALE_FLOOR_S, WARN, Action,
+                             DiagnosticStatus, Entity, Event, KeyValue, effective_level, from_dict, to_dict)
 
 FIXTURE_FILE = FIXTURE_PLUGINS_DIR / "v6_frames.json"
 FIXTURE_ALIASES = {"plug": "F1", "bus-busy": "F2", "after-restart": "F3", "f1": "F1", "f2": "F2", "f3": "F3",
@@ -227,6 +231,75 @@ class FixtureOs:
         return recorded[0], recorded[1]
 
 
+# ----- devices the host has seen (expected-but-absent) ------------------------------------------------------------
+SEEN_FILE = "seen.json"
+SEEN_WRITE_S = 300.0  # refresh a known device's last_seen on disk at most this often; a new device is written at once
+EXPECTED_PATH = f"{tree.HOST_PATH}/expected"
+EXPECTED_SOURCE = "io_diagnostics.expected"
+
+
+def default_state_dir() -> Path:
+    """``$IO_DIAGNOSTICS_STATE_DIR``, else ``~/.local/state/io-diagnostics`` (the XDG state home)."""
+
+    return Path(os.environ.get("IO_DIAGNOSTICS_STATE_DIR") or Path.home() / ".local" / "state" / "io-diagnostics")
+
+
+class SeenDevices:
+    """``hardware_id -> {name, first_seen, last_seen}`` of the USB devices a plugin diagnosed, in a small JSON file.
+
+    WHY only devices a plugin claimed (and only repeatable ``usb:<vid>:<pid>:<serial>`` ids): remembering every USB
+    stick ever plugged would leave a permanent "expected" warning per stick; a device a driver diagnoses is rack
+    hardware someone expects back. WHY atomic (temp file + rename in the same directory): a crash mid-write must
+    leave the old file, never half of one. ``path=None`` keeps it in memory only (tests, fixtures, fake machines)."""
+
+    def __init__(self, path: Path | None):
+        self.path = Path(path) if path else None
+        self.devices: dict[str, dict] = {}
+        self.note = ""  # why the file could not be read at start (sticky: the old content was dropped)
+        self.write_note = ""  # why the latest write failed; cleared by the next good one
+        self._written = -1e18
+        if self.path and self.path.exists():
+            try:
+                data = json.loads(self.path.read_text())
+                self.devices = {str(key): dict(value) for key, value in (data.get("devices") or {}).items()
+                                if isinstance(value, dict)}
+            except (OSError, ValueError, AttributeError) as error:
+                self.note = f"{self.path}: unreadable ({type(error).__name__}: {error}); starting empty"
+
+    def mark(self, seen: dict[str, str], now: float) -> None:
+        """``seen``: hardware_id -> name, present now."""
+
+        new = False
+        for hardware_id, name in seen.items():
+            entry = self.devices.get(hardware_id)
+            if entry is None:
+                entry, new = {"first_seen": now}, True
+                self.devices[hardware_id] = entry
+            entry.update(name=name, last_seen=now)
+        if self.path and seen and (new or time.monotonic() - self._written > SEEN_WRITE_S):
+            self._write()
+
+    def _write(self) -> None:
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            handle, temporary = tempfile.mkstemp(prefix=f".{self.path.name}.", dir=self.path.parent)
+            with os.fdopen(handle, "w") as file:
+                json.dump({"version": 1, "devices": self.devices}, file, indent=1, sort_keys=True)
+                file.flush()
+                os.fsync(file.fileno())
+            os.replace(temporary, self.path)
+            self._written = time.monotonic()
+            self.write_note = ""
+        except OSError as error:  # a read-only home must not stop the host; the reason shows in host.sources
+            self.write_note = f"{self.path}: not written ({type(error).__name__}: {error})"
+
+
+def _seen_text(last_seen, utc_offset_s: int | None) -> str:
+    if isinstance(last_seen, (int, float)) and not isinstance(last_seen, bool):
+        return (activity_module.iso(float(last_seen), utc_offset_s) or "")[:16].replace("T", " ")
+    return str(last_seen or "")
+
+
 # ----- the host -------------------------------------------------------------------------------------------------
 @dataclass
 class View:
@@ -245,7 +318,8 @@ class _Blank(dict):
 
 class Host:
     def __init__(self, *, plugins_dir: Path = PLUGINS_DIR, clock: Clock | None = None, os_source=None,
-                 fixture: dict | None = None, plugin_env: dict[str, str] | None = None, enable: tuple[str, ...] = ()):
+                 fixture: dict | None = None, plugin_env: dict[str, str] | None = None, enable: tuple[str, ...] = (),
+                 state_file: Path | None = None):
         self.plugins_dir = Path(plugins_dir)
         self.clock = clock or Clock()
         self.os = os_source or LiveOs()
@@ -259,6 +333,8 @@ class Host:
                                  if name not in known]
         self.specs = [dataclasses.replace(spec, enabled=True) if spec.name in enable else spec for spec in self.specs]
         self.jobs: dict[tuple[str, str], Job] = {}
+        self.gates = Gates()  # one per host: `once`, the scheduler and act all take turns per `exclusive` group
+        self.seen = SeenDevices(state_file)  # USB devices a plugin diagnosed, remembered across runs (None: memory)
         self.layer = tree.OsLayer()
         self.sources: list[dict] = []
         self.os_records: list[DiagnosticStatus] = []
@@ -280,13 +356,15 @@ class Host:
 
     # --- plugins that declare their matches in describe ------------------------------------------------------------
     def adopt_described_matches(self) -> None:
-        """A declaration without ``matches`` takes them from its plugin's ``describe`` (docs/build-plan-v1.md:
-        describe returns matches), once, before the first match. describe must be passive; it runs bounded by
-        the plugin's timeout, in parallel, never more than once per plugin."""
+        """Every enabled plugin's ``describe``, once, before the first match: a declaration without ``matches`` takes
+        them from it (docs/build-plan-v1.md: describe returns matches), and its ``expected`` devices (record v0.1)
+        feed the absent rows. describe must be passive; it runs bounded by the plugin's timeout, in parallel, never
+        more than once per plugin."""
 
         from io_diagnostics.plugins import PluginConfigError, parse_match
 
-        pending = [spec for spec in self.specs if spec.enabled and not spec.matches and spec.name not in self._described]
+        pending = [spec for spec in self.specs if spec.enabled and spec.name not in self._described
+                   and self.describes.get(spec.name) is None]
         results: dict[str, dict] = {}
 
         def ask(spec) -> None:
@@ -301,6 +379,8 @@ class Host:
             self._described.add(spec.name)
             answer = results.get(spec.name) or {"error": "describe did not run"}
             self.describes[spec.name] = answer
+            if spec.matches:
+                continue  # its declaration's matches win; describe was asked for its expected devices
             matches = []
             for item in answer.get("matches") or []:
                 try:
@@ -318,11 +398,20 @@ class Host:
         self.adopt_described_matches()
         now = self.clock.now()
         devices, sources = self.os.skeleton()
-        usb = activity_module.usb_activity(self.os.boots(), now, self.utc_offset_s)
+        boots = self.os.boots()
+        usb = activity_module.usb_activity(boots, now, self.utc_offset_s)
         layer = tree.build_os_layer(self.os.hostname, devices, extra_ports=frozenset(usb.recent_ports))
         usb.events = [dataclasses.replace(event, path=layer.port_paths.get(str(event.args.get("port")), event.path))
                       if event.args.get("port") else event for event in usb.events]
         pairs = match_devices(self.specs, [layer.matchable(device_id) for device_id in layer.devices])
+        claimed = {layer.entities[path].hardware_id: layer.entities[path].name
+                   for path in {layer.device_paths[str(device.get("id"))] for _spec, device in pairs}
+                   if activity_module.usb_id(layer.entities[path].hardware_id)}
+        self.seen.mark(claimed, now)
+        absent = self._absent_rows(layer, boots, now)
+        if self.seen.note or self.seen.write_note:
+            note = " · ".join(text for text in (self.seen.note, self.seen.write_note) if text)
+            sources = [*sources, {"name": "seen devices", "state": "skipped", "note": note}]
         with self.lock:
             wanted = {}
             for spec, device in pairs:
@@ -332,7 +421,7 @@ class Host:
                 wanted[key] = job
             self.jobs = wanted
             self.layer, self.sources, self.usb = layer, sources, usb
-            self.os_records = tree.os_statuses(layer, usb.history, now, {key[1] for key in wanted})
+            self.os_records = tree.os_statuses(layer, usb.history, now, {key[1] for key in wanted}) + absent
         changed = []
         for status in self.os_records:  # WHY only on change: OS checks are recomputed every refresh, not re-evaluated
             key, signature = (status.path, status.name), (status.level, status.code)
@@ -341,11 +430,74 @@ class Host:
                 changed.append(status)
         self.faults.observe(changed, now)
 
+    # --- expected but absent ------------------------------------------------------------------------------------
+    def expected_devices(self) -> dict[str, dict]:
+        """``hardware_id -> {name, last_seen, source, owner}``: the devices this host has seen a plugin diagnose, plus
+        every enabled plugin's describe ``expected`` (record v0.1; the plugin's entry wins over the memory)."""
+
+        out = {hardware_id: {"name": str(entry.get("name") or hardware_id), "last_seen": entry.get("last_seen"),
+                             "source": "seen by this host", "owner": "io_diagnostics"}
+               for hardware_id, entry in self.seen.devices.items()}
+        for spec in self.specs:
+            if not spec.enabled:
+                continue
+            for item in (self.describes.get(spec.name) or {}).get("expected") or []:
+                hardware_id = item.get("hardware_id") if isinstance(item, dict) else None
+                if not isinstance(hardware_id, str) or not hardware_id:
+                    continue
+                remembered = out.get(hardware_id, {})
+                out[hardware_id] = {"name": str(item.get("name") or remembered.get("name") or hardware_id),
+                                    "last_seen": item.get("last_seen") or remembered.get("last_seen"),
+                                    "source": str(item.get("source") or spec.name), "owner": spec.name}
+        return out
+
+    def _absent_rows(self, layer: tree.OsLayer, boots: list, now: float) -> list[DiagnosticStatus]:
+        """One row (entity + WARN status) per expected USB device that is not on USB now, under ``host/expected``,
+        saying in plain words what the kernel saw. WHY warn, not error: absent is not broken."""
+
+        present = {ids for entity in layer.entities.values() if (ids := activity_module.usb_id(entity.hardware_id))}
+        note = str(getattr(getattr(self.os, "kernel_log", None), "note", "") or "")
+        unreadable = note if note.startswith("journalctl unavailable") else ""
+        statuses = []
+        for hardware_id, expected in sorted(self.expected_devices().items()):
+            ids = activity_module.usb_id(hardware_id)
+            if ids is None or ids in present:  # v0.1: only USB ids (usb:<vid>:<pid>:<serial>) are checked here
+                continue
+            if EXPECTED_PATH not in layer.entities:
+                layer.entities[EXPECTED_PATH] = Entity(EXPECTED_PATH, "Expected, not connected", "group",
+                                                       via=tree.HOST_PATH, owner="io_diagnostics")
+                layer.icons[EXPECTED_PATH] = "group"
+            path = f"{EXPECTED_PATH}/{tree.slug(hardware_id)}"
+            layer.entities[path] = Entity(path, expected["name"], "device", via=EXPECTED_PATH, hardware_id=hardware_id,
+                                          owner=expected["owner"])
+            layer.icons[path] = "usb"
+            evidence = activity_module.kernel_evidence(boots, hardware_id, now, self.utc_offset_s, unreadable)
+            seen = _seen_text(expected["last_seen"], self.utc_offset_s)
+            said = f"expected (last seen {seen}, {expected['source']})" if seen else f"expected ({expected['source']})"
+            message = f"{said} · not on USB · {evidence['text']}"
+            if evidence["kind"] == "never":
+                message += ": try a data cable or another port"
+            values = (KeyValue("what_to_check", activity_module.WHAT_TO_CHECK[evidence["kind"]]),
+                      KeyValue("kernel_evidence", evidence["kind"]), KeyValue("expected_by", expected["source"]),
+                      KeyValue("last_seen", seen or "unknown"))
+            statuses.append(DiagnosticStatus(level=WARN, name=f"{expected['name']}: presence", message=message,
+                                             hardware_id=hardware_id, values=values, path=path, code="ExpectedAbsent",
+                                             stamp=now, received=now, source=EXPECTED_SOURCE))
+        return statuses
+
     # --- plugin runs -----------------------------------------------------------------------------------------------
     def _job_env(self) -> dict[str, str]:
         return dict(self.plugin_env)
 
     def run_job(self, job: Job) -> None:
+        """Run one job, waiting first for its ``exclusive`` group (queued, never failed)."""
+
+        with self.gates.hold(job.spec.exclusive):
+            self._run_job(job)
+
+    def _run_job(self, job: Job) -> None:
+        """Run one job; the caller holds its group (the scheduler takes it before submitting)."""
+
         with self.lock:
             entity = self.layer.entities.get(job.device_path)
         outcome = run_plugin(job.spec, job.device, job.device_path, self.clock.now, self._job_env(),
@@ -362,7 +514,8 @@ class Host:
         self.faults.observe(observed, now)
 
     def run_all_once(self) -> None:
-        """Refresh, then run every matched (plugin, device) once, in parallel; used by ``once`` and tests."""
+        """Refresh, then run every matched (plugin, device) once, in parallel except within an ``exclusive`` group,
+        whose jobs run one after another; used by ``once`` and tests."""
 
         self.refresh()
         threads = [threading.Thread(target=self.run_job, args=(job,), daemon=True) for job in list(self.jobs.values())]
@@ -379,7 +532,7 @@ class Host:
     # --- background service ------------------------------------------------------------------------------------
     def start(self, *, udev: bool = True) -> None:
         self.refresh()
-        self._scheduler = Scheduler(lambda: list(self.jobs.values()), self.run_job)
+        self._scheduler = Scheduler(lambda: list(self.jobs.values()), self._run_job, gates=self.gates)
         self._scheduler.start()
         threading.Thread(target=self._refresh_loop, name="io-refresh", daemon=True).start()
         threading.Thread(target=self.describe_all, name="io-describe", daemon=True).start()
@@ -448,7 +601,7 @@ class Host:
         view = self.view()
         summary = self.summary_json(view)
         recent = self.events_json(view, RECENT)
-        return {"api": API, "schema": SCHEMA, "clock": self.clock_json(view.now), "fixture": self.fixture,
+        return {"api": API, "schema": SCHEMA, "record_version": RECORD_VERSION, "clock": self.clock_json(view.now), "fixture": self.fixture,
                 "host": {"name": self.os.hostname, "sources": list(self.sources)}, "summary": summary,
                 "chip": chip_model(summary, recent, self.url),
                 "tree": tree.node_json(tree.HOST_PATH, view.rows, view.layer, view.faults_by_path, nested=True),
@@ -533,14 +686,20 @@ class Host:
             return None, f"{check}: no physical device above {entity.name}"
         return self.os.gate(view.layer.matchable(view.layer.device_of_path[device_path]), check)
 
-    def actions_json(self, path: str, view: View) -> list[dict]:
+    def _fill(self, path: str, view: View) -> _Blank:
+        """The values a confirm text's ``{name}``, ``{id}``, ``{serial}``, ``{latest}`` placeholders take."""
+
         entity = view.merged.entities[path]
         device_path = tree.nearest_device(path, view.merged)
         serial = entity.identity.get("serial_number") or (view.merged.entities[device_path].identity.get("serial_number", "")
                                                            if device_path else "")
         firmware = self._firmware(path, view)
-        fill = _Blank(name=entity.name, id=path.rsplit("/", 1)[-1], serial=serial,
+        return _Blank(name=entity.name, id=path.rsplit("/", 1)[-1], serial=serial,
                       latest=dict(firmware.values).get("latest_version", "?") if firmware else "?")
+
+    def actions_json(self, path: str, view: View) -> list[dict]:
+        entity = view.merged.entities[path]
+        fill = self._fill(path, view)
         out = []
         for action in entity.actions:
             results = []
@@ -567,6 +726,87 @@ class Host:
                         "owner": entity.owner})
         return out
 
+    # --- actions: run one, for a person ------------------------------------------------------------------------------
+    def _owning_job(self, path: str, entity) -> Job | None:
+        """The job whose device row is ``path`` or above it; with several plugins on one device, the entity's owner."""
+
+        with self.lock:
+            candidates = []
+            for job in self.jobs.values():
+                device_path = self.layer.device_paths.get(str(job.device.get("id")), job.device_path)
+                if path == device_path or path.startswith(device_path + "/"):
+                    candidates.append((len(device_path), job))
+        if not candidates:
+            return None
+        deepest = max(length for length, _ in candidates)
+        candidates = [job for length, job in candidates if length == deepest]
+        return next((job for job in candidates if job.spec.name == entity.owner), candidates[0] if len(candidates) == 1 else None)
+
+    def _registered(self, job: Job, entity, name: str) -> tuple[Action | None, str]:
+        """The action as the entity registered it (after a diagnose), else as the plugin's ``describe`` lists it
+        (a fresh ``io-diagnostics act`` process has run no diagnose: describe is passive, diagnose may not be)."""
+
+        found = next((action for action in entity.actions if action.name == name), None)
+        if found is not None:
+            return found, "entity"
+        if self.describes.get(job.spec.name) is None:
+            self.describes[job.spec.name] = describe(job.spec, extra_env=self._job_env())
+        for item in (self.describes.get(job.spec.name) or {}).get("actions") or []:
+            if isinstance(item, dict) and item.get("name") == name:
+                try:
+                    return from_dict({"schema": SCHEMA, **item, "record": "action"}), "describe"
+                except (TypeError, ValueError, KeyError):
+                    return None, "describe"
+        return None, ""
+
+    def act(self, path: str, action: str, *, node: int | None = None, confirm: str | None = None, dry_run: bool = False,
+            human: bool | None = None) -> dict:
+        """Run the plugin's ``act`` for one action registered on the entity at ``path``.
+
+        The rule (docs/api-v1.md "Actions: io-diagnostics act"): only a person runs an action; agents can't click.
+        - ``human`` is whether a person asked: the CLI passes stdin-is-a-TTY, and so does the default. Not a person
+          -> everything is refused except ``dry_run``, which the plugin answers without touching the device.
+        - Every action whose danger is not ``query`` needs ``confirm`` (the token the confirm dialog shows). The
+          host passes it through; the plugin checks it against the device (moteus: its time-window token, RealSense:
+          the camera's serial), because only the owner knows what it confirms.
+        - It runs inside the plugin's ``exclusive`` group, so it never collides with its own diagnose."""
+
+        if human is None:
+            try:
+                human = sys.stdin is not None and sys.stdin.isatty()
+            except (ValueError, OSError):  # a closed stdin is not a person
+                human = False
+        view = self.view()
+        out = {"path": path, "action": action, "node": node, "dry_run": dry_run, "plugin": None, "device_id": None,
+               "title": "", "danger": None, "registered_by": "", "argv": None, "refused": None, "outcome": "refused",
+               "returncode": None, "duration_s": 0.0, "records": [], "action_result": None, "rejected": [],
+               "stderr_tail": "", "message": ""}
+
+        def refuse(code: str, message: str) -> dict:
+            return {**out, "refused": code, "message": message}
+
+        entity = view.merged.entities.get(path)
+        if entity is None:
+            return refuse("NoSuchEntity", f"no entity at {path!r}")
+        job = self._owning_job(path, entity)
+        if job is None:
+            return refuse("NoPlugin", f"no enabled plugin diagnoses {entity.name} ({path})")
+        registered, source = self._registered(job, entity, action)
+        out.update(plugin=job.spec.name, device_id=str(job.device.get("id", "")), registered_by=source)
+        if registered is None:
+            return refuse("ActionNotRegistered", f"{job.spec.name} registers no action {action!r} for {entity.name}")
+        argv = act_argv(job.spec, job.device, action, node=node, confirm=confirm, dry_run=dry_run)
+        out.update(title=registered.title, danger=registered.danger, argv=argv)
+        if not human and not dry_run:
+            return refuse("NotInteractive", "not a person (stdin is not a TTY): only --dry-run runs; agents can't click")
+        if registered.danger != "query" and not dry_run and not confirm:
+            text = string.Formatter().vformat(registered.confirm, (), self._fill(path, view))
+            return refuse("ConfirmRequired", f"{registered.danger}: pass --confirm <token> after reading: {text}")
+        device_path = self.layer.device_paths.get(str(job.device.get("id")), job.device_path)
+        with self.gates.hold(job.spec.exclusive):
+            result = run_act(job.spec, job.device, device_path, argv, self.clock.now, self._job_env())
+        return {**out, **result}
+
     # --- activity, records, plugins -----------------------------------------------------------------------------
     def activity(self, limit: int = 200) -> dict:
         view = self.view()
@@ -590,7 +830,8 @@ class Host:
         for spec in self.specs:
             out.append({"name": spec.name, "file": str(spec.file), "command": list(spec.command),
                         "diagnose_args": list(spec.diagnose_args), "cwd": str(spec.cwd),
-                        "timeout_s": spec.timeout_s, "period_s": spec.period_s, "enabled": spec.enabled, "replay": spec.replay,
+                        "timeout_s": spec.timeout_s, "act_timeout_s": spec.act_timeout_s, "period_s": spec.period_s,
+                        "enabled": spec.enabled, "replay": spec.replay, "exclusive": spec.exclusive,
                         "matches": [match.text() for match in spec.matches], "description": spec.description,
                         "describe": self.describes.get(spec.name),
                         "jobs": [{"device_id": str(job.device.get("id")), "device_path": job.device_path,
@@ -622,8 +863,10 @@ def make_host(*, fixture: str | None = None, plugins_dir: Path | None = None, on
         clock = FixedClock(time.time()) if once else Clock()
         return Host(plugins_dir=plugins_dir or PLUGINS_DIR, clock=clock, os_source=MachineOs(machine), enable=enable)
     if fixture is None:
+        # WHY live only: the remembered devices are this machine's; a fixture or a fake machine must never add to them
         clock = FixedClock(time.time()) if once else Clock()
-        return Host(plugins_dir=plugins_dir or PLUGINS_DIR, clock=clock, os_source=LiveOs(), enable=enable)
+        return Host(plugins_dir=plugins_dir or PLUGINS_DIR, clock=clock, os_source=LiveOs(), enable=enable,
+                    state_file=default_state_dir() / SEEN_FILE)
     document, frame = load_fixture(fixture)
     offset = frame.get("utc_offset_s")
     clock = FixedClock(frame["clock"] + at_s, offset, "fixture") if once else ReplayClock(frame["clock"], offset, offset_s)

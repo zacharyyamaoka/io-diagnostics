@@ -1,7 +1,7 @@
 # IO diagnostics plugin: the moteus_servo driver's own diagnostics (fdcanusb CAN-FD adapters, USB 0483:5740,
 # and the moteus boards on their bus). Boundary: docs/build-plan-v1.md "Plugin boundary". The host appends one
 # verb to `command`:
-#   describe | diagnose --device <id> | act --device <id> --action <name> [--node <CAN id>] --confirm <token>
+#   describe | diagnose --device <id> | act --device <id> --action <name> [--node <CAN id>] [--confirm <token>] [--dry-run]
 # and reads diagnostics-record/0 JSON lines (contract/record.py) from stdout. Paths are rooted at
 # $IO_DIAGNOSTICS_DEVICE_PATH (the device's own row): <row>/can is the bus, <row>/can/<id> each board.
 # Run by hand (passive: never opens the port):
@@ -10,10 +10,16 @@
 name = "moteus_servo"
 description = "fdcanusb adapters + moteus boards: ids, identity, firmware vs latest, read-only config, can status, reply loss"
 
-# WHY disabled: diagnose talks to the bus (query frames + console reads, behind the port-holder check and the
-# rack bus lock). The orchestrator enables it for its one live run (`io-diagnostics serve --enable moteus_servo`);
-# the fixture plugin drives the UI meanwhile.
-enabled = false
+# WHY enabled: plug in the rack and see live what is connected and whether it works (Zach, 2026-10-22). diagnose
+# is query-only bus traffic (query frames + console reads, behind the port-holder check and the rack bus lock),
+# which the peer sessions sharing the rack approved; every write (reboot, set_id, update_config, calibrate ...) is
+# an `act` that the host runs only for a person at a TTY with --confirm, never on a schedule (docs/api-v1.md).
+enabled = true
+
+# WHY a group: diagnose takes the rack bus lock (flock LOCK_NB), and so does intel_rgbd's; two runs at once fail
+# each other with BusLockHeld. The host queues the group's jobs instead (moteus vs RealSense, and one plugin's
+# devices: found live 2026-10-22 17:41).
+exclusive = "rack-bus"
 
 # WHY uv run in the driver's own project: moteus and pyserial live in the driver's env, never in io-diagnostics'.
 # WHY the worktree path: the plugin lives on bam_ws branch claude/traj-tracking-sim-to-real-a3da60 until it is
@@ -39,6 +45,9 @@ cwd = "/home/bam/bam_ws/.claude/worktrees/traj-sim2real-rack/src/core/mdp/agent/
 # 3-board bus about 3-6 s (scan, 20 query cycles, config + identity per board, can status). 45 s leaves room
 # for uv's start.
 timeout_s = 45
+# Seconds per act call, never used by diagnose. WHY 900: a firmware update backs up the config, flashes, verifies
+# and restores, longer than any diagnose; calibration spins the rotor for ~30-60 s.
+act_timeout_s = 900
 
 # Seconds between diagnose calls per adapter. WHY 300: while the check runs it holds the rack bus lock, and an
 # experiment that finds the lock held refuses to start; rack_inventory already polls every ~180 s.

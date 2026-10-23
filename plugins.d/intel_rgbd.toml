@@ -1,6 +1,6 @@
 # IO diagnostics plugin: the intel_rgbd driver's own diagnostics (Intel RealSense, USB 8086:0b*).
 # Boundary: docs/build-plan-v1.md "Plugin boundary". The host appends one verb to `command`:
-#   describe | diagnose --device <id> | act --device <id> --action <name> --confirm <token>
+#   describe | diagnose --device <id> | act --device <id> --action <name> [--confirm <token>] [--dry-run]
 # and reads diagnostics-record/0 JSON lines (contract/record.py) from stdout.
 # Run by hand (passive: sysfs only, never asks the SDK):
 #   uv run --project <cwd> --extra real python -m intel_rgbd.diagnostics diagnose --passive
@@ -8,10 +8,16 @@
 name = "intel_rgbd"
 description = "Intel RealSense cameras: USB and RealSense serials, USB link, firmware vs recommended, configured streams"
 
-# WHY disabled: a default diagnose asks the SDK (rs.context().query_devices() + camera_info), and listing devices
-# opens every RealSense (behind its holder check and the rack bus lock). The orchestrator enables it for its one
-# live run (`io-diagnostics serve --enable intel_rgbd`); the fixture plugin drives the UI meanwhile.
-enabled = false
+# WHY enabled: plug in the rack and see live what is connected and whether it works (Zach, 2026-10-22). A default
+# diagnose only asks the SDK (rs.context().query_devices() + camera_info, behind its holder check and the rack bus
+# lock) and never opens a stream: query-only, which the peer sessions sharing the rack approved. hardware_reset is
+# an `act` that the host runs only for a person at a TTY with --confirm, never on a schedule (docs/api-v1.md).
+enabled = true
+
+# WHY a group: diagnose takes the rack bus lock (flock LOCK_NB), and so does moteus_servo's; two runs at once fail
+# each other with BusLockHeld. The host queues the group's jobs instead (camera 6-1 vs 6-2, and moteus vs
+# RealSense: found live 2026-10-22 17:41).
+exclusive = "rack-bus"
 
 # WHY uv run in the driver's own project: pyrealsense2 lives in the driver's env, never in io-diagnostics'.
 # WHY the worktree path: the plugin lives on bam_ws branch claude/traj-tracking-sim-to-real-a3da60 until it is
@@ -24,12 +30,14 @@ command = [
 ]
 cwd = "/home/bam/bam_ws/.claude/worktrees/traj-sim2real-rack/src/core/mdp/agent/sensors/intel_rgbd"
 
-# Seconds per call. A live diagnose is uv start + one camera_info query (about 1-2 s per camera); a hardware_reset
-# waits up to 15 s for the camera to re-enumerate (real.py HARDWARE_RESET_TIMEOUT_S).
-timeout = 30
+# Seconds per diagnose call. A live diagnose is uv start + one camera_info query (about 1-2 s per camera).
+timeout_s = 30
+# Seconds per act call, never used by diagnose. WHY 900: rs-fw-update is given 300 s, on-chip calibration 120 s,
+# and a hardware_reset waits up to 15 s for the camera to re-enumerate (real.py HARDWARE_RESET_TIMEOUT_S).
+act_timeout_s = 900
 # Seconds between diagnose calls. Must equal intel_rgbd.diagnostics.DIAGNOSE_PERIOD_S: every status promises it as
 # expected_period_s, and the host marks a record stale after max(3 x period, 5 s).
-period = 60
+period_s = 60
 
 # No `matches` here on purpose: the host takes them from the plugin's own `describe` (usb 8086:0b*), the build
 # plan's route, so the driver alone decides which cameras it claims.

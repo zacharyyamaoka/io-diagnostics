@@ -2,8 +2,8 @@
 
 Every `*.toml` here declares one plugin. The host (`io_diagnostics/plugins.py`, `io_diagnostics/runner.py`) loads
 them at start, matches them to OS skeleton devices, and runs each matched (plugin, device) pair every `period_s`.
-A broken file is skipped and named in `GET /api/v1/plugins` → `problems`; it never stops the host. Nothing in this
-directory is enabled by default: a file here is a decision to let that driver's code run.
+A broken file is skipped and named in `GET /api/v1/plugins` → `problems`; it never stops the host. A file here is a
+decision to let that driver's code run.
 
 ## The declaration
 
@@ -13,23 +13,34 @@ description = "moteus boards behind an fdcanusb"
 command = ["uv", "run", "--project", "/home/bam/bam_ws/src/core/mdp/agent/actuators/moteus_servo",
            "python", "-m", "moteus_servo.diagnostics"]          # argv, never a shell string
 cwd = "/home/bam/bam_ws"                       # optional; default: this file's directory
-timeout_s = 20                                 # one run's wall-clock limit; past it the whole process group is killed
+timeout_s = 20                                 # one diagnose's wall-clock limit; past it the whole process group is killed
+act_timeout_s = 900                            # optional, default 900: one act's limit (firmware flash, calibration)
 period_s = 30                                  # how often per matched device
 matches = ["usb:0483:5740"]                    # see Matches
 enabled = true                                 # optional, default true; `io-diagnostics ... --enable NAME` overrides false
 env = { MOTEUS_DIAGNOSTICS_QUIET = "1" }       # optional extra environment
 diagnose_args = ["--passive"]                  # optional: appended after `diagnose --device <id>` (options of the verb)
+exclusive = "rack-bus"                         # optional group: never two runs (diagnose or act) of it at once
 ```
 
-The two shipped declarations (`moteus_servo.toml`, `intel_rgbd.toml`) run the real drivers but say `enabled = false`:
-their default `diagnose` talks to the hardware (behind the holder check and the rack bus lock). Turn one on for a run
-with `--enable moteus_servo`, never by editing the file. `tests/fixtures/plugins-live-passive/` declares the same two
-drivers with `diagnose_args = ["--passive"]` behind `passive_guard.py` (refuses any diagnose without `--passive`,
-and any `act`): the real driver code on the real skeleton, with no adapter or camera opened.
+The two shipped declarations (`moteus_servo.toml`, `intel_rgbd.toml`) run the real drivers and are `enabled = true`
+(2026-10-22: plug in the rack and see live what is connected). Their default `diagnose` is query-only traffic to the
+hardware, behind the holder check and the rack bus lock, which the peer sessions sharing the rack approved; every
+write is an `act`, which the host runs only for a person (below). `tests/fixtures/plugins-live-passive/` declares
+the same two drivers with `diagnose_args = ["--passive"]` behind `passive_guard.py` (refuses any diagnose without
+`--passive`, and any `act`): the real driver code on the real skeleton, with no adapter or camera opened. Tests
+never load `plugins.d` into a running host.
+
+**`exclusive`**: plugins that share a resource the OS cannot arbitrate for them declare one group name. The host
+then runs at most one job of that group at a time, across plugins and across one plugin's devices, in `once`, in the
+periodic scheduler and for `act`. A due job whose group is busy waits its turn (oldest due first); it is never failed
+for it. WHY: both rack drivers take the rack bus lock with `flock LOCK_NB`, so two sibling runs started together
+failed each other with `BusLockHeld` (live, 2026-10-22 17:41). Their lock still guards against other processes.
 
 `{python}` (the host's interpreter), `{root}` (the io-diagnostics checkout) and `{here}` (this file's directory)
 are expanded in `command`, `cwd` and `env`. A relative executable with a `/` resolves against `cwd`. `timeout` and
-`period` (the build plan's spelling) are accepted for `timeout_s` / `period_s`.
+`period` (the build plan's spelling) and `act_timeout` are accepted for `timeout_s` / `period_s` / `act_timeout_s`; the
+shipped files write the `_s` spelling.
 
 **No `matches` here?** Then the host asks the plugin once (`<command> describe`, which must be passive, bounded by
 `timeout_s`) and uses the `matches` it returns, as strings (`"usb:8086:0b*"`) or as `{"bus": "usb", "vid": "8086",
@@ -52,10 +63,16 @@ The host passes the PHYSICAL device when a match is through one of its function 
 ## The boundary (docs/build-plan-v1.md, "Plugin boundary")
 
 ```
-<command> describe                                → one JSON object: {name, version, schema, matches, actions}
+<command> describe                                → one JSON object: {name, version, schema, matches, actions[, record_version, expected]}
 <command> diagnose --device <id>                  → JSON lines, one contract.record v0 record each
-<command> act --device <id> --action <n> --confirm <token>   → never called by the host in v1
+<command> act --device <id> --action <n> [--node N] [--confirm <token>] [--dry-run]   → JSON lines (the result)
 ```
+
+`act` runs only through `io-diagnostics act --path <entity path> --action <n> [--node N] [--confirm T] [--dry-run]`,
+never on a schedule and never over HTTP in v1. The host refuses everything but `--dry-run` when stdin is not a TTY
+(agents can't click), and any action whose `danger` is not `query` without `--confirm`; it passes the token through
+and the plugin checks it. `--dry-run` must run nothing and print what it would run (docs/actions-vocabulary-v0.1.md).
+Details: docs/api-v1.md, "Actions".
 
 `diagnose` gets, besides `--device <id>` (the skeleton id, e.g. `usb:1-3`), these environment variables:
 
@@ -111,7 +128,7 @@ time is simply not re-sent, and its last record goes STALE on the host's clock.
 
 ## Rules a plugin must keep (docs/build-plan-v1.md, Hard rules)
 
-- Read only, unless an action ran (and in v1 no action runs). Before any active check: the port-holder check and the
+- Read only, unless a person ran an action (`io-diagnostics act`). Before any active check: the port-holder check and the
   rack bus lock (`/home/bam/.cache/rack-commissioning/bus.lock`, `LOCK_NB`, skip if held). Never steal a port: if
   another process holds it, report `unknown` + `PortBusy` and stop.
 - Finish well inside `timeout_s`; the host kills the whole process group after it.

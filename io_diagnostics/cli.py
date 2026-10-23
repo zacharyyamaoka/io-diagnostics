@@ -1,4 +1,4 @@
-"""``io-diagnostics [serve | tray | once --json]``: the one command.
+"""``io-diagnostics [serve | tray | once --json | act]``: the one command.
 
     uv run --project /home/bam/io-diagnostics io-diagnostics serve
     uv run --project /home/bam/io-diagnostics io-diagnostics serve --fixture F2 --offset 330
@@ -14,9 +14,14 @@
              environment it re-executes itself under /usr/bin/python3). The dashboard opens only on a click.
 - ``once``   refresh, run every matched plugin once, print the merged tree and records (``--json``) and exit:
              for tests and the rack session runner. ``--at S`` judges a fixture S seconds after its frame clock.
+- ``act``    ``--path <entity path> --action <name> [--node N] [--confirm TOKEN] [--dry-run]``: run one action the
+             entity's plugin registered, through the plugin's own ``act``, and print its answer as JSON. Only a person
+             runs actions: with stdin not a TTY (an agent) only ``--dry-run`` runs, and any action whose danger is
+             not ``query`` needs ``--confirm``. Exit 0 ran · 2 refused (nothing ran) · 1 the plugin failed.
 
-The host itself is passive: it opens no CAN adapter or camera, and actions are shown, never executed. A driver
-plugin you ``--enable`` runs its own gated checks (port-holder check + the rack bus lock first).
+The host itself is passive: it opens no CAN adapter or camera. The driver plugins in plugins.d (enabled by default)
+run their own gated, query-only checks (port-holder check + the rack bus lock first), one at a time per
+``exclusive`` group; a write runs only through ``act``, for a person.
 """
 
 from __future__ import annotations
@@ -42,7 +47,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="io-diagnostics", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
     for name, text in (("serve", "serve the dashboard and the JSON API"), ("tray", "serve + the top-bar chip, one process"),
-                       ("once", "run everything once, print, exit")):
+                       ("once", "run everything once, print, exit"), ("act", "run one registered action (a person only)")):
         command = commands.add_parser(name, help=text)
         command.add_argument("--fixture", help="replay a recorded frame: F1 / F2 / F3 (plug / bus-busy / after-restart)")
         command.add_argument("--plugins", type=Path, help="plugin directory (default: plugins.d, or the fixture plugins)")
@@ -54,6 +59,12 @@ def _parser() -> argparse.ArgumentParser:
         if name == "once":
             command.add_argument("--json", action="store_true", help="print state, records, activity and plugins as JSON")
             command.add_argument("--at", type=float, default=0.0, help="fixture only: judge S seconds after the frame clock")
+        elif name == "act":
+            command.add_argument("--path", required=True, help="the entity's tree path (/api/v1/node?path=...)")
+            command.add_argument("--action", required=True, help="the action's machine name (check_comms, reboot, ...)")
+            command.add_argument("--node", type=int, help="CAN id, for an action on one board")
+            command.add_argument("--confirm", metavar="TOKEN", help="the confirm token; required unless the danger is query")
+            command.add_argument("--dry-run", action="store_true", help="run nothing: the plugin prints what it would run")
         else:
             command.add_argument("--port", type=int, default=8812)
             command.add_argument("--bind", default="127.0.0.1")
@@ -89,6 +100,23 @@ def _once(args) -> int:
         print(f"{state['clock']['iso']}  {state['chip']['label']}  ({state['summary']['devices']} devices)")
         _print_tree(state["tree"])
     return 0
+
+
+def _act(args) -> int:
+    """Exit 0: the plugin ran and exited 0 · 2: the host refused (nothing ran) · 1: the plugin failed or hung."""
+
+    from io_diagnostics.host import make_host
+
+    host = make_host(fixture=args.fixture, plugins_dir=args.plugins, once=True, enable=tuple(args.enable),
+                     machine=args.machine)
+    host.refresh()
+    result = host.act(args.path, args.action, node=args.node, confirm=args.confirm, dry_run=args.dry_run)
+    json.dump(result, sys.stdout, default=str, ensure_ascii=False)
+    print()
+    if result["refused"]:
+        print(f"refused: {result['refused']}: {result['message']}", file=sys.stderr)
+        return 2
+    return 0 if result["outcome"] == "ok" else 1
 
 
 def _serve(args, *, tray: bool) -> int:
@@ -141,6 +169,8 @@ def main(argv: list[str] | None = None) -> int:
         return _serve(args, tray=True)
     if args.command == "serve":
         return _serve(args, tray=False)
+    if args.command == "act":
+        return _act(args)
     return _once(args)
 
 

@@ -31,6 +31,11 @@ from typing import Any, ClassVar, Mapping, NamedTuple
 # Bump the trailing number only for a breaking change. Additive changes (a new optional field with a default)
 # keep it, and readers ignore fields they do not know (open world).
 SCHEMA = "diagnostics-record/0"
+# The additive revision this module validates against. It never travels in a record line (every line still says
+# SCHEMA, so a v0 reader reads it); a producer states the revision it writes once, in its describe answer
+# (``"record_version": "0.1"``), and the host states its own in its API. v0.1 (2026-10-22): identity ``model_id``,
+# danger ``moves``, the standard action names (docs/diagnostics-record-v0.md "v0.1").
+RECORD_VERSION = "0.1"
 
 # ----- levels -------------------------------------------------------------------------------------------------
 UNKNOWN, OK, WARN, ERROR = "unknown", "ok", "warn", "error"
@@ -60,13 +65,33 @@ STALE_FLOOR_S = 5.0
 EVENT_SEVERITIES = ("info", WARN, ERROR)  # log severity: INFO is an event, never a status (ROS #268 debate)
 PENDING, CONFIRMED, HEALED, CLEARED = "pending", "confirmed", "healed", "cleared"
 FAULT_STATUSES = (PENDING, CONFIRMED, HEALED, CLEARED)
-IDENTITY_KEYS = ("manufacturer", "model", "serial_number", "hw_version", "sw_version")  # HA device_info names
+# HA device_info names. v0.1 adds model_id (HA DeviceInfo's own key): the robotparts part id ("mjbots-moteus-c1"),
+# a plain string; the record never imports robotparts.
+IDENTITY_KEYS = ("manufacturer", "model", "serial_number", "hw_version", "sw_version", "model_id")
 
 # Gate classes of an Action (and of a driver's sections): how much it touches the device.
 PASSIVE = "passive"  # sysfs / by-id / files: safe while an experiment runs
 TOUCHES = "touches"  # talks to the device: only through the gate, query-only
 CHANGES = "changes"  # reset / config write: explicit, per device, confirmed, AND gated
-DANGERS = ("query", "interrupts", "changes")
+# v0.1 adds "moves": hardware moves (a rotor spins, a loaded joint can fall). Danger is per driver: the same
+# standard name can be "query" on one device and "moves" on another (docs/actions-vocabulary-v0.1.md).
+DANGERS = ("query", "interrupts", "changes", "moves")
+
+# The standard action names (v0.1, frozen 2026-10-22: docs/actions-vocabulary-v0.1.md) -> the host's label. Same
+# name = same meaning and same label on every driver; a driver's ``title`` for a standard name must equal it.
+# WHY data, not prose: the validator and every surface read one table, so "Reboot…" cannot drift per driver.
+STANDARD_ACTIONS = {
+    "check_comms": "Check communication",
+    "check_firmware": "Check firmware",
+    "update_firmware": "Update firmware…",
+    "calibrate": "Run calibration…",
+    "update_config": "Update configuration…",
+    "clear_faults": "Clear faults",
+    "reboot": "Reboot…",
+    "stop_all": "Stop all",
+    "set_id": "Change CAN id…",
+    "open_console": "Open console",
+}
 
 # PascalCase, optionally qualified ("MoteusFault.33"): K8s reason / Redfish MessageKey style, at most 64 chars
 # (ros2_medkit's limit for fault codes, which maps 1:1 to its UPPER_SNAKE).
@@ -172,7 +197,7 @@ class Action:
     name: str  # "run_comms_check", "clear_faults", "reset", "update_firmware", "identify"
     title: str  # the button label
     description: str
-    danger: str  # "query" (reads only) / "interrupts" (drops the device for a moment) / "changes" (writes state)
+    danger: str  # "query" (reads only) / "interrupts" (drops the device for a moment) / "changes" (writes state) / "moves" (hardware moves)
     scope: str  # which of the driver's entities it attaches to: "device" (the USB device) or "node" (one board)
     confirm: str
     preconditions: tuple[tuple[str, str], ...] = ()
@@ -446,6 +471,9 @@ def validate(record) -> list[str]:
             problems.append(f"{where}: name must be snake_case")
         if record.danger not in DANGERS:
             problems.append(f"{where}: danger {record.danger!r} must be one of {DANGERS}")
+        label = STANDARD_ACTIONS.get(record.name)
+        if label is not None and record.title != label:
+            problems.append(f"{where}: a standard action's title must be its label {label!r}, got {record.title!r}")
         if record.kind not in (PASSIVE, TOUCHES, CHANGES):
             problems.append(f"{where}: kind {record.kind!r} must be passive, touches or changes")
     else:
@@ -792,7 +820,7 @@ class FaultManager:
 
 
 __all__ = [
-    "SCHEMA", "UNKNOWN", "OK", "WARN", "ERROR", "STALE", "LEVELS", "RANK", "ROS_LEVEL", "FROM_ROS_LEVEL", "MODES",
+    "SCHEMA", "RECORD_VERSION", "STANDARD_ACTIONS", "UNKNOWN", "OK", "WARN", "ERROR", "STALE", "LEVELS", "RANK", "ROS_LEVEL", "FROM_ROS_LEVEL", "MODES",
     "STALE_FACTOR", "STALE_FLOOR_S", "EVENT_SEVERITIES", "PENDING", "CONFIRMED", "HEALED", "CLEARED",
     "FAULT_STATUSES", "IDENTITY_KEYS", "PASSIVE", "TOUCHES", "CHANGES", "DANGERS",
     "KeyValue", "Measurement", "DiagnosticStatus", "Action", "Entity", "Event", "Fault",

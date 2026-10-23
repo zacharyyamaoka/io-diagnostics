@@ -5,9 +5,10 @@
 `tests/test_host_api.py` checks every endpoint against the shapes below.*
 
 All endpoints are `GET` and return JSON (`Content-Type: application/json`, `Cache-Control: no-store`). Any other
-method returns **405**: actions never execute in v1, so there is nothing to `POST`. The record contract underneath is
-`contract/record.py` (`SCHEMA = "diagnostics-record/0"`); `docs/diagnostics-record-v0.md` explains every rule this
-API applies.
+method returns **405**: actions never execute over HTTP in v1, so there is nothing to `POST` (a person runs one with
+`io-diagnostics act`, see "Actions" below). The record contract underneath is `contract/record.py`
+(`SCHEMA = "diagnostics-record/0"`, `RECORD_VERSION = "0.1"`); `docs/diagnostics-record-v0.md` explains every rule
+this API applies.
 
 ```bash
 uv run --project /home/bam/io-diagnostics python /home/bam/io-diagnostics/io_diagnostics/cli.py serve --fixture F2
@@ -45,6 +46,7 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
 {
   "api": "io-diagnostics/1",
   "schema": "diagnostics-record/0",
+  "record_version": "0.1",
   "clock": {"now": 1761095510.0, "iso": "2026-10-21T18:11:50-07:00", "time": "18:11:50",
             "mode": "fixture", "utc_offset_s": -25200,
             "rank": ["ok", "warn", "unknown", "stale", "error"], "stale_factor": 3.0, "stale_floor_s": 5.0},
@@ -66,10 +68,23 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
 }
 ```
 
+- `record_version`: the additive revision of the record contract this host validates against (`"0.1"`: identity
+  `model_id`, danger `moves`, the standard action names). `schema` stays `"diagnostics-record/0"`.
 - `fixture` is `null` in live mode. In fixture mode the host replays a recorded scenario through the same code path
   as live plugins; `clock` runs at 1× from the frame's clock (plus `--offset`).
 - `host.sources`: which OS skeleton sources were used and which were skipped (with the reason), so a page can say
-  "PCI discovery not available" instead of implying there is no PCI.
+  "PCI discovery not available" instead of implying there is no PCI. A `"seen devices"` entry appears only when
+  the remembered-devices file could not be read or written.
+- **Expected, not connected** (record v0.1): a device a plugin's `describe` lists in `expected`
+  (`[{hardware_id, name, last_seen, source}]`), or a USB device this host has seen a plugin diagnose (kept in
+  `~/.local/state/io-diagnostics/seen.json`, live mode only), that is not on USB now. Each one is a tree row under
+  the group `host/expected` (`kind` `"group"`, name `"Expected, not connected"`). The row's `kind` is `"device"`,
+  its `owner` the plugin (or `io_diagnostics` for a remembered one), and its one check is `<name>: presence`.
+  That check is `warn` with `code` `"ExpectedAbsent"`, and its `message` says what the kernel saw this boot:
+  `"expected (last seen 2026-10-21 18:24, rack_inventory) · not on USB · the kernel saw no plug event since boot
+  (2026-10-22 07:00): try a data cable or another port"`, or `"… plugged in at 09:00:01 on 1-5, gone at 09:30:00"`,
+  or that the kernel log could not be read. Its values are `what_to_check`, `kernel_evidence`
+  (`never | left | unknown`), `expected_by` and `last_seen`. Only `usb:<vid>:<pid>:<serial>` ids are judged.
 - `summary` is the **root's advisory rollup** (the chip's question: "does anything need me?"):
   - `level`: the worst independent cause anywhere (`null` = nothing reports).
   - `counts`: independent causes per level; knock-on problems under a failed ancestor are not counted.
@@ -127,7 +142,7 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
 | `knock_on_of` | This row's own problem is explained by that failed ancestor (one dead bus is one cause): draw it subdued; it is not counted in `summary`. `null` when the row is an independent cause or OK. |
 | `stale` | `own.level` is `"stale"`: the host has not received this entity's periodic record for `max(3 × expected_period_s, 5 s)` on its own receive clock. |
 | `connected` | `false` = not connected → render fully greyed: an empty USB port, or an entity whose latest record says `mode: "offline"` (a deliberate goodbye). |
-| `hardware_id`, `identity` | Repeatable identifier (`usb:<vid>:<pid>:<serial>` for USB) and the descriptive `manufacturer / model / serial_number / hw_version / sw_version` (any subset; parts carry none). |
+| `hardware_id`, `identity` | Repeatable identifier (`usb:<vid>:<pid>:<serial>` for USB) and the descriptive `manufacturer / model / serial_number / hw_version / sw_version / model_id` (any subset; parts carry none). `model_id` (record v0.1) is the robotparts part id, e.g. `"mjbots-moteus-c1"`, a plain string a page may link to robotparts.dev. |
 | `owner` | Who registered the entity and would run its actions: a plugin name, or `io_facts.usb` / `io_diagnostics` for OS rows. |
 | `id_text` | Short text for the id column: a device's serial (a plugin may replace it, e.g. the RealSense SDK serial), a port's link speed or `empty`, a bus's / group's / the host's physical device count. |
 | `last_received`, `age_s` | When the row was last heard from: the newest `received` among its PERIODIC own records (the ones STALE is judged on), else among all its own records (`null` = no records); age on the host clock. |
@@ -181,7 +196,12 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
   - `state`: `"nothing_to_do"` (`update_available` fails: "up to date", whatever else holds, since a free port
     would not make the button useful), else `"blocked"` (another precondition fails), else `"unknown"` (one cannot be
     evaluated), else `"ready"`. `reason` is the text to show beside a disabled button.
-  - `executable` is always `false` in v1: the host shows actions and never runs them.
+  - `danger`: `query` (reads only) · `interrupts` (stops or resets what runs) · `changes` (writes stored state) ·
+    `moves` (record v0.1: hardware moves, e.g. moteus calibration spins the rotor). Every danger but `query` needs a
+    per-device confirmation. The same standard `name` can carry a different `danger` on another driver; its `title`
+    is always the standard label (`contract.record.STANDARD_ACTIONS`, docs/actions-vocabulary-v0.1.md).
+  - `executable` is always `false` in v1: the dashboard shows actions and never runs them (a person runs one with
+    `io-diagnostics act`, below).
 - `faults`: the host's `FaultManager` memory for this entity (see Activity).
 
 ## `GET /api/v1/activity[?limit=N]`
@@ -241,7 +261,9 @@ viewers, and what the rack session runner can read.
   "problems": ["broken.toml: command must be a non-empty list of strings"],
   "plugins": [
     {"name": "moteus_servo", "file": ".../plugins.d/moteus_servo.toml", "command": ["..."], "diagnose_args": [],
-     "cwd": "...", "timeout_s": 20.0, "period_s": 30.0, "enabled": true, "replay": false, "description": "moteus boards",
+     "cwd": "...", "timeout_s": 20.0, "act_timeout_s": 900.0, "period_s": 30.0, "enabled": true, "replay": false,
+     "exclusive": "rack-bus",
+     "description": "moteus boards",
      "matches": ["usb:0483:5740"],
      "describe": {"name": "moteus_servo", "version": "0.3.0", "schema": "diagnostics-record/0"},
      "jobs": [{"device_id": "usb:1-3", "device_path": "host/usb1/port-1-3/usb-1-3",
@@ -254,8 +276,56 @@ viewers, and what the rack session runner can read.
 
 `outcome` is `ok`, `malformed` (some lines rejected), `crashed`, `timeout` or `not_started`; the same outcome is the
 host check on the device row. `diagnose_args` is what the declaration appends after `diagnose --device <id>`
-(e.g. a driver's `--passive`). `describe` is `null` until the plugin's `describe` verb has run (it runs once, in the
-background, never blocking `diagnose`).
+(e.g. a driver's `--passive`). `describe` is `null` until the plugin's `describe` verb has run (once per enabled
+plugin, all in parallel, at the host's first refresh, before the first match); a v0.1 plugin may state
+`"record_version": "0.1"` and its `expected` devices there (see "Expected, not connected"). `exclusive` is the
+declaration's group (`""` = none): the host never runs two jobs (diagnose or act) of one group at once, across
+plugins and across one plugin's devices; a due job whose group is busy waits its turn (oldest due first) and is
+never failed for it. Both rack drivers declare `"rack-bus"`, because each takes the rack bus lock with
+`flock LOCK_NB` and would otherwise fail its sibling with `BusLockHeld`. `next_due_s` stays `0.0` while a job waits
+for its group.
+
+## Actions: `io-diagnostics act` (no HTTP in v1)
+
+```bash
+uv run --project /home/bam/io-diagnostics io-diagnostics act --path host/usb1/port-1-3/usb-1-3 --action check_comms --dry-run
+```
+
+`act --path <entity path> --action <name> [--node N] [--confirm TOKEN] [--dry-run]` (also `--plugins`,
+`--enable`, `--fixture`, `--machine` as for `once`) finds the job whose device row is at or above `path`, looks the
+action up on the entity (after a diagnose) or else in the plugin's `describe` `actions`, and runs the plugin's
+`<command> act --device <id> --action <name> [--node N] [--confirm TOKEN] [--dry-run]` inside its `exclusive`
+group. Host function: `Host.act(path, action, node=, confirm=, dry_run=, human=)`.
+
+**The rule: only a person runs an action; agents can't click.**
+- With stdin not a TTY (an agent, a pipe, a cron job) the host refuses everything except `--dry-run`
+  (`refused: "NotInteractive"`). A dry run runs nothing: the plugin prints what it would run.
+- An action whose `danger` is not `query` needs `--confirm TOKEN` (`refused: "ConfirmRequired"`, with the action's
+  confirm text). The host passes the token through; the plugin checks it, since only the owner knows what it
+  confirms (moteus: the token its `ConfirmationRequired` event names; RealSense: the camera's serial).
+- Refused before anything runs: `NoSuchEntity`, `NoPlugin`, `ActionNotRegistered`.
+
+It prints one JSON object and exits 0 (ran, plugin exit 0), 2 (refused: nothing ran) or 1 (the plugin crashed or
+hung):
+
+```json
+{"path": "host/usb1/port-1-3/usb-1-3", "action": "reboot", "node": 15, "dry_run": true, "plugin": "moteus_servo",
+ "device_id": "usb:1-3", "title": "Reboot…", "danger": "interrupts", "registered_by": "describe",
+ "argv": ["uv", "...", "act", "--device", "usb:1-3", "--action", "reboot", "--node", "15", "--dry-run"],
+ "refused": null, "outcome": "ok", "returncode": 0, "duration_s": 0.4,
+ "records": [{"record": "action-result", "command": ["..."], "...": "the plugin's lines, verbatim"}],
+ "action_result": {"record": "action-result", "action": "reboot", "dry_run": true, "command_kind": "argv",
+                   "command": ["..."], "preconditions": [], "confirm_required": true, "message": "..."},
+ "rejected": [], "stderr_tail": "", "message": "ran in 0.4 s · 1 lines"}
+```
+
+`outcome` is `refused`, `ok`, `crashed`, `timeout` or `not_started`; `records` are the plugin's JSON lines as it
+wrote them (the host does not reinterpret an action's result); `action_result` is the first `record:
+"action-result"` line (`null` if none) with the vocabulary's fields (`action`, `title`, `dry_run`, `danger`, `path`,
+`hardware_id`, `command_kind` `argv | sdk`, `command`, `preconditions` `[{check, text, state, detail}]`,
+`confirm_required`, `confirm_token`, `confirm_given`, `source`, `stamp`, `message`), and its `message` becomes the
+result's; `registered_by` is `entity` or `describe`. The plugin's `act` is bounded by its declaration's
+`act_timeout_s` (default 900 s; a firmware flash or a calibration outlasts any diagnose), never by `timeout_s`.
 
 ## `GET /api/v1/health`
 
@@ -270,3 +340,4 @@ background, never blocking `diagnose`).
 - That a path is stable across replugs (key selections on `path`, but expect it to vanish and reappear elsewhere;
   `hardware_id` follows the device).
 - That buttons do anything: `executable` is `false` in v1.
+- That `danger` has three values: record v0.1 added `moves`; treat any value it does not know as needing a confirm.

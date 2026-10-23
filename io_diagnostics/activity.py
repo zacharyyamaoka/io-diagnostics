@@ -121,6 +121,56 @@ def usb_activity(boots: list[Boot], now: float, utc_offset_s: int | None = None,
     return out
 
 
+_USB_ID = re.compile(r"^usb:(?P<vid>[0-9a-fA-F]{4}):(?P<pid>[0-9a-fA-F]{4}):(?P<serial>.+)$")
+# What to try, by what the kernel saw (Zach, 2026-10-22: say it in plain words, not just "missing").
+WHAT_TO_CHECK = {
+    "never": "a data cable (a charge-only cable powers it but it never enumerates) · another USB port, not through a hub"
+             " · the adapter itself: does its LED light?",
+    "left": "the cable and both connectors (it enumerated, then dropped off) · its power · replug it",
+    "unknown": "a data cable (not charge-only) · another USB port · the adapter itself",
+}
+
+
+def usb_id(hardware_id: str) -> tuple[str, str, str] | None:
+    """``usb:<vid>:<pid>:<serial>`` -> (vid, pid, serial); None for any other id (a port-bound ``...@1-3`` too)."""
+
+    found = _USB_ID.match(hardware_id or "")
+    return (found["vid"].lower(), found["pid"].lower(), found["serial"]) if found and "@" not in found["serial"] else None
+
+
+def kernel_evidence(boots: list[Boot], hardware_id: str, now: float, utc_offset_s: int | None = None,
+                    unreadable: str = "") -> dict:
+    """What this boot's kernel log says about one USB device that is absent now: ``kind`` ``never`` (no plug event
+    since boot), ``left`` (it plugged in, then went away), or ``unknown`` (the log could not be read), plus ``text``.
+
+    WHY the kernel log: it tells a device the computer never saw enumerate (charge-only cable, bad port, dead
+    adapter) from one that came and went (connector, power), which "missing" alone does not."""
+
+    ids = usb_id(hardware_id)
+    current = max((boot for boot in boots if boot.start <= now), key=lambda boot: boot.start, default=None)
+    if ids is None:
+        return {"kind": "unknown", "text": f"{hardware_id} is not a USB id: no kernel evidence", "events": 0}
+    if unreadable or current is None or not current.lines:
+        why = unreadable or "no kernel USB lines since boot"
+        return {"kind": "unknown", "text": f"the kernel log could not be read ({why}): no evidence whether it ever enumerated",
+                "events": 0}
+    vid, pid, serial = ids
+    seen = [event for event in journal.parse_kernel_log(current.lines)
+            if to_unix(event.time, utc_offset_s) <= now and event.vid.lower() == vid and event.pid.lower() == pid
+            and (not event.serial or event.serial == serial)]
+    if not seen:
+        since = (iso(current.start, utc_offset_s) or "")[:16].replace("T", " ")
+        return {"kind": "never", "text": f"the kernel saw no plug event since boot ({since})", "events": 0}
+    first_add = next((event for event in seen if event.kind == "add"), seen[0])
+    plugs = sum(1 for event in seen if event.kind == "add")
+    text = f"plugged in at {first_add.time:%H:%M:%S} on {first_add.port}"
+    if plugs > 1:
+        text += f" ({plugs} times)"
+    last = seen[-1]
+    text += f", gone at {last.time:%H:%M:%S}" if last.kind == "remove" else ", not on USB now (no disconnect logged)"
+    return {"kind": "left", "text": text, "events": len(seen)}
+
+
 def boot_start() -> float | None:
     """This boot's start, from /proc/stat ``btime`` (passive)."""
 

@@ -372,3 +372,56 @@ def test_uptime_going_backwards_is_a_restart():
 
 def test_action_has_one_definition():
     assert diagnostics.Action is Action  # V6 drivers import it from contract.diagnostics; the standard owns it
+
+
+# ----- v0.1 (additive): model_id, moves, the standard action names -------------------------------------------------
+VOCABULARY = Path(__file__).resolve().parents[1] / "docs" / "actions-vocabulary-v0.1.md"
+
+
+def test_v0_1_is_signalled_by_a_constant_never_by_the_schema_string():
+    from contract.record import RECORD_VERSION
+
+    assert (SCHEMA, RECORD_VERSION) == ("diagnostics-record/0", "0.1")
+    line = to_dict(Entity("host/usb-1-3", identity={"model_id": "mjbots-fdcanusb"}))
+    assert line["schema"] == SCHEMA and "record_version" not in line  # a v0 reader still reads every v0.1 line
+
+
+def test_v0_1_adds_model_id_and_moves():
+    from contract.record import DANGERS, IDENTITY_KEYS
+
+    assert IDENTITY_KEYS[-1] == "model_id" and DANGERS[-1] == "moves"
+    board = Entity("host/usb-1-3/can/15", "CAN 15", "node", via="host/usb-1-3/can", hardware_id="moteus:7E3A12",
+                   identity={"manufacturer": "mjbots", "model": "moteus c1", "model_id": "mjbots-moteus-c1"},
+                   actions=[Action("calibrate", "Run calibration…", "spins the rotor ~30 s", "moves", "node",
+                                   "Calibrate {name}? The rotor spins.")])
+    assert validate(board) == []
+    assert from_dict(json.loads(json.dumps(to_dict(board)))) == board
+    assert any("identity key 'model_number'" in problem for problem in validate(Entity("x", identity={"model_number": "1"})))
+
+
+def test_the_standard_action_table_is_the_frozen_vocabulary():
+    import re
+
+    from contract.record import STANDARD_ACTIONS
+
+    rows = re.findall(r"^\| `([a-z_]+)` \| ([^|]+?) \|", VOCABULARY.read_text(), re.M)
+    assert rows and STANDARD_ACTIONS == {name: label for name, label in rows}
+
+
+def test_a_standard_name_must_carry_its_label_and_any_danger():
+    assert validate(Action("reboot", "Reboot…", "", "interrupts", "node", "")) == []
+    assert validate(Action("calibrate", "Run calibration…", "", "changes", "device", "")) == []  # danger is per driver
+    [problem] = validate(Action("reboot", "Reset…", "", "interrupts", "node", ""))
+    assert "title must be its label 'Reboot…'" in problem
+    assert validate(Action("identify", "Blink the LED", "", "query", "node", "")) == []  # non-standard: any title
+
+
+def test_stock_round_trip_is_still_the_identity_beside_v0_1_records():
+    # model_id lives on Entity and moves on Action: neither can reach the stock five
+    for message in REAL_WORLD:
+        assert to_diagnostic_status(from_diagnostic_status(message, path="host/usb-1-3/can/15", source="moteus_servo")) == message
+    status = DiagnosticStatus(ERROR, "CAN 15: calibration", "rotor did not spin", "moteus:7E3A12", path="host/usb-1-3/can/15",
+                              code="CalibrationFailed", source="moteus_servo")
+    stock = to_diagnostic_status(status)
+    assert set(stock) == {"level", "name", "message", "hardware_id", "values"}
+    assert to_diagnostic_status(from_diagnostic_status(stock)) == stock

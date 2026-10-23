@@ -11,6 +11,7 @@ devices to hand it. The host never imports a driver.
     timeout_s = 20                     # one run's wall-clock limit
     period_s = 30                      # how often to run it per matched device
     matches = ["usb:0483:5740", "by-id:*fdcanusb*"]
+    exclusive = "rack-bus"             # optional: never two runs of this group at once (queued, not failed)
 
 A skeleton device is the frozen lane-B dict ``{"bus", "id", "path", "label", "vendor", "product", "serial",
 "parent", "attrs"}``; matching reads only those keys, defensively, so any OS source can feed it.
@@ -30,12 +31,15 @@ from io_diagnostics import ROOT
 
 DEFAULT_TIMEOUT_S = 20.0
 DEFAULT_PERIOD_S = 30.0
+# WHY far longer than a diagnose: an act may flash firmware (rs-fw-update is given 300 s) or calibrate (~30-120 s);
+# a diagnose timeout would kill it half-way. Used only by act, never by diagnose.
+DEFAULT_ACT_TIMEOUT_S = 900.0
 MATCH_KINDS = ("usb", "pci", "pci-class", "by-id", "tty", "v4l", "netdev")
 KNOWN_KEYS = {"name", "command", "cwd", "timeout_s", "period_s", "timeout", "period", "matches", "enabled", "replay", "env",
-              "description", "diagnose_args"}
+              "description", "diagnose_args", "exclusive", "act_timeout_s", "act_timeout"}
 # WHY aliases: docs/build-plan-v1.md names the keys "timeout, period"; the lane spec and this README say timeout_s /
 # period_s. Both mean seconds; the _s spelling wins when a file has both.
-KEY_ALIASES = {"timeout_s": "timeout", "period_s": "period"}
+KEY_ALIASES = {"timeout_s": "timeout", "period_s": "period", "act_timeout_s": "act_timeout"}
 _NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
@@ -169,6 +173,7 @@ class PluginSpec:
     file: Path
     timeout_s: float = DEFAULT_TIMEOUT_S
     period_s: float = DEFAULT_PERIOD_S
+    act_timeout_s: float = DEFAULT_ACT_TIMEOUT_S  # act only (firmware updates, calibration); diagnose uses timeout_s
     matches: tuple[Match, ...] = ()
     enabled: bool = True
     # WHY replay is declared, not inferred: a replay plugin re-delivers a RECORDING, so a "received" time in its
@@ -180,6 +185,10 @@ class PluginSpec:
     # WHY a separate list: options of the diagnose VERB (a driver's ``--passive``) must follow
     # ``diagnose --device <id>``; ``command`` holds only what goes before the verb.
     diagnose_args: tuple[str, ...] = ()
+    # WHY a declared group: plugins that share one resource the OS cannot arbitrate for them (the rack bus lock is
+    # flock LOCK_NB, so the loser FAILS) must take turns. The host runs at most one job (diagnose or act) per group
+    # at a time, across plugins and across one plugin's devices; "" = no group, runs in parallel.
+    exclusive: str = ""
 
     def accepts(self, device: dict) -> bool:
         return self.enabled and any(match.accepts(device) for match in self.matches)
@@ -214,7 +223,8 @@ def load_plugin(path: Path) -> tuple[PluginSpec, list[str]]:
     if "/" in argv[0] and not Path(argv[0]).is_absolute():
         argv[0] = str((cwd / argv[0]).resolve())
     numbers = {}
-    for key, default in (("timeout_s", DEFAULT_TIMEOUT_S), ("period_s", DEFAULT_PERIOD_S)):
+    for key, default in (("timeout_s", DEFAULT_TIMEOUT_S), ("period_s", DEFAULT_PERIOD_S),
+                         ("act_timeout_s", DEFAULT_ACT_TIMEOUT_S)):
         value = data.get(key, data.get(KEY_ALIASES[key], default))
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not value > 0:
             raise PluginConfigError(f"{path.name}: {key} must be a positive number, got {value!r}")
@@ -235,11 +245,14 @@ def load_plugin(path: Path) -> tuple[PluginSpec, list[str]]:
     diagnose_args = data.get("diagnose_args", [])
     if not isinstance(diagnose_args, list) or not all(isinstance(part, str) and part for part in diagnose_args):
         raise PluginConfigError(f"{path.name}: diagnose_args must be a list of strings")
+    exclusive = data.get("exclusive", "")
+    if not isinstance(exclusive, str) or (exclusive and not _NAME.match(exclusive)):
+        raise PluginConfigError(f"{path.name}: exclusive must be a group name ([A-Za-z0-9_.-]), got {exclusive!r}")
     spec = PluginSpec(name=name, command=tuple(argv), cwd=cwd, file=path.resolve(), matches=matches,
                       enabled=data.get("enabled", True), replay=data.get("replay", False),
                       env={key: _expand(value, here) for key, value in env.items()},
                       description=str(data.get("description", "")),
-                      diagnose_args=tuple(_expand(part, here) for part in diagnose_args), **numbers)
+                      diagnose_args=tuple(_expand(part, here) for part in diagnose_args), exclusive=exclusive, **numbers)
     return spec, notes
 
 

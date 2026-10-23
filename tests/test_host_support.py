@@ -3,7 +3,14 @@ plugin declarations that run tests/fixtures/plugins/cases/case_plugin.py as a RE
 
 from __future__ import annotations
 
+import atexit
+import errno
+import json
+import os
+import shutil
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -12,6 +19,52 @@ sys.path.insert(0, str(ROOT))
 from io_diagnostics.host import Clock, Host  # noqa: E402
 
 CASES = ROOT / "tests" / "fixtures" / "plugins" / "cases" / "case_plugin.py"
+
+
+# ----- the hardware tripwire -------------------------------------------------------------------------------------
+# WHY (plugins.d ships the real drivers ENABLED since 2026-10-22): a test that forgets its plugin directory would run
+# the real moteus_servo / intel_rgbd diagnose against the rack. Every subprocess this test process starts goes through
+# here; it refuses (EPERM, before anything runs) a real driver module unless passive_guard.py stands in front of it
+# (which allows only describe / diagnose --passive), and an io-diagnostics once/serve/tray/act that names neither
+# --plugins nor --fixture (it would load plugins.d). pytest imports this module at collection, so it covers the suite.
+REAL_DRIVER_MODULES = ("moteus_servo.diagnostics", "intel_rgbd.diagnostics")
+HOST_VERBS = ("once", "serve", "tray", "act")
+TRIPPED: list[list[str]] = []
+
+
+def tripwire_refuses(argv) -> str:
+    """Why this argv must not run in a test, or "" (allowed)."""
+
+    words = [os.fspath(word) for word in ([argv] if isinstance(argv, (str, bytes, os.PathLike)) else list(argv))]
+    words = [word.decode() if isinstance(word, bytes) else word for word in words]
+    guarded = len(words) > 1 and words[1].endswith("passive_guard.py")
+    if any(word in REAL_DRIVER_MODULES for word in words) and not guarded:
+        return "a real driver module without passive_guard.py in front of it"
+    host = next((index for index, word in enumerate(words) if word.endswith("io_diagnostics/cli.py") or word == "io-diagnostics"), None)
+    if host is not None and any(word in HOST_VERBS for word in words[host + 1:host + 2]) \
+            and not {"--plugins", "--fixture"} & set(words):
+        return "an io-diagnostics host with neither --plugins nor --fixture (it would load plugins.d)"
+    return ""
+
+
+class _TripwirePopen(subprocess.Popen):
+    def __init__(self, args, *rest, **options):
+        why = tripwire_refuses(args)
+        if why:
+            TRIPPED.append([str(word) for word in ([args] if isinstance(args, str) else args)])
+            print(f"hardware tripwire: refused {why}: {args!r}", file=sys.stderr)
+            raise PermissionError(errno.EPERM, f"hardware tripwire (tests/test_host_support.py): {why}")
+        super().__init__(args, *rest, **options)
+
+
+if not issubclass(subprocess.Popen, _TripwirePopen):
+    subprocess.Popen = _TripwirePopen  # subprocess.run and the host's runner both look Popen up on the module
+
+# WHY: a live-mode host remembers the USB devices it saw in ~/.local/state/io-diagnostics/seen.json; a test's fake
+# devices must never land in Zach's real file (they would show as "expected" forever). Inherited by subprocesses.
+_STATE_DIR = tempfile.mkdtemp(prefix="io-diagnostics-test-state-")
+atexit.register(shutil.rmtree, _STATE_DIR, ignore_errors=True)
+os.environ["IO_DIAGNOSTICS_STATE_DIR"] = _STATE_DIR
 
 
 class SetClock(Clock):
@@ -77,6 +130,65 @@ def write_plugin(directory: Path, name: str, case: str, matches: list[str], *, t
                     f"timeout_s = {timeout_s}\nperiod_s = {period_s}\nreplay = {'true' if replay else 'false'}\n"
                     f"matches = {matches!r}\n".replace("'", '"'))
     return path
+
+
+# A stdlib plugin for the gate and action tests: logs every run (verb, device, argv, start and end on the wall clock,
+# shared by every process) as one JSON line to $FAKE_LOG, sleeps $FAKE_SLEEP in diagnose, and registers three
+# actions on its device row (query / interrupts / moves). Never touches hardware.
+FAKE_PLUGIN = r'''
+import json, os, sys, time
+
+NAME = os.environ["FAKE_NAME"]
+ACTIONS = [
+    {"name": "check_comms", "title": "Check communication", "description": "ask who answers", "danger": "query",
+     "scope": "device", "confirm": "", "kind": "touches"},
+    {"name": "reboot", "title": "Reboot…", "description": "restart it", "danger": "interrupts", "scope": "node",
+     "confirm": "Reboot {name} ({serial})?", "kind": "changes"},
+    {"name": "calibrate", "title": "Run calibration…", "description": "spins the rotor", "danger": "moves",
+     "scope": "node", "confirm": "Calibrate {name}? The rotor spins.", "kind": "changes"},
+]
+args = sys.argv[1:]
+verb = next(word for word in args if word in ("describe", "diagnose", "act"))
+device = args[args.index("--device") + 1] if "--device" in args else ""
+start = time.time()
+if verb == "diagnose":
+    time.sleep(float(os.environ.get("FAKE_SLEEP", "0.4")))
+elif verb == "act":
+    time.sleep(float(os.environ.get("FAKE_ACT_SLEEP", "0")))
+with open(os.environ["FAKE_LOG"], "a") as log:
+    log.write(json.dumps({"plugin": NAME, "verb": verb, "device": device, "argv": args, "start": start, "end": time.time()}) + "\n")
+if verb == "describe":
+    print(json.dumps({"name": NAME, "schema": "diagnostics-record/0", "record_version": "0.1", "actions": ACTIONS,
+                      "expected": json.loads(os.environ.get("FAKE_EXPECTED", "[]"))}))
+elif verb == "diagnose":
+    print(json.dumps({"schema": "diagnostics-record/0", "record": "entity", "path": "", "name": NAME + " device",
+                      "kind": "device", "identity": {"serial_number": "SER-" + NAME, "model_id": "acme-widget-1"},
+                      "actions": ACTIONS}))
+    print(json.dumps({"schema": "diagnostics-record/0", "record": "status", "level": "ok", "name": NAME + ": ran",
+                      "path": ""}))
+else:
+    print(json.dumps({"record": "action-result", "action": args[args.index("--action") + 1], "dry_run": "--dry-run" in args,
+                      "command": ["would", "run", "this"]}))
+'''
+
+
+def write_fake_plugin(directory: Path, name: str, matches: list[str], log: Path, *, exclusive: str = "", sleep_s: float = 0.4,
+                      period_s: float = 30, timeout_s: float = 20, act_sleep_s: float = 0.0,
+                      expected: list[dict] | None = None) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    script = directory / "fake_plugin.py"
+    script.write_text(FAKE_PLUGIN)
+    path = directory / f"{name}.toml"
+    path.write_text(f'name = "{name}"\ncommand = ["{{python}}", "{script}"]\ntimeout_s = {timeout_s}\nperiod_s = {period_s}\n'
+                    f'matches = {matches!r}\n'.replace("'", '"')
+                    + (f'exclusive = "{exclusive}"\n' if exclusive else "")
+                    + f'env = {{ FAKE_NAME = "{name}", FAKE_LOG = "{log}", FAKE_SLEEP = "{sleep_s}", FAKE_ACT_SLEEP = "{act_sleep_s}",'
+                      f" FAKE_EXPECTED = '{json.dumps(expected or [])}' }}\n")  # a TOML literal string: JSON keeps its quotes
+    return path
+
+
+def read_log(log: Path) -> list[dict]:
+    return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
 
 
 def make_host(tmp_path: Path, skeleton: list[dict], plugins: list[tuple], *, at: float = 1000.0, gates=None) -> Host:

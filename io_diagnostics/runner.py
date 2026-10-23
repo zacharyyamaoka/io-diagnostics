@@ -17,6 +17,7 @@ cache stores them relative, so a device that moves to another USB port keeps its
 from __future__ import annotations
 
 import concurrent.futures
+import contextlib
 import dataclasses
 import json
 import os
@@ -268,6 +269,79 @@ def run_plugin(spec: PluginSpec, device: dict, device_path: str, now: Callable[[
                     f"ran in {duration:.2g} s · {len(parsed.records)} records")
 
 
+def act_argv(spec: PluginSpec, device: dict, action: str, *, node: int | None = None, confirm: str | None = None,
+             dry_run: bool = False) -> list[str]:
+    """``<command> act --device <id> --action <name> [--node N] [--confirm T] [--dry-run]`` (docs/actions-vocabulary-v0.1.md)."""
+
+    argv = [*spec.command, "act", "--device", str(device.get("id", "")), "--action", action]
+    if node is not None:
+        argv += ["--node", str(node)]
+    if confirm:
+        argv += ["--confirm", confirm]
+    if dry_run:
+        argv.append("--dry-run")
+    return argv
+
+
+def run_act(spec: PluginSpec, device: dict, device_path: str, argv: list[str], now: Callable[[], float],
+            extra_env: dict[str, str] | None = None) -> dict:
+    """Run one ``act`` argv, bounded by the plugin's ``act_timeout_s`` (never its diagnose timeout: a firmware flash
+    or a calibration outlasts any diagnose). Never raises for anything the plugin does.
+
+    The answer's lines are kept as the plugin wrote them (``records``: every JSON object, e.g. an Event
+    ``ConfirmationRequired`` or a dry run's ``action-result``); the host does not reinterpret an action's result.
+    The first ``action-result`` line (docs/actions-vocabulary-v0.1.md: action, title, dry_run, danger, path,
+    hardware_id, command_kind argv|sdk, command, preconditions, confirm_required / confirm_token / confirm_given,
+    source, stamp, message) is also returned as ``action_result``, and its ``message`` becomes the result's."""
+
+    started = now()
+    clock = time.monotonic()
+    try:
+        process = subprocess.Popen(argv, cwd=spec.cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, text=True, errors="replace",
+                                   env=plugin_env(spec, device, device_path, started, extra_env), start_new_session=True)
+    except OSError as error:
+        return {"outcome": "not_started", "returncode": None, "duration_s": 0.0, "records": [], "rejected": [],
+                "stderr_tail": "", "message": f"could not start: {type(error).__name__}: {error}"}
+    timed_out = False
+    try:
+        stdout, stderr = process.communicate(timeout=spec.act_timeout_s)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        _kill_group(process)
+        try:
+            stdout, stderr = process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            stdout, stderr = "", ""
+    duration = time.monotonic() - clock
+    records, rejected = [], []
+    for number, raw in enumerate((stdout or "").splitlines(), start=1):
+        if not raw.strip():
+            continue
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as error:
+            rejected.append(f"line {number}: not JSON ({error.msg})")
+            continue
+        if isinstance(data, dict):
+            records.append(data)
+        else:
+            rejected.append(f"line {number}: a JSON {type(data).__name__}, not an object")
+    tail = (stderr or "").strip()[-STDERR_TAIL:]
+    if timed_out:
+        outcome, message = "timeout", f"no answer within {spec.act_timeout_s:g} s (act_timeout_s): killed"
+    elif process.returncode != 0:
+        last_line = tail.splitlines()[-1] if tail else ""
+        outcome, message = "crashed", f"exited {process.returncode} after {duration:.1f} s" + (f": {last_line}" if last_line else "")
+    else:
+        outcome, message = "ok", f"ran in {duration:.2g} s · {len(records)} lines"
+    result = next((record for record in records if record.get("record") == "action-result"), None)
+    if result is not None and outcome == "ok" and result.get("message"):
+        message = str(result["message"])
+    return {"outcome": outcome, "returncode": process.returncode, "duration_s": round(duration, 3), "records": records,
+            "action_result": result, "rejected": rejected, "stderr_tail": tail, "message": message}
+
+
 def _outcome(spec, device, device_path, started, duration, outcome, returncode, parsed: Parsed, problems, tail, message) -> RunOutcome:
     return RunOutcome(plugin=spec.name, device_id=str(device.get("id", "")), device_path=device_path, started=started,
                       duration_s=duration, outcome=outcome, returncode=returncode, records=parsed.records,
@@ -385,15 +459,58 @@ def describe(spec: PluginSpec, timeout_s: float | None = None, extra_env: dict[s
     return {"error": f"describe printed no JSON object (exit {completed.returncode})"}
 
 
+class Gates:
+    """One lock per ``exclusive`` group: at most one run (diagnose or act) of a group at a time, in this process.
+
+    WHY in the host and not left to the plugins: both rack drivers take the rack bus lock with flock LOCK_NB, so
+    two sibling jobs started together fail each other with ``BusLockHeld`` ("an experiment runs") although the
+    holder was the host's own job (found live 2026-10-22 17:41, moteus vs RealSense and camera 6-1 vs 6-2). The
+    plugin's lock still guards against OTHER processes; this one makes the host's own jobs take turns."""
+
+    def __init__(self):
+        self._locks: dict[str, threading.Lock] = {}
+        self._guard = threading.Lock()
+
+    def _lock(self, group: str) -> threading.Lock:
+        with self._guard:
+            return self._locks.setdefault(group, threading.Lock())
+
+    @contextlib.contextmanager
+    def hold(self, group: str):
+        """Wait for the group, run, release. ``""`` = no group: never waits."""
+
+        if not group:
+            yield
+            return
+        with self._lock(group):
+            yield
+
+    def try_take(self, group: str) -> bool:
+        return True if not group else self._lock(group).acquire(blocking=False)
+
+    def release(self, group: str) -> None:
+        if group:
+            self._lock(group).release()
+
+    def busy(self) -> list[str]:
+        with self._guard:
+            return sorted(group for group, lock in self._locks.items() if lock.locked())
+
+
 class Scheduler:
-    """Runs due jobs on a small thread pool, each at most once at a time, every ``period_s`` (real time).
+    """Runs due jobs on a small thread pool, each at most once at a time, every ``period_s`` (real time), and never
+    two jobs of one ``exclusive`` group at once: a due job whose group is busy waits for a later tick (queued, not
+    failed), oldest due first.
 
     WHY real (monotonic) time for scheduling and the host clock only for stamps: a replay clock can be offset
-    from wall time, and a run's cadence must not depend on it.
+    from wall time, and a run's cadence must not depend on it. WHY the group is taken before submitting, not
+    inside the worker: a worker blocked on a busy group would hold one of the few pool threads idle.
     """
 
-    def __init__(self, jobs: Callable[[], list[Job]], run: Callable[[Job], None], workers: int = 4, tick_s: float = 0.25):
+    def __init__(self, jobs: Callable[[], list[Job]], run: Callable[[Job], None], workers: int = 4, tick_s: float = 0.25,
+                 gates: Gates | None = None):
         self._jobs, self._run, self._tick_s = jobs, run, tick_s
+        self.gates = gates or Gates()
         self._pool = concurrent.futures.ThreadPoolExecutor(max_workers=workers, thread_name_prefix="io-plugin")
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, name="io-scheduler", daemon=True)
@@ -408,11 +525,13 @@ class Scheduler:
     def _loop(self) -> None:
         while not self._stop.is_set():
             now = time.monotonic()
-            for job in self._jobs():
-                if not job.running and job.next_due <= now:
-                    job.running = True
-                    job.next_due = now + job.spec.period_s
-                    self._pool.submit(self._guarded, job)
+            due = sorted((job for job in self._jobs() if not job.running and job.next_due <= now), key=lambda job: job.next_due)
+            for job in due:
+                if not self.gates.try_take(job.spec.exclusive):
+                    continue  # its group is running: stays due, so it goes first once the group is free
+                job.running = True
+                job.next_due = now + job.spec.period_s
+                self._pool.submit(self._guarded, job)
             self._stop.wait(self._tick_s)
 
     def _guarded(self, job: Job) -> None:
@@ -420,3 +539,4 @@ class Scheduler:
             self._run(job)
         finally:
             job.running = False
+            self.gates.release(job.spec.exclusive)

@@ -40,10 +40,16 @@ def walk(node: dict):
 
 # ----- the declarations ----------------------------------------------------------------------------------------
 @pytest.mark.parametrize("name", sorted(DRIVERS))
-def test_plugins_d_runs_the_real_driver_module_in_its_own_project_and_ships_disabled(name):
+def test_plugins_d_runs_the_real_driver_module_in_its_own_project_enabled_in_the_rack_bus_group(name):
     declared = tomllib.loads((PLUGINS_D / f"{name}.toml").read_text())
     command = declared["command"]
-    assert declared["enabled"] is False, f"{name}: a driver whose diagnose talks to hardware must ship disabled"
+    # WHY enabled (2026-10-22): query-only bus traffic is approved; writes run only through `act`, for a person
+    assert declared["enabled"] is True, f"{name}: the rack drivers ship on, so plugging in the rack shows it live"
+    assert declared["exclusive"] == "rack-bus", f"{name}: both take the rack bus lock, so they must take turns"
+    assert "diagnose_args" not in declared, f"{name}: plugins.d runs the driver's own default (query-only) diagnose"
+    # one spelling in the shipped files; act gets its own, longer limit (firmware flash, calibration)
+    assert {"timeout_s", "period_s", "act_timeout_s"} <= set(declared) and not {"timeout", "period", "act_timeout"} & set(declared)
+    assert declared["act_timeout_s"] >= 900 > declared["timeout_s"]
     assert command[:2] == ["uv", "run"] and command[command.index("-m") + 1] == DRIVERS[name]
     project = Path(command[command.index("--project") + 1])
     assert project == Path(declared["cwd"]) and project.is_absolute()
@@ -51,12 +57,41 @@ def test_plugins_d_runs_the_real_driver_module_in_its_own_project_and_ships_disa
         assert (project / "src" / name / "diagnostics.py").is_file()
 
 
-def test_a_host_on_plugins_d_schedules_no_driver_job_until_enabled():
+def test_a_host_on_plugins_d_matches_the_rack_adapter_without_being_asked():
+    """Matching only (a pure function): no test runs plugins.d. intel_rgbd takes its matches from its describe."""
+
     specs, problems = load_plugins(PLUGINS_D)
     assert {spec.name for spec in specs} == set(DRIVERS) and problems == []
     fdcanusb = usb_device("1-3", "0483", "5740", "272813EF", label="fdcanusb")
     d405 = usb_device("6-1", "8086", "0b5b", "219323070276", label="D405")
-    assert match_devices(specs, [fdcanusb, d405]) == []
+    assert [(spec.name, device["id"]) for spec, device in match_devices(specs, [fdcanusb, d405])] == [("moteus_servo", "usb:1-3")]
+
+
+@pytest.mark.parametrize("argv", [
+    ["/bin/echo", "-m", "moteus_servo.diagnostics", "diagnose", "--device", "usb:1-3"],
+    ["uv", "run", "python", "-m", "intel_rgbd.diagnostics", "act", "--device", "x", "--action", "reboot"],
+    [sys.executable, str(CLI), "once", "--json"],  # no --plugins / --fixture: it would load plugins.d
+    [sys.executable, str(CLI), "act", "--path", "host", "--action", "reboot", "--dry-run"],
+])
+def test_the_suite_tripwire_refuses_hardware_before_anything_runs(argv):
+    """tests/test_host_support.py patches subprocess.Popen for the whole session (plugins.d ships the drivers on).
+    Every argv here is harmless if the tripwire broke: echo, a missing module, or a host that exits on its own."""
+
+    import test_host_support
+
+    before = len(test_host_support.TRIPPED)
+    with pytest.raises(PermissionError, match="hardware tripwire"):
+        subprocess.run(argv, capture_output=True, timeout=10)
+    assert len(test_host_support.TRIPPED) == before + 1
+
+
+def test_the_suite_tripwire_lets_the_guarded_and_the_directed_through():
+    from test_host_support import tripwire_refuses
+
+    assert tripwire_refuses([sys.executable, str(LIVE_PASSIVE / "passive_guard.py"), "uv", "run", "python", "-m",
+                             "moteus_servo.diagnostics", "diagnose", "--device", "usb:1-3", "--passive"]) == ""
+    assert tripwire_refuses([sys.executable, str(CLI), "once", "--json", "--fixture", "F1"]) == ""
+    assert tripwire_refuses([sys.executable, str(CLI), "act", "--plugins", "/tmp/x", "--path", "p", "--action", "a"]) == ""
 
 
 @pytest.mark.parametrize("name", sorted(DRIVERS))
