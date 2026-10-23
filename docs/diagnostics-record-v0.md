@@ -439,6 +439,11 @@ how a reader tells.
     differs from its label. A non-standard name is allowed and is not checked.
   - `QUALIFIED_ACTIONS` (`identify`): a name in it may add the way in brackets to its label ("Identify (wiggle)",
     "Identify (snapshot)"); the validator accepts the label or the label plus one lower-case bracket.
+  - `STANDARD_EVENT_CODES` (`Found`, `Probed`, `ProbeBlocked`): the codes of the events a driver's on-connect
+    `probe` writes itself (`docs/probe-on-connect.md`). `Found`: a sub-device (or the device) answered, with its name
+    and identity in the message. `Probed`: one summary per probe, always last. `ProbeBlocked`: the probe could not
+    talk to the device; it comes with the `PortBusy` / `BusLockHeld` status, whose `port_holders` value lists the
+    holders as `pid program`. Same meaning on every driver; the validator does not restrict any other code.
 - **How v0.1 is signalled: the schema string does not change.**
   - Every line still says `"schema": "diagnostics-record/0"`. Rule 8 already allows a new string enum value under
     the same number, and v0.1 adds only values (one identity key, one danger) and a table.

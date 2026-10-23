@@ -569,3 +569,14 @@ def test_validate_names_a_broken_caused_by():
     assert any("entity paths" in problem for problem in validate(dataclasses.replace(rig, caused_by=("",))))
     clash = dataclasses.replace(rig, values=(KeyValue("caused_by", "CAN 15"),))
     assert any("where caused_by rides" in problem for problem in validate(clash))
+
+
+def test_the_standard_event_codes_are_the_probe_contracts_and_valid_event_codes():
+    from contract.record import STANDARD_EVENT_CODES
+
+    assert set(STANDARD_EVENT_CODES) == {"Found", "Probed", "ProbeBlocked"}
+    for code in STANDARD_EVENT_CODES:
+        assert validate(Event(code=code, stamp=1.0, message="CAN 12 answers on fdcanusb 0607623A (moteus-c1 · fw 1.1.2)")) == []
+    probe_doc = (Path(__file__).resolve().parents[1] / "docs" / "probe-on-connect.md").read_text()
+    for code in STANDARD_EVENT_CODES:
+        assert f"`{code}`" in probe_doc

@@ -107,6 +107,14 @@ STANDARD_ACTIONS = {
 QUALIFIED_ACTIONS = frozenset({"identify"})
 _QUALIFIER = re.compile(r"^ \([a-z][a-z ]*\)$")
 
+# The standard event codes (docs/probe-on-connect.md): a driver's probe writes these itself, one meaning on every
+# driver, and the host logs them as they are (it derives no device-specific events). Code -> when it is written.
+STANDARD_EVENT_CODES = {
+    "Found": "the probe heard a sub-device (or the device itself) answer",
+    "Probed": "one summary per probe, always last",
+    "ProbeBlocked": "the probe could not talk to the device (a holder or the bus lock); the host probes again when it clears",
+}
+
 # PascalCase, optionally qualified ("MoteusFault.33"): K8s reason / Redfish MessageKey style, at most 64 chars
 # (ros2_medkit's limit for fault codes, which maps 1:1 to its UPPER_SNAKE).
 _CODE = re.compile(r"^[A-Z][A-Za-z0-9]*(\.[A-Za-z0-9_]+)*$")
@@ -916,7 +924,7 @@ class FaultManager:
 
 
 __all__ = [
-    "SCHEMA", "RECORD_VERSION", "CAUSED_BY_KEY", "CAUSED_BY_SEPARATOR", "STANDARD_ACTIONS", "QUALIFIED_ACTIONS", "UNKNOWN", "OK", "WARN", "ERROR", "STALE", "LEVELS", "RANK", "ROS_LEVEL", "FROM_ROS_LEVEL", "MODES",
+    "SCHEMA", "RECORD_VERSION", "CAUSED_BY_KEY", "CAUSED_BY_SEPARATOR", "STANDARD_ACTIONS", "QUALIFIED_ACTIONS", "STANDARD_EVENT_CODES", "UNKNOWN", "OK", "WARN", "ERROR", "STALE", "LEVELS", "RANK", "ROS_LEVEL", "FROM_ROS_LEVEL", "MODES",
     "STALE_FACTOR", "STALE_FLOOR_S", "EVENT_SEVERITIES", "PENDING", "CONFIRMED", "HEALED", "CLEARED",
     "FAULT_STATUSES", "IDENTITY_KEYS", "PASSIVE", "TOUCHES", "CHANGES", "DANGERS",
     "KeyValue", "Measurement", "DiagnosticStatus", "Action", "Entity", "Event", "Fault",

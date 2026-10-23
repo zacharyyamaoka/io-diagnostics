@@ -1,4 +1,4 @@
-"""Refuse anything but ``describe`` or ``diagnose ... --passive``, then exec the real driver command.
+"""Refuse anything but ``describe`` or ``diagnose`` / ``probe ... --passive``, then exec the real driver command.
 
     <python> passive_guard.py <driver argv...> diagnose --device usb:1-3 --passive
 
@@ -13,7 +13,9 @@ from __future__ import annotations
 import os
 import sys
 
-VERBS = ("describe", "diagnose", "act")
+# WHY probe: a driver that declares one is probed on connect in place of its first diagnose (docs/probe-on-connect.md);
+# it takes the same diagnose_args, and it asks the bus unless --passive says not to
+VERBS = ("describe", "diagnose", "probe", "act")
 
 
 def main(argv: list[str]) -> int:
@@ -23,7 +25,7 @@ def main(argv: list[str]) -> int:
         return 2
     verb = argv[verbs[0]]
     after = argv[verbs[0] + 1:]
-    if verb == "act" or (verb == "diagnose" and "--passive" not in after):
+    if verb == "act" or (verb in ("diagnose", "probe") and "--passive" not in after):
         print(f"passive_guard: refused {verb} without --passive (argv after the verb: {after!r})", file=sys.stderr)
         return 2
     os.execvp(argv[0], argv)
