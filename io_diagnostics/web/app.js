@@ -29,7 +29,8 @@ const S = {
   skins: [],           // ready skins from skins/index.json
   skin: null,
   mode: 'auto',        // 'auto' (prefers-color-scheme) | 'light' | 'dark'
-  util: null,          // the utility being dry-run / confirmed / run: {path, name, node, phase, dry, result, ...}
+  util: null,          // the utility being dry-run / confirmed / run: {path, name, node, newId, phase, dry, result, ...}
+  newIds: new Map(),   // entity path -> what the person typed in set_id's "New id (1-126)" box
   modalHtml: '',
   why: new Map(),      // entity path -> {checks: [{name, level, message, lines, evidence}], message, at}: what_to_check
   attOpen: new Set(),  // attention items whose checklist the viewer opened (the first one is open unless closed)
@@ -525,7 +526,7 @@ function renderDetail(byPath) {
   if (!detail) return `${html}<div class="muted">loading…</div></div>`;
   html += whatToCheckCard(detail, ownRow);
   // the utilities right under the problem: what to check, then the buttons that check or fix it (printer style)
-  html += renderUtilities(detail.actions);
+  html += renderUtilities(detail.actions, detail.node.path);
   const status = [
     ['shows', `${pill(node.level)} <span class="muted">${node.own.level === null ? 'grouping: worst below' : 'its own self-report'}</span>`],
     ['worst below', node.rollup.level ? `${pill(node.rollup.level)} ${node.rollup.origin && node.rollup.origin !== node.path ? `<a class="link" data-go="${esc(node.rollup.origin)}">${esc(node.rollup.origin_name)}</a>` : ''}` : '<span class="muted">nothing reports</span>'],
@@ -606,6 +607,16 @@ function nodeOf(path, action) {
   return /^\d+$/.test(last) ? Number(last) : null;
 }
 
+// set_id's new CAN id: what the person typed in its row when it is a whole number 1-126 other than the board's own id
+// (the driver refuses anything else), else null. Every other action takes no new id.
+function newIdOf(path, action) {
+  if (action.name !== 'set_id') return null;
+  const text = String(S.newIds.get(path) ?? '').trim();
+  if (!/^\d+$/.test(text)) return null;
+  const id = Number(text);
+  return id >= 1 && id <= 126 && id !== nodeOf(path, action) ? id : null;
+}
+
 async function postAct(body) {
   try {
     const response = await fetch('/api/v1/act', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-IO-Diagnostics': 'ui' }, body: JSON.stringify(body) });
@@ -619,10 +630,12 @@ async function startDryRun(name) {
   const action = S.node && (S.node.actions || []).find((item) => item.name === name);
   if (!action) return;
   const path = S.node.node.path;
-  const util = { path, name, node: nodeOf(path, action), phase: 'dry', dry: null, result: null, error: '', refused: '', ticked: false };
+  const newId = newIdOf(path, action);
+  if (name === 'set_id' && newId === null) return; // no dry run until the row holds a valid new id
+  const util = { path, name, node: nodeOf(path, action), newId, phase: 'dry', dry: null, result: null, error: '', refused: '', ticked: false };
   S.util = util;
   render();
-  const { status, data } = await postAct({ path, action: name, node: util.node, dry_run: true });
+  const { status, data } = await postAct({ path, action: name, node: util.node, ...(newId !== null ? { new_id: newId } : {}), dry_run: true });
   if (S.util !== util) return;
   if (status === 200) { util.dry = data; util.at = Date.now(); } else { util.refused = data.refused || `HTTP ${status}`; util.error = data.error || ''; }
   util.phase = 'shown';
@@ -635,7 +648,8 @@ async function runUtility() {
   util.phase = 'running';
   util.startedAt = Date.now();
   render();
-  const { status, data } = await postAct({ path: util.path, action: util.name, node: util.node, token: util.dry.token });
+  // the run repeats the dry run's new id: the server's token is bound to it (a token for CAN 7 never runs CAN 9)
+  const { status, data } = await postAct({ path: util.path, action: util.name, node: util.node, ...(util.newId !== null ? { new_id: util.newId } : {}), token: util.dry.token });
   if (S.util !== util) return;
   util.phase = 'done';
   if (status === 200) util.result = data.result; else { util.refused = data.refused || `HTTP ${status}`; util.error = data.error || ''; }
@@ -726,22 +740,29 @@ function dryRunPanel(action) {
     + `<div class="u-foot">${foot}</div></div>`;
 }
 
-function utilityRow(action) {
+function utilityRow(action, path) {
   const active = S.util && S.util.path === S.sel && S.util.name === action.name;
   const runnable = RUNNABLE.has(action.state);
   const reason = action.state !== 'ready' && action.reason ? `<span class="u-reason">${esc(action.reason)}</span>` : '';
   const danger = action.danger !== 'query' ? `<span class="danger ${esc(action.danger)}">${esc(action.danger)}</span>` : '';
-  return `<div class="urow${active ? ' active' : ''}${runnable ? '' : ' blocked'}" data-util-row="${esc(action.name)}">`
-    + `<button class="u-btn" data-util="${esc(action.name)}" title="Dry run: show what ${esc(plainTitle(action.title))} would run">`
+  // set_id names its new id in the row itself; its dry run stays disabled until the box holds a valid one
+  const needsId = action.name === 'set_id';
+  const waiting = needsId && newIdOf(path, action) === null;
+  const button = `<button class="u-btn" data-util="${esc(action.name)}"${waiting ? ' disabled' : ''} title="${waiting
+    ? 'Type the new CAN id (1-126) first' : `Dry run: show what ${esc(plainTitle(action.title))} would run`}">`
     + `${utilIcon(action.name)}<span class="u-text"><span class="u-title">${esc(action.title)}</span>`
-    + `<span class="u-desc">${esc(action.description)}</span>${reason}</span>${danger}</button>`
+    + `<span class="u-desc">${esc(action.description)}</span>${reason}</span>${danger}</button>`;
+  const newId = needsId ? `<label class="u-newid"><span>New id (1-126)</span><input type="number" min="1" max="126" step="1" inputmode="numeric"`
+    + ` data-util-newid value="${esc(S.newIds.get(path) ?? '')}" aria-label="New CAN id (1-126)"></label>` : '';
+  return `<div class="urow${active ? ' active' : ''}${runnable ? '' : ' blocked'}" data-util-row="${esc(action.name)}">`
+    + `${needsId ? `<div class="u-line">${button}${newId}</div>` : button}`
     + `${active ? dryRunPanel(action) : ''}</div>`;
 }
 
-function renderUtilities(actions) {
+function renderUtilities(actions, path) {
   if (!actions || !actions.length) return '';
   const groups = utilityGroups(actions).map((group) => `<div class="ugroup ugroup-${group.id}"><div class="ugroup-h">${esc(group.title)}</div>`
-    + `${group.items.map(utilityRow).join('')}</div>`).join('');
+    + `${group.items.map((action) => utilityRow(action, path)).join('')}</div>`).join('');
   return `<div class="card wide utilities"><h3>Utilities<span class="right muted">${esc(actions[0].owner)} runs them · every click is a dry run first</span></h3>${groups}</div>`;
 }
 
@@ -768,6 +789,7 @@ function renderModal() {
     + `<header><h2 id="m-title">${esc(plainTitle(action.title))} · ${esc(label)}</h2><span class="danger ${esc(action.danger)}">${esc(action.danger)}</span></header>`
     + `<div class="body"><div class="m-danger">${shape(moves ? 'error' : 'warn', action.danger)}<b>${esc(DANGER_WORDS[action.danger] || 'Needs your confirmation: its danger class is not one this page knows.')}</b></div>`
     + `<div class="confirm">${esc(answer.confirm || action.confirm)}</div>`
+    + `${util.name === 'set_id' && util.newId !== null ? `<div class="m-newid">CAN ${esc(util.node)} → CAN ${esc(util.newId)}</div>` : ''}`
     + `<div class="m-runs">Runs <code>${esc(commandOf(answer) || 'in-process')}</code></div>`
     + `<div class="m-pre-h">Preconditions</div>${preconditionsHtml(rows)}`
     + `${moves ? `<label class="m-tick"><input type="checkbox" data-util-tick${util.ticked ? ' checked' : ''}><span>I checked: ${esc(tick)}</span></label>` : ''}`
@@ -899,7 +921,15 @@ function render() {
   const detailHtml = renderDetail(byPath);
   // WHY compare: the dry-run panel and the What to check list are read, not glanced at; an unchanged detail is not
   // rewritten every second (selection, focus and scroll stay)
-  if (detailHtml !== S.detailHtml) { $('detail').innerHTML = detailHtml; S.detailHtml = detailHtml; }
+  if (detailHtml !== S.detailHtml) {
+    // set_id's new-id box is rewritten with the detail as the person types: keep the focus in it and the caret at
+    // its end (a number input has no selection API; re-setting its value is what moves the caret there)
+    const typing = document.activeElement && document.activeElement.matches('[data-util-newid]');
+    $('detail').innerHTML = detailHtml;
+    S.detailHtml = detailHtml;
+    const box = typing && $('detail').querySelector('[data-util-newid]');
+    if (box) { const typed = box.value; box.focus(); box.value = ''; box.value = typed; }
+  }
   renderChip();
   renderModal();
   renderStatusbar();
@@ -973,6 +1003,17 @@ $('structure-toggles').addEventListener('change', (event) => {
 });
 document.addEventListener('change', (event) => {
   if (event.target.closest('[data-util-tick]') && S.util) { S.util.ticked = event.target.checked; render(); }
+});
+document.addEventListener('input', (event) => {
+  const box = event.target.closest('[data-util-newid]');
+  const action = box && S.node && (S.node.actions || []).find((item) => item.name === 'set_id');
+  if (!action) return;
+  const path = S.node.node.path;
+  S.newIds.set(path, box.value);
+  // a dry run shown for another new id no longer says what would run: close it, the person dry-runs the new one
+  const util = S.util;
+  if (util && util.path === path && util.name === 'set_id' && util.phase !== 'running' && util.newId !== newIdOf(path, action)) S.util = null;
+  render();
 });
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return;

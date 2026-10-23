@@ -35,6 +35,8 @@ ACTIONS = [
     {"name": "calibrate", "title": "Run calibration…", "description": "spins the rotor", "danger": "moves",
      "scope": "node", "confirm": "Calibrate {name}? The rotor spins.", "kind": "changes",
      "preconditions": [["joint_free", "the joint is free to spin"]]},
+    {"name": "set_id", "title": "Change CAN id…", "description": "a new bus id", "danger": "changes",
+     "scope": "node", "confirm": "Change the CAN id of CAN {id}?", "kind": "changes"},
 ]
 if verb == "describe":
     print(json.dumps({"name": "tokens", "schema": "diagnostics-record/0", "actions": ACTIONS}))
@@ -152,6 +154,26 @@ def test_a_run_needs_its_own_fresh_unused_token(rig):
     assert runs(rig["log"]) == [["act", "--device", "usb:9-1", "--action", "calibrate", "--node", "3", "--confirm", "tok-calibrate"]]
     assert post(rig, {**base, "token": fresh})[1]["refused"] == "NoDryRun"  # single use: a replay is refused
     assert len(runs(rig["log"])) == 1
+
+
+def test_set_id_carries_its_new_id_and_the_token_binds_it(rig):
+    base = {"path": rig["path"], "action": "set_id", "node": 3}
+    status, answer = post(rig, {**base, "new_id": 7, "dry_run": True})
+    assert status == 200 and answer["token"] and answer["result"]["new_id"] == 7, answer
+    assert answer["result"]["argv"][-10:] == ["act", "--device", "usb:9-1", "--action", "set_id", "--node", "3", "--new-id", "7",
+                                              "--dry-run"]
+    for other in (9, None):  # a token issued for CAN 3 -> CAN 7 runs neither CAN 3 -> CAN 9 nor a set_id without an id
+        token = post(rig, {**base, "new_id": 7, "dry_run": True})[1]["token"]  # a mismatch spends the token
+        status, refused = post(rig, {**base, "new_id": other, "token": token})
+        assert (status, refused.get("refused")) == (403, "TokenMismatch") and "new id 7" in refused["error"], refused
+    assert runs(rig["log"]) == []
+    status, answer = post(rig, {**base, "new_id": 7, "dry_run": True})
+    status, ran = post(rig, {**base, "new_id": 7, "token": answer["token"]})
+    assert status == 200 and ran["result"]["records"][-1]["code"] == "ActionCompleted", ran
+    assert runs(rig["log"]) == [["act", "--device", "usb:9-1", "--action", "set_id", "--node", "3", "--new-id", "7",
+                                 "--confirm", "tok-set_id"]]
+    status, bad = post(rig, {**base, "new_id": "7", "dry_run": True})
+    assert (status, bad["refused"]) == (400, "BadRequest") and "new_id" in bad["error"]
 
 
 def test_a_query_runs_with_one_more_click(rig):

@@ -687,14 +687,18 @@ class Host:
         return self.os.gate(view.layer.matchable(view.layer.device_of_path[device_path]), check)
 
     def _fill(self, path: str, view: View) -> _Blank:
-        """The values a confirm text's ``{name}``, ``{id}``, ``{serial}``, ``{latest}`` placeholders take."""
+        """The values a confirm text's ``{name}``, ``{id}``, ``{serial}``, ``{latest}`` placeholders take.
+
+        WHY ``{name}`` is the nearest device's name: the drivers' convention is ``{name}`` = the physical device that
+        owns the action (a CAN board's adapter, a RealSense itself) and ``{id}`` = the node id, so a board's
+        "Calibrate CAN {id} on {name}?" reads "Calibrate CAN 1 on fdcanusb 272813EF?", not "... on CAN 1?"."""
 
         entity = view.merged.entities[path]
         device_path = tree.nearest_device(path, view.merged)
-        serial = entity.identity.get("serial_number") or (view.merged.entities[device_path].identity.get("serial_number", "")
-                                                           if device_path else "")
+        device = view.merged.entities[device_path] if device_path else None
+        serial = entity.identity.get("serial_number") or (device.identity.get("serial_number", "") if device else "")
         firmware = self._firmware(path, view)
-        return _Blank(name=entity.name, id=path.rsplit("/", 1)[-1], serial=serial,
+        return _Blank(name=device.name if device else entity.name, id=path.rsplit("/", 1)[-1], serial=serial,
                       latest=dict(firmware.values).get("latest_version", "?") if firmware else "?")
 
     def actions_json(self, path: str, view: View) -> list[dict]:
@@ -760,7 +764,7 @@ class Host:
         return None, ""
 
     def act(self, path: str, action: str, *, node: int | None = None, confirm: str | None = None, dry_run: bool = False,
-            human: bool | None = None) -> dict:
+            human: bool | None = None, new_id: int | None = None) -> dict:
         """Run the plugin's ``act`` for one action registered on the entity at ``path``.
 
         The rule (docs/api-v1.md "Actions: io-diagnostics act"): only a person runs an action; agents can't click.
@@ -769,6 +773,7 @@ class Host:
         - Every action whose danger is not ``query`` needs ``confirm`` (the token the confirm dialog shows). The
           host passes it through; the plugin checks it against the device (moteus: its time-window token, RealSense:
           the camera's serial), because only the owner knows what it confirms.
+        - ``new_id`` passes through as ``--new-id`` (set_id's new bus id); the plugin checks it.
         - It runs inside the plugin's ``exclusive`` group, so it never collides with its own diagnose."""
 
         if human is None:
@@ -777,9 +782,9 @@ class Host:
             except (ValueError, OSError):  # a closed stdin is not a person
                 human = False
         view = self.view()
-        out = {"path": path, "action": action, "node": node, "dry_run": dry_run, "plugin": None, "device_id": None,
-               "title": "", "danger": None, "registered_by": "", "argv": None, "refused": None, "outcome": "refused",
-               "returncode": None, "duration_s": 0.0, "records": [], "action_result": None, "rejected": [],
+        out = {"path": path, "action": action, "node": node, "new_id": new_id, "dry_run": dry_run, "plugin": None,
+               "device_id": None, "title": "", "danger": None, "registered_by": "", "argv": None, "refused": None,
+               "outcome": "refused", "returncode": None, "duration_s": 0.0, "records": [], "action_result": None, "rejected": [],
                "stderr_tail": "", "message": ""}
 
         def refuse(code: str, message: str) -> dict:
@@ -795,7 +800,7 @@ class Host:
         out.update(plugin=job.spec.name, device_id=str(job.device.get("id", "")), registered_by=source)
         if registered is None:
             return refuse("ActionNotRegistered", f"{job.spec.name} registers no action {action!r} for {entity.name}")
-        argv = act_argv(job.spec, job.device, action, node=node, confirm=confirm, dry_run=dry_run)
+        argv = act_argv(job.spec, job.device, action, node=node, confirm=confirm, dry_run=dry_run, new_id=new_id)
         out.update(title=registered.title, danger=registered.danger, argv=argv)
         if not human and not dry_run:
             return refuse("NotInteractive", "not a person (stdin is not a TTY): only --dry-run runs; agents can't click")

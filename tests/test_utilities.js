@@ -16,6 +16,8 @@
 //                (set apart), More; every click is a dry run (POST /api/v1/act dry_run) showing argv, steps,
 //                preconditions and the confirm text; a query runs with one more click and shows its result; moves
 //                needs the modal's box ticked and a button labelled with the action
+//   set_id       its row's "New id (1-126)" box keeps the dry run disabled until it holds a valid id; the dry run,
+//                the modal ("CAN 15 → CAN 7") and the run carry that id; typing another closes the dry run
 //   server       a fetch without the page header, or without a dry run's token, is refused with a plain reason
 //   seams        subtitle / suffix (p3), attrs (p4), lead (p5), toggles[].when (p2), box guides (Terminal), mono
 //                columns and the folded Connection card (p1)
@@ -239,6 +241,60 @@ async function main() {
     check('query: runs with one more click', runLabel === 'Run Check communication' && !query.modalShown && /ActionCompleted/.test(query.records) && posts.length === 4, { runLabel, query, posts: posts.length });
     await showActive();
     await page.screenshot({ path: path.join(SHOTS, 'integration-utilities-query-result.png'), clip: detail });
+
+    // ---- set_id: the new id in its row gates the dry run; the dry run, the modal and the run all carry it
+    await open(page, base, CAN15);
+    await page.waitForSelector('[data-util-row="set_id"] [data-util-newid]');
+    const idRow = async () => page.evaluate(() => {
+      const row = document.querySelector('[data-util-row="set_id"]');
+      const box = row.querySelector('[data-util-newid]');
+      return { label: row.querySelector('.u-newid').textContent, value: box.value, type: box.type, min: box.min, max: box.max,
+        disabled: row.querySelector('[data-util="set_id"]').disabled, focused: document.activeElement === box };
+    });
+    const empty = await idRow();
+    const sent = posts.length;
+    await page.click('[data-util="set_id"]', { force: true }); // disabled: nothing may happen
+    await page.waitForTimeout(400);
+    check('set_id: an input, the dry run disabled', empty.label === 'New id (1-126)' && empty.type === 'number' && empty.min === '1' && empty.max === '126'
+      && empty.value === '' && empty.disabled && posts.length === sent, { empty, posts: posts.length - sent });
+    const gate = {};
+    for (const typed of ['0', '127', '15', '1.5', '12']) {
+      await page.fill('[data-util-row="set_id"] [data-util-newid]', '');
+      await page.type('[data-util-row="set_id"] [data-util-newid]', typed, { delay: 60 });
+      await page.waitForTimeout(1300); // past a poll: the detail is rewritten, the caret stays
+      gate[typed] = await idRow();
+    }
+    check('set_id: only a valid new id enables it', ['0', '127', '15', '1.5'].every((typed) => gate[typed].disabled) && !gate['12'].disabled
+      && gate['12'].value === '12' && gate['12'].focused, gate);
+    await page.fill('[data-util-row="set_id"] [data-util-newid]', '7');
+    await page.waitForTimeout(300);
+    const rowBox = await page.locator('[data-util-row="set_id"]').boundingBox();
+    await page.evaluate(() => document.activeElement.blur()); // the resting row, not its focus ring
+    await page.mouse.move(5, 995);
+    await page.screenshot({ path: path.join(SHOTS, 'fix-set-id.png'), clip: { x: rowBox.x - 12, y: rowBox.y - 30, width: rowBox.width + 24, height: rowBox.height + 42 } });
+    await page.click('[data-util="set_id"]');
+    await page.waitForSelector('[data-util-row="set_id"] .u-panel .u-cmd', { timeout: 15000 });
+    await page.waitForTimeout(300);
+    const idDry = await page.evaluate(() => ({ cmd: document.querySelector('.u-panel .u-cmd').textContent, confirm: (document.querySelector('.u-panel .confirm') || {}).textContent,
+      argv: document.querySelector('.u-panel .u-argv').textContent }));
+    check('set_id: the dry run carries the new id', posts.length === sent + 1 && posts[sent].body.new_id === 7 && posts[sent].body.dry_run === true
+      && /--new 7$/.test(idDry.cmd) && /New id: CAN 7\./.test(idDry.confirm) && /--node 15 --new-id 7 --dry-run$/.test(idDry.argv), { body: posts[sent] && posts[sent].body, idDry });
+    await page.click('[data-util-run]');
+    await page.waitForSelector('#modal:not([hidden]) .modal', { timeout: 5000 });
+    const idModal = await page.evaluate(() => (document.querySelector('#modal .m-newid') || {}).textContent);
+    check('set_id: the modal repeats CAN A → CAN B', idModal === 'CAN 15 → CAN 7', idModal);
+    await page.screenshot({ path: path.join(SHOTS, 'fix-set-id-modal.png') });
+    await page.click('#modal [data-util-confirm]');
+    await page.waitForSelector('[data-util-row="set_id"] .u-panel .u-result', { timeout: 20000 });
+    const idRun = await page.evaluate(() => (document.querySelector('[data-util-row="set_id"] .u-panel .u-records')
+      || document.querySelector('[data-util-row="set_id"] .u-panel .u-result') || {}).textContent);
+    check('set_id: the run carries the dry run\'s new id', posts.length === sent + 2 && posts[sent + 1].body.new_id === 7 && posts[sent + 1].body.token
+      && !('dry_run' in posts[sent + 1].body) && /ActionCompleted/.test(idRun), { body: posts[sent + 1] && posts[sent + 1].body, idRun });
+    await page.click('[data-util-again]');
+    await page.waitForSelector('[data-util-row="set_id"] .u-panel .u-cmd', { timeout: 15000 });
+    await page.fill('[data-util-row="set_id"] [data-util-newid]', '9');
+    await page.waitForTimeout(300);
+    check('set_id: another new id closes the dry run', await page.evaluate(() => !document.querySelector('[data-util-row="set_id"] .u-panel') && S.util === null), '');
 
     // ---- the server refuses anything but the page's dry-run-then-click (the browser logs each 403: expected here)
     const before = errors.length;

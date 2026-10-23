@@ -14,10 +14,11 @@
              environment it re-executes itself under /usr/bin/python3). The dashboard opens only on a click.
 - ``once``   refresh, run every matched plugin once, print the merged tree and records (``--json``) and exit:
              for tests and the rack session runner. ``--at S`` judges a fixture S seconds after its frame clock.
-- ``act``    ``--path <entity path> --action <name> [--node N] [--confirm TOKEN] [--dry-run]``: run one action the
-             entity's plugin registered, through the plugin's own ``act``, and print its answer as JSON. Only a person
-             runs actions: with stdin not a TTY (an agent) only ``--dry-run`` runs, and any action whose danger is
-             not ``query`` needs ``--confirm``. Exit 0 ran · 2 refused (nothing ran) · 1 the plugin failed.
+- ``act``    ``--path <entity path> --action <name> [--node N] [--new-id N] [--confirm TOKEN] [--dry-run]``: run one
+             action the entity's plugin registered (``--new-id``: set_id's new CAN id), through the plugin's own
+             ``act``, and print its answer as JSON. Only a person runs actions: with stdin not a TTY (an agent) only
+             ``--dry-run`` runs, and any action whose danger is not ``query`` needs ``--confirm``. Exit 0 ran ·
+             2 refused (nothing ran) · 1 the plugin failed.
 
 The host itself is passive: it opens no CAN adapter or camera. The driver plugins in plugins.d (enabled by default)
 run their own gated, query-only checks (port-holder check + the rack bus lock first), one at a time per
@@ -63,6 +64,7 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--path", required=True, help="the entity's tree path (/api/v1/node?path=...)")
             command.add_argument("--action", required=True, help="the action's machine name (check_comms, reboot, ...)")
             command.add_argument("--node", type=int, help="CAN id, for an action on one board")
+            command.add_argument("--new-id", type=int, metavar="N", help="set_id only: the board's new CAN id (1-126)")
             command.add_argument("--confirm", metavar="TOKEN", help="the confirm token; required unless the danger is query")
             command.add_argument("--dry-run", action="store_true", help="run nothing: the plugin prints what it would run")
         else:
@@ -110,7 +112,8 @@ def _act(args) -> int:
     host = make_host(fixture=args.fixture, plugins_dir=args.plugins, once=True, enable=tuple(args.enable),
                      machine=args.machine)
     host.refresh()
-    result = host.act(args.path, args.action, node=args.node, confirm=args.confirm, dry_run=args.dry_run)
+    result = host.act(args.path, args.action, node=args.node, confirm=args.confirm, dry_run=args.dry_run,
+                      new_id=args.new_id)
     json.dump(result, sys.stdout, default=str, ensure_ascii=False)
     print()
     if result["refused"]:

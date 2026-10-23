@@ -270,12 +270,15 @@ def run_plugin(spec: PluginSpec, device: dict, device_path: str, now: Callable[[
 
 
 def act_argv(spec: PluginSpec, device: dict, action: str, *, node: int | None = None, confirm: str | None = None,
-             dry_run: bool = False) -> list[str]:
-    """``<command> act --device <id> --action <name> [--node N] [--confirm T] [--dry-run]`` (docs/actions-vocabulary-v0.1.md)."""
+             dry_run: bool = False, new_id: int | None = None) -> list[str]:
+    """``<command> act --device <id> --action <name> [--node N] [--new-id N] [--confirm T] [--dry-run]``
+    (docs/actions-vocabulary-v0.1.md; ``--new-id`` is set_id's new bus id)."""
 
     argv = [*spec.command, "act", "--device", str(device.get("id", "")), "--action", action]
     if node is not None:
         argv += ["--node", str(node)]
+    if new_id is not None:
+        argv += ["--new-id", str(new_id)]
     if confirm:
         argv += ["--confirm", confirm]
     if dry_run:

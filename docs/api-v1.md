@@ -202,6 +202,11 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
     `moves` (record v0.1: hardware moves, e.g. moteus calibration spins the rotor). Every danger but `query` needs a
     per-device confirmation. The same standard `name` can carry a different `danger` on another driver; its `title`
     is always the standard label (`contract.record.STANDARD_ACTIONS`, docs/actions-vocabulary-v0.1.md).
+  - `confirm` and the precondition `text`s are filled by the host, as the drivers fill them: `{name}` = the
+    physical device that owns the action (the nearest `device` at or above the row: a CAN board's adapter, a
+    RealSense itself), `{id}` = the row's last path segment (a board's node id), `{serial}` = the row's serial, else
+    that device's, `{latest}` = its `firmware` check's `latest_version`. So a board's "Calibrate CAN {id} on
+    {name}?" reads "Calibrate CAN 1 on fdcanusb 272813EF?".
   - `executable` is always `false`: nothing runs from a `GET`. The page runs one only through `POST /api/v1/act`
     (a dry run first, then a person's click; "Actions from the page"), a person at a TTY through `io-diagnostics act`.
 - `faults`: the host's `FaultManager` memory for this entity (see Activity).
@@ -293,11 +298,13 @@ for its group.
 uv run --project /home/bam/io-diagnostics io-diagnostics act --path host/usb1/port-1-3/usb-1-3 --action check_comms --dry-run
 ```
 
-`act --path <entity path> --action <name> [--node N] [--confirm TOKEN] [--dry-run]` (also `--plugins`,
-`--enable`, `--fixture`, `--machine` as for `once`) finds the job whose device row is at or above `path`, looks the
-action up on the entity (after a diagnose) or else in the plugin's `describe` `actions`, and runs the plugin's
-`<command> act --device <id> --action <name> [--node N] [--confirm TOKEN] [--dry-run]` inside its `exclusive`
-group. Host function: `Host.act(path, action, node=, confirm=, dry_run=, human=)`.
+`act --path <entity path> --action <name> [--node N] [--new-id N] [--confirm TOKEN] [--dry-run]` (also
+`--plugins`, `--enable`, `--fixture`, `--machine` as for `once`) finds the job whose device row is at or above
+`path`, looks the action up on the entity (after a diagnose) or else in the plugin's `describe` `actions`, and runs
+the plugin's `<command> act --device <id> --action <name> [--node N] [--new-id N] [--confirm TOKEN] [--dry-run]`
+inside its `exclusive` group. `--new-id` is `set_id`'s new bus id (`act --action set_id --node 15 --new-id 7`); the
+host passes it through and the plugin checks it (moteus: 1-126, not the board's own id, no board answering it yet;
+its confirm token names it). Host function: `Host.act(path, action, node=, confirm=, dry_run=, human=, new_id=)`.
 
 **The rule: only a person runs an action; agents can't click.**
 - With stdin not a TTY (an agent, a pipe, a cron job) the host refuses everything except `--dry-run`
@@ -311,7 +318,7 @@ It prints one JSON object and exits 0 (ran, plugin exit 0), 2 (refused: nothing 
 hung):
 
 ```json
-{"path": "host/usb1/port-1-3/usb-1-3", "action": "reboot", "node": 15, "dry_run": true, "plugin": "moteus_servo",
+{"path": "host/usb1/port-1-3/usb-1-3", "action": "reboot", "node": 15, "new_id": null, "dry_run": true, "plugin": "moteus_servo",
  "device_id": "usb:1-3", "title": "Reboot…", "danger": "interrupts", "registered_by": "describe",
  "argv": ["uv", "...", "act", "--device", "usb:1-3", "--action", "reboot", "--node", "15", "--dry-run"],
  "refused": null, "outcome": "ok", "returncode": 0, "duration_s": 0.4,
@@ -341,7 +348,7 @@ is a dry run first:
 
 The answer carries the `Host.act(..., dry_run=True)` result (above: `argv`, `action_result` with the plugin's
 `command`, `steps`, `preconditions`, `confirm`, and its own token) and, when the plugin answered (`outcome` `ok`), the
-page's token for exactly that path / action / node:
+page's token for exactly that path / action / node / new id:
 
 ```json
 {"dry_run": true, "result": {"path": "host/usb1/port-1-3/usb-1-3/can/15", "action": "calibrate", "outcome": "ok"}, "token": "c-3TW1BFkuLa5-UsYKpa3OMp", "window_s": 300.0}
@@ -351,6 +358,14 @@ The run repeats the request with that token and without `dry_run`:
 
 ```json
 {"path": "host/usb1/port-1-3/usb-1-3/can/15", "action": "calibrate", "node": 15, "token": "c-3TW1BFkuLa5-UsYKpa3OMp"}
+```
+
+`set_id` also names the board's new bus id as `new_id` (an integer; omit it or send `null` for every other action).
+The server passes it to the plugin as `--new-id` and binds the token to it, so the run must repeat it: a token
+issued for `CAN 15 → CAN 7` cannot run `CAN 15 → CAN 9` (`TokenMismatch`).
+
+```json
+{"path": "host/usb1/port-1-3/usb-1-3/can/15", "action": "set_id", "node": 15, "new_id": 7, "dry_run": true}
 ```
 
 and answers `{"dry_run": false, "result": {...}}` with the `Host.act` result of the real run (`records` are the
@@ -366,11 +381,14 @@ reason>"}` and nothing reaches the plugin:
 | `NotJson` | the body is not `Content-Type: application/json` (forces a CORS preflight this server never answers) |
 | `NoDryRun` | no token, a token this server never issued, or one already used (tokens are single use) |
 | `TokenExpired` | the dry run is older than `window_s` (300 s: a moteus token is good for at least one 5-minute window) |
-| `TokenMismatch` | the token was issued for another path, action or node |
+| `TokenMismatch` | the token was issued for another path, action, node or new id |
 
-A malformed body is **400** `BadRequest`. The page's rule on top (web/app.js): a `query` runs with one more click;
-any other danger only from a confirm modal that repeats the danger; `moves` only with a ticked box that states the
-physical precondition (e.g. "CAN 15's joint is free to spin") and a button labelled with the action. Agents must not
+A malformed body (`node` or `new_id` not an integer or `null`, ...) is **400** `BadRequest`. The page's rule on top
+(web/app.js): a `query` runs with one more click; any other danger only from a confirm modal that repeats the
+danger; `moves` only with a ticked box that states the physical precondition (e.g. "CAN 15's joint is free to
+spin") and a button labelled with the action. `set_id`'s row holds a "New id (1-126)" number box: its dry run stays
+disabled until the box holds a whole number 1-126 other than the board's own id, its confirm modal repeats
+"CAN 15 → CAN 7", and typing another id closes a dry run shown for the old one. Agents must not
 replay this flow: the headers are what a browser sends, and a command-line client can forge them, which is why the
 rule is written here and not only enforced.
 

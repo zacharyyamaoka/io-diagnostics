@@ -2,7 +2,7 @@
 
     <python> v6_scenario.py describe
     <python> v6_scenario.py diagnose --device usb:1-3        (frame from IO_DIAGNOSTICS_FIXTURE, set by the host)
-    <python> v6_scenario.py act --device usb:1-3 --action calibrate --node 15 [--confirm TOKEN] [--dry-run]
+    <python> v6_scenario.py act --device usb:1-3 --action calibrate --node 15 [--new-id N] [--confirm TOKEN] [--dry-run]
 
 It speaks the plugin boundary exactly like a live driver (docs/build-plan-v1.md, plugins.d/README.md): JSON lines,
 one v0 record each, paths relative to the device. It is declared ``replay = true``, so the host keeps the receive
@@ -33,12 +33,14 @@ UPDATER = "~/zach_brain/Settings/Skills/update-moteus-firmware/scripts/update_mo
 CACHE = "~/.cache/moteus-firmware"
 
 
-def token_for(action: str, serial: str, node: int | None, at: float) -> str:
+def token_for(action: str, serial: str, node: int | None, at: float, extra: str = "") -> str:
     text = f"{action}|{serial.upper()}|{node if node is not None else '-'}|{int(at // WINDOW_S)}"
+    if extra:  # set_id: the new id, like moteus_servo confirm_token
+        text += f"|{extra}"
     return hashlib.sha256(text.encode()).hexdigest()[:12]
 
 
-def plan(action: str, serial: str, node: int | None, camera: bool) -> list[dict]:
+def plan(action: str, serial: str, node: int | None, camera: bool, new_id: int | None = None) -> list[dict]:
     """The steps a live driver's dry run lists for this action (moteus_servo plan_action / intel_rgbd act)."""
 
     if camera:
@@ -76,7 +78,7 @@ def plan(action: str, serial: str, node: int | None, camera: bool) -> list[dict]
                           "sends": ["query", "stop"]}],
         "reset": [{"purpose": f"query CAN {node}, then d reset", "runs": "in-process", "argv": [], "sends": ["query", "d reset"]}],
         "set_id": [{"purpose": f"5 UUID reads of CAN {node}, one query of the new id, then reassign", "runs": "subprocess",
-                    "argv": ["python3", "utils/moteus_reassign_id.py", "--target", target, "--new", "<new id>"]}],
+                    "argv": ["python3", "utils/moteus_reassign_id.py", "--target", target, "--new", str(new_id)]}],
         "stop_all": [{"purpose": "scan ids 1-32 and the expected ids, then stop every board that answers", "runs": "subprocess",
                       "argv": ["python3", "utils/moteus_with_targets.py", tool, "-t", "1,14,15", "--stop"]}],
         "open_console": [{"purpose": "open tview on the boards that answer, detached", "runs": "detached",
@@ -106,13 +108,21 @@ def act(args, frame: dict, now: float) -> int:
         line(record="event", code="ActionRefused", severity="warn", stamp=now, path=path,
              message=f"{args.action} acts on one board: pass --node <CAN id>")
         return 0
+    if args.action == "set_id" and (args.new_id is None or not 1 <= args.new_id <= 126 or args.new_id == args.node):
+        line(record="event", code="ActionRefused", severity="warn", stamp=now, path=path,
+             message="set_id needs the new id: pass --new-id <CAN id>" if args.new_id is None
+             else f"CAN {args.new_id} is not a new id for CAN {args.node} (1-126)")
+        return 0
     fill = {"name": device.get("name", ""), "id": "" if args.node is None else str(args.node), "serial": serial, "latest": "1.1.2"}
     confirm = string.Formatter().vformat(action.get("confirm") or "", (), fill)
-    steps = plan(args.action, serial, args.node, camera)
+    if args.action == "set_id":
+        confirm += f" New id: CAN {args.new_id}."
+    steps = plan(args.action, serial, args.node, camera, args.new_id)
     command = next((step["argv"] for step in reversed(steps) if step["runs"] != "in-process" and step["argv"]), None) \
         or next((step["argv"] for step in steps if step["argv"]), [])
-    token = token_for(args.action, serial, args.node, now)
-    valid = bool(args.confirm) and args.confirm in (token, token_for(args.action, serial, args.node, now - WINDOW_S))
+    extra = str(args.new_id) if args.action == "set_id" else ""
+    token = token_for(args.action, serial, args.node, now, extra)
+    valid = bool(args.confirm) and args.confirm in (token, token_for(args.action, serial, args.node, now - WINDOW_S, extra))
     if args.dry_run:
         line(record="action-result", action=args.action, title=action.get("title", ""), dry_run=True, stamp=now, path=path,
              hardware_id=device.get("hardware_id", ""), node=args.node, danger=action.get("danger"), scope=action.get("scope"),
@@ -130,7 +140,7 @@ def act(args, frame: dict, now: float) -> int:
     line(record="event", code="ActionCompleted", severity="info", stamp=now, path=path,
          message=f"fixture {args.frame}: {action.get('title')} answered from the recording; nothing ran "
                  f"(a live driver runs {' '.join(command) or 'it in-process'})",
-         args={"action": args.action, "node": args.node})
+         args={"action": args.action, "node": args.node, **({"new_id": args.new_id} if args.new_id is not None else {})})
     return 0
 
 
@@ -141,6 +151,7 @@ def main() -> int:
     parser.add_argument("--frame", default=os.environ.get("IO_DIAGNOSTICS_FIXTURE", "F1"))
     parser.add_argument("--action", default="")
     parser.add_argument("--node", type=int)
+    parser.add_argument("--new-id", type=int)
     parser.add_argument("--confirm", default="")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()

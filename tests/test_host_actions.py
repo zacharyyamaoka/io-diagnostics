@@ -129,6 +129,92 @@ def test_io_diagnostics_act_cli_refuses_an_agent_and_runs_its_dry_run(tmp_path):
     assert run["argv"] == ["act", "--device", job.device["id"], "--action", "reboot", "--node", "3", "--dry-run"]
 
 
+# An adapter with one board, in the live moteus shape (the CAN bus part_of the adapter, the board via the bus): the
+# board's confirm texts say "CAN {id} on {name}" like the driver's. Logs every act's argv. Never touches hardware.
+BOARD_PLUGIN = r'''
+import json, os, sys
+
+args = sys.argv[1:]
+verb = next(word for word in args if word in ("describe", "diagnose", "act"))
+ADAPTER = [{"name": "check_comms", "title": "Check communication", "description": "ask who answers", "danger": "query",
+            "scope": "device", "confirm": "Query every id on {name}?", "kind": "touches"}]
+BOARD = [{"name": "calibrate", "title": "Run calibration…", "description": "spins the rotor", "danger": "moves",
+          "scope": "node", "confirm": "Calibrate CAN {id} on {name}? The rotor spins.", "kind": "changes"},
+         {"name": "set_id", "title": "Change CAN id…", "description": "a new bus id", "danger": "changes",
+          "scope": "node", "confirm": "Change the CAN id of CAN {id} on {name}?", "kind": "changes"}]
+if verb == "describe":
+    print(json.dumps({"name": "boards", "schema": "diagnostics-record/0", "actions": ADAPTER + BOARD}))
+    raise SystemExit(0)
+if verb == "diagnose":
+    for record in ({"path": "", "name": "fdcanusb W1", "kind": "device", "identity": {"serial_number": "W1"}, "actions": ADAPTER},
+                   {"path": "can", "name": "W1 CAN bus", "kind": "bus", "part_of": ""},
+                   {"path": "can/15", "name": "CAN 15", "kind": "node", "via": "can", "actions": BOARD}):
+        print(json.dumps({"schema": "diagnostics-record/0", "record": "entity", **record}))
+    raise SystemExit(0)
+with open(os.environ["BOARD_LOG"], "a") as log:
+    log.write(json.dumps({"verb": "act", "argv": args}) + "\n")
+print(json.dumps({"record": "action-result", "action": args[args.index("--action") + 1], "dry_run": "--dry-run" in args,
+                  "command": ["would", "run", "this"]}))
+'''
+
+
+def board_host(tmp_path) -> tuple[Host, str, object]:
+    log = tmp_path / "boards.jsonl"
+    script = tmp_path / "board_plugin.py"
+    script.write_text(BOARD_PLUGIN)
+    (tmp_path / "plugins.d").mkdir()
+    (tmp_path / "plugins.d" / "boards.toml").write_text(
+        f'name = "boards"\ncommand = ["{{python}}", "{script}"]\ntimeout_s = 20\nperiod_s = 30\nmatches = ["usb:1234:*"]\n'
+        f'env = {{ BOARD_LOG = "{log}" }}\n')
+    host = Host(plugins_dir=tmp_path / "plugins.d", clock=SetClock(), os_source=FakeOs(standard_skeleton(WIDGET)))
+    host.run_all_once()
+    return host, host.layer.device_paths["usb:9-1"], log
+
+
+def test_set_id_passes_its_new_id_to_the_plugin(tmp_path):
+    host, adapter, log = board_host(tmp_path)
+    board = f"{adapter}/can/15"
+    dry = host.act(board, "set_id", node=15, new_id=7, dry_run=True, human=False)
+    assert (dry["refused"], dry["outcome"], dry["new_id"]) == (None, "ok", 7), dry
+    ran = host.act(board, "set_id", node=15, new_id=7, confirm="TOKEN", human=True)
+    assert ran["outcome"] == "ok", ran
+    assert [run["argv"] for run in acts(log)] == [
+        ["act", "--device", "usb:9-1", "--action", "set_id", "--node", "15", "--new-id", "7", "--dry-run"],
+        ["act", "--device", "usb:9-1", "--action", "set_id", "--node", "15", "--new-id", "7", "--confirm", "TOKEN"]]
+    host.act(board, "calibrate", node=15, dry_run=True, human=False)  # no new id: no --new-id
+    assert "--new-id" not in acts(log)[-1]["argv"]
+
+
+def test_a_confirm_names_the_device_that_owns_the_action(tmp_path):
+    """``{name}`` on a board is its adapter (the drivers' convention), on a device the device itself."""
+
+    host, adapter, _log = board_host(tmp_path)
+    board = f"{adapter}/can/15"
+    confirms = {action["name"]: action["confirm"] for action in host.node(board)["actions"]}
+    assert confirms == {"calibrate": "Calibrate CAN 15 on fdcanusb W1? The rotor spins.",
+                        "set_id": "Change the CAN id of CAN 15 on fdcanusb W1?"}, confirms
+    refused = host.act(board, "calibrate", node=15, human=True)  # the ConfirmRequired text is filled the same way
+    assert refused["refused"] == "ConfirmRequired" and "Calibrate CAN 15 on fdcanusb W1?" in refused["message"], refused
+    [check] = host.node(adapter)["actions"]
+    assert check["confirm"] == "Query every id on fdcanusb W1?", check
+
+
+def test_io_diagnostics_act_cli_passes_new_id(tmp_path):
+    machine = ROOT / "tests" / "data" / "sysfs-rack-fixture.json"
+    log = tmp_path / "runs.jsonl"
+    write_fake_plugin(tmp_path / "plugins.d", "uarts", ["usb:0403:*"], log, sleep_s=0.0)  # the FT232R
+    probe = Host(plugins_dir=tmp_path / "plugins.d", clock=SetClock(), os_source=MachineOs(machine))
+    probe.refresh()
+    [job] = probe.jobs.values()
+    dry = subprocess.run([sys.executable, str(CLI), "act", "--machine", str(machine), "--plugins", str(tmp_path / "plugins.d"),
+                          "--path", job.device_path, "--action", "reboot", "--node", "3", "--new-id", "9", "--dry-run"],
+                         stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60, cwd="/")
+    assert dry.returncode == 0, dry.stderr
+    assert json.loads(dry.stdout)["new_id"] == 9
+    [run] = [run for run in read_log(log) if run["verb"] == "act"]
+    assert run["argv"] == ["act", "--device", job.device["id"], "--action", "reboot", "--node", "3", "--new-id", "9", "--dry-run"]
+
+
 def test_an_act_is_bounded_by_act_timeout_s_never_by_the_diagnose_timeout(tmp_path):
     log = tmp_path / "runs.jsonl"
     path = write_fake_plugin(tmp_path / "plugins.d", "slow", ["usb:1234:*"], log, sleep_s=0.0, timeout_s=0.5, act_sleep_s=1.0)

@@ -32,7 +32,8 @@ MAX_BODY = 64 * 1024
 
 
 class ActGate:
-    """The page's dry-run tokens: one per dry run, for that path / action / node, single use, valid ``window_s``.
+    """The page's dry-run tokens: one per dry run, for that path / action / node / new id, single use, valid
+    ``window_s``.
 
     WHY a token of the server's own, besides the plugin's: the plugin's token proves what the person read (moteus:
     action, adapter, board, time window); this one proves the click follows a dry run the page showed, so a request
@@ -44,15 +45,17 @@ class ActGate:
         self.lock = threading.Lock()
         self.tokens: dict[str, dict] = {}
 
-    def issue(self, path: str, action: str, node: int | None, plugin_token: str | None) -> str:
+    def issue(self, path: str, action: str, node: int | None, plugin_token: str | None, new_id: int | None = None) -> str:
         token = secrets.token_urlsafe(18)
         with self.lock:
             now = self.now()
             self.tokens = {key: value for key, value in self.tokens.items() if now - value["issued"] <= self.window_s}
-            self.tokens[token] = {"path": path, "action": action, "node": node, "plugin_token": plugin_token, "issued": now}
+            self.tokens[token] = {"path": path, "action": action, "node": node, "new_id": new_id, "plugin_token": plugin_token,
+                                  "issued": now}
         return token
 
-    def redeem(self, token: str, path: str, action: str, node: int | None) -> tuple[dict | None, str, str]:
+    def redeem(self, token: str, path: str, action: str, node: int | None,
+               new_id: int | None = None) -> tuple[dict | None, str, str]:
         """``(entry, "", "")`` once per token, else ``(None, code, reason)``; a wrong or expired token is spent."""
 
         with self.lock:
@@ -62,10 +65,16 @@ class ActGate:
             age = self.now() - entry["issued"]
             if age > self.window_s:
                 return None, "TokenExpired", f"the dry run is {age:.0f} s old (a token lasts {self.window_s:.0f} s): click the utility again"
-            if (entry["path"], entry["action"], entry["node"]) != (path, action, node):
+            # WHY the new id too: a token issued for "CAN 15 -> CAN 7" must never run "CAN 15 -> CAN 9"
+            if (entry["path"], entry["action"], entry["node"], entry["new_id"]) != (path, action, node, new_id):
                 board = "" if entry["node"] is None else f" node {entry['node']}"
-                return None, "TokenMismatch", f"the token is for {entry['action']} on {entry['path']}{board}, not this action"
+                new = "" if entry["new_id"] is None else f" (new id {entry['new_id']})"
+                return None, "TokenMismatch", f"the token is for {entry['action']} on {entry['path']}{board}{new}, not this action"
             return entry, "", ""
+
+
+def _int_or_null(value) -> bool:
+    return value is None or (isinstance(value, int) and not isinstance(value, bool))
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -143,23 +152,24 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length))
         except json.JSONDecodeError as error:
             return self._json({"refused": "BadRequest", "error": f"not JSON: {error.msg}"}, 400)
-        path, action, node = body.get("path"), body.get("action"), body.get("node")
-        if not isinstance(path, str) or not isinstance(action, str) or not (node is None or (isinstance(node, int) and not isinstance(node, bool))):
-            return self._json({"refused": "BadRequest", "error": "path and action are strings; node is an integer or null"}, 400)
+        path, action, node, new_id = body.get("path"), body.get("action"), body.get("node"), body.get("new_id")
+        if not isinstance(path, str) or not isinstance(action, str) or not _int_or_null(node) or not _int_or_null(new_id):
+            return self._json({"refused": "BadRequest", "error": "path and action are strings; node and new_id are integers or null"}, 400)
         if body.get("dry_run") is True:
-            result = self.host.act(path, action, node=node, dry_run=True, human=False)
+            result = self.host.act(path, action, node=node, dry_run=True, human=False, new_id=new_id)
             token = None
             if result.get("refused") is None and result.get("outcome") == "ok":
                 answer = result.get("action_result") or {}
                 plugin_token = answer.get("token") or answer.get("confirm_token") or None
-                token = self.gate.issue(path, action, node, plugin_token)
+                token = self.gate.issue(path, action, node, plugin_token, new_id)
             return self._json({"dry_run": True, "result": result, "token": token, "window_s": self.gate.window_s})
-        entry, refused, reason = self.gate.redeem(str(body.get("token") or ""), path, action, node)
+        entry, refused, reason = self.gate.redeem(str(body.get("token") or ""), path, action, node, new_id)
         if entry is None:
             return self._json({"refused": refused, "error": reason}, 403)
         # WHY human=True here and nowhere else in the server: the person read the dry run on the page and clicked
         # (a confirm modal for anything but a query); the plugin still checks its own token against the device
-        result = self.host.act(path, action, node=node, confirm=entry["plugin_token"], dry_run=False, human=True)
+        result = self.host.act(path, action, node=node, confirm=entry["plugin_token"], dry_run=False, human=True,
+                               new_id=new_id)
         return self._json({"dry_run": False, "result": result})
 
     def _refuse(self):
