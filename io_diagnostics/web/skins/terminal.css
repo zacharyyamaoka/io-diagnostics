@@ -1,100 +1,124 @@
-/* STUB (orchestrator, 2026-10-22): a copy of Claude until the Terminal skin lane replaces this file. */
-/* Skin 1 · Claude — the default (docs/round2-brief-2026-10-22.md: warm neutrals, serif display, generous spacing).
- * Defines every BASE token of web/tokens.css for both modes; derived tokens come from tokens.css.
- * WHY the selection is a warm grey, not the clay accent: OK rows carry no colour (quiet when OK), and a clay
- * selection would read as a warning next to the amber triangle. Clay stays for focus and the active control. */
+/* Skin 4 · Terminal — a terminal emulator (docs/round2-brief-2026-10-22.md: monospace, ANSI palette, box-drawing).
+ * Defines every BASE token of web/tokens.css for both modes; derived tokens come from tokens.css unless overridden.
+ *
+ * Palettes (published values unless marked "est."):
+ *   dark  = the Tango palette GNOME Terminal ships, on classic black. ANSI slots used: 1 red #cc0000 / 9 #ef2929,
+ *           3 yellow #c4a000 / 11 #fce94f, 5 magenta #75507b / 13 #ad7fa8, 6 cyan #06989a / 14 #34e2e2,
+ *           2 green #4e9a06 / 10 #8ae234, 4 blue #3465a4 / 12 #729fcf; greys = Tango Aluminium 1-6
+ *           (#eeeeec #d3d7cf #babdb6 #888a85 #555753 #2e3436). The surface steps between black and Aluminium 6 are est.
+ *   light = Solarized Light (Ethan Schoonover): base3 #fdf6e3, base2 #eee8d5, base1 #93a1a1, base00 #657b83,
+ *           base01 #586e75, violet #6c71c4, green #859900, blue #268bd2.
+ *           WHY base01 (not Solarized's own base00) is the body text: base00 on base3 measures 4.15:1, under AA.
+ *           est.: the darker text steps, link blue, borders, surface-2; warn #a17a00 (Solarized yellow #b58900 is
+ *           2.98:1 on base3, under the 3:1 a shape needs); error #c0211e (Solarized red #dc322f sits at the same
+ *           lightness as the amber, so the two merge for deuteranopes: ΔE00 2.7 -> 8.8); stale a neutral grey
+ *           #6c7273 (base00 is too close to violet, ΔE00 15). Solarized's base02/base03 are too teal for text on an
+ *           OK row (chroma > .12 would colour every OK name).
+ * WHY radius 0 and 20px rows: a terminal draws on a character grid; nothing is rounded and a row is one line.
+ * WHY stale is the grey ANSI slot: old data is "dim", not a new fault; unknown takes the magenta slot.
+ * Not expressible with tokens today: box-drawing tree guides (├── └──). The seam that would carry them is a
+ * `--io-guide-style: lines | box` token read by tree/v1.js and tree/v6.js, which would then emit the ├/└/│ glyph
+ * prefix per depth (or a `.t6-row::before { content: var(--io-guide-glyph) }` pseudo-element hook in v6.css).
+ * Today the indent is one 2-character step (16px) and the guides are the derived --io-guide lines. */
 [data-skin="terminal"][data-mode="light"] {
-  --io-bg: #e9e6dc;
-  --io-surface: #faf9f5;
-  --io-surface-2: #f4f2eb;
-  --io-surface-alt: #f5f3ec;
-  --io-field: #ffffff;
-  --io-popover: #ffffff;
-  --io-chrome-bg: #1f1e1d;
-  --io-chrome-text: #edebe3;
+  --io-bg: #eee8d5;
+  --io-surface: #fdf6e3;
+  --io-surface-2: #f5eedb;
+  --io-surface-alt: #f6efdc;
+  --io-field: #fdf6e3;
+  --io-popover: #fdf6e3;
+  --io-chrome-bg: #073642;
+  --io-chrome-text: #eee8d5;
 
-  --io-text: #3d3c37;
-  --io-text-strong: #141413;
-  --io-muted: #5f5d56;
-  --io-faint: #74726a;
-  --io-off: #b0ada3;
-  --io-icon: #85837b;
+  --io-text: #3f5156;
+  --io-text-strong: #1e2c30;
+  --io-muted: #586e75;
+  --io-faint: #5b6f75;
+  --io-off: #93a1a1;
+  --io-icon: #657b83;
 
-  --io-border: #e0ddd2;
-  --io-border-soft: #ebe9e1;
+  --io-border: #d9d2bd;
+  --io-border-soft: #eae3cf;
 
-  --io-hover: #f1efe8;
-  --io-selected: #e8e5db;
-  --io-selected-line: #c5c1b4;
-  --io-accent: #c96442;
-  --io-accent-text: #a8502f;
-  --io-focus: #d97757;
+  --io-hover: #f3ecd8;
+  --io-selected: #e8e1cc;
+  --io-selected-line: #93a1a1;
+  --io-accent: #268bd2;
+  --io-accent-text: #1a6aa3;
+  --io-focus: #268bd2;
 
-  --io-warn: #b7791f;
-  --io-error: #c83e32;
-  --io-stale: #8c897f;
-  --io-unknown: #7466b8;
-  --io-on-status: #ffffff;
-  --io-ok: #5e8c4a;
-  --io-info: #3f6fa8;
-  --io-shadow: #3d3929;
+  --io-warn: #a17a00;
+  --io-error: #c0211e;
+  --io-stale: #6c7273;
+  --io-unknown: #6c71c4;
+  --io-on-status: #fdf6e3;
+  --io-ok: #859900;
+  --io-info: #268bd2;
+  --io-shadow: #002b36;
 
-  --io-font-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Ubuntu, Inter, sans-serif;
-  --io-font-mono: "JetBrains Mono", "Ubuntu Mono", ui-monospace, monospace;
-  --io-font-display: ui-serif, Georgia, Cambria, "Times New Roman", serif;
+  --io-font-ui: ui-monospace, "SFMono-Regular", "Cascadia Mono", "DejaVu Sans Mono", "Ubuntu Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --io-font-mono: ui-monospace, "SFMono-Regular", "Cascadia Mono", "DejaVu Sans Mono", "Ubuntu Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --io-font-display: ui-monospace, "SFMono-Regular", "Cascadia Mono", "DejaVu Sans Mono", "Ubuntu Mono", Menlo, Consolas, "Liberation Mono", monospace;
   --io-font-size: 13px;
 
-  --io-radius: 8px;
-  --io-radius-sm: 6px;
-  --io-radius-lg: 12px;
-  --io-row-h: 28px;
-  --io-indent: 14px;
+  --io-radius: 0;
+  --io-radius-sm: 0;
+  --io-radius-lg: 0;
+  --io-row-h: 20px;
+  --io-indent: 16px;
+
+  --io-warn-text: #7d5f00;
+  --io-ok-text: #5c6a00;
+  --io-info-text: #17639a;
+  --io-radius-pill: 0;
 }
 
 [data-skin="terminal"][data-mode="dark"] {
-  --io-bg: #1f1e1d;
-  --io-surface: #262624;
-  --io-surface-2: #2b2a27;
-  --io-surface-alt: #232321;
-  --io-field: #1f1e1d;
-  --io-popover: #30302e;
-  --io-chrome-bg: #141413;
-  --io-chrome-text: #e5e3da;
+  --io-bg: #000000;
+  --io-surface: #0c0c0c;
+  --io-surface-2: #1a1c1d;
+  --io-surface-alt: #080808;
+  --io-field: #000000;
+  --io-popover: #1a1c1d;
+  --io-chrome-bg: #000000;
+  --io-chrome-text: #d3d7cf;
 
-  --io-text: #cfccc2;
-  --io-text-strong: #f5f4ee;
-  --io-muted: #a3a097;
-  --io-faint: #8f8c83;
-  --io-off: #5e5c56;
-  --io-icon: #9a978d;
+  --io-text: #d3d7cf;
+  --io-text-strong: #eeeeec;
+  --io-muted: #babdb6;
+  --io-faint: #888a85;
+  --io-off: #555753;
+  --io-icon: #888a85;
 
-  --io-border: #3a3935;
-  --io-border-soft: #31302d;
+  --io-border: #2e3436;
+  --io-border-soft: #1c1e1f;
 
-  --io-hover: #2f2e2b;
-  --io-selected: #383733;
-  --io-selected-line: #5a5852;
-  --io-accent: #d97757;
-  --io-accent-text: #e39a7c;
-  --io-focus: #d97757;
+  --io-hover: #1a1c1d;
+  --io-selected: #2e3436;
+  --io-selected-line: #888a85;
+  --io-accent: #34e2e2;
+  --io-accent-text: #34e2e2;
+  --io-focus: #34e2e2;
 
-  --io-warn: #e3a33a;
-  --io-error: #e5594e;
-  --io-stale: #9d9a90;
-  --io-unknown: #a497e0;
-  --io-on-status: #1f1e1d;
-  --io-ok: #7fb069;
-  --io-info: #78a6da;
+  --io-warn: #fce94f;
+  --io-error: #ef2929;
+  --io-stale: #888a85;
+  --io-unknown: #ad7fa8;
+  --io-on-status: #000000;
+  --io-ok: #8ae234;
+  --io-info: #729fcf;
   --io-shadow: #000000;
 
-  --io-font-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Ubuntu, Inter, sans-serif;
-  --io-font-mono: "JetBrains Mono", "Ubuntu Mono", ui-monospace, monospace;
-  --io-font-display: ui-serif, Georgia, Cambria, "Times New Roman", serif;
+  --io-font-ui: ui-monospace, "SFMono-Regular", "Cascadia Mono", "DejaVu Sans Mono", "Ubuntu Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --io-font-mono: ui-monospace, "SFMono-Regular", "Cascadia Mono", "DejaVu Sans Mono", "Ubuntu Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --io-font-display: ui-monospace, "SFMono-Regular", "Cascadia Mono", "DejaVu Sans Mono", "Ubuntu Mono", Menlo, Consolas, "Liberation Mono", monospace;
   --io-font-size: 13px;
 
-  --io-radius: 8px;
-  --io-radius-sm: 6px;
-  --io-radius-lg: 12px;
-  --io-row-h: 28px;
-  --io-indent: 14px;
+  --io-radius: 0;
+  --io-radius-sm: 0;
+  --io-radius-lg: 0;
+  --io-row-h: 20px;
+  --io-indent: 16px;
+
+  --io-radius-pill: 0;
 }
