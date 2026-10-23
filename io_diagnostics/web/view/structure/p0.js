@@ -13,7 +13,8 @@
     if (node.kind === 'host' || node.kind === 'group') return true;
     if (node.kind === 'bus' && node.depth <= 1) return true; // an OS bus (api depth 1, under the host)
     if (node.kind === 'port') return true;                   // a port is "where"; its device is the row that matters
-    return Boolean(row.status.hint);
+    // a folded part's problem (the live CAN bus, part_of its adapter: no ACK) opens the boards lifted under it
+    return Boolean(row.status.hint || row.status.part);
   }
 
   function rowFor(node, options) {

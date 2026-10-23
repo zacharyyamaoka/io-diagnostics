@@ -35,7 +35,7 @@
   // (and drop the hovered chevron) just because age_s ticked. Level words are listed so rollup.counts survive.
   const DRAWN_FIELDS = ['path', 'name', 'kind', 'icon', 'level', 'own', 'rollup', 'hint', 'message', 'knock_on_of',
     'connected', 'stale', 'id_text', 'edge', 'children', 'counts', 'origin', 'origin_name', 'ok', 'warn', 'unknown',
-    'error', 'label', 'idText', 'status', 'part', 'text', 'defaultOpen', 'hit', 'title'];
+    'error', 'label', 'idText', 'status', 'part', 'text', 'defaultOpen', 'hit', 'title', 'subtitle', 'lead', 'suffix', 'attrs'];
 
   // ------------------------------------------------------------------------------ icons ----
   // Type icons: 24-unit stroke drawings (Lucide-style, ISC; the same family as web/index.html's sprite), carried here
@@ -231,10 +231,18 @@
     const idText = node.idText !== undefined ? node.idText : node.id_text;
     const id = idText ? `<span class="t2-id" title="${esc(idText)}">${esc(idText)}</span>` : '';
     const title = node.title || `${node.name}${node.message ? ` — ${node.message}` : ''}${node.connected === false ? ' (not connected)' : ''}`;
-    return `<div class="${cls}" role="treeitem" aria-level="${ancestors.length + 1}"${hasKids ? ` aria-expanded="${open}"` : ''}`
+    // the round 2 row seams (docs/round2-seams.md §3): lead note, attrs / suffix (not the id), subtitle
+    const shownAttrs = (node.attrs || []).filter(Boolean);
+    const extra = (node.lead ? `<span class="t2-leadnote">${esc(node.lead)}</span>` : '')
+      + (shownAttrs.length ? `<span class="t2-attrs">${esc(shownAttrs.join(' · '))}</span>` : '')
+      + (node.suffix ? `<span class="t2-suffix">${esc(node.suffix)}</span>` : '');
+    const sub = node.subtitle && !selected ? `<span class="t2-sub" aria-hidden="true">${esc(node.subtitle)}</span>` : '';
+    const html = `<div class="${cls}" role="treeitem" aria-level="${ancestors.length + 1}"${hasKids ? ` aria-expanded="${open}"` : ''}`
       + ` aria-selected="${selected}" data-t2-path="${esc(node.path)}" title="${esc(title)}">`
-      + `<span class="t2-guides">${guides}</span>${lead}<span class="t2-name">${esc(node.name)}</span>`
-      + `<span class="t2-fill"></span>${pill}${id}${statusHtml(node)}</div>`;
+      + `<span class="t2-guides">${guides}</span>${lead}<span class="t2-name">${esc(node.name)}</span>${extra}`
+      + `<span class="t2-fill"></span>${pill}${id}${statusHtml(node)}${sub}</div>`;
+    return selected && node.subtitle
+      ? `${html}<div class="t2-subline" style="--t2-depth:${ancestors.length}">${esc(node.subtitle)}</div>` : html;
   }
 
   // -------------------------------------------------------------------------------- render ----

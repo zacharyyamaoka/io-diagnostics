@@ -231,10 +231,18 @@
       : '<span class="t1-chev t1-leaf"></span>';
     const idText = node.idText !== undefined ? node.idText : node.id_text;
     const id = idText ? `<span class="t1-id">${esc(idText)}</span>` : '';
-    return `<div class="${classes.join(' ')}" role="treeitem" aria-level="${node.depth + 1}"${hasKids ? ` aria-expanded="${open}"` : ''}`
-      + ` aria-selected="${node.path === st.selected}" data-t1-path="${esc(node.path)}" style="--t1-d:${node.depth}" title="${esc(node.title || tooltip(node, byPath))}">`
+    // the round 2 row seams (docs/round2-seams.md §3): lead, attrs / suffix (not the id), subtitle
+    const shownAttrs = (node.attrs || []).filter(Boolean);
+    const extra = (node.lead ? `<span class="t1-lead">${esc(node.lead)}</span>` : '')
+      + (shownAttrs.length ? `<span class="t1-attrs">${esc(shownAttrs.join(' · '))}</span>` : '')
+      + (node.suffix ? `<span class="t1-suffix">${esc(node.suffix)}</span>` : '');
+    const selected = node.path === st.selected;
+    const sub = node.subtitle && !selected ? `<span class="t1-sub" aria-hidden="true">${esc(node.subtitle)}</span>` : '';
+    const html = `<div class="${classes.join(' ')}" role="treeitem" aria-level="${node.depth + 1}"${hasKids ? ` aria-expanded="${open}"` : ''}`
+      + ` aria-selected="${selected}" data-t1-path="${esc(node.path)}" style="--t1-d:${node.depth}" title="${esc(node.title || tooltip(node, byPath))}">`
       + `<span class="t1-guides"></span>${chevron}${typeIcon(node.icon)}`
-      + `<span class="t1-name">${highlight(node.name, hit ? q : '')}</span>${id}${statusHtml(node, open)}</div>`;
+      + `<span class="t1-name">${highlight(node.name, hit ? q : '')}</span>${extra}${id}${statusHtml(node, open)}${sub}</div>`;
+    return selected && node.subtitle ? `${html}<div class="t1-subline" style="--t1-d:${node.depth}">${esc(node.subtitle)}</div>` : html;
   }
 
   function headHtml(summary, entities) {

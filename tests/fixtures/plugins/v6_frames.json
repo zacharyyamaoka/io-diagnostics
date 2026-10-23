@@ -1378,23 +1378,80 @@
       "owner": "moteus_servo",
       "actions": [
        {
-        "name": "run_comms_check",
-        "title": "Run comms check",
-        "description": "Addressed id scan 1-126 (moteus_find_ids) + bus health and reply latency (can_bus_triage). Query-only: no board changes mode.",
+        "name": "check_comms",
+        "title": "Check communication",
         "danger": "query",
         "scope": "device",
-        "confirm": "Query ids 1-126 on {name} and read bus health. No board changes mode; takes about 4 s.",
+        "kind": "touches",
+        "description": "Ask every CAN id (1-126) who is there, count lost replies, and read each board's config and firmware and the bus's health. Reads only: no board changes mode.",
+        "confirm": "Query every id on {name} and read bus health? No board changes mode.",
         "preconditions": [
          [
           "port_free",
-          "No other process has the adapter open (find_port_holders)"
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
          ],
          [
           "bus_lock_free",
-          "Rack bus lock free (no experiment running)"
+          "The rack bus lock is free (no experiment running)"
          ]
-        ],
-        "kind": "touches"
+        ]
+       },
+       {
+        "name": "check_firmware",
+        "title": "Check firmware",
+        "danger": "query",
+        "scope": "device",
+        "kind": "touches",
+        "description": "Fetch the latest official moteus release and compare each board's installed firmware with it. Reads only.",
+        "confirm": "Fetch the latest official release and read every board's firmware on {name}? No board changes mode.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ]
+        ]
+       },
+       {
+        "name": "stop_all",
+        "title": "Stop all",
+        "danger": "interrupts",
+        "scope": "device",
+        "kind": "changes",
+        "description": "Send stop to every board that answers on this bus. Every motor goes limp at once.",
+        "confirm": "Stop every board on {name}? Joints under gravity fall when their servo stops.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ]
+        ]
+       },
+       {
+        "name": "open_console",
+        "title": "Open console",
+        "danger": "interrupts",
+        "scope": "device",
+        "kind": "changes",
+        "description": "Open tview, moteus's own console, on this adapter. It holds the port until you close it: checks and buttons wait until then.",
+        "confirm": "Open tview on {name}? It holds the port until you close it; diagnostics and every button wait until then.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ]
+        ]
        }
       ],
       "icon": "adapter"
@@ -1428,8 +1485,8 @@
       "path": "can",
       "name": "272813EF CAN bus",
       "kind": "bus",
-      "via": "",
-      "icon": "bus"
+      "icon": "bus",
+      "part_of": ""
      },
      {
       "schema": "diagnostics-record/0",
@@ -1561,6 +1618,87 @@
          [
           "board_answers",
           "CAN {id} answers on the bus"
+         ]
+        ]
+       },
+       {
+        "name": "calibrate",
+        "title": "Run calibration…",
+        "danger": "moves",
+        "scope": "node",
+        "kind": "changes",
+        "description": "Run moteus's motor and encoder calibration on one board. The rotor spins for about 30 seconds.",
+        "confirm": "Calibrate CAN {id}? The rotor spins for about 30 s. Only when its joint is free to spin: no load on it and no hard stop in reach.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ],
+         [
+          "board_answers",
+          "CAN {id} answers a query on this bus"
+         ],
+         [
+          "joint_free",
+          "CAN {id}'s joint is free to spin: no load on it and no hard stop in reach"
+         ]
+        ]
+       },
+       {
+        "name": "update_config",
+        "title": "Update configuration…",
+        "danger": "changes",
+        "scope": "node",
+        "kind": "changes",
+        "description": "Write this board's recorded configuration to it, after saving a backup of the one it has now.",
+        "confirm": "Write the recorded config to CAN {id}? Its current config is saved first, then the recorded file replaces it.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ],
+         [
+          "board_answers",
+          "CAN {id} answers a query on this bus"
+         ],
+         [
+          "config_recorded",
+          "A recorded config for CAN {id} exists (can-{id}.cfg in the config dir)"
+         ]
+        ]
+       },
+       {
+        "name": "set_id",
+        "title": "Change CAN id…",
+        "danger": "changes",
+        "scope": "node",
+        "kind": "changes",
+        "description": "Give one board a new CAN id and save it on the board. A new board ships as CAN 1, like a board already here: connect it alone (or on another adapter), change its id, then join it to the bus.",
+        "confirm": "Change the CAN id of CAN {id}? It is stopped, and afterwards answers only on its new id.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ],
+         [
+          "source_id_unique",
+          "Exactly one board answers CAN {id} (a new board ships as CAN 1: connect it alone)"
+         ],
+         [
+          "new_id_free",
+          "No board answers the new CAN id yet"
          ]
         ]
        }
@@ -1833,6 +1971,87 @@
           "CAN {id} answers on the bus"
          ]
         ]
+       },
+       {
+        "name": "calibrate",
+        "title": "Run calibration…",
+        "danger": "moves",
+        "scope": "node",
+        "kind": "changes",
+        "description": "Run moteus's motor and encoder calibration on one board. The rotor spins for about 30 seconds.",
+        "confirm": "Calibrate CAN {id}? The rotor spins for about 30 s. Only when its joint is free to spin: no load on it and no hard stop in reach.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ],
+         [
+          "board_answers",
+          "CAN {id} answers a query on this bus"
+         ],
+         [
+          "joint_free",
+          "CAN {id}'s joint is free to spin: no load on it and no hard stop in reach"
+         ]
+        ]
+       },
+       {
+        "name": "update_config",
+        "title": "Update configuration…",
+        "danger": "changes",
+        "scope": "node",
+        "kind": "changes",
+        "description": "Write this board's recorded configuration to it, after saving a backup of the one it has now.",
+        "confirm": "Write the recorded config to CAN {id}? Its current config is saved first, then the recorded file replaces it.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ],
+         [
+          "board_answers",
+          "CAN {id} answers a query on this bus"
+         ],
+         [
+          "config_recorded",
+          "A recorded config for CAN {id} exists (can-{id}.cfg in the config dir)"
+         ]
+        ]
+       },
+       {
+        "name": "set_id",
+        "title": "Change CAN id…",
+        "danger": "changes",
+        "scope": "node",
+        "kind": "changes",
+        "description": "Give one board a new CAN id and save it on the board. A new board ships as CAN 1, like a board already here: connect it alone (or on another adapter), change its id, then join it to the bus.",
+        "confirm": "Change the CAN id of CAN {id}? It is stopped, and afterwards answers only on its new id.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ],
+         [
+          "source_id_unique",
+          "Exactly one board answers CAN {id} (a new board ships as CAN 1: connect it alone)"
+         ],
+         [
+          "new_id_free",
+          "No board answers the new CAN id yet"
+         ]
+        ]
        }
       ],
       "icon": "servo"
@@ -2103,6 +2322,87 @@
           "CAN {id} answers on the bus"
          ]
         ]
+       },
+       {
+        "name": "calibrate",
+        "title": "Run calibration…",
+        "danger": "moves",
+        "scope": "node",
+        "kind": "changes",
+        "description": "Run moteus's motor and encoder calibration on one board. The rotor spins for about 30 seconds.",
+        "confirm": "Calibrate CAN {id}? The rotor spins for about 30 s. Only when its joint is free to spin: no load on it and no hard stop in reach.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ],
+         [
+          "board_answers",
+          "CAN {id} answers a query on this bus"
+         ],
+         [
+          "joint_free",
+          "CAN {id}'s joint is free to spin: no load on it and no hard stop in reach"
+         ]
+        ]
+       },
+       {
+        "name": "update_config",
+        "title": "Update configuration…",
+        "danger": "changes",
+        "scope": "node",
+        "kind": "changes",
+        "description": "Write this board's recorded configuration to it, after saving a backup of the one it has now.",
+        "confirm": "Write the recorded config to CAN {id}? Its current config is saved first, then the recorded file replaces it.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ],
+         [
+          "board_answers",
+          "CAN {id} answers a query on this bus"
+         ],
+         [
+          "config_recorded",
+          "A recorded config for CAN {id} exists (can-{id}.cfg in the config dir)"
+         ]
+        ]
+       },
+       {
+        "name": "set_id",
+        "title": "Change CAN id…",
+        "danger": "changes",
+        "scope": "node",
+        "kind": "changes",
+        "description": "Give one board a new CAN id and save it on the board. A new board ships as CAN 1, like a board already here: connect it alone (or on another adapter), change its id, then join it to the bus.",
+        "confirm": "Change the CAN id of CAN {id}? It is stopped, and afterwards answers only on its new id.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ],
+         [
+          "source_id_unique",
+          "Exactly one board answers CAN {id} (a new board ships as CAN 1: connect it alone)"
+         ],
+         [
+          "new_id_free",
+          "No board answers the new CAN id yet"
+         ]
+        ]
        }
       ],
       "icon": "servo"
@@ -2354,23 +2654,80 @@
       "owner": "moteus_servo",
       "actions": [
        {
-        "name": "run_comms_check",
-        "title": "Run comms check",
-        "description": "Addressed id scan 1-126 (moteus_find_ids) + bus health and reply latency (can_bus_triage). Query-only: no board changes mode.",
+        "name": "check_comms",
+        "title": "Check communication",
         "danger": "query",
         "scope": "device",
-        "confirm": "Query ids 1-126 on {name} and read bus health. No board changes mode; takes about 4 s.",
+        "kind": "touches",
+        "description": "Ask every CAN id (1-126) who is there, count lost replies, and read each board's config and firmware and the bus's health. Reads only: no board changes mode.",
+        "confirm": "Query every id on {name} and read bus health? No board changes mode.",
         "preconditions": [
          [
           "port_free",
-          "No other process has the adapter open (find_port_holders)"
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
          ],
          [
           "bus_lock_free",
-          "Rack bus lock free (no experiment running)"
+          "The rack bus lock is free (no experiment running)"
          ]
-        ],
-        "kind": "touches"
+        ]
+       },
+       {
+        "name": "check_firmware",
+        "title": "Check firmware",
+        "danger": "query",
+        "scope": "device",
+        "kind": "touches",
+        "description": "Fetch the latest official moteus release and compare each board's installed firmware with it. Reads only.",
+        "confirm": "Fetch the latest official release and read every board's firmware on {name}? No board changes mode.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ]
+        ]
+       },
+       {
+        "name": "stop_all",
+        "title": "Stop all",
+        "danger": "interrupts",
+        "scope": "device",
+        "kind": "changes",
+        "description": "Send stop to every board that answers on this bus. Every motor goes limp at once.",
+        "confirm": "Stop every board on {name}? Joints under gravity fall when their servo stops.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ]
+        ]
+       },
+       {
+        "name": "open_console",
+        "title": "Open console",
+        "danger": "interrupts",
+        "scope": "device",
+        "kind": "changes",
+        "description": "Open tview, moteus's own console, on this adapter. It holds the port until you close it: checks and buttons wait until then.",
+        "confirm": "Open tview on {name}? It holds the port until you close it; diagnostics and every button wait until then.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ]
+        ]
        }
       ],
       "icon": "adapter"
@@ -2404,8 +2761,8 @@
       "path": "can",
       "name": "28B3A25D CAN bus",
       "kind": "bus",
-      "via": "",
-      "icon": "bus"
+      "icon": "bus",
+      "part_of": ""
      },
      {
       "schema": "diagnostics-record/0",
@@ -2430,6 +2787,10 @@
        {
         "key": "reply loss",
         "value": "100% (0 of 4 answered the last poll)"
+       },
+       {
+        "key": "what_to_check",
+        "value": "1. Motor supply on: the boards are powered from it, and the fdcanusb alone gets no ACK (are the boards' LEDs lit?)\n2. XT30 power splitter: every board's XT30 lead seated\n3. CAN cable from the fdcanusb into the JST splitter, seated at both ends\n4. CAN ground: the cable's ground connected between the fdcanusb and the boards"
        }
       ],
       "path": "can",
@@ -2483,19 +2844,42 @@
       "owner": "intel_rgbd",
       "actions": [
        {
-        "name": "run_comms_check",
-        "title": "Run frame check",
-        "description": "Stream 2 s of depth + colour and compare the frame rate with the profile's 30 Hz; reads the USB descriptor type.",
+        "name": "check_comms",
+        "title": "Check communication",
         "danger": "query",
         "scope": "device",
-        "confirm": "Stream 2 s from {name} and measure frame rate. Opening a camera another process streams would kill that stream.",
+        "kind": "touches",
+        "description": "Ask the SDK which RealSense cameras answer (enumerate) and read this one's camera_info (no stream, no option read).",
+        "confirm": "",
         "preconditions": [
          [
           "camera_free",
-          "No other process streams this camera (camera_holders)"
+          "No other process holds a RealSense and realsense-viewer is closed"
+         ],
+         [
+          "bus_lock_free",
+          "No rack experiment holds the bus lock"
          ]
-        ],
-        "kind": "touches"
+        ]
+       },
+       {
+        "name": "check_firmware",
+        "title": "Check firmware",
+        "danger": "query",
+        "scope": "device",
+        "kind": "touches",
+        "description": "Read the installed and the SDK's recommended firmware through camera_info (no stream, no option read).",
+        "confirm": "",
+        "preconditions": [
+         [
+          "camera_free",
+          "No other process holds a RealSense and realsense-viewer is closed"
+         ],
+         [
+          "bus_lock_free",
+          "No rack experiment holds the bus lock"
+         ]
+        ]
        },
        {
         "name": "reset",
@@ -2526,6 +2910,48 @@
          [
           "camera_free",
           "No other process streams this camera (camera_holders)"
+         ]
+        ]
+       },
+       {
+        "name": "calibrate",
+        "title": "Run calibration…",
+        "danger": "changes",
+        "scope": "device",
+        "kind": "changes",
+        "description": "The SDK's on-chip self-calibration. Nothing moves. The result replaces the camera's stored calibration only when its health factor was out of the good band and improved.",
+        "confirm": "Run on-chip self-calibration on {name} ({serial})? A textured, well-lit target must fill its view; the camera's stored calibration is rewritten when the result improves it.",
+        "preconditions": [
+         [
+          "camera_free",
+          "No other process holds a RealSense and realsense-viewer is closed"
+         ],
+         [
+          "bus_lock_free",
+          "No rack experiment holds the bus lock"
+         ],
+         [
+          "target_in_view",
+          "A textured, well-lit target fills the camera's view"
+         ]
+        ]
+       },
+       {
+        "name": "open_console",
+        "title": "Open console",
+        "danger": "interrupts",
+        "scope": "device",
+        "kind": "changes",
+        "description": "Start realsense-viewer, the vendor's own console, detached. It holds every RealSense until it is closed.",
+        "confirm": "Open realsense-viewer for {name} ({serial})? It holds every RealSense until you close it.",
+        "preconditions": [
+         [
+          "camera_free",
+          "No other process holds a RealSense and realsense-viewer is closed"
+         ],
+         [
+          "bus_lock_free",
+          "No rack experiment holds the bus lock"
          ]
         ]
        }
@@ -2679,19 +3105,42 @@
       "owner": "intel_rgbd",
       "actions": [
        {
-        "name": "run_comms_check",
-        "title": "Run frame check",
-        "description": "Stream 2 s of depth + colour and compare the frame rate with the profile's 30 Hz; reads the USB descriptor type.",
+        "name": "check_comms",
+        "title": "Check communication",
         "danger": "query",
         "scope": "device",
-        "confirm": "Stream 2 s from {name} and measure frame rate. Opening a camera another process streams would kill that stream.",
+        "kind": "touches",
+        "description": "Ask the SDK which RealSense cameras answer (enumerate) and read this one's camera_info (no stream, no option read).",
+        "confirm": "",
         "preconditions": [
          [
           "camera_free",
-          "No other process streams this camera (camera_holders)"
+          "No other process holds a RealSense and realsense-viewer is closed"
+         ],
+         [
+          "bus_lock_free",
+          "No rack experiment holds the bus lock"
          ]
-        ],
-        "kind": "touches"
+        ]
+       },
+       {
+        "name": "check_firmware",
+        "title": "Check firmware",
+        "danger": "query",
+        "scope": "device",
+        "kind": "touches",
+        "description": "Read the installed and the SDK's recommended firmware through camera_info (no stream, no option read).",
+        "confirm": "",
+        "preconditions": [
+         [
+          "camera_free",
+          "No other process holds a RealSense and realsense-viewer is closed"
+         ],
+         [
+          "bus_lock_free",
+          "No rack experiment holds the bus lock"
+         ]
+        ]
        },
        {
         "name": "reset",
@@ -2722,6 +3171,48 @@
          [
           "camera_free",
           "No other process streams this camera (camera_holders)"
+         ]
+        ]
+       },
+       {
+        "name": "calibrate",
+        "title": "Run calibration…",
+        "danger": "changes",
+        "scope": "device",
+        "kind": "changes",
+        "description": "The SDK's on-chip self-calibration. Nothing moves. The result replaces the camera's stored calibration only when its health factor was out of the good band and improved.",
+        "confirm": "Run on-chip self-calibration on {name} ({serial})? A textured, well-lit target must fill its view; the camera's stored calibration is rewritten when the result improves it.",
+        "preconditions": [
+         [
+          "camera_free",
+          "No other process holds a RealSense and realsense-viewer is closed"
+         ],
+         [
+          "bus_lock_free",
+          "No rack experiment holds the bus lock"
+         ],
+         [
+          "target_in_view",
+          "A textured, well-lit target fills the camera's view"
+         ]
+        ]
+       },
+       {
+        "name": "open_console",
+        "title": "Open console",
+        "danger": "interrupts",
+        "scope": "device",
+        "kind": "changes",
+        "description": "Start realsense-viewer, the vendor's own console, detached. It holds every RealSense until it is closed.",
+        "confirm": "Open realsense-viewer for {name} ({serial})? It holds every RealSense until you close it.",
+        "preconditions": [
+         [
+          "camera_free",
+          "No other process holds a RealSense and realsense-viewer is closed"
+         ],
+         [
+          "bus_lock_free",
+          "No rack experiment holds the bus lock"
          ]
         ]
        }
@@ -4170,23 +4661,80 @@
       "owner": "moteus_servo",
       "actions": [
        {
-        "name": "run_comms_check",
-        "title": "Run comms check",
-        "description": "Addressed id scan 1-126 (moteus_find_ids) + bus health and reply latency (can_bus_triage). Query-only: no board changes mode.",
+        "name": "check_comms",
+        "title": "Check communication",
         "danger": "query",
         "scope": "device",
-        "confirm": "Query ids 1-126 on {name} and read bus health. No board changes mode; takes about 4 s.",
+        "kind": "touches",
+        "description": "Ask every CAN id (1-126) who is there, count lost replies, and read each board's config and firmware and the bus's health. Reads only: no board changes mode.",
+        "confirm": "Query every id on {name} and read bus health? No board changes mode.",
         "preconditions": [
          [
           "port_free",
-          "No other process has the adapter open (find_port_holders)"
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
          ],
          [
           "bus_lock_free",
-          "Rack bus lock free (no experiment running)"
+          "The rack bus lock is free (no experiment running)"
          ]
-        ],
-        "kind": "touches"
+        ]
+       },
+       {
+        "name": "check_firmware",
+        "title": "Check firmware",
+        "danger": "query",
+        "scope": "device",
+        "kind": "touches",
+        "description": "Fetch the latest official moteus release and compare each board's installed firmware with it. Reads only.",
+        "confirm": "Fetch the latest official release and read every board's firmware on {name}? No board changes mode.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ]
+        ]
+       },
+       {
+        "name": "stop_all",
+        "title": "Stop all",
+        "danger": "interrupts",
+        "scope": "device",
+        "kind": "changes",
+        "description": "Send stop to every board that answers on this bus. Every motor goes limp at once.",
+        "confirm": "Stop every board on {name}? Joints under gravity fall when their servo stops.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ]
+        ]
+       },
+       {
+        "name": "open_console",
+        "title": "Open console",
+        "danger": "interrupts",
+        "scope": "device",
+        "kind": "changes",
+        "description": "Open tview, moteus's own console, on this adapter. It holds the port until you close it: checks and buttons wait until then.",
+        "confirm": "Open tview on {name}? It holds the port until you close it; diagnostics and every button wait until then.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ]
+        ]
        }
       ],
       "icon": "adapter"
@@ -4221,6 +4769,10 @@
        {
         "key": "holder",
         "value": "port held by tview pid 640623 since 18:24:46"
+       },
+       {
+        "key": "what_to_check",
+        "value": "1. tview (pid 640623) has the port: close tview\n2. Or let the named process finish; checks and buttons wait until the port is free"
        }
       ],
       "code": "PortBusy",
@@ -4233,8 +4785,8 @@
       "path": "can",
       "name": "272813EF CAN bus",
       "kind": "bus",
-      "via": "",
-      "icon": "bus"
+      "icon": "bus",
+      "part_of": ""
      },
      {
       "schema": "diagnostics-record/0",
@@ -4370,6 +4922,87 @@
          [
           "board_answers",
           "CAN {id} answers on the bus"
+         ]
+        ]
+       },
+       {
+        "name": "calibrate",
+        "title": "Run calibration…",
+        "danger": "moves",
+        "scope": "node",
+        "kind": "changes",
+        "description": "Run moteus's motor and encoder calibration on one board. The rotor spins for about 30 seconds.",
+        "confirm": "Calibrate CAN {id}? The rotor spins for about 30 s. Only when its joint is free to spin: no load on it and no hard stop in reach.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ],
+         [
+          "board_answers",
+          "CAN {id} answers a query on this bus"
+         ],
+         [
+          "joint_free",
+          "CAN {id}'s joint is free to spin: no load on it and no hard stop in reach"
+         ]
+        ]
+       },
+       {
+        "name": "update_config",
+        "title": "Update configuration…",
+        "danger": "changes",
+        "scope": "node",
+        "kind": "changes",
+        "description": "Write this board's recorded configuration to it, after saving a backup of the one it has now.",
+        "confirm": "Write the recorded config to CAN {id}? Its current config is saved first, then the recorded file replaces it.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ],
+         [
+          "board_answers",
+          "CAN {id} answers a query on this bus"
+         ],
+         [
+          "config_recorded",
+          "A recorded config for CAN {id} exists (can-{id}.cfg in the config dir)"
+         ]
+        ]
+       },
+       {
+        "name": "set_id",
+        "title": "Change CAN id…",
+        "danger": "changes",
+        "scope": "node",
+        "kind": "changes",
+        "description": "Give one board a new CAN id and save it on the board. A new board ships as CAN 1, like a board already here: connect it alone (or on another adapter), change its id, then join it to the bus.",
+        "confirm": "Change the CAN id of CAN {id}? It is stopped, and afterwards answers only on its new id.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ],
+         [
+          "source_id_unique",
+          "Exactly one board answers CAN {id} (a new board ships as CAN 1: connect it alone)"
+         ],
+         [
+          "new_id_free",
+          "No board answers the new CAN id yet"
          ]
         ]
        }
@@ -4642,6 +5275,87 @@
           "CAN {id} answers on the bus"
          ]
         ]
+       },
+       {
+        "name": "calibrate",
+        "title": "Run calibration…",
+        "danger": "moves",
+        "scope": "node",
+        "kind": "changes",
+        "description": "Run moteus's motor and encoder calibration on one board. The rotor spins for about 30 seconds.",
+        "confirm": "Calibrate CAN {id}? The rotor spins for about 30 s. Only when its joint is free to spin: no load on it and no hard stop in reach.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ],
+         [
+          "board_answers",
+          "CAN {id} answers a query on this bus"
+         ],
+         [
+          "joint_free",
+          "CAN {id}'s joint is free to spin: no load on it and no hard stop in reach"
+         ]
+        ]
+       },
+       {
+        "name": "update_config",
+        "title": "Update configuration…",
+        "danger": "changes",
+        "scope": "node",
+        "kind": "changes",
+        "description": "Write this board's recorded configuration to it, after saving a backup of the one it has now.",
+        "confirm": "Write the recorded config to CAN {id}? Its current config is saved first, then the recorded file replaces it.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ],
+         [
+          "board_answers",
+          "CAN {id} answers a query on this bus"
+         ],
+         [
+          "config_recorded",
+          "A recorded config for CAN {id} exists (can-{id}.cfg in the config dir)"
+         ]
+        ]
+       },
+       {
+        "name": "set_id",
+        "title": "Change CAN id…",
+        "danger": "changes",
+        "scope": "node",
+        "kind": "changes",
+        "description": "Give one board a new CAN id and save it on the board. A new board ships as CAN 1, like a board already here: connect it alone (or on another adapter), change its id, then join it to the bus.",
+        "confirm": "Change the CAN id of CAN {id}? It is stopped, and afterwards answers only on its new id.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ],
+         [
+          "source_id_unique",
+          "Exactly one board answers CAN {id} (a new board ships as CAN 1: connect it alone)"
+         ],
+         [
+          "new_id_free",
+          "No board answers the new CAN id yet"
+         ]
+        ]
        }
       ],
       "icon": "servo"
@@ -4912,6 +5626,87 @@
           "CAN {id} answers on the bus"
          ]
         ]
+       },
+       {
+        "name": "calibrate",
+        "title": "Run calibration…",
+        "danger": "moves",
+        "scope": "node",
+        "kind": "changes",
+        "description": "Run moteus's motor and encoder calibration on one board. The rotor spins for about 30 seconds.",
+        "confirm": "Calibrate CAN {id}? The rotor spins for about 30 s. Only when its joint is free to spin: no load on it and no hard stop in reach.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ],
+         [
+          "board_answers",
+          "CAN {id} answers a query on this bus"
+         ],
+         [
+          "joint_free",
+          "CAN {id}'s joint is free to spin: no load on it and no hard stop in reach"
+         ]
+        ]
+       },
+       {
+        "name": "update_config",
+        "title": "Update configuration…",
+        "danger": "changes",
+        "scope": "node",
+        "kind": "changes",
+        "description": "Write this board's recorded configuration to it, after saving a backup of the one it has now.",
+        "confirm": "Write the recorded config to CAN {id}? Its current config is saved first, then the recorded file replaces it.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ],
+         [
+          "board_answers",
+          "CAN {id} answers a query on this bus"
+         ],
+         [
+          "config_recorded",
+          "A recorded config for CAN {id} exists (can-{id}.cfg in the config dir)"
+         ]
+        ]
+       },
+       {
+        "name": "set_id",
+        "title": "Change CAN id…",
+        "danger": "changes",
+        "scope": "node",
+        "kind": "changes",
+        "description": "Give one board a new CAN id and save it on the board. A new board ships as CAN 1, like a board already here: connect it alone (or on another adapter), change its id, then join it to the bus.",
+        "confirm": "Change the CAN id of CAN {id}? It is stopped, and afterwards answers only on its new id.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ],
+         [
+          "source_id_unique",
+          "Exactly one board answers CAN {id} (a new board ships as CAN 1: connect it alone)"
+         ],
+         [
+          "new_id_free",
+          "No board answers the new CAN id yet"
+         ]
+        ]
        }
       ],
       "icon": "servo"
@@ -5177,19 +5972,42 @@
       "owner": "intel_rgbd",
       "actions": [
        {
-        "name": "run_comms_check",
-        "title": "Run frame check",
-        "description": "Stream 2 s of depth + colour and compare the frame rate with the profile's 30 Hz; reads the USB descriptor type.",
+        "name": "check_comms",
+        "title": "Check communication",
         "danger": "query",
         "scope": "device",
-        "confirm": "Stream 2 s from {name} and measure frame rate. Opening a camera another process streams would kill that stream.",
+        "kind": "touches",
+        "description": "Ask the SDK which RealSense cameras answer (enumerate) and read this one's camera_info (no stream, no option read).",
+        "confirm": "",
         "preconditions": [
          [
           "camera_free",
-          "No other process streams this camera (camera_holders)"
+          "No other process holds a RealSense and realsense-viewer is closed"
+         ],
+         [
+          "bus_lock_free",
+          "No rack experiment holds the bus lock"
          ]
-        ],
-        "kind": "touches"
+        ]
+       },
+       {
+        "name": "check_firmware",
+        "title": "Check firmware",
+        "danger": "query",
+        "scope": "device",
+        "kind": "touches",
+        "description": "Read the installed and the SDK's recommended firmware through camera_info (no stream, no option read).",
+        "confirm": "",
+        "preconditions": [
+         [
+          "camera_free",
+          "No other process holds a RealSense and realsense-viewer is closed"
+         ],
+         [
+          "bus_lock_free",
+          "No rack experiment holds the bus lock"
+         ]
+        ]
        },
        {
         "name": "reset",
@@ -5220,6 +6038,48 @@
          [
           "camera_free",
           "No other process streams this camera (camera_holders)"
+         ]
+        ]
+       },
+       {
+        "name": "calibrate",
+        "title": "Run calibration…",
+        "danger": "changes",
+        "scope": "device",
+        "kind": "changes",
+        "description": "The SDK's on-chip self-calibration. Nothing moves. The result replaces the camera's stored calibration only when its health factor was out of the good band and improved.",
+        "confirm": "Run on-chip self-calibration on {name} ({serial})? A textured, well-lit target must fill its view; the camera's stored calibration is rewritten when the result improves it.",
+        "preconditions": [
+         [
+          "camera_free",
+          "No other process holds a RealSense and realsense-viewer is closed"
+         ],
+         [
+          "bus_lock_free",
+          "No rack experiment holds the bus lock"
+         ],
+         [
+          "target_in_view",
+          "A textured, well-lit target fills the camera's view"
+         ]
+        ]
+       },
+       {
+        "name": "open_console",
+        "title": "Open console",
+        "danger": "interrupts",
+        "scope": "device",
+        "kind": "changes",
+        "description": "Start realsense-viewer, the vendor's own console, detached. It holds every RealSense until it is closed.",
+        "confirm": "Open realsense-viewer for {name} ({serial})? It holds every RealSense until you close it.",
+        "preconditions": [
+         [
+          "camera_free",
+          "No other process holds a RealSense and realsense-viewer is closed"
+         ],
+         [
+          "bus_lock_free",
+          "No rack experiment holds the bus lock"
          ]
         ]
        }
@@ -5373,19 +6233,42 @@
       "owner": "intel_rgbd",
       "actions": [
        {
-        "name": "run_comms_check",
-        "title": "Run frame check",
-        "description": "Stream 2 s of depth + colour and compare the frame rate with the profile's 30 Hz; reads the USB descriptor type.",
+        "name": "check_comms",
+        "title": "Check communication",
         "danger": "query",
         "scope": "device",
-        "confirm": "Stream 2 s from {name} and measure frame rate. Opening a camera another process streams would kill that stream.",
+        "kind": "touches",
+        "description": "Ask the SDK which RealSense cameras answer (enumerate) and read this one's camera_info (no stream, no option read).",
+        "confirm": "",
         "preconditions": [
          [
           "camera_free",
-          "No other process streams this camera (camera_holders)"
+          "No other process holds a RealSense and realsense-viewer is closed"
+         ],
+         [
+          "bus_lock_free",
+          "No rack experiment holds the bus lock"
          ]
-        ],
-        "kind": "touches"
+        ]
+       },
+       {
+        "name": "check_firmware",
+        "title": "Check firmware",
+        "danger": "query",
+        "scope": "device",
+        "kind": "touches",
+        "description": "Read the installed and the SDK's recommended firmware through camera_info (no stream, no option read).",
+        "confirm": "",
+        "preconditions": [
+         [
+          "camera_free",
+          "No other process holds a RealSense and realsense-viewer is closed"
+         ],
+         [
+          "bus_lock_free",
+          "No rack experiment holds the bus lock"
+         ]
+        ]
        },
        {
         "name": "reset",
@@ -5416,6 +6299,48 @@
          [
           "camera_free",
           "No other process streams this camera (camera_holders)"
+         ]
+        ]
+       },
+       {
+        "name": "calibrate",
+        "title": "Run calibration…",
+        "danger": "changes",
+        "scope": "device",
+        "kind": "changes",
+        "description": "The SDK's on-chip self-calibration. Nothing moves. The result replaces the camera's stored calibration only when its health factor was out of the good band and improved.",
+        "confirm": "Run on-chip self-calibration on {name} ({serial})? A textured, well-lit target must fill its view; the camera's stored calibration is rewritten when the result improves it.",
+        "preconditions": [
+         [
+          "camera_free",
+          "No other process holds a RealSense and realsense-viewer is closed"
+         ],
+         [
+          "bus_lock_free",
+          "No rack experiment holds the bus lock"
+         ],
+         [
+          "target_in_view",
+          "A textured, well-lit target fills the camera's view"
+         ]
+        ]
+       },
+       {
+        "name": "open_console",
+        "title": "Open console",
+        "danger": "interrupts",
+        "scope": "device",
+        "kind": "changes",
+        "description": "Start realsense-viewer, the vendor's own console, detached. It holds every RealSense until it is closed.",
+        "confirm": "Open realsense-viewer for {name} ({serial})? It holds every RealSense until you close it.",
+        "preconditions": [
+         [
+          "camera_free",
+          "No other process holds a RealSense and realsense-viewer is closed"
+         ],
+         [
+          "bus_lock_free",
+          "No rack experiment holds the bus lock"
          ]
         ]
        }
@@ -6966,23 +7891,80 @@
       "owner": "moteus_servo",
       "actions": [
        {
-        "name": "run_comms_check",
-        "title": "Run comms check",
-        "description": "Addressed id scan 1-126 (moteus_find_ids) + bus health and reply latency (can_bus_triage). Query-only: no board changes mode.",
+        "name": "check_comms",
+        "title": "Check communication",
         "danger": "query",
         "scope": "device",
-        "confirm": "Query ids 1-126 on {name} and read bus health. No board changes mode; takes about 4 s.",
+        "kind": "touches",
+        "description": "Ask every CAN id (1-126) who is there, count lost replies, and read each board's config and firmware and the bus's health. Reads only: no board changes mode.",
+        "confirm": "Query every id on {name} and read bus health? No board changes mode.",
         "preconditions": [
          [
           "port_free",
-          "No other process has the adapter open (find_port_holders)"
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
          ],
          [
           "bus_lock_free",
-          "Rack bus lock free (no experiment running)"
+          "The rack bus lock is free (no experiment running)"
          ]
-        ],
-        "kind": "touches"
+        ]
+       },
+       {
+        "name": "check_firmware",
+        "title": "Check firmware",
+        "danger": "query",
+        "scope": "device",
+        "kind": "touches",
+        "description": "Fetch the latest official moteus release and compare each board's installed firmware with it. Reads only.",
+        "confirm": "Fetch the latest official release and read every board's firmware on {name}? No board changes mode.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ]
+        ]
+       },
+       {
+        "name": "stop_all",
+        "title": "Stop all",
+        "danger": "interrupts",
+        "scope": "device",
+        "kind": "changes",
+        "description": "Send stop to every board that answers on this bus. Every motor goes limp at once.",
+        "confirm": "Stop every board on {name}? Joints under gravity fall when their servo stops.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ]
+        ]
+       },
+       {
+        "name": "open_console",
+        "title": "Open console",
+        "danger": "interrupts",
+        "scope": "device",
+        "kind": "changes",
+        "description": "Open tview, moteus's own console, on this adapter. It holds the port until you close it: checks and buttons wait until then.",
+        "confirm": "Open tview on {name}? It holds the port until you close it; diagnostics and every button wait until then.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ]
+        ]
        }
       ],
       "icon": "adapter"
@@ -7016,8 +7998,8 @@
       "path": "can",
       "name": "272813EF CAN bus",
       "kind": "bus",
-      "via": "",
-      "icon": "bus"
+      "icon": "bus",
+      "part_of": ""
      },
      {
       "schema": "diagnostics-record/0",
@@ -7042,6 +8024,10 @@
        {
         "key": "reply loss",
         "value": "100% (0 of 3 ACK since the restart) (reported)"
+       },
+       {
+        "key": "what_to_check",
+        "value": "1. Motor supply on: the boards are powered from it, and the fdcanusb alone gets no ACK (are the boards' LEDs lit?)\n2. XT30 power splitter: every board's XT30 lead seated\n3. CAN cable from the fdcanusb into the JST splitter, seated at both ends\n4. CAN ground: the cable's ground connected between the fdcanusb and the boards"
        }
       ],
       "path": "can",
@@ -7148,6 +8134,87 @@
           "CAN {id} answers on the bus"
          ]
         ]
+       },
+       {
+        "name": "calibrate",
+        "title": "Run calibration…",
+        "danger": "moves",
+        "scope": "node",
+        "kind": "changes",
+        "description": "Run moteus's motor and encoder calibration on one board. The rotor spins for about 30 seconds.",
+        "confirm": "Calibrate CAN {id}? The rotor spins for about 30 s. Only when its joint is free to spin: no load on it and no hard stop in reach.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ],
+         [
+          "board_answers",
+          "CAN {id} answers a query on this bus"
+         ],
+         [
+          "joint_free",
+          "CAN {id}'s joint is free to spin: no load on it and no hard stop in reach"
+         ]
+        ]
+       },
+       {
+        "name": "update_config",
+        "title": "Update configuration…",
+        "danger": "changes",
+        "scope": "node",
+        "kind": "changes",
+        "description": "Write this board's recorded configuration to it, after saving a backup of the one it has now.",
+        "confirm": "Write the recorded config to CAN {id}? Its current config is saved first, then the recorded file replaces it.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ],
+         [
+          "board_answers",
+          "CAN {id} answers a query on this bus"
+         ],
+         [
+          "config_recorded",
+          "A recorded config for CAN {id} exists (can-{id}.cfg in the config dir)"
+         ]
+        ]
+       },
+       {
+        "name": "set_id",
+        "title": "Change CAN id…",
+        "danger": "changes",
+        "scope": "node",
+        "kind": "changes",
+        "description": "Give one board a new CAN id and save it on the board. A new board ships as CAN 1, like a board already here: connect it alone (or on another adapter), change its id, then join it to the bus.",
+        "confirm": "Change the CAN id of CAN {id}? It is stopped, and afterwards answers only on its new id.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ],
+         [
+          "source_id_unique",
+          "Exactly one board answers CAN {id} (a new board ships as CAN 1: connect it alone)"
+         ],
+         [
+          "new_id_free",
+          "No board answers the new CAN id yet"
+         ]
+        ]
        }
       ],
       "icon": "servo"
@@ -7167,6 +8234,10 @@
        {
         "key": "reply loss",
         "value": "0 of 10 recent polls missed"
+       },
+       {
+        "key": "what_to_check",
+        "value": "1. Its XT30 power lead, seated in the splitter\n2. Its CAN lead into the JST splitter, seated at both ends\n3. Its id may have changed: run Check communication (it scans every id)"
        }
       ],
       "path": "can/1",
@@ -7387,6 +8458,87 @@
           "CAN {id} answers on the bus"
          ]
         ]
+       },
+       {
+        "name": "calibrate",
+        "title": "Run calibration…",
+        "danger": "moves",
+        "scope": "node",
+        "kind": "changes",
+        "description": "Run moteus's motor and encoder calibration on one board. The rotor spins for about 30 seconds.",
+        "confirm": "Calibrate CAN {id}? The rotor spins for about 30 s. Only when its joint is free to spin: no load on it and no hard stop in reach.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ],
+         [
+          "board_answers",
+          "CAN {id} answers a query on this bus"
+         ],
+         [
+          "joint_free",
+          "CAN {id}'s joint is free to spin: no load on it and no hard stop in reach"
+         ]
+        ]
+       },
+       {
+        "name": "update_config",
+        "title": "Update configuration…",
+        "danger": "changes",
+        "scope": "node",
+        "kind": "changes",
+        "description": "Write this board's recorded configuration to it, after saving a backup of the one it has now.",
+        "confirm": "Write the recorded config to CAN {id}? Its current config is saved first, then the recorded file replaces it.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ],
+         [
+          "board_answers",
+          "CAN {id} answers a query on this bus"
+         ],
+         [
+          "config_recorded",
+          "A recorded config for CAN {id} exists (can-{id}.cfg in the config dir)"
+         ]
+        ]
+       },
+       {
+        "name": "set_id",
+        "title": "Change CAN id…",
+        "danger": "changes",
+        "scope": "node",
+        "kind": "changes",
+        "description": "Give one board a new CAN id and save it on the board. A new board ships as CAN 1, like a board already here: connect it alone (or on another adapter), change its id, then join it to the bus.",
+        "confirm": "Change the CAN id of CAN {id}? It is stopped, and afterwards answers only on its new id.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ],
+         [
+          "source_id_unique",
+          "Exactly one board answers CAN {id} (a new board ships as CAN 1: connect it alone)"
+         ],
+         [
+          "new_id_free",
+          "No board answers the new CAN id yet"
+         ]
+        ]
        }
       ],
       "icon": "servo"
@@ -7406,6 +8558,10 @@
        {
         "key": "reply loss",
         "value": "0 of 10 recent polls missed"
+       },
+       {
+        "key": "what_to_check",
+        "value": "1. Its XT30 power lead, seated in the splitter\n2. Its CAN lead into the JST splitter, seated at both ends\n3. Its id may have changed: run Check communication (it scans every id)"
        }
       ],
       "path": "can/14",
@@ -7626,6 +8782,87 @@
           "CAN {id} answers on the bus"
          ]
         ]
+       },
+       {
+        "name": "calibrate",
+        "title": "Run calibration…",
+        "danger": "moves",
+        "scope": "node",
+        "kind": "changes",
+        "description": "Run moteus's motor and encoder calibration on one board. The rotor spins for about 30 seconds.",
+        "confirm": "Calibrate CAN {id}? The rotor spins for about 30 s. Only when its joint is free to spin: no load on it and no hard stop in reach.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ],
+         [
+          "board_answers",
+          "CAN {id} answers a query on this bus"
+         ],
+         [
+          "joint_free",
+          "CAN {id}'s joint is free to spin: no load on it and no hard stop in reach"
+         ]
+        ]
+       },
+       {
+        "name": "update_config",
+        "title": "Update configuration…",
+        "danger": "changes",
+        "scope": "node",
+        "kind": "changes",
+        "description": "Write this board's recorded configuration to it, after saving a backup of the one it has now.",
+        "confirm": "Write the recorded config to CAN {id}? Its current config is saved first, then the recorded file replaces it.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ],
+         [
+          "board_answers",
+          "CAN {id} answers a query on this bus"
+         ],
+         [
+          "config_recorded",
+          "A recorded config for CAN {id} exists (can-{id}.cfg in the config dir)"
+         ]
+        ]
+       },
+       {
+        "name": "set_id",
+        "title": "Change CAN id…",
+        "danger": "changes",
+        "scope": "node",
+        "kind": "changes",
+        "description": "Give one board a new CAN id and save it on the board. A new board ships as CAN 1, like a board already here: connect it alone (or on another adapter), change its id, then join it to the bus.",
+        "confirm": "Change the CAN id of CAN {id}? It is stopped, and afterwards answers only on its new id.",
+        "preconditions": [
+         [
+          "port_free",
+          "No other process has the adapter open (tview, moteus_tool, a peer)"
+         ],
+         [
+          "bus_lock_free",
+          "The rack bus lock is free (no experiment running)"
+         ],
+         [
+          "source_id_unique",
+          "Exactly one board answers CAN {id} (a new board ships as CAN 1: connect it alone)"
+         ],
+         [
+          "new_id_free",
+          "No board answers the new CAN id yet"
+         ]
+        ]
        }
       ],
       "icon": "servo"
@@ -7645,6 +8882,10 @@
        {
         "key": "reply loss",
         "value": "0 of 10 recent polls missed"
+       },
+       {
+        "key": "what_to_check",
+        "value": "1. Its XT30 power lead, seated in the splitter\n2. Its CAN lead into the JST splitter, seated at both ends\n3. Its id may have changed: run Check communication (it scans every id)"
        }
       ],
       "path": "can/15",
@@ -7874,19 +9115,42 @@
       "owner": "intel_rgbd",
       "actions": [
        {
-        "name": "run_comms_check",
-        "title": "Run frame check",
-        "description": "Stream 2 s of depth + colour and compare the frame rate with the profile's 30 Hz; reads the USB descriptor type.",
+        "name": "check_comms",
+        "title": "Check communication",
         "danger": "query",
         "scope": "device",
-        "confirm": "Stream 2 s from {name} and measure frame rate. Opening a camera another process streams would kill that stream.",
+        "kind": "touches",
+        "description": "Ask the SDK which RealSense cameras answer (enumerate) and read this one's camera_info (no stream, no option read).",
+        "confirm": "",
         "preconditions": [
          [
           "camera_free",
-          "No other process streams this camera (camera_holders)"
+          "No other process holds a RealSense and realsense-viewer is closed"
+         ],
+         [
+          "bus_lock_free",
+          "No rack experiment holds the bus lock"
          ]
-        ],
-        "kind": "touches"
+        ]
+       },
+       {
+        "name": "check_firmware",
+        "title": "Check firmware",
+        "danger": "query",
+        "scope": "device",
+        "kind": "touches",
+        "description": "Read the installed and the SDK's recommended firmware through camera_info (no stream, no option read).",
+        "confirm": "",
+        "preconditions": [
+         [
+          "camera_free",
+          "No other process holds a RealSense and realsense-viewer is closed"
+         ],
+         [
+          "bus_lock_free",
+          "No rack experiment holds the bus lock"
+         ]
+        ]
        },
        {
         "name": "reset",
@@ -7917,6 +9181,48 @@
          [
           "camera_free",
           "No other process streams this camera (camera_holders)"
+         ]
+        ]
+       },
+       {
+        "name": "calibrate",
+        "title": "Run calibration…",
+        "danger": "changes",
+        "scope": "device",
+        "kind": "changes",
+        "description": "The SDK's on-chip self-calibration. Nothing moves. The result replaces the camera's stored calibration only when its health factor was out of the good band and improved.",
+        "confirm": "Run on-chip self-calibration on {name} ({serial})? A textured, well-lit target must fill its view; the camera's stored calibration is rewritten when the result improves it.",
+        "preconditions": [
+         [
+          "camera_free",
+          "No other process holds a RealSense and realsense-viewer is closed"
+         ],
+         [
+          "bus_lock_free",
+          "No rack experiment holds the bus lock"
+         ],
+         [
+          "target_in_view",
+          "A textured, well-lit target fills the camera's view"
+         ]
+        ]
+       },
+       {
+        "name": "open_console",
+        "title": "Open console",
+        "danger": "interrupts",
+        "scope": "device",
+        "kind": "changes",
+        "description": "Start realsense-viewer, the vendor's own console, detached. It holds every RealSense until it is closed.",
+        "confirm": "Open realsense-viewer for {name} ({serial})? It holds every RealSense until you close it.",
+        "preconditions": [
+         [
+          "camera_free",
+          "No other process holds a RealSense and realsense-viewer is closed"
+         ],
+         [
+          "bus_lock_free",
+          "No rack experiment holds the bus lock"
          ]
         ]
        }
@@ -8070,19 +9376,42 @@
       "owner": "intel_rgbd",
       "actions": [
        {
-        "name": "run_comms_check",
-        "title": "Run frame check",
-        "description": "Stream 2 s of depth + colour and compare the frame rate with the profile's 30 Hz; reads the USB descriptor type.",
+        "name": "check_comms",
+        "title": "Check communication",
         "danger": "query",
         "scope": "device",
-        "confirm": "Stream 2 s from {name} and measure frame rate. Opening a camera another process streams would kill that stream.",
+        "kind": "touches",
+        "description": "Ask the SDK which RealSense cameras answer (enumerate) and read this one's camera_info (no stream, no option read).",
+        "confirm": "",
         "preconditions": [
          [
           "camera_free",
-          "No other process streams this camera (camera_holders)"
+          "No other process holds a RealSense and realsense-viewer is closed"
+         ],
+         [
+          "bus_lock_free",
+          "No rack experiment holds the bus lock"
          ]
-        ],
-        "kind": "touches"
+        ]
+       },
+       {
+        "name": "check_firmware",
+        "title": "Check firmware",
+        "danger": "query",
+        "scope": "device",
+        "kind": "touches",
+        "description": "Read the installed and the SDK's recommended firmware through camera_info (no stream, no option read).",
+        "confirm": "",
+        "preconditions": [
+         [
+          "camera_free",
+          "No other process holds a RealSense and realsense-viewer is closed"
+         ],
+         [
+          "bus_lock_free",
+          "No rack experiment holds the bus lock"
+         ]
+        ]
        },
        {
         "name": "reset",
@@ -8113,6 +9442,48 @@
          [
           "camera_free",
           "No other process streams this camera (camera_holders)"
+         ]
+        ]
+       },
+       {
+        "name": "calibrate",
+        "title": "Run calibration…",
+        "danger": "changes",
+        "scope": "device",
+        "kind": "changes",
+        "description": "The SDK's on-chip self-calibration. Nothing moves. The result replaces the camera's stored calibration only when its health factor was out of the good band and improved.",
+        "confirm": "Run on-chip self-calibration on {name} ({serial})? A textured, well-lit target must fill its view; the camera's stored calibration is rewritten when the result improves it.",
+        "preconditions": [
+         [
+          "camera_free",
+          "No other process holds a RealSense and realsense-viewer is closed"
+         ],
+         [
+          "bus_lock_free",
+          "No rack experiment holds the bus lock"
+         ],
+         [
+          "target_in_view",
+          "A textured, well-lit target fills the camera's view"
+         ]
+        ]
+       },
+       {
+        "name": "open_console",
+        "title": "Open console",
+        "danger": "interrupts",
+        "scope": "device",
+        "kind": "changes",
+        "description": "Start realsense-viewer, the vendor's own console, detached. It holds every RealSense until it is closed.",
+        "confirm": "Open realsense-viewer for {name} ({serial})? It holds every RealSense until you close it.",
+        "preconditions": [
+         [
+          "camera_free",
+          "No other process holds a RealSense and realsense-viewer is closed"
+         ],
+         [
+          "bus_lock_free",
+          "No rack experiment holds the bus lock"
          ]
         ]
        }

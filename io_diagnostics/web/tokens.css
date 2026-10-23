@@ -103,4 +103,25 @@
   --io-overlay: color-mix(in srgb, var(--io-shadow) 50%, transparent);      /* modal backdrop */
   --io-shadow-pop: 0 16px 48px color-mix(in srgb, var(--io-shadow) 40%, transparent);   /* pop-over / modal shadow */
   --io-radius-pill: 999px;          /* fully rounded pills */
+
+  /* ---- DERIVED · affordances (not colours; a skin may override) --------------------------------------- */
+  --io-focus-width: 2px;            /* the focus ring's width (High contrast: thicker) */
+  --io-link-decoration: none;       /* links' text-decoration at rest (High contrast: underline) */
+  --io-guide-style: none;           /* tree guides: none, or box = box-drawing glyphs (Terminal; read by tree/v6.js) */
+  --io-guide-glyph: "│├└─";         /* the box glyphs, in order: bar, tee, corner, dash */
+}
+
+/* Print forces light, whatever the skin and mode: a neutral black-on-white palette with the light status fills
+   (html[data-skin][data-mode] outranks every skin's [data-skin][data-mode] rule). */
+@media print {
+  html[data-skin][data-mode] {
+    color-scheme: light;
+    --io-bg: #ffffff; --io-surface: #ffffff; --io-surface-2: #ffffff; --io-surface-alt: #ffffff; --io-field: #ffffff;
+    --io-popover: #ffffff; --io-chrome-bg: #ffffff; --io-chrome-text: #000000;
+    --io-text: #1a1a1a; --io-text-strong: #000000; --io-muted: #4a4a4a; --io-faint: #5c5c5c; --io-off: #9a9a9a; --io-icon: #4a4a4a;
+    --io-border: #9a9a9a; --io-border-soft: #c8c8c8; --io-hover: #ffffff; --io-selected: #ededed; --io-selected-line: #6a6a6a;
+    --io-accent: #8a3a1f; --io-accent-text: #8a3a1f; --io-focus: #000000;
+    --io-warn: #9a5f00; --io-error: #b3261e; --io-stale: #6b6b6b; --io-unknown: #5b4ba8; --io-on-status: #ffffff;
+    --io-ok: #3f6f2c; --io-info: #2f5d94; --io-shadow: #000000;
+  }
 }

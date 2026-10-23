@@ -2,11 +2,12 @@
 
 *2026-10-22, lane F (host + tray). The only interface the web UI and the tree proposals may rely on. Served by
 `io_diagnostics/server.py` (stdlib `http.server`, default `http://127.0.0.1:8812/`). Tests:
-`tests/test_host_api.py` checks every endpoint against the shapes below.*
+`tests/test_host_api.py` checks every endpoint against the shapes below; `tests/test_server_act.py` the one write.*
 
-All endpoints are `GET` and return JSON (`Content-Type: application/json`, `Cache-Control: no-store`). Any other
-method returns **405**: actions never execute over HTTP in v1, so there is nothing to `POST` (a person runs one with
-`io-diagnostics act`, see "Actions" below). The record contract underneath is `contract/record.py`
+Every endpoint is `GET` and returns JSON (`Content-Type: application/json`, `Cache-Control: no-store`), except ONE
+write: `POST /api/v1/act`, the page's Utilities panel (see "Actions from the page" below). Any other method or path
+returns **405**. **Agents never call `POST /api/v1/act`**: they dry-run with `io-diagnostics act --dry-run`; a real
+action runs only from a person's click on the page (or `io-diagnostics act` typed by a person at a TTY). The record contract underneath is `contract/record.py`
 (`SCHEMA = "diagnostics-record/0"`, `RECORD_VERSION = "0.1"`); `docs/diagnostics-record-v0.md` explains every rule
 this API applies.
 
@@ -22,6 +23,7 @@ uv run --project /home/bam/io-diagnostics python /home/bam/io-diagnostics/io_dia
 | `GET /api/v1/records` | The raw v0 records the host holds (entities, statuses with `received`, events, faults) | rarely |
 | `GET /api/v1/plugins` | Plugin registry: loaded `plugins.d/*.toml`, matched devices, last run per device | rarely |
 | `GET /api/v1/health` | `{"ok": true, ...}` liveness | — |
+| `POST /api/v1/act` | The Utilities panel ONLY: a dry run, then a person's confirmed run with the dry run's token | on click |
 | `GET /`, `/<file>` | The page in `io_diagnostics/web/` | — |
 
 Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while building a response → **500**
@@ -200,8 +202,8 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
     `moves` (record v0.1: hardware moves, e.g. moteus calibration spins the rotor). Every danger but `query` needs a
     per-device confirmation. The same standard `name` can carry a different `danger` on another driver; its `title`
     is always the standard label (`contract.record.STANDARD_ACTIONS`, docs/actions-vocabulary-v0.1.md).
-  - `executable` is always `false` in v1: the dashboard shows actions and never runs them (a person runs one with
-    `io-diagnostics act`, below).
+  - `executable` is always `false`: nothing runs from a `GET`. The page runs one only through `POST /api/v1/act`
+    (a dry run first, then a person's click; "Actions from the page"), a person at a TTY through `io-diagnostics act`.
 - `faults`: the host's `FaultManager` memory for this entity (see Activity).
 
 ## `GET /api/v1/activity[?limit=N]`
@@ -285,7 +287,7 @@ never failed for it. Both rack drivers declare `"rack-bus"`, because each takes 
 `flock LOCK_NB` and would otherwise fail its sibling with `BusLockHeld`. `next_due_s` stays `0.0` while a job waits
 for its group.
 
-## Actions: `io-diagnostics act` (no HTTP in v1)
+## Actions: `io-diagnostics act` (a person at a terminal)
 
 ```bash
 uv run --project /home/bam/io-diagnostics io-diagnostics act --path host/usb1/port-1-3/usb-1-3 --action check_comms --dry-run
@@ -327,6 +329,51 @@ wrote them (the host does not reinterpret an action's result); `action_result` i
 result's; `registered_by` is `entity` or `describe`. The plugin's `act` is bounded by its declaration's
 `act_timeout_s` (default 900 s; a firmware flash or a calibration outlasts any diagnose), never by `timeout_s`.
 
+## Actions from the page: `POST /api/v1/act`
+
+The Utilities panel's one write (`io_diagnostics/server.py`). **Never call it from an agent, a script or another
+tool**: an agent proves a button with `io-diagnostics act --dry-run`, and only a person clicks. Every click on the page
+is a dry run first:
+
+```json
+{"path": "host/usb1/port-1-3/usb-1-3/can/15", "action": "calibrate", "node": 15, "dry_run": true}
+```
+
+The answer carries the `Host.act(..., dry_run=True)` result (above: `argv`, `action_result` with the plugin's
+`command`, `steps`, `preconditions`, `confirm`, and its own token) and, when the plugin answered (`outcome` `ok`), the
+page's token for exactly that path / action / node:
+
+```json
+{"dry_run": true, "result": {"path": "host/usb1/port-1-3/usb-1-3/can/15", "action": "calibrate", "outcome": "ok"}, "token": "c-3TW1BFkuLa5-UsYKpa3OMp", "window_s": 300.0}
+```
+
+The run repeats the request with that token and without `dry_run`:
+
+```json
+{"path": "host/usb1/port-1-3/usb-1-3/can/15", "action": "calibrate", "node": 15, "token": "c-3TW1BFkuLa5-UsYKpa3OMp"}
+```
+
+and answers `{"dry_run": false, "result": {...}}` with the `Host.act` result of the real run (`records` are the
+plugin's lines: `ActionCompleted`, `ConfirmationRequired`, `ActionRefused`, ...). The server passes the PLUGIN's
+token from the dry run (`action_result.token`, or `confirm_token`) as `--confirm`; the plugin still checks it against
+the device. It runs a real action only when ALL of these hold, else **403** `{"refused": "<Code>", "error": "<plain
+reason>"}` and nothing reaches the plugin:
+
+| Code | Refused when |
+|---|---|
+| `NotFromPage` | the `X-IO-Diagnostics: ui` header is missing (the page's own fetch sets it) |
+| `NotSameOrigin` | `Sec-Fetch-Site` is not `same-origin` (a browser sets it; no page can forge it), or `Origin` is another site |
+| `NotJson` | the body is not `Content-Type: application/json` (forces a CORS preflight this server never answers) |
+| `NoDryRun` | no token, a token this server never issued, or one already used (tokens are single use) |
+| `TokenExpired` | the dry run is older than `window_s` (300 s: a moteus token is good for at least one 5-minute window) |
+| `TokenMismatch` | the token was issued for another path, action or node |
+
+A malformed body is **400** `BadRequest`. The page's rule on top (web/app.js): a `query` runs with one more click;
+any other danger only from a confirm modal that repeats the danger; `moves` only with a ticked box that states the
+physical precondition (e.g. "CAN 15's joint is free to spin") and a button labelled with the action. Agents must not
+replay this flow: the headers are what a browser sends, and a command-line client can forge them, which is why the
+rule is written here and not only enforced.
+
 ## `GET /api/v1/health`
 
 `{"ok": true, "api": "io-diagnostics/1", "mode": "live" | "fixture", "uptime_s": 12.3}`
@@ -339,5 +386,5 @@ result's; `registered_by` is `entity` or `describe`. The plugin's `act` is bound
   and rank above `warn`.
 - That a path is stable across replugs (key selections on `path`, but expect it to vanish and reappear elsewhere;
   `hardware_id` follows the device).
-- That buttons do anything: `executable` is `false` in v1.
+- That a `GET` runs anything: `executable` is `false`; a button runs only through `POST /api/v1/act` after its dry run.
 - That `danger` has three values: record v0.1 added `moves`; treat any value it does not know as needing a confirm.

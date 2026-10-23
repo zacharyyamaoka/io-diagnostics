@@ -35,7 +35,7 @@
 
   // A layer handed to core.js as a folded part of the entity it serves: same entity, no children (what sits below
   // it is drawn as its own rows), part_of so partsOf() folds it.
-  const asPart = (layer) => ({ ...layer, edge: 'part_of', children: [] });
+  const asPart = (layer) => ({ ...layer, edge: 'part_of', folded: 'path', children: [] });
 
   // The node core.js sees for an entity row: its own composition parts, plus the hidden layers that report a problem.
   function seen(node, layers) {
@@ -164,27 +164,6 @@
     return entity ? withConnection(row, connectionOf(node, trail)) : row;
   }
 
-  // ------------------------------------------------------------------------------------ query ----
-  // core's search (label, API name, ids, path, message, hardware id, parts) plus the Connection text, so "ttyACM0" or
-  // "1-3" still finds the adapter whose layers are hidden.
-  function searchText(row) {
-    const parts = (row.parts || []).map((part) => `${part.name} ${part.label} ${part.message}`);
-    return [row.label, row.apiName, row.idText, row.id_text, row.entity, row.message, row.hardware_id,
-      (row.columns || {}).connection, ...parts].join('\u0000').toLowerCase();
-  }
-
-  function applyQuery(rows, query) {
-    const q = String(query || '').trim().toLowerCase();
-    if (!q) return rows;
-    const keep = (list) => list.reduce((out, row) => {
-      const children = keep(row.children || []);
-      const hit = searchText(row).includes(q);
-      if (hit || children.length) out.push(Object.assign(row, { children, hit, defaultOpen: children.length > 0 }));
-      return out;
-    }, []);
-    return keep(rows);
-  }
-
   root.IOStructures = root.IOStructures || {};
   root.IOStructures.p1 = {
     name: 'Devices, transport as columns',
@@ -194,9 +173,8 @@
       { key: 'showTransport', label: 'Ports', default: false, title: 'Show the transport layers (USB bus, port, hub, tty / video, CAN bus) as rows' },
     ],
     columns: [
-      { key: 'connection', title: 'Connection', width: '240px' },
+      { key: 'connection', title: 'Connection', width: '240px', mono: true },
     ],
-    handlesQuery: true,
     rows(state, options) {
       const top = V.topLevel(state, options);
       let rows;
@@ -209,7 +187,7 @@
         // several hosts: one row each (no connection of its own), its entities below
         rows = top.nodes.map((host) => V.entityRow(seen(host, []), options, { node: host, children: lift(host, options, [], []), defaultOpen: true }));
       }
-      return applyQuery(rows, options.query);
+      return rows; // core's search reads the Connection column too (row.columns), so "ttyACM0" finds the adapter
     },
   };
 })(typeof window !== 'undefined' ? window : globalThis);

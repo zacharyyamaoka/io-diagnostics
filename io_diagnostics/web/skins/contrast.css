@@ -50,6 +50,8 @@
   --io-radius-lg: 6px;
   --io-row-h: 30px;
   --io-indent: 16px;
+  --io-focus-width: 3px;           /* WCAG 2.4.13: a thicker focus ring */
+  --io-link-decoration: underline; /* links never by colour alone (WCAG 1.4.1) */
 
   --io-warn-text: #6b3a00;
   --io-error-text: #8f000a;
@@ -112,6 +114,8 @@
   --io-radius-lg: 6px;
   --io-row-h: 30px;
   --io-indent: 16px;
+  --io-focus-width: 3px;           /* WCAG 2.4.13: a thicker focus ring */
+  --io-link-decoration: underline; /* links never by colour alone (WCAG 1.4.1) */
 
   --io-warn-text: #ffc24d;
   --io-error-text: #ffadad;

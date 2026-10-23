@@ -50,7 +50,8 @@
   }
 
   // A folded node as core.js's folded part: edge part_of, without the children that are rows elsewhere.
-  const asPart = (node) => Object.assign({}, node, { edge: 'part_of', children: (node.children || []).filter((child) => child.edge === 'part_of') });
+  const asPart = (node) => Object.assign({}, node, { edge: 'part_of', folded: node.kind === 'part' || node.kind === 'stream' ? node.folded : 'path',
+    children: (node.children || []).filter((child) => child.edge === 'part_of') });
 
   // "/dev/video0 · capture", "/dev/video1" … "/dev/video5" -> "/dev/video0–5"; anything else verbatim.
   function nodesText(attrs) {
@@ -72,11 +73,9 @@
     const children = view.children.map((child) => rowOf(child, options));
     const path = view.chain.map((link) => link.name).join(' › ');
     const attrs = nodesText(view.attrs);
-    const row = V.entityRow(shown, options, { children, node, columns: { nodes: attrs } });
-    // WHY the folded path and the device nodes ride in idText: it is the one muted slot the tree and the Table both
-    // draw beside the label (docs/round2-seams.md has no `via` field yet; see the p4 lane report). The device node
-    // goes first: the slot ellipsizes its end, and /dev/ttyACM0 is what a script opens.
-    row.idText = [attrs, path, row.idText].filter(Boolean).join(' · ');
+    // the device nodes and the folded path are muted text after the label (row.attrs, row.suffix), not the id: the
+    // Table's ID column keeps the serial. The device node goes first: /dev/ttyACM0 is what a script opens.
+    const row = V.entityRow(shown, options, { children, node, columns: { nodes: attrs }, attrs: attrs ? [attrs] : [], suffix: path });
     row.title = [row.title, path ? `folded: ${path}` : '', view.lifted ? `bus folded in: ${view.lifted.name}` : '', attrs ? `device nodes: ${view.attrs.map((attr) => attr.name).join(', ')}` : ''].filter(Boolean).join('\n');
     // pass-throughs that kept a row (they branch) and an adapter's boards are open; a quiet device stays folded
     row.defaultOpen = children.length > 0 && (isPassThrough(node) || Boolean(view.lifted) || Boolean(row.status.hint));
@@ -93,7 +92,7 @@
     ],
     columns: [
       // narrow: the Table's columns are fixed-width and the Message column takes only what is left
-      { key: 'nodes', title: 'Device nodes', width: '120px' },
+      { key: 'nodes', title: 'Device nodes', width: '120px', mono: true },
     ],
     rows(state, options) {
       // parts as rows would put the folded nodes back as rows beside their joined row: this structure keeps them folded

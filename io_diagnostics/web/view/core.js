@@ -61,7 +61,12 @@
       while (at < words.length - 1 && modelWords.has(words[at].toLowerCase())) at += 1;
       ident = words.slice(at).join(' ');
     }
-    ident = ident.replace(/^[\s·:,\-]+/, '').trim() || serial;
+    ident = ident.replace(/^[\s·:,\-]+/, '').trim();
+    // a parenthesis that wraps the whole id is punctuation of the name, not part of the id: the live RealSense name
+    // "RealSense D405 (USB 219323070276)" reads "RealSense D405 · USB 219323070276" (the full name stays in the tooltip)
+    const wrapped = /^\(([^()]*)\)$/.exec(ident);
+    if (wrapped) ident = wrapped[1].trim();
+    ident = ident || serial;
     if (!ident) return { label: name, model: '', ident: '' };
     return { label: `${model} · ${ident}`, model, ident };
   }
@@ -76,12 +81,16 @@
   // ----------------------------------------------------------------------------- parts ----
   const isPart = (node) => node.edge === 'part_of';
 
-  // Every composition part under an owner (a part's own children fold with it), in API order.
+  // Every composition part under an owner (a part's own parts fold with it), in API order.
+  // WHY never a part's `via` children: the live moteus plugin reports the CAN bus as part_of its adapter and the
+  // boards as via the bus; the boards are entities (rows, lifted by childrenOf), never parts of the adapter.
+  // `folded: 'path'` marks a transport layer a structure folded in (node.layer / node.folded set on the copy it hands
+  // in), so the detail card can say "Connection (folded)" rather than "composition (part_of)".
   function partsOf(node) {
     const parts = [];
     (function collect(owner, children) {
       for (const child of children || []) {
-        if (!isPart(child) && owner === node) continue;
+        if (!isPart(child)) continue;
         parts.push({
           entity: child.path,
           name: child.name,
@@ -94,6 +103,7 @@
           problem: ownProblem(child),
           knock_on_of: child.knock_on_of || null,
           connected: child.connected,
+          folded: child.folded === 'path' || child.layer === true ? 'path' : '',
           node: child,
         });
         collect(child, child.children);
@@ -111,8 +121,20 @@
   }
 
   // ---------------------------------------------------------------------------- tree walk ----
-  // The children a structure should walk: via edges always; part_of edges only with options.showParts.
-  const childrenOf = (node, options = {}) => (node.children || []).filter((child) => options.showParts || !isPart(child));
+  // The children a structure should walk: via edges always; part_of edges only with options.showParts. Without it a
+  // folded part's own via children (the boards of a part_of CAN bus) are lifted to the owner, in API order, so
+  // folding the part never hides an entity.
+  function childrenOf(node, options = {}) {
+    if (options.showParts) return node.children || [];
+    const out = [];
+    (function lift(children) {
+      for (const child of children || []) {
+        if (isPart(child)) lift(child.children);
+        else out.push(child);
+      }
+    })(node.children);
+    return out;
+  }
 
   // An empty slot: a port or bus with nothing connected or nothing under it, that reports no problem of its own.
   function isEmpty(node) {
@@ -166,6 +188,13 @@
       hint: isGrouping(node) ? node.hint : (hint ? node.hint : null),
       title: tooltip(node, label, hint, part),
       columns: {},
+      // the seams a structure may fill (docs/round2-seams.md §3): subtitle = a muted second line under the selected /
+      // hovered row; lead = an inline note beside the label; suffix / attrs = muted text after the label that is not
+      // the id (the Table's ID column keeps idText)
+      subtitle: '',
+      lead: '',
+      suffix: '',
+      attrs: [],
       children: [],
       node,
     }, extra);
@@ -179,9 +208,15 @@
     for (const child of children) {
       const level = child.rollup ? child.rollup.level : null;
       const own = child.status ? child.status.own : null;
-      const worst = rank(own) > rank(level) ? own : level;
+      // a member's folded part counts too: a structure may fold a layer the API rollup does not place under it
+      // (P2's port above an adapter), and its problem is still a problem in this group
+      const part = child.status && child.status.part ? child.status.part : null;
+      let worst = rank(own) > rank(level) ? own : level;
+      if (part && rank(part.level) > rank(worst)) worst = part.level;
       if (PROBLEM.has(worst) && (!hint || rank(worst) > rank(hint.level))) {
-        hint = { level: worst, origin: (child.rollup && child.rollup.origin) || child.entity, origin_name: (child.rollup && child.rollup.origin_name) || child.label, message: (child.rollup && child.rollup.message) || child.message || '' };
+        hint = worst === (part && part.level) && rank(part.level) > rank(level)
+          ? { level: worst, origin: part.entity, origin_name: part.label, message: part.text }
+          : { level: worst, origin: (child.rollup && child.rollup.origin) || child.entity, origin_name: (child.rollup && child.rollup.origin_name) || child.label, message: (child.rollup && child.rollup.message) || child.message || '' };
       }
     }
     return {
@@ -191,7 +226,7 @@
       id_text: '', idText: '', last_received: null, age_s: null, expected_period_s: null, stale_after_s: null,
       checks: 0, actions: 0, faults: 0, parts: [], status: { own: null, hint, part: null, note: '' },
       title: [label, hint ? `below: ${hint.level} · ${hint.message}` : ''].filter(Boolean).join('\n'),
-      columns, children, defaultOpen, node: null,
+      columns, subtitle: '', lead: '', suffix: '', attrs: [], children, defaultOpen, node: null,
     };
   }
 
@@ -228,10 +263,13 @@
   }
 
   // ------------------------------------------------------------------------------ query ----
+  // Everything a row draws or holds one hover away: label, names, ids, path, message, hardware id, its folded parts,
+  // its Table columns and the seam texts (subtitle, lead, suffix, attrs), so "ttyACM0" finds the adapter in P1.
   function searchText(row) {
     const parts = (row.parts || []).map((part) => `${part.name} ${part.label} ${part.message}`);
-    return [row.label, row.apiName, row.idText, row.id_text, row.entity, row.message, row.hardware_id, ...parts]
-      .join('\u0000').toLowerCase();
+    const columns = Object.values(row.columns || {}).map((value) => String(value ?? ''));
+    return [row.label, row.apiName, row.idText, row.id_text, row.entity, row.message, row.hardware_id, ...parts, ...columns,
+      row.subtitle, row.lead, row.suffix, ...(row.attrs || [])].join('\u0000').toLowerCase();
   }
 
   // Keep the rows that match plus their ancestors; mark matches `hit` and open every kept branch.
@@ -245,6 +283,26 @@
       return out;
     }, []);
     return keep(rows);
+  }
+
+  // hintScope: 'children' (a structure flag): a worst-below hint is only drawn on a row that shows children. P5 lists
+  // an adapter as a leaf beside its bus's boards; the API's hint on it points at rows drawn elsewhere, a stray dot.
+  function dropLeafHints(rows) {
+    for (const row of rows) {
+      if (!row.children.length && row.status && row.status.hint) {
+        row.status = { ...row.status, hint: null };
+        if (row.entity) row.hint = null;
+      }
+      dropLeafHints(row.children);
+    }
+  }
+
+  // toggles[].when: a toggle that only means something in one mode of its structure (P2's Empty ports, Connections
+  // only). `when` is an option key (shown while that option is on) or a function(options) -> boolean.
+  function toggleShown(toggle, options = {}) {
+    if (!toggle || toggle.when === undefined || toggle.when === null) return true;
+    if (typeof toggle.when === 'function') return Boolean(toggle.when(options));
+    return Boolean(options[toggle.when]);
   }
 
   // ------------------------------------------------------------------------------ index ----
@@ -285,6 +343,7 @@
     const top = topLevel(state, opts);
     let rows = structure ? finalize(structure.rows(state, opts) || []) : [];
     if (opts.query && !(structure && structure.handlesQuery)) rows = applyQuery(rows, opts.query);
+    if (structure && structure.hintScope === 'children') dropLeafHints(rows);
     const host = top.hosts[0] || null;
     return {
       structure: id,
@@ -300,7 +359,7 @@
   const IOView = {
     RANK, PROBLEM, DEFAULT_OPTIONS,
     isGrouping, ownProblem, hintOf, labelOf, partLabel, partsOf, worstPart, childrenOf, isEmpty, topLevel,
-    entityRow, groupRow, finalize, applyQuery, indexRows, defaultOptions, structureIds, build,
+    entityRow, groupRow, finalize, applyQuery, searchText, indexRows, defaultOptions, structureIds, build, toggleShown,
   };
   root.IOView = IOView;
   if (typeof module !== 'undefined' && module.exports) module.exports = IOView;

@@ -26,8 +26,11 @@
   // ------------------------------------------------------------------------ Devices view ----
   // A layer folded into the entity it serves, drawn by core as a part (entityRow / partsOf). Only its own part_of
   // descendants come with it: entities below it (a CAN bus's boards) stay rows of their own.
+  // A transport layer (bus, port, tty / video node) is marked folded: 'path', so the detail panel lists it as the
+  // connection folded in, not as a composition part; a real part (driver, motor, stream) stays a part.
   function asPart(node) {
-    return { ...node, edge: 'part_of', children: (node.children || []).filter(isPart).map(asPart) };
+    const layer = node.kind !== 'part' && node.kind !== 'stream';
+    return { ...node, edge: 'part_of', ...(layer ? { folded: 'path' } : {}), children: (node.children || []).filter(isPart).map(asPart) };
   }
 
   // A field bus (a plugin's CAN bus under its adapter): it holds boards, not OS ports or devices.
@@ -150,13 +153,11 @@
   }
 
   function physicalRow(node, options) {
-    const lifted = [];
-    const lift = (part) => { for (const child of part.children || []) (isPart(child) ? lift(child) : lifted.push(child)); };
-    if (!options.showParts) (node.children || []).filter(isPart).forEach(lift);
-    const shaped = lifted.length ? { ...node, children: (node.children || []).map((child) => (isPart(child) ? asPart(child) : child)) } : node;
-    const children = [...V.childrenOf(node, options), ...lifted]
+    // core's childrenOf lifts a folded part's entities (the part_of bus's boards); its partsOf never collects them
+    const lifted = options.showParts ? [] : (node.children || []).filter(isPart).flatMap((part) => V.childrenOf({ children: [part] }, options));
+    const children = V.childrenOf(node, options)
       .filter((child) => options.showEmpty || !V.isEmpty(child)).map((child) => physicalRow(child, options));
-    const row = V.entityRow(shaped, options, { children });
+    const row = V.entityRow(node, options, { children });
     // the lifted boards sit under a part's problem (the bus no-ACK), which core draws as status.part, not a hint
     row.defaultOpen = physicalDefaultOpen(node, row) || Boolean(lifted.length && row.status.part);
     return row;
@@ -169,7 +170,7 @@
     order: 2,
     toggles: [
       { key: 'connections', label: 'Connections', default: false, title: 'Off: devices by what they are for (Actuators, Cameras, Network, Computer). On: the physical tree, as connected (USB / PCIe ports and buses)' },
-      { key: 'showEmpty', label: 'Empty ports', default: false, title: 'Connections view: show empty USB ports and buses with nothing on them' },
+      { key: 'showEmpty', label: 'Empty ports', default: false, when: 'connections', title: 'Connections view: show empty USB ports and buses with nothing on them' },
     ],
     rows(state, options) {
       const top = V.topLevel(state, options);

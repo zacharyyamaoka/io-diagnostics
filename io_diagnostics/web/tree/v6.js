@@ -96,16 +96,38 @@
     return byKey;
   }
 
+  // `lasts`: for each level above the row and the row itself, whether it is the last of its siblings (box guides)
   function visibleRows(st) {
     const out = [];
-    (function walk(list) {
-      for (const row of list) {
+    (function walk(list, lasts) {
+      list.forEach((row, at) => {
         const open = isOpen(st, row);
-        out.push({ row, open });
-        if (open) walk(row.children);
-      }
-    })(st.rows);
+        const mine = [...lasts, at === list.length - 1];
+        out.push({ row, open, lasts: mine });
+        if (open) walk(row.children, mine);
+      });
+    })(st.rows, []);
     return out;
+  }
+
+  // Box-drawing guides, when the skin asks for them (Terminal: --io-guide-style: box; --io-guide-glyph: "│├└─").
+  // Read from the page's tokens on every paint, so a live skin switch redraws them.
+  function guideStyle() {
+    const style = getComputedStyle(document.documentElement);
+    if (style.getPropertyValue('--io-guide-style').trim() !== 'box') return null;
+    const glyphs = [...style.getPropertyValue('--io-guide-glyph').trim().replace(/^["']|["']$/g, '')];
+    return glyphs.length >= 4 ? glyphs : ['│', '├', '└', '─'];
+  }
+
+  // "│  └─ " for a row two levels down: one 3-cell column per level below the top (the top level stays flush)
+  function guideText(lasts, glyphs) {
+    const [bar, tee, corner, dash] = glyphs;
+    let text = '';
+    for (let level = 1; level < lasts.length; level += 1) {
+      const last = lasts[level];
+      text += level === lasts.length - 1 ? `${last ? corner : tee}${dash} ` : `${last ? ' ' : bar}  `;
+    }
+    return text;
   }
 
   // ------------------------------------------------------------------------------ drawing ----
@@ -139,7 +161,7 @@
     return `${esc(text.slice(0, at))}<mark>${esc(text.slice(at, at + q.length))}</mark>${esc(text.slice(at + q.length))}`;
   }
 
-  function rowHtml({ row, open }, st, q) {
+  function rowHtml({ row, open, lasts }, st, q, glyphs) {
     const hasKids = row.children.length > 0;
     const status = row.status || {};
     const classes = ['t6-row'];
@@ -154,11 +176,22 @@
       ? `<span class="t6-chev${open ? ' t6-open' : ''}" data-t6-toggle="${esc(row.key)}" title="${open ? 'Collapse' : 'Expand'}"><svg viewBox="0 0 16 16" aria-hidden="true">${CHEVRON}</svg></span>`
       : '<span class="t6-chev t6-leaf"></span>';
     const note = status.note ? `<span class="t6-note${status.part.knock_on_of ? ' t6-subdued' : ''}">${esc(status.note)}</span>` : '';
+    // the seams (docs/round2-seams.md §3): lead = an inline note, attrs / suffix = muted text that is not the id
+    const shownAttrs = (row.attrs || []).filter(Boolean);
+    const lead = row.lead ? `<span class="t6-lead">${esc(row.lead)}</span>` : '';
+    const attrs = shownAttrs.length ? `<span class="t6-attrs">${esc(shownAttrs.join(' · '))}</span>` : '';
+    const suffix = row.suffix ? `<span class="t6-suffix">${esc(row.suffix)}</span>` : '';
     const id = row.idText ? `<span class="t6-id">${esc(row.idText)}</span>` : '';
-    return `<div class="${classes.join(' ')}" role="treeitem" aria-level="${row.depth + 1}"${hasKids ? ` aria-expanded="${open}"` : ''}`
-      + ` aria-selected="${row.key === st.selected}" data-t6-path="${esc(row.key)}" style="--t6-d:${row.depth}" title="${esc(row.title || row.label)}">`
-      + `${chevron}${typeIcon(row.icon)}<span class="t6-name">${highlight(row.label, row.hit ? q : '')}</span>${note}`
-      + `<span class="t6-fill"></span>${id}${statusHtml(row, open)}</div>`;
+    const selected = row.key === st.selected;
+    // subtitle: an in-flow second line under the selected row; on any other row it appears on hover, over the next
+    const sub = row.subtitle && !selected ? `<span class="t6-sub" aria-hidden="true">${esc(row.subtitle)}</span>` : '';
+    const guide = glyphs ? `<span class="t6-guide" aria-hidden="true">${esc(guideText(lasts, glyphs))}</span>` : '';
+    const html = `<div class="${classes.join(' ')}" role="treeitem" aria-level="${row.depth + 1}"${hasKids ? ` aria-expanded="${open}"` : ''}`
+      + ` aria-selected="${selected}" data-t6-path="${esc(row.key)}" style="--t6-d:${row.depth}" title="${esc(row.title || row.label)}">`
+      + `${guide}${chevron}${typeIcon(row.icon)}<span class="t6-name">${highlight(row.label, row.hit ? q : '')}</span>${lead}${note}${attrs}${suffix}`
+      + `<span class="t6-fill"></span>${id}${statusHtml(row, open)}${sub}</div>`;
+    return selected && row.subtitle
+      ? `${html}<div class="t6-subline" style="--t6-d:${row.depth}" title="${esc(row.subtitle)}">${esc(row.subtitle)}</div>` : html;
   }
 
   function headHtml(st) {
@@ -187,7 +220,9 @@
     st.visible = rows.map(({ row }) => row.key);
     const head = headHtml(st);
     if (head !== st.lastHead) { st.head.innerHTML = head; st.lastHead = head; }
-    const html = rows.map((entry) => rowHtml(entry, st, q)).join('') || '<div class="t6-empty">Nothing matches.</div>';
+    const glyphs = guideStyle();
+    st.root.classList.toggle('t6-box', Boolean(glyphs));
+    const html = rows.map((entry) => rowHtml(entry, st, q, glyphs)).join('') || '<div class="t6-empty">Nothing matches.</div>';
     // WHY compare before writing: the page re-renders every second; an unchanged tree must not touch the DOM
     // (hover, focus and scroll stay exactly where they were)
     if (html !== st.lastHtml) { st.list.innerHTML = html; st.lastHtml = html; }

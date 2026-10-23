@@ -76,7 +76,7 @@
   function withLayers(entity) {
     const layers = [...entity.up, ...entity.down];
     if (!layers.length) return entity.node;
-    const flat = (layer) => ({ ...layer, edge: 'part_of', children: (layer.children || []).filter(isCompositionPart) });
+    const flat = (layer) => ({ ...layer, edge: 'part_of', folded: 'path', children: (layer.children || []).filter(isCompositionPart) });
     const parts = (entity.node.children || []).filter(isCompositionPart);
     return { ...entity.node, children: [...parts, ...layers.map(flat)] };
   }
@@ -116,13 +116,15 @@
       defaultOpen: children.length > 0,
     });
     row.node = entity.node; // the raw API node, as every structure hands it to the renderers
-    // the path on demand: the tooltip's second line, and with "Paths" the muted suffix (the id stays in the tooltip)
+    // the path on demand: the tooltip's second line, the muted breadcrumb under the selected / hovered row
+    // (row.subtitle), and with "Paths" the muted suffix after the label (row.suffix: the ID column keeps the id)
     if (full.length > 1) {
       const lines = row.title.split('\n');
       lines.splice(1, 0, joined(full));
       row.title = lines.join('\n');
+      row.subtitle = joined(full.slice(1));
     }
-    if (options.showPaths && suffix) row.idText = suffix;
+    if (options.showPaths && suffix) row.suffix = suffix;
     return row;
   }
 
@@ -135,7 +137,7 @@
       { key: 'showPaths', label: 'Paths', default: false, title: 'Show each row\'s connection path (USB bus › port › tty › CAN bus) as a muted suffix' },
     ],
     columns: [
-      { key: 'path', title: 'Path', width: '240px' },
+      { key: 'path', title: 'Path', width: '240px', mono: true },
     ],
     rows(state, options) {
       const top = V.topLevel(state, options);

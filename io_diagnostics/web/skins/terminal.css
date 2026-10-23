@@ -16,10 +16,8 @@
  *           OK row (chroma > .12 would colour every OK name).
  * WHY radius 0 and 20px rows: a terminal draws on a character grid; nothing is rounded and a row is one line.
  * WHY stale is the grey ANSI slot: old data is "dim", not a new fault; unknown takes the magenta slot.
- * Not expressible with tokens today: box-drawing tree guides (├── └──). The seam that would carry them is a
- * `--io-guide-style: lines | box` token read by tree/v1.js and tree/v6.js, which would then emit the ├/└/│ glyph
- * prefix per depth (or a `.t6-row::before { content: var(--io-guide-glyph) }` pseudo-element hook in v6.css).
- * Today the indent is one 2-character step (16px) and the guides are the derived --io-guide lines. */
+ * Box-drawing tree guides (├─ └─ │): --io-guide-style: box asks tree style v6 to draw the glyphs of
+ * --io-guide-glyph as the indent (tokens.css "affordances"; the other styles keep their own guides). */
 [data-skin="terminal"][data-mode="light"] {
   --io-bg: #eee8d5;
   --io-surface: #fdf6e3;
@@ -66,6 +64,8 @@
   --io-radius-lg: 0;
   --io-row-h: 20px;
   --io-indent: 16px;
+  --io-guide-style: box;
+  --io-guide-glyph: "│├└─";
 
   --io-warn-text: #7d5f00;
   --io-ok-text: #5c6a00;
@@ -119,6 +119,8 @@
   --io-radius-lg: 0;
   --io-row-h: 20px;
   --io-indent: 16px;
+  --io-guide-style: box;
+  --io-guide-glyph: "│├└─";
 
   --io-radius-pill: 0;
 }

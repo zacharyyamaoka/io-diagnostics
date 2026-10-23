@@ -84,6 +84,8 @@
     <span class="tb-label" id="mode">—</span>
   </div>
   <div class="storyline"><span id="story"></span><span class="legend" id="sources"></span></div>
+  <!-- the attention line: every independent cause, its plain-words reason and its numbered what_to_check -->
+  <div class="attention" id="attention" role="status" aria-live="polite" hidden></div>
   <div class="main" id="main">
     <section class="left" id="left">
       <!-- one persistent pane per tree proposal: a renderer keeps its expansion and scroll in its own pane -->
@@ -94,7 +96,7 @@
   </div>
   <footer class="statusbar">
     <span id="lastmsg">—</span>
-    <span class="sb-note">passive only · never opens a CAN adapter or a camera · actions never execute (API v1)</span>
+    <span class="sb-note">diagnoses passively · a utility runs only after its dry run and your click</span>
     <!-- the quiet control cluster (bottom-right): structure + its toggles, tree style, skin, light/dark; live, persisted -->
     <div class="controls" id="controls">
       <label class="ctl" id="structure-switch" title="Structure: what the rows are">

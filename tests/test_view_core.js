@@ -1,12 +1,13 @@
 #!/usr/bin/env node
-// Unit tests for the round 2 view model (io_diagnostics/web/view/core.js + the p0 structure), in plain Node.
+// Unit tests for the round 2 view model (io_diagnostics/web/view/core.js + every structure p0-p5), in plain Node.
 //
 //   /usr/bin/node /home/bam/io-diagnostics/tests/test_view_core.js
 //
 // Synthetic states pin each rule (labels, single-host elision, parts folding, query, the black-box hint passed
-// through); then the same invariants run over the REAL fixture frames F1 / F2 / F3 (`cli.py serve --fixture <F>
-// --port 0`, a free port each, stopped by their process group). Prints one line per check and exits 1 on a failure.
-// Nothing here opens a CAN adapter or a camera.
+// through, the live part_of CAN bus, the row seams, expected-but-absent devices); then the same invariants run over
+// the REAL fixture frames F1 / F2 / F3 (`cli.py serve --fixture <F> --port 0`, a free port each, stopped by their
+// process group) and the live rack frame of 2026-10-22 17:41 (tests/fixtures/live/, read from disk). Prints one line
+// per check and exits 1 on a failure. Nothing here opens a CAN adapter or a camera.
 'use strict';
 
 const path = require('path');
@@ -15,8 +16,11 @@ const { spawn } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 const UV = '/home/bam/.local/bin/uv';
+const fs = require('fs');
 const V = require(path.join(ROOT, 'io_diagnostics', 'web', 'view', 'core.js'));
-require(path.join(ROOT, 'io_diagnostics', 'web', 'view', 'structure', 'p0.js'));
+const STRUCTURES = ['p0', 'p1', 'p2', 'p3', 'p4', 'p5'];
+for (const id of STRUCTURES) require(path.join(ROOT, 'io_diagnostics', 'web', 'view', 'structure', `${id}.js`));
+const LIVE = path.join(ROOT, 'tests', 'fixtures', 'live', 'rack-state-2026-10-22-1741.json');
 
 let failed = 0;
 let passed = 0;
@@ -144,6 +148,106 @@ function unit() {
   const group = V.finalize([V.groupRow({ key: 'g:actuators', label: 'Actuators', children: [can15, find(built, 'moteus-c1 · CAN 14')] })]);
   check('groupRow: no entity, worst member as hint', group[0].entity === null && group[0].status.hint.level === 'error' && group[0].children[0].depth === 1
     && group[0].children[0].parent === 'g:actuators');
+  liveShapeUnit();
+  seamUnit();
+}
+
+// The live moteus shape (2026-10-22 17:41): the CAN bus is part_of its adapter, the boards are via the bus.
+function liveRackState() {
+  const base = 'host/usb1/port-1-3/usb-1-3';
+  const noAck = 'error-passive and no board answered: nobody ACKs this adapter\'s frames';
+  const board = (id) => node(`${base}/can/${id}`, `CAN ${id}`, { kind: 'node', icon: 'servo', level: 'error', own: { level: 'error', message: 'did not answer' },
+    message: `CAN ${id} did not answer the id scan`, identity: { model: 'moteus-c1', serial_number: `S${id}` }, id_text: `S${id}` });
+  const bus = node(`${base}/can`, 'CAN bus', { kind: 'bus', icon: 'bus', edge: 'part_of', level: 'error', own: { level: 'error', message: noAck }, message: noAck,
+    rollup: { level: 'error', origin: `${base}/can`, origin_name: 'CAN bus', message: noAck, counts: { error: 1 }, knock_on: [] }, children: [board(1), board(14), board(15)] });
+  const tty = node(`${base}/ttyACM0`, '/dev/ttyACM0', { icon: 'tty', identity: { model: '/dev/ttyACM0' } });
+  const adapter = node(base, 'fdcanusb 272813EF', { icon: 'adapter', id_text: '272813EF', identity: { model: 'fdcanusb', serial_number: '272813EF' },
+    rollup: { level: 'error', origin: `${base}/can`, origin_name: 'CAN bus', message: noAck, counts: { error: 1 }, knock_on: [] },
+    hint: { level: 'error', origin: `${base}/can`, message: noAck }, children: [tty, bus] });
+  const port = node('host/usb1/port-1-3', 'Port 1-3', { kind: 'port', icon: 'port', id_text: '12 Mb/s', children: [adapter] });
+  const usb1 = grouping('host/usb1', 'USB bus 1 · 480 Mb/s', { level: 'error', children: [port] });
+  const camera = node('host/usb6/port-6-1/usb-6-1', 'RealSense D405 (USB 219323070276)', { icon: 'camera', identity: { model: 'RealSense D405', serial_number: '219323070276' } });
+  const usb6 = grouping('host/usb6', 'USB bus 6 · 10 Gb/s', { children: [node('host/usb6/port-6-1', 'Port 6-1', { kind: 'port', icon: 'port', children: [camera] })] });
+  const host = node('host', 'bam-GPU', { kind: 'host', icon: 'host', edge: null, depth: 0, own: { level: null, message: '' }, level: 'error', children: [usb1, usb6] });
+  return { api: 'io-diagnostics/1', tree: host, summary: { level: 'error', counts: { error: 1 },
+    attention: [{ path: `${base}/can`, name: 'CAN bus', level: 'error', message: noAck, device: { path: base, name: 'fdcanusb 272813EF' } }] } };
+}
+
+// An expected-but-absent device (host code ExpectedAbsent) under the host's "Expected, not connected" group.
+function withExpected(state) {
+  const absent = node('host/expected/usb-0483-5740-28b3a25d', 'fdcanusb 28B3A25D', { icon: 'usb', level: 'warn', own: { level: 'warn', message: 'expected · not on USB' },
+    message: 'expected (last seen 2026-10-21 18:24, rack_inventory) · not on USB', hardware_id: 'usb:0483:5740:28B3A25D' });
+  const group = grouping('host/expected', 'Expected, not connected', { kind: 'group', icon: 'group', level: 'warn', children: [absent] });
+  const tree = { ...state.tree, children: [...state.tree.children, group] };
+  return { ...state, tree, summary: { ...state.summary, attention: [...state.summary.attention, { path: absent.path, name: absent.name, level: 'warn', message: absent.message, device: null }] } };
+}
+
+function liveShapeUnit() {
+  const state = liveRackState();
+  const p0 = V.build(state, 'p0', {});
+  const adapter = p0.flat.find((row) => row.entity === 'host/usb1/port-1-3/usb-1-3');
+  check('live shape: partsOf keeps the part_of bus, never its via boards', adapter.parts.map((part) => part.label).join(',') === 'CAN bus',
+    adapter.parts.map((part) => part.label));
+  check('live shape: p0 lifts the bus\'s boards under the adapter', adapter.children.map((row) => row.label).join(' | ') === '/dev/ttyACM0 | moteus-c1 · CAN 1 | moteus-c1 · CAN 14 | moteus-c1 · CAN 15'
+    && adapter.defaultOpen === true, adapter.children.map((row) => row.label));
+  check('live shape: the bus problem is the adapter\'s part, the boards keep their own', Boolean(adapter.status.part) && adapter.status.part.level === 'error'
+    && adapter.status.hint === null && p0.flat.filter((row) => row.kind === 'node').every((row) => row.status.own === 'error'), adapter.status);
+  const adapterNode = state.tree.children[0].children[0].children[0];
+  check('childrenOf lifts a folded part\'s via children; showParts keeps the part', V.childrenOf(adapterNode).map((n) => n.name).join(',') === '/dev/ttyACM0,CAN 1,CAN 14,CAN 15'
+    && V.childrenOf(adapterNode, { showParts: true }).map((n) => n.name).join(',') === '/dev/ttyACM0,CAN bus');
+  const L = (n) => V.labelOf(n).label;
+  const unwrapped = L(node('a', 'RealSense D405 (USB 219323070276)', { identity: { model: 'RealSense D405', serial_number: '219323070276' } }));
+  const inner = L(node('a', 'D405 ·4411 (SDK)', { identity: { model: 'RealSense D405', serial_number: '4411' } }));
+  check('label: a wrapping parenthesis is unwrapped, an inner one kept', unwrapped === 'RealSense D405 · USB 219323070276' && inner === 'RealSense D405 · 4411 (SDK)', [unwrapped, inner]);
+  for (const id of STRUCTURES) {
+    for (const [tag, input] of [['live shape', state], ['expected absent', withExpected(state)], ['old shape', withExpected(rackState())]]) {
+      const built = V.build(input, id, {});
+      const boards = [...new Set(built.flat.filter((row) => row.kind === 'node').map((row) => row.apiName))].sort();
+      const partBoards = built.flat.flatMap((row) => row.parts).filter((part) => part.kind === 'node');
+      const lost = input.summary.attention.filter((item) => !built.byEntity.has(item.path));
+      const absent = built.flat.find((row) => row.entity === 'host/expected/usb-0483-5740-28b3a25d');
+      const expectBoards = tag === 'old shape' ? 'CAN 14,CAN 15' : 'CAN 1,CAN 14,CAN 15';
+      check(`${id} ${tag}: boards are rows, never parts; attention lands on a row${tag === 'live shape' ? '' : '; the absent device is a warn row'}`,
+        boards.join(',') === expectBoards && partBoards.length === 0 && lost.length === 0
+        && (tag === 'live shape' || Boolean(absent && absent.status.own === 'warn')),
+        { boards, partBoards: partBoards.map((part) => part.label), lost: lost.map((item) => item.name), absent: absent ? absent.status.own : null });
+    }
+  }
+}
+
+function seamUnit() {
+  const state = rackState();
+  const can14 = state.tree.children[0].children[0].children[0].children[1].children[0];
+  const row = V.entityRow(can14, {});
+  check('seams: every row carries subtitle / lead / suffix / attrs', row.subtitle === '' && row.lead === '' && row.suffix === '' && Array.isArray(row.attrs)
+    && V.groupRow({ key: 'g', label: 'G' }).attrs.length === 0);
+  const columned = V.finalize([V.entityRow(can14, {}, { columns: { connection: 'USB 1-3 · ttyACM0' } })]);
+  const suffixed = V.finalize([V.entityRow(can14, {}, { suffix: 'Port 1-3' })]);
+  check('search reads the Table columns and the seam texts', V.applyQuery(columned, 'ttyacm0').length === 1 && V.applyQuery(suffixed, 'port 1-3').length === 1
+    && V.applyQuery(V.finalize([V.entityRow(can14, {})]), 'ttyacm0').length === 0);
+  const quiet = V.entityRow(can14, {});
+  quiet.status = { ...quiet.status, part: { level: 'warn', entity: 'x/port', label: 'Port 1-3', text: 'Port 1-3: flapping', message: 'flapping' } };
+  const group = V.groupRow({ key: 'g:x', label: 'X', children: [quiet] });
+  check('groupRow counts a member\'s folded part', Boolean(group.status.hint) && group.status.hint.level === 'warn' && group.status.hint.message === 'Port 1-3: flapping', group.status.hint);
+  const p5 = V.build(liveRackState(), 'p5', {});
+  const leafHints = p5.flat.filter((r) => !r.children.length && r.status.hint);
+  check('hintScope children: no hint on a leaf row (p5\'s adapters)', globalThis.IOStructures.p5.hintScope === 'children' && leafHints.length === 0, leafHints.map((r) => r.label));
+  const p2 = globalThis.IOStructures.p2.toggles.find((toggle) => toggle.key === 'showEmpty');
+  check('toggles[].when: P2\'s Empty ports only in Connections', V.toggleShown(p2, { connections: false }) === false && V.toggleShown(p2, { connections: true }) === true
+    && V.toggleShown({ key: 'x' }, {}) === true);
+  const p4 = V.build(liveRackState(), 'p4', {});
+  const adapter4 = p4.flat.find((r) => r.entity === 'host/usb1/port-1-3/usb-1-3');
+  check('p4: folded path and device nodes ride in suffix / attrs, the id stays the id', adapter4.idText === '' && adapter4.attrs.join() === '/dev/ttyACM0'
+    && /Port 1-3/.test(adapter4.suffix) && adapter4.parts.some((part) => part.folded === 'path'), { id: adapter4.idText, attrs: adapter4.attrs, suffix: adapter4.suffix });
+  const p3 = V.build(liveRackState(), 'p3', { showPaths: true });
+  const can15 = p3.flat.find((r) => r.ident === 'CAN 15');
+  check('p3: breadcrumb subtitle and Paths suffix, id kept', /CAN bus/.test(can15.subtitle) && /CAN bus/.test(can15.suffix) && can15.idText === 'S15', { subtitle: can15.subtitle, suffix: can15.suffix, id: can15.idText });
+  const busRow = p5.flat.find((r) => r.entity === 'host/usb1/port-1-3/usb-1-3/can');
+  check('p5: the bus words are the row lead, the id column counts nodes', /error-passive/.test(busRow.lead) && busRow.idText === '3 nodes', { lead: busRow.lead, id: busRow.idText });
+  const columns = STRUCTURES.flatMap((id) => (globalThis.IOStructures[id].columns || []).map((column) => `${id}.${column.key}:${column.mono}`));
+  check('extra columns declare mono', columns.length === 3 && columns.every((text) => text.endsWith(':true')), columns);
+  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'io_diagnostics', 'web', 'view', 'structure', 'index.json'), 'utf8'));
+  check('the default structure is p1', manifest.default === 'p1', manifest.default);
 }
 
 // ------------------------------------------------------------------- real fixture frames ----
@@ -199,6 +303,17 @@ function invariants(frame, state) {
   // every attention item lands on a visible row (its own, or its owner's when it is a folded part)
   const lost = state.summary.attention.filter((item) => !built.byEntity.has(item.path));
   check(`${frame}: every attention item maps to a row`, lost.length === 0, lost.map((item) => item.name));
+  // every structure: boards are rows (never folded away as parts), composition parts are not rows, attention lands
+  const boards = [...nodes.values()].filter((n) => n.kind === 'node').map((n) => n.path).sort();
+  for (const id of STRUCTURES) {
+    const each = V.build(state, id, {});
+    const rowBoards = [...new Set(each.flat.filter((row) => row.kind === 'node').map((row) => row.entity))].sort();
+    const partBoards = each.flat.flatMap((row) => row.parts).filter((part) => part.kind === 'node').map((part) => part.label);
+    const partRows = each.flat.filter((row) => row.kind === 'part' || row.kind === 'stream').map((row) => row.label);
+    const missed = state.summary.attention.filter((item) => !each.byEntity.has(item.path)).map((item) => item.name);
+    check(`${frame} ${id}: boards are rows, parts fold, attention lands`, rowBoards.join() === boards.join() && partBoards.length === 0 && partRows.length === 0 && missed.length === 0,
+      { boards: rowBoards.length, of: boards.length, partBoards, partRows, missed });
+  }
 }
 
 const countParts = (n) => (n.edge === 'part_of' ? 1 : 0) + n.children.reduce((sum, child) => sum + countParts(child), 0);
@@ -232,8 +347,24 @@ async function frames() {
   }
 }
 
+// The live rack frame (2026-10-22 17:41: CAN bus error-passive, boards silent, two D405s), read from disk.
+function liveFrame() {
+  const state = JSON.parse(fs.readFileSync(LIVE, 'utf8'));
+  const bus = [];
+  (function visit(n) { if (n.kind === 'bus' && n.edge === 'part_of') bus.push(n); n.children.forEach(visit); })(state.tree);
+  check('live 17:41: the moteus plugin\'s CAN bus is part_of its adapter, its boards via it', bus.length === 1 && bus[0].children.every((n) => n.edge === 'via' && n.kind === 'node'));
+  invariants('live 17:41', state);
+  const p1 = V.build(state, 'p1', {});
+  const adapter = p1.flat.find((row) => row.label === 'fdcanusb · 272813EF');
+  check('live 17:41 p1: fdcanusb → its boards, the bus words on the adapter', Boolean(adapter) && adapter.children.map((row) => row.label).join(' | ') === 'CAN 1 | CAN 14 | CAN 15'
+    && Boolean(adapter.status.part) && /error-passive/.test(adapter.status.part.text), adapter && { kids: adapter.children.map((row) => row.label), part: adapter.status.part });
+  const cameras = p1.flat.filter((row) => row.model === 'RealSense D405').map((row) => row.label);
+  check('live 17:41: RealSense labels', cameras.join(' | ') === 'RealSense D405 · USB 219323070276 | RealSense D405 · USB 130523071221', cameras);
+}
+
 (async () => {
   unit();
+  liveFrame();
   if (!process.argv.includes('--unit')) await frames();
   console.log(`\n${passed}/${passed + failed} checks passed`);
   process.exitCode = failed ? 1 : 0;

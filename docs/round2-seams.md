@@ -71,6 +71,12 @@ computed in `tokens.css` from the base ones with `color-mix()`; a skin **may** o
 segment) · `--io-mark` (search highlight) · `--io-overlay` (modal backdrop) · `--io-shadow-pop` (a full
 `box-shadow` value) · `--io-radius-pill`.
 
+**Affordances (DERIVED, not colours; integration lane, 2026-10-22):** `--io-focus-width` (focus ring width, 2px;
+High contrast 3px) · `--io-link-decoration` (links at rest, `none`; High contrast `underline`) · `--io-guide-style`
+(`none`, or `box`: tree style v6 draws box-drawing glyphs as the indent; Terminal sets it) · `--io-guide-glyph` (the
+glyphs in order bar, tee, corner, dash; default `"│├└─"`). `tokens.css` also ends with an `@media print` block that
+forces a neutral light palette (`html[data-skin][data-mode]` outranks every skin rule), whatever the skin and mode.
+
 Adding a token: add it to `tokens.css` (BASE above the `---- DERIVED` comment, or DERIVED below it) with a one-line
 meaning, give it a value in every ready skin, and list it here. The test reads the list from `tokens.css` itself.
 
@@ -164,12 +170,16 @@ kind, children, message, defaultOpen, columns})` (a structure's own grouping row
 | `status.hint` | the API's worst-below hint `{level, origin, origin_name, message}` or `null`; on a grouping row its `level` (= rollup). A hint whose origin is one of this row's folded parts is `null` (it is `status.part`) |
 | `status.part` | the worst folded part's own problem `{level, entity, label, message, text: "driver: fault 33 …", knock_on_of}` or `null` |
 | `status.note` | `status.part.text` when the part is what the mark is about (no own problem, or a worse part), else `''` |
-| `parts` | the folded composition parts `[{entity, name, label, icon, kind, level, message, own, problem, knock_on_of, connected, node}]` |
+| `parts` | the folded parts `[{entity, name, label, icon, kind, level, message, own, problem, knock_on_of, connected, folded, node}]`; `folded: 'path'` marks a transport layer a structure folded in (it set `folded: 'path'` or `layer: true` on the copy it handed in): the detail panel lists those as "Connection (folded)", the rest as "Parts · composition (part_of)". `partsOf` never collects a part's own `via` children (the live CAN bus is `part_of` its adapter and its boards are `via` the bus: the boards are rows) |
 | `children` | child rows (display order) |
 | `defaultOpen` | the structure's expansion default (core: open when there is a hint, if unset) |
 | `hit` | search matched this row (or one of its parts); present only while searching |
 | `columns` | `{key: text}` for the structure's declared Table columns |
 | `title` | the tooltip text (label, full API name, message, part, hint, knock-on, not connected, id) |
+| `subtitle` | a muted second line under the selected row (in flow) and under a hovered row (an overlay, no layout jump); the Table draws it under the selected row. P3's breadcrumb. `''` = none |
+| `lead` | an inline note right after the label, muted (P5's bus words: "error-passive · no ACK …"). `''` = none |
+| `suffix` | muted text after the label that is NOT the id (P3's Paths, P4's folded path); the ID column keeps `idText` |
+| `attrs` | short muted mono attributes after the label (P4's device nodes `/dev/ttyACM0`), joined with ` · `; `[]` = none |
 | `depth`, `parent`, `path`, `name` | set by core: display depth (0 = top level), parent key, aliases of `key` / `label` |
 | `kind`, `icon`, `edge`, `level`, `message`, `own`, `rollup`, `hint`, `knock_on_of`, `stale`, `connected`, `hardware_id`, `identity`, `owner`, `id_text`, `last_received`, `age_s`, `expected_period_s`, `stale_after_s`, `checks`, `actions`, `faults` | the API node's fields, unchanged (`hint` minus a part-explained hint) |
 | `node` | the raw API node (`null` for a group row) |
@@ -177,10 +187,18 @@ kind, children, message, defaultOpen, columns})` (a structure's own grouping row
 ### Helpers in `window.IOView` (all pure)
 
 `topLevel(state, options)` → `{nodes, hosts, elided}` — single-host elision · `childrenOf(node, options)` → via
-children (part_of only with `showParts`) · `isEmpty(node)` — an empty port / bus with no own problem ·
+children (part_of only with `showParts`; without it a folded part's own via children are lifted in its place, so the
+boards of a part_of CAN bus stay rows) · `isEmpty(node)` — an empty port / bus with no own problem ·
 `labelOf(node)` → `{label, model, ident}` · `partsOf(node)` · `hintOf(node)` · `ownProblem(node)` · `isGrouping(node)` ·
-`entityRow` · `groupRow` · `applyQuery(rows, q)` · `build(state, id, options)` · `structureIds()` ·
-`defaultOptions(structure)` · `RANK`, `PROBLEM`, `DEFAULT_OPTIONS`.
+`entityRow` · `groupRow` (its hint counts each member's `status.part` too) · `applyQuery(rows, q)` ·
+`searchText(row)` (label, names, ids, path, message, hardware id, parts, `row.columns` values, subtitle / lead /
+suffix / attrs) · `build(state, id, options)` · `structureIds()` · `defaultOptions(structure)` ·
+`toggleShown(toggle, options)` · `RANK`, `PROBLEM`, `DEFAULT_OPTIONS`.
+
+Structure fields beyond `rows()` (integration lane): `toggles[].when` — an option key (the toggle shows only while
+that option is on: P2's Empty ports in Connections) or a function(options) → boolean · `hintScope: 'children'` — a
+worst-below hint is dropped on every row without children (P5's leaf adapters) · `columns[].mono: true` — the
+Table draws that column in `--io-font-mono` (P1 Connection, P3 Path, P4 Device nodes).
 
 Rules every structure keeps (the tests check them on whatever `rows()` returns): rows are entities with `model · id`
 labels; no composition part is a row unless the viewer turned it on; one host is elided; a row's own level is the
@@ -188,9 +206,9 @@ API's self-report and its hint is the API's (`status.*` comes from `entityRow`/`
 
 ### Registering a structure (`web/view/structure/index.json`)
 
-Pre-listed `p0` (ready) … `p5` (`"ready": false`), blank-line separated. Landing a structure = write
-`view/structure/<id>.js` and change **only your own line** to `"ready": true`. The page loads ready structures at
-boot; the Structure picker lists every one that registered `rows()`.
+Pre-listed `p0` … `p5`, blank-line separated, all ready since the wave. `"default": "p1"` (integration lane,
+2026-10-22: Zach's "fdcanusb → Moteus c1 · CAN 15", the transport as columns, a Ports toggle). A remembered choice
+still wins. The page loads ready structures at boot; the Structure picker lists every one that registered `rows()`.
 
 `p0` "Physical (today)" (`view/structure/p0.js`) is the reference: the v1 physical tree through this seam, with
 toggles `showParts` ("Parts as rows", off) and `showEmpty` ("Empty ports", on).
@@ -210,7 +228,17 @@ Picker order: v6 (default), v1, v2, v3, v4, v5.
   `io-diagnostics.structure`, `io-diagnostics.tree-variant`, `io-diagnostics.structure-toggles`
   (`{structureId: {key: bool}}`); v2 keeps its own `io-diagnostics.tree.v2.open`.
 - Controls (bottom-right `#controls`): `#structure`, `#structure-toggles [data-opt=<key>]`, `#tree-variant`,
-  `#skin`, `#mode-switch [data-mode=auto|light|dark]`. Never a URL flag.
+  `#skin`, `#mode-switch [data-mode=auto|light|dark]`. Never a URL flag. Defaults: structure p1, tree v6, skin claude,
+  mode follows the OS.
+- Attention line `#attention` (under the story line): every `summary.attention` cause, worst first, `.att-where`
+  (`device › name`, a link) + `.att-msg` (the plain words); the first one's `what_to_check` lines open
+  (`.why-lines > div`, as authored), the others behind `[data-att]`. `S.why` caches each path's checklists from
+  `/api/v1/node` (`what_to_check`, `kernel_evidence`). The detail panel's first card is `.card.why` ("What to
+  check") for the selection and its folded problem parts.
+- Utilities: `.card.utilities > .ugroup.ugroup-{checks|maintenance|motion|more}` > `.urow` > `button.u-btn[data-util=<name>]`
+  (icon `svg.u-ic`, `.u-title`, `.u-desc`); a click dry-runs (`S.util`, `POST /api/v1/act`), the panel `.u-panel`
+  shows `.u-cmd`, `.u-steps`, `.pre`, `.confirm`, `.u-argv`; `[data-util-run]` runs a query or opens the modal
+  (`#modal .modal.m-<danger>`, `[data-util-tick]` for moves, `[data-util-confirm]`); the result is `.u-result`.
 - In-page: `window.IOView`; the page's state `S` is a top-level `const` (reach it as `S` from `page.evaluate`, not
   `window.S`): `S.built` is the last `IOView.build(...)` result the page drew (`rows`, `flat`, `byKey`, `byEntity`,
   `host`, `columns`, `options`), `S.structure`, `S.skin`, `S.mode`, `S.sel` (entity), `S.selKey` (group row).
@@ -228,8 +256,11 @@ Picker order: v6 (default), v1, v2, v3, v4, v5.
 /usr/bin/node /home/bam/io-diagnostics/tests/test_tree_variants.js
 ```
 
-`test_view_core.js` — core.js + p0 in plain Node: labels, single-host elision, parts folding, query, the black-box
-hint passed through (synthetic states, then every row of the real F1 / F2 / F3 frames). `--unit` skips the frames.
+`test_view_core.js` — core.js + every structure in plain Node: labels, single-host elision, parts folding, query, the
+black-box hint passed through, the live part_of CAN bus, the row seams, expected-but-absent devices (synthetic
+states, then every row of the real F1 / F2 / F3 frames and the live rack frame
+`tests/fixtures/live/rack-state-2026-10-22-1741.json`; every structure keeps every board a row). `--unit` skips the
+fixture servers (the live frame is read from disk).
 
 `test_tree_variants.js` — headless Chrome on fixture servers F1 / F2 (each started on a free port and stopped by its
 process group): the per-style checks for v1–v6, then the **foundation gates** for every ready skin (with p0) and every
@@ -245,12 +276,34 @@ ready structure (with Claude), in light and dark, for the v6 tree and the Table:
 | `shapes` / `right` | a row with an own or part problem has no visible shape, or the shape sits left of the name |
 | `labels` | a drawn name differs from the row's label, a part is a row, nothing is folded, or no `fdcanusb · …` label |
 
-`--foundation` runs only the gates; `--mutate` proves the rulers fail (green names, pinned / hidden chevrons:
-`no-green`, `chevrons` and both views' `quiet-ok` must fail). Screenshots: `reports/media/round2/foundation-<tree|table>-<1811|1825>-<light|dark>.png`
-(a non-default combo is prefixed `foundation-<skin>-<structure>-…`). Not yet gated, owned by the skin lanes: WCAG AA
-contrast measured per skin and mode.
+| `contrast` | (every skin, both modes, with p1) a text token (text, text-strong, muted, faint, accent-text, the six level `-text`) under 4.5:1 on surface, surface-2, surface-alt or popover, or a problem shape (warn, error, stale, unknown) under 3:1 on surface or on the selected row — measured on the browser's own resolved tokens |
+| `table message` | the Table's Message column narrower than 240 px at 1600 px with the detail pane open (every structure, its extra columns included) |
+
+`--foundation` runs only the gates; `--mutate` proves the rulers fail (green names, pinned / hidden chevrons, a
+faint token too light / too dark, an unbounded table: `no-green`, `chevrons`, both views' `quiet-ok`, `contrast` for
+every skin and `table message` must fail). The per-style checks run on p0 (the physical tree they are about); the
+foundation gates run every structure with Claude and every skin with p1 (the default). Screenshots:
+`reports/media/round2/foundation-<tree|table>-<1811|1825>-<light|dark>.png` (a non-default combo is prefixed
+`foundation-<skin>-<structure>-…`).
+
+```bash
+/usr/bin/node /home/bam/io-diagnostics/tests/test_utilities.js
+```
+
+`test_utilities.js` — the integration acceptance on a fixture server (it refuses to press anything unless only the
+fixture plugin is loaded): defaults, the attention line and the detail's What to check (incl. an injected
+ExpectedAbsent device in every structure), the Utilities card (groups, icons, dry run, the moves modal, a query's
+result), the server's refusals, and every seam above drawn. Screenshots `reports/media/round2/integration-*.png`.
 
 ## Decisions taken here (reversible)
+
+- (integration) The CAN bus in F1-F3 is now `part_of` its adapter, boards `via` the bus, as the live moteus plugin
+  sends it (`tests/fixtures/plugins/live_shape.py`, idempotent; it also adds `what_to_check` and the standard action
+  vocabulary; the boards' recorded `reset` stays, pinned by tests/test_host_api.py, so it shows under More).
+- (integration) `labelOf` unwraps a parenthesis that wraps the whole id: the live "RealSense D405 (USB 219323070276)"
+  reads `RealSense D405 · USB 219323070276`; an inner parenthesis ("4411 (SDK)") stays. The full name is in the tooltip.
+- (integration) The foundation ruler counts a composition part (kind `part` / `stream`) as a part row, not any row
+  whose edge is `part_of`: the bus P5 draws as its top-level row is `part_of` its adapter in the live shape.
 
 - Labels render the model verbatim (`moteus-c1 · CAN 15`, not "Moteus c1"): stored text renders as authored; the
   full API name is in the tooltip and the detail path line. The brief's example prettified it.

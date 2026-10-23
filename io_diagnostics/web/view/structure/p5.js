@@ -53,13 +53,13 @@
     const adapterRows = adapter ? [V.entityRow(adapter, bus.edge === 'part_of' ? { ...options, showParts: true } : options)] : [];
     const row = V.entityRow(bus, options, { children: [...adapterRows, ...members], defaultOpen: true });
     const label = `${protocol} · ${ident}`;
-    // WHY the bus's own message in the id slot: when boards don't answer, the bus's own words ("error-passive · no
-    // ACK: no powered node on this bus") are the first thing Zach needs, and the seam has no other inline text slot
-    // (status.note is the folded part's). A healthy bus says how many nodes it carries, like a USB bus's "2 devices".
+    // WHY the bus's own words inline (row.lead): when boards don't answer, "error-passive · no ACK: no powered node
+    // on this bus" is the first thing Zach needs; the id column keeps saying how many nodes the bus carries.
     const nodes = members.length;
     return Object.assign(row, {
       label, model: protocol, ident,
-      idText: row.status.own ? String(bus.message || '') : `${nodes} node${nodes === 1 ? '' : 's'}`,
+      lead: row.status.own ? String(bus.message || '') : '',
+      idText: `${nodes} node${nodes === 1 ? '' : 's'}`,
       title: `${label}\n${row.title}`,
     });
   }
@@ -103,6 +103,8 @@
     name: 'Bus lens',
     description: 'The buses the robot talks over at the top (CAN per adapter, USB cameras, PCIe capture, Ethernet / EtherCAT), each listing its nodes; the computer\'s own USB / PCIe topology folds into one "Computer" row.',
     order: 5,
+    // an adapter is a leaf beside its bus's boards here: its API hint points at rows drawn elsewhere (core.js)
+    hintScope: 'children',
     toggles: [
       { key: 'showEmpty', label: 'Empty ports', default: false, title: 'Under Computer: show empty USB ports and buses with nothing on them' },
     ],

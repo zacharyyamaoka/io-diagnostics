@@ -1,7 +1,10 @@
 /* Skin 1 · Claude — the default (docs/round2-brief-2026-10-22.md: warm neutrals, serif display, generous spacing).
  * Defines every BASE token of web/tokens.css for both modes; derived tokens come from tokens.css.
  * WHY the selection is a warm grey, not the clay accent: OK rows carry no colour (quiet when OK), and a clay
- * selection would read as a warning next to the amber triangle. Clay stays for focus and the active control. */
+ * selection would read as a warning next to the amber triangle. Clay stays for focus and the active control.
+ * WHY these faint / warn / stale / muted values (round 2 contrast gate, tests/test_tree_variants.js): faint reads
+ * >= 4.5:1 on every reading surface (light 4.30 on surface-2 before; dark 3.93 on the pop-over), and the warn and
+ * stale shapes >= 3:1 on the selected row (2.89 / 2.78 before); dark muted moved up with faint to keep the steps. */
 [data-skin="claude"][data-mode="light"] {
   --io-bg: #e9e6dc;
   --io-surface: #faf9f5;
@@ -15,7 +18,7 @@
   --io-text: #3d3c37;
   --io-text-strong: #141413;
   --io-muted: #5f5d56;
-  --io-faint: #74726a;
+  --io-faint: #6e6c64;
   --io-off: #b0ada3;
   --io-icon: #85837b;
 
@@ -29,9 +32,9 @@
   --io-accent-text: #a8502f;
   --io-focus: #d97757;
 
-  --io-warn: #b7791f;
+  --io-warn: #ad7019;
   --io-error: #c83e32;
-  --io-stale: #8c897f;
+  --io-stale: #827f75;
   --io-unknown: #7466b8;
   --io-on-status: #ffffff;
   --io-ok: #5e8c4a;
@@ -62,8 +65,8 @@
 
   --io-text: #cfccc2;
   --io-text-strong: #f5f4ee;
-  --io-muted: #a3a097;
-  --io-faint: #8f8c83;
+  --io-muted: #aeaba2;
+  --io-faint: #9d9a91;
   --io-off: #5e5c56;
   --io-icon: #9a978d;
 

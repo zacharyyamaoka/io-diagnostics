@@ -29,7 +29,13 @@ const S = {
   skins: [],           // ready skins from skins/index.json
   skin: null,
   mode: 'auto',        // 'auto' (prefers-color-scheme) | 'light' | 'dark'
-  dialog: params.get('dialog') ? { name: params.get('dialog') } : null,
+  util: null,          // the utility being dry-run / confirmed / run: {path, name, node, phase, dry, result, ...}
+  modalHtml: '',
+  why: new Map(),      // entity path -> {checks: [{name, level, message, lines, evidence}], message, at}: what_to_check
+  attOpen: new Set(),  // attention items whose checklist the viewer opened (the first one is open unless closed)
+  attClosed: new Set(),
+  attHtml: '',
+  detailHtml: '',
   chip: params.get('chip') === '1',
   lastOk: 0,
   lastError: '',
@@ -107,7 +113,8 @@ function loadScript(src) {
   });
 }
 
-const DEFAULTS = { skin: 'claude', structure: 'p0', variant: 'v6' };
+// WHY p1: Zach's "fdcanusb → Moteus c1 · CAN 15" (entities, transport as columns, a Ports toggle one click away)
+const DEFAULTS = { skin: 'claude', structure: 'p1', variant: 'v6' };
 const darkQuery = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
 
 // <html data-skin data-mode>: the skin's tokens for the mode. Auto follows the OS until the viewer picks one.
@@ -277,12 +284,14 @@ function structureOptions() {
 function renderToggles() {
   const structure = window.IOStructures[S.structure] || {};
   const options = structureOptions();
-  $('structure-toggles').innerHTML = (structure.toggles || []).map((toggle) => `<label class="ctl-check" title="${esc(toggle.title || toggle.label)}">`
+  // a toggle with `when` shows only while it means something (P2's Empty ports: Connections only)
+  $('structure-toggles').innerHTML = (structure.toggles || []).filter((toggle) => IOView.toggleShown(toggle, options)).map((toggle) => `<label class="ctl-check" title="${esc(toggle.title || toggle.label)}">`
     + `<input type="checkbox" data-opt="${esc(toggle.key)}"${options[toggle.key] ? ' checked' : ''}>${esc(toggle.label)}</label>`).join('');
 }
 function setToggle(key, value) {
   S.toggles[S.structure] = { ...(S.toggles[S.structure] || {}), [key]: value };
   writePref(PREFS.toggles, JSON.stringify(S.toggles));
+  renderToggles();
   render();
 }
 
@@ -362,8 +371,12 @@ function rowHtml(row, selectable) {
   const cls = ['row', row.connected === false ? 'off' : '', row.knock_on_of ? 'knock' : '', row.hit ? 'hit' : '',
     selectable && row.key === selectedKey() ? 'sel' : ''].join(' ');
   const note = row.status && row.status.note ? `<span class="note">${esc(row.status.note)}</span>` : '';
+  // the row seams (docs/round2-seams.md §3): lead note, then muted attrs / suffix that are not the id
+  const attrs = (row.attrs || []).filter(Boolean);
+  const lead = row.lead ? `<span class="lead">${esc(row.lead)}</span>` : '';
+  const extra = (attrs.length ? `<span class="attrs">${esc(attrs.join(' · '))}</span>` : '') + (row.suffix ? `<span class="suffix">${esc(row.suffix)}</span>` : '');
   return `<div class="${cls}" data-key="${esc(row.key)}" style="--d:${row.depth}" title="${esc(row.title || row.label)}">${chev}${icon(row.icon)}`
-    + `<span class="name">${esc(row.label)}</span>${note}<span class="fill"></span>${statusMark(row)}</div>`;
+    + `<span class="name">${esc(row.label)}</span>${lead}${note}${extra}<span class="fill"></span>${statusMark(row)}</div>`;
 }
 
 // Fallback only: drawn when no tree style registered (e.g. a tree/*.js failed to load).
@@ -395,22 +408,37 @@ function belowCell(row) {
   return `<td title="${esc(hint.message)}"><span class="belowcell">${shape(hint.level, `below: ${hint.level}`)}<span>${esc(hint.origin_name || hint.message || '')}</span></span></td>`;
 }
 
+// WHY a minimum: the Message column is the one that says what is wrong; with the detail pane open at 1600 px and a
+// structure's extra columns, a fixed layout gave it what was left (Zach's screenshot: "ME"). The table now grows
+// past the pane and scrolls sideways instead.
+const MESSAGE_MIN_PX = 280;
+const FIXED_COLUMNS = [['Name', 380], ['ID', 170], ['Message', null], ['Below', 190]];
+const TAIL_COLUMNS = [['Last seen', 140], ['Checks', 60], ['Faults', 60]];
 function renderTable() {
   const rows = visibleRows(S.built.rows);
   const extra = S.built.columns || [];
-  const body = rows.map((row) => `<tr class="${row.key === selectedKey() ? 'sel' : ''} ${row.connected === false ? 'off' : ''}" data-key="${esc(row.key)}">`
-    + `<td class="namecell">${rowHtml(row, false)}</td>`
-    + `<td class="mono idcell" title="${esc(row.id_text || '')}">${esc(row.idText || '')}</td>`
-    + messageCell(row)
-    + belowCell(row)
-    + extra.map((column) => `<td title="${esc(row.columns[column.key] || '')}">${esc(row.columns[column.key] || '')}</td>`).join('')
-    + `<td class="num">${fmtSeen(row)}</td>`
-    + `<td class="num">${row.checks || ''}</td>`
-    + `<td class="num">${row.faults || ''}</td></tr>`).join('');
+  const span = FIXED_COLUMNS.length + extra.length + TAIL_COLUMNS.length;
+  const body = rows.map((row) => {
+    const selected = row.key === selectedKey();
+    const tr = `<tr class="${selected ? 'sel' : ''} ${row.connected === false ? 'off' : ''}" data-key="${esc(row.key)}">`
+      + `<td class="namecell">${rowHtml(row, false)}</td>`
+      + `<td class="mono idcell" title="${esc(row.id_text || '')}">${esc(row.idText || '')}</td>`
+      + messageCell(row)
+      + belowCell(row)
+      + extra.map((column) => `<td class="${column.mono ? 'mono xcol' : 'xcol'}" title="${esc(row.columns[column.key] || '')}">${esc(row.columns[column.key] || '')}</td>`).join('')
+      + `<td class="num">${fmtSeen(row)}</td>`
+      + `<td class="num">${row.checks || ''}</td>`
+      + `<td class="num">${row.faults || ''}</td></tr>`;
+    // the subtitle (P3's breadcrumb): a muted second line under the selected row, as in the tree
+    return selected && row.subtitle ? `${tr}<tr class="subrow"><td colspan="${span}"><div class="sub" style="--d:${row.depth}">${esc(row.subtitle)}</div></td></tr>` : tr;
+  }).join('');
+  const widths = (columns) => columns.map(([, width]) => (width ? `<col style="width:${width}px">` : '<col>')).join('');
   const extraCols = extra.map((column) => `<col style="width:${esc(column.width || '160px')}">`).join('');
   const extraHeads = extra.map((column) => `<th>${esc(column.title)}</th>`).join('');
-  return `<table class="grid"><colgroup><col style="width:380px"><col style="width:170px"><col><col style="width:190px">${extraCols}<col style="width:140px"><col style="width:60px"><col style="width:60px"></colgroup>`
-    + `<thead><tr><th>Name</th><th>ID</th><th>Message</th><th>Below</th>${extraHeads}<th>Last seen</th><th>Checks</th><th>Faults</th></tr></thead>`
+  const fixed = [...FIXED_COLUMNS, ...TAIL_COLUMNS].reduce((sum, [, width]) => sum + (width || 0), 0)
+    + extra.reduce((sum, column) => sum + (parseInt(column.width, 10) || 160), 0);
+  return `<table class="grid" style="min-width:${fixed + MESSAGE_MIN_PX}px"><colgroup>${widths(FIXED_COLUMNS)}${extraCols}${widths(TAIL_COLUMNS)}</colgroup>`
+    + `<thead><tr><th>Name</th><th>ID</th><th class="msgcol">Message</th><th>Below</th>${extraHeads}<th>Last seen</th><th>Checks</th><th>Faults</th></tr></thead>`
     + `<tbody>${body}</tbody></table>`;
 }
 
@@ -462,12 +490,16 @@ function renderGroupDetail(row) {
 }
 
 // The folded parts of the selected row (view/core.js keeps them off the tree): each one click from its own detail.
+// A structure marks the transport layers it folded in (folded: 'path'): those are the row's connection, not its parts.
 function partsCard(row) {
   if (!row || !row.parts || !row.parts.length) return '';
-  const items = row.parts.map((part) => `<div class="part-row" data-go="${esc(part.entity)}" title="${esc(part.name)}">${icon(part.icon)}`
+  const item = (part) => `<div class="part-row" data-go="${esc(part.entity)}" title="${esc(part.name)}">${icon(part.icon)}`
     + `<span class="pname">${esc(part.label)}</span><span class="pmsg">${esc(part.message)}</span>`
-    + `<span class="st${part.knock_on_of ? ' knock' : ''}">${shape(part.problem, part.message)}</span></div>`).join('');
-  return `<div class="card wide"><h3>Parts · ${row.parts.length}<span class="right muted">composition (part_of), folded into this row</span></h3>${items}</div>`;
+    + `<span class="st${part.knock_on_of ? ' knock' : ''}">${shape(part.problem, part.message)}</span></div>`;
+  const path = row.parts.filter((part) => part.folded === 'path');
+  const parts = row.parts.filter((part) => part.folded !== 'path');
+  return (path.length ? `<div class="card wide"><h3>Connection (folded) · ${path.length}<span class="right muted">the layers this row is reached through, folded into it</span></h3>${path.map(item).join('')}</div>` : '')
+    + (parts.length ? `<div class="card wide"><h3>Parts · ${parts.length}<span class="right muted">composition (part_of), folded into this row</span></h3>${parts.map(item).join('')}</div>` : '');
 }
 
 function renderDetail(byPath) {
@@ -491,6 +523,9 @@ function renderDetail(byPath) {
   if (!node.connected) html += '<div class="banner osonly">Not connected.</div>';
   html += '<div class="cards">';
   if (!detail) return `${html}<div class="muted">loading…</div></div>`;
+  html += whatToCheckCard(detail, ownRow);
+  // the utilities right under the problem: what to check, then the buttons that check or fix it (printer style)
+  html += renderUtilities(detail.actions);
   const status = [
     ['shows', `${pill(node.level)} <span class="muted">${node.own.level === null ? 'grouping: worst below' : 'its own self-report'}</span>`],
     ['worst below', node.rollup.level ? `${pill(node.rollup.level)} ${node.rollup.origin && node.rollup.origin !== node.path ? `<a class="link" data-go="${esc(node.rollup.origin)}">${esc(node.rollup.origin_name)}</a>` : ''}` : '<span class="muted">nothing reports</span>'],
@@ -507,7 +542,6 @@ function renderDetail(byPath) {
   if (node.hardware_id) idRows.push(['hardware id', `<span class="mono">${esc(node.hardware_id)}</span>`]);
   html += kvCard('Identity', idRows);
   html += partsCard(ownRow);
-  html += renderActions(detail.actions);
   html += detail.checks.map(checkCard).join('');
   if (detail.faults.length) {
     html += kvCard('Faults', detail.faults.map((f) => [f.code, `${pill(f.severity)} ${esc(f.status)}${f.active ? ' · active' : ''} · ${f.occurrence_count}× · ${esc(f.message)}`]), { wide: true });
@@ -516,14 +550,298 @@ function renderDetail(byPath) {
   return `${html}</div>`;
 }
 
-function renderActions(actions) {
+// ------------------------------------------------------------------ utilities (the action buttons) ----
+// The printer-utility window (Zach, 2026-10-22: Canon "Cleaning": icon, title, one-line description per utility),
+// over docs/actions-vocabulary-v0.1.md. Checks first (query), then maintenance (changes / interrupts), then motion
+// (moves) set apart, then the driver's own non-standard actions under "More".
+// WHY every click is a dry run first: the person reads exactly what would run (argv, steps, preconditions, the
+// plugin's own confirm text) before anything can; a query then runs with one more click, anything else only from a
+// confirm modal that repeats the danger (moves: a ticked box that states the physical precondition). The server
+// runs a real action only with the dry run's token, from this page (io_diagnostics/server.py, docs/api-v1.md).
+const STANDARD_ORDER = ['check_comms', 'check_firmware', 'update_firmware', 'update_config', 'clear_faults', 'set_id', 'reboot',
+  'stop_all', 'open_console', 'calibrate'];
+const STANDARD = new Set(STANDARD_ORDER);
+const DANGER_WORDS = {
+  query: 'Reads only.',
+  interrupts: 'Interrupts what runs: a stream drops, a board restarts or stops.',
+  changes: 'Changes what the device stores: its configuration, id, faults or firmware.',
+  moves: 'Makes hardware move: a motor spins, and a loaded joint can fall.',
+};
+// a precondition only a person can check (the host cannot read it passively): what the moves box states
+const PHYSICAL = new Set(['joint_free', 'target_in_view']);
+const RUNNABLE = new Set(['ready', 'unknown']); // blocked / nothing_to_do keep the Run button disabled
+const UTIL_ICONS = {
+  check_comms: '<path d="M4.9 19.1a10 10 0 0 1 0-14.2M7.8 16.2a6 6 0 0 1 0-8.4M16.2 7.8a6 6 0 0 1 0 8.4M19.1 4.9a10 10 0 0 1 0 14.2"/><circle cx="12" cy="12" r="2"/>',
+  check_firmware: '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="m8.5 12 2.5 2.5 4.5-5"/>',
+  update_firmware: '<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>',
+  update_config: '<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
+  clear_faults: '<circle cx="12" cy="12" r="9"/><path d="m9 9 6 6M15 9l-6 6"/>',
+  set_id: '<path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"/>',
+  reboot: '<path d="M21 12a9 9 0 1 1-2.6-6.4L21 8"/><path d="M21 3v5h-5"/>',
+  stop_all: '<path d="M7.9 2h8.2L22 7.9v8.2L16.1 22H7.9L2 16.1V7.9Z"/><rect x="9" y="9" width="6" height="6" rx="1"/>',
+  open_console: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 9 3 3-3 3M11 15h6"/>',
+  calibrate: '<circle cx="12" cy="12" r="8"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/><circle cx="12" cy="12" r="1.5"/>',
+  more: '<circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/><rect x="2" y="5" width="20" height="14" rx="3"/>',
+};
+const utilIcon = (name) => `<svg class="u-ic" viewBox="0 0 24 24" aria-hidden="true">${UTIL_ICONS[STANDARD.has(name) ? name : 'more']}</svg>`;
+const plainTitle = (title) => String(title || '').replace(/…$/, '');
+const hhmmss = (ms) => new Date(ms).toTimeString().slice(0, 8);
+
+function utilityGroups(actions) {
+  const order = (action) => (STANDARD.has(action.name) ? STANDARD_ORDER.indexOf(action.name) : STANDARD_ORDER.length);
+  const sorted = [...actions].sort((a, b) => order(a) - order(b));
+  const standard = sorted.filter((action) => STANDARD.has(action.name));
+  return [
+    { id: 'checks', title: 'Checks', items: standard.filter((action) => action.danger === 'query') },
+    { id: 'maintenance', title: 'Maintenance', items: standard.filter((action) => action.danger !== 'query' && action.danger !== 'moves') },
+    { id: 'motion', title: 'Motion · makes hardware move', items: standard.filter((action) => action.danger === 'moves') },
+    { id: 'more', title: 'More', items: sorted.filter((action) => !STANDARD.has(action.name)) },
+  ].filter((group) => group.items.length);
+}
+
+// The CAN id a node-scoped action names: the entity's own last path segment ("…/can/15" -> 15), as the host's {id}.
+function nodeOf(path, action) {
+  if (action.scope !== 'node') return null;
+  const last = String(path).split('/').pop();
+  return /^\d+$/.test(last) ? Number(last) : null;
+}
+
+async function postAct(body) {
+  try {
+    const response = await fetch('/api/v1/act', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-IO-Diagnostics': 'ui' }, body: JSON.stringify(body) });
+    return { status: response.status, data: await response.json() };
+  } catch (error) {
+    return { status: 0, data: { refused: 'Unreachable', error: `the host did not answer: ${error}` } };
+  }
+}
+
+async function startDryRun(name) {
+  const action = S.node && (S.node.actions || []).find((item) => item.name === name);
+  if (!action) return;
+  const path = S.node.node.path;
+  const util = { path, name, node: nodeOf(path, action), phase: 'dry', dry: null, result: null, error: '', refused: '', ticked: false };
+  S.util = util;
+  render();
+  const { status, data } = await postAct({ path, action: name, node: util.node, dry_run: true });
+  if (S.util !== util) return;
+  if (status === 200) { util.dry = data; util.at = Date.now(); } else { util.refused = data.refused || `HTTP ${status}`; util.error = data.error || ''; }
+  util.phase = 'shown';
+  render();
+}
+
+async function runUtility() {
+  const util = S.util;
+  if (!util || !util.dry || !util.dry.token || util.phase === 'running') return;
+  util.phase = 'running';
+  util.startedAt = Date.now();
+  render();
+  const { status, data } = await postAct({ path: util.path, action: util.name, node: util.node, token: util.dry.token });
+  if (S.util !== util) return;
+  util.phase = 'done';
+  if (status === 200) util.result = data.result; else { util.refused = data.refused || `HTTP ${status}`; util.error = data.error || ''; }
+  S.nodeAt = 0; // refresh the node now: the action may have changed what it reports
+  loadNode();
+  render();
+}
+
+// The host's passive evaluation (pass / fail / unknown + detail) beside the plugin's own reading, by check name.
+function preconditionRows(action, answer) {
+  const plugin = new Map(((answer && answer.preconditions) || []).map((item) => [item.check, item]));
+  const rows = (action.preconditions || []).map((item) => ({ check: item.check, text: item.text, state: item.state, detail: item.detail,
+    plugin: plugin.has(item.check) ? plugin.get(item.check).state : '' }));
+  for (const [check, item] of plugin) if (!rows.some((row) => row.check === check)) rows.push({ check, text: item.text, state: 'unknown', detail: '', plugin: item.state });
+  return rows;
+}
+function preconditionsHtml(rows) {
+  if (!rows.length) return '<div class="muted">No preconditions.</div>';
+  return `<ul class="pre">${rows.map((row) => `<li><span class="st ${esc(row.state)}">${{ pass: '✓', fail: '✗' }[row.state] || '?'}</span>`
+    + `<span>${esc(row.text)}</span><span class="why">${esc([row.detail, row.plugin ? `driver: ${row.plugin}` : ''].filter(Boolean).join(' · '))}</span></li>`).join('')}</ul>`;
+}
+
+const commandOf = (answer) => {
+  const command = answer && answer.command;
+  if (Array.isArray(command) && command.length) return command.join(' ');
+  if (typeof command === 'string' && command) return command;
+  return '';
+};
+
+function stepsHtml(answer) {
+  const steps = (answer && answer.steps) || [];
+  if (!steps.length) return '';
+  return `<ol class="u-steps">${steps.map((step) => `<li><span>${esc(step.purpose)}</span> <span class="tag recorded">${esc(step.runs || '')}</span>`
+    + `${step.argv && step.argv.length ? `<code>${esc(step.argv.join(' '))}</code>` : ''}`
+    + `${step.sends && step.sends.length ? `<span class="muted"> · sends ${esc(step.sends.join(', '))}</span>` : ''}</li>`).join('')}</ol>`;
+}
+
+const FAILED_CODES = new Set(['ActionRefused', 'ConfirmationRequired', 'ConfirmRequired', 'ActionFailed']);
+function resultHtml(util) {
+  if (!util.result) {
+    return `<div class="u-result fail"><div class="u-result-h">${shape('error', 'not run')}<b>Not run</b> · ${esc(util.refused)}</div><div>${esc(util.error)}</div></div>`;
+  }
+  const result = util.result;
+  const records = result.records || [];
+  const refusedByDriver = records.find((record) => FAILED_CODES.has(record.code));
+  const ok = !result.refused && result.outcome === 'ok' && !refusedByDriver;
+  const head = ok ? `<b>Done</b> · ${esc(result.message || `${result.outcome} in ${result.duration_s} s`)}`
+    : `${shape('error', 'failed')}<b>${esc(result.refused ? `Refused: ${result.refused}` : refusedByDriver ? `${refusedByDriver.code}` : result.outcome)}</b> · ${esc(result.message || (refusedByDriver && refusedByDriver.message) || '')}`;
+  const lines = records.map((record) => `<li><span class="mono">${esc(record.code || record.record || '')}</span> ${esc(record.message || record.name || '')}</li>`).join('');
+  return `<div class="u-result ${ok ? 'ok' : 'fail'}"><div class="u-result-h">${head}</div>`
+    + `${lines ? `<ul class="u-records">${lines}</ul>` : ''}`
+    + `${(result.rejected || []).length ? `<pre class="u-tail">${esc(result.rejected.join('\n'))}</pre>` : ''}`
+    + `${result.stderr_tail ? `<pre class="u-tail">${esc(result.stderr_tail)}</pre>` : ''}`
+    + `<div class="muted">${esc(result.plugin || '')} · ${esc(result.outcome)} · ${esc(result.duration_s)} s · exit ${esc(result.returncode)}</div></div>`;
+}
+
+function dryRunPanel(action) {
+  const util = S.util;
+  const close = '<button class="btn" data-util-close>Close</button>';
+  if (util.phase === 'dry') return `<div class="u-panel"><div class="muted">Dry run · asking ${esc(action.owner)} what it would run…</div></div>`;
+  if (!util.dry) return `<div class="u-panel">${resultHtml(util)}<div class="u-foot">${close}</div></div>`;
+  const result = util.dry.result || {};
+  const answer = result.action_result || {};
+  if (result.refused || result.outcome !== 'ok' || !util.dry.token) {
+    return `<div class="u-panel"><div class="u-result fail"><div class="u-result-h">${shape('error', 'dry run failed')}<b>The dry run did not answer</b> · ${esc(result.refused || result.outcome)}</div>`
+      + `<div>${esc(result.message || '')}</div>${result.stderr_tail ? `<pre class="u-tail">${esc(result.stderr_tail)}</pre>` : ''}</div><div class="u-foot">${close}</div></div>`;
+  }
+  const command = commandOf(answer);
+  const confirm = answer.confirm || action.confirm;
+  const runnable = RUNNABLE.has(action.state);
+  // the token's window runs on this computer's clock (a replay's clock shows the recorded time)
+  const expires = `${Math.round((util.dry.window_s || 300) / 60)} min`;
+  let foot;
+  if (util.phase === 'running') foot = `<span class="u-running">Running since ${esc(hhmmss(util.startedAt))}…</span>`;
+  else if (util.phase === 'done') foot = `<button class="btn" data-util-again>Dry run again</button>${close}`;
+  else if (action.danger === 'query') foot = `<button class="btn primary query" data-util-run${runnable ? '' : ' disabled'}>Run ${esc(plainTitle(action.title))}</button>${close}`;
+  else foot = `<button class="btn primary ${esc(action.danger)}" data-util-run${runnable ? '' : ' disabled'}>Continue…</button>${close}`;
+  return `<div class="u-panel">`
+    + `<div class="u-panel-h">Dry run · nothing ran<span class="right muted">its token is good for ${esc(expires)}</span></div>`
+    + `<div class="u-k">Will run</div><div class="u-v"><code class="u-cmd">${esc(command || 'in-process (no command line)')}</code>`
+    + `${answer.command_kind ? ` <span class="tag recorded">${esc(answer.command_kind)}</span>` : ''}</div>`
+    + `${stepsHtml(answer) ? `<div class="u-k">Steps</div><div class="u-v">${stepsHtml(answer)}</div>` : ''}`
+    + `<div class="u-k">Preconditions</div><div class="u-v">${preconditionsHtml(preconditionRows(action, answer))}</div>`
+    + `${confirm ? `<div class="u-k">Confirm</div><div class="u-v"><div class="confirm">${esc(confirm)}</div></div>` : ''}`
+    + `${!runnable ? `<div class="banner blocked">◌ <span><b>${esc(action.reason || action.state)}</b></span></div>` : ''}`
+    + `<div class="u-k">Through</div><div class="u-v"><code class="u-argv">${esc((result.argv || []).join(' '))}</code></div>`
+    + `${util.phase === 'done' ? resultHtml(util) : ''}`
+    + `<div class="u-foot">${foot}</div></div>`;
+}
+
+function utilityRow(action) {
+  const active = S.util && S.util.path === S.sel && S.util.name === action.name;
+  const runnable = RUNNABLE.has(action.state);
+  const reason = action.state !== 'ready' && action.reason ? `<span class="u-reason">${esc(action.reason)}</span>` : '';
+  const danger = action.danger !== 'query' ? `<span class="danger ${esc(action.danger)}">${esc(action.danger)}</span>` : '';
+  return `<div class="urow${active ? ' active' : ''}${runnable ? '' : ' blocked'}" data-util-row="${esc(action.name)}">`
+    + `<button class="u-btn" data-util="${esc(action.name)}" title="Dry run: show what ${esc(plainTitle(action.title))} would run">`
+    + `${utilIcon(action.name)}<span class="u-text"><span class="u-title">${esc(action.title)}</span>`
+    + `<span class="u-desc">${esc(action.description)}</span>${reason}</span>${danger}</button>`
+    + `${active ? dryRunPanel(action) : ''}</div>`;
+}
+
+function renderUtilities(actions) {
   if (!actions || !actions.length) return '';
-  const buttons = actions.map((a) => `<button class="abtn ${a.danger} ${a.state !== 'ready' ? 'blocked' : ''}" data-action="${esc(a.name)}" title="${esc(a.description)}">`
-    + `${a.state !== 'ready' ? '<span class="lockdot"></span>' : ''}${esc(a.title)}</button>`).join('');
-  const blocked = actions.find((a) => a.state === 'blocked') || actions.find((a) => a.reason);
-  return `<div class="card wide"><h3>Actions<span class="right muted">registered by ${esc(actions[0].owner)} · the owner runs them, the host only shows them</span></h3>`
-    + `<div class="actions">${buttons}</div>`
-    + `<div class="caption">${blocked ? `◌ ${esc(blocked.reason)} · ` : ''}Every action opens a confirm with its preconditions; v1 never executes one.</div></div>`;
+  const groups = utilityGroups(actions).map((group) => `<div class="ugroup ugroup-${group.id}"><div class="ugroup-h">${esc(group.title)}</div>`
+    + `${group.items.map(utilityRow).join('')}</div>`).join('');
+  return `<div class="card wide utilities"><h3>Utilities<span class="right muted">${esc(actions[0].owner)} runs them · every click is a dry run first</span></h3>${groups}</div>`;
+}
+
+// The confirm modal for anything but a query: the danger repeated in words, the plugin's confirm text, what runs,
+// the preconditions; for moves a box stating the physical precondition must be ticked, and the button says the action.
+function renderModal() {
+  const back = $('modal');
+  const util = S.util;
+  const action = util && util.phase === 'confirm' && S.node && util.path === S.node.node.path && (S.node.actions || []).find((item) => item.name === util.name);
+  if (!action || !util.dry) {
+    back.hidden = true;
+    if (S.modalHtml) { back.innerHTML = ''; S.modalHtml = ''; }
+    return;
+  }
+  back.hidden = false;
+  const answer = (util.dry.result || {}).action_result || {};
+  const rows = preconditionRows(action, answer);
+  const moves = action.danger === 'moves';
+  const physical = rows.find((row) => PHYSICAL.has(row.check)) || rows.find((row) => /person confirms/.test(row.plugin || ''));
+  const tick = physical ? physical.text : (answer.confirm || action.confirm);
+  const label = (S.built && S.built.byEntity.has(util.path) && S.built.byKey.get(S.built.byEntity.get(util.path)).entity === util.path)
+    ? S.built.byKey.get(S.built.byEntity.get(util.path)).label : S.node.node.name;
+  const html = `<div class="modal m-${esc(action.danger)}" role="dialog" aria-modal="true" aria-labelledby="m-title">`
+    + `<header><h2 id="m-title">${esc(plainTitle(action.title))} · ${esc(label)}</h2><span class="danger ${esc(action.danger)}">${esc(action.danger)}</span></header>`
+    + `<div class="body"><div class="m-danger">${shape(moves ? 'error' : 'warn', action.danger)}<b>${esc(DANGER_WORDS[action.danger] || 'Needs your confirmation: its danger class is not one this page knows.')}</b></div>`
+    + `<div class="confirm">${esc(answer.confirm || action.confirm)}</div>`
+    + `<div class="m-runs">Runs <code>${esc(commandOf(answer) || 'in-process')}</code></div>`
+    + `<div class="m-pre-h">Preconditions</div>${preconditionsHtml(rows)}`
+    + `${moves ? `<label class="m-tick"><input type="checkbox" data-util-tick${util.ticked ? ' checked' : ''}><span>I checked: ${esc(tick)}</span></label>` : ''}`
+    + `</div><footer><span class="note">${esc(action.owner)} runs it once you press the button; the dry run's token is good for ${esc(Math.round((util.dry.window_s || 300) / 60))} min.</span>`
+    + `<button class="btn" data-util-cancel>Cancel</button>`
+    + `<button class="btn primary ${esc(action.danger)}" data-util-confirm${moves && !util.ticked ? ' disabled' : ''}>${esc(plainTitle(action.title))}</button></footer></div>`;
+  if (html !== S.modalHtml) { back.innerHTML = html; S.modalHtml = html; }
+}
+
+// ------------------------------------------------------------------- what to check (plain words) ----
+// A status whose cause has a checklist carries the value `what_to_check` (numbered lines, newline-separated, in the
+// order to check them; moteus_servo docs/io_diagnostics_actions.md, the host's ExpectedAbsent rows). The page's top
+// attention line and the detail panel show the plain-words reason and those lines, as authored.
+// WHY at the top: when boards don't answer, "motor supply on? XT30 splitter? CAN cable? CAN ground?" is the thing
+// Zach needs first (Daily Note 2026-10-22: "I plug it in and now I need it to run").
+function whyOf(detail) {
+  return ((detail && detail.checks) || []).filter((check) => PROBLEM.has(check.effective_level)).map((check) => {
+    const values = Object.fromEntries((check.values || []).map((value) => [value.key, value.value]));
+    if (!values.what_to_check) return null;
+    return { name: check.name, level: check.effective_level, message: check.message || '', code: check.code || '',
+      lines: String(values.what_to_check).split('\n').filter((line) => line.trim()), evidence: values.kernel_evidence || '' };
+  }).filter(Boolean);
+}
+
+// /api/v1/node for a path whose checklist the page shows (attention items, the selection's problem parts); cached,
+// refreshed when the item's message changes or every 5 s.
+function wantWhy(path, message = '') {
+  const known = S.why.get(path);
+  if (known && (known.loading || (known.message === message && performance.now() - known.at < 5000))) return;
+  S.why.set(path, { ...(known || { checks: [] }), loading: true, message, at: performance.now() });
+  getJson(`/api/v1/node?path=${encodeURIComponent(path)}`)
+    .then((detail) => { S.why.set(path, { checks: whyOf(detail), loading: false, message, at: performance.now() }); render(); })
+    .catch(() => { S.why.set(path, { checks: [], loading: false, message, at: performance.now() }); });
+}
+
+const whyLines = (why) => `<div class="why-lines">${why.lines.map((line) => `<div>${esc(line)}</div>`).join('')}</div>`
+  + (why.evidence ? `<div class="why-ev">kernel evidence: ${esc(why.evidence)}</div>` : '');
+
+// The top attention line: every independent cause the API lists (summary.attention), worst first, each with its
+// plain-words reason; the first one's checklist open, the others one click away. Hidden when nothing needs you.
+function renderAttention() {
+  const element = $('attention');
+  const items = S.data.summary.attention || [];
+  if (!items.length) { element.hidden = true; element.innerHTML = ''; return; }
+  for (const item of items.slice(0, 6)) wantWhy(item.path, item.message);
+  const rows = items.slice(0, 4).map((item, at) => {
+    const checks = (S.why.get(item.path) || {}).checks || [];
+    const why = checks.find((check) => check.message === item.message) || checks[0];
+    const open = why && (at === 0 ? !S.attClosed.has(item.path) : S.attOpen.has(item.path));
+    const where = item.device && item.device.path !== item.path ? `${item.device.name} › ${item.name}` : item.name;
+    const toggle = why ? `<button class="att-more" data-att="${esc(item.path)}" aria-expanded="${Boolean(open)}">${open ? 'hide' : `what to check · ${why.lines.length}`}</button>` : '';
+    return `<div class="att-item lv-${esc(item.level)}" data-att-item="${esc(item.path)}"><div class="att-line"><span class="att-st">${shape(item.level, item.level)}</span>`
+      + `<a class="att-where" data-go="${esc(item.path)}">${esc(where)}</a><span class="att-msg" title="${esc(item.message)}">${esc(item.message)}</span>${toggle}</div>`
+      + `${open ? whyLines(why) : ''}</div>`;
+  }).join('');
+  const rest = items.length > 4 ? `<div class="att-rest">+${items.length - 4} more · the chip lists every one</div>` : '';
+  const html = `${rows}${rest}`;
+  element.hidden = false;
+  if (html !== S.attHtml) { element.innerHTML = html; S.attHtml = html; }
+}
+
+// The detail panel's "What to check": the selection's own checklists, then its folded parts' (the CAN bus folded
+// into its adapter), each with the plain-words reason.
+function whatToCheckCard(detail, ownRow) {
+  const own = whyOf(detail).map((why) => ({ ...why, who: '' }));
+  const parts = ((ownRow && ownRow.parts) || []).filter((part) => part.problem).flatMap((part) => {
+    wantWhy(part.entity, part.message);
+    return ((S.why.get(part.entity) || {}).checks || []).map((why) => ({ ...why, who: part.label, entity: part.entity }));
+  });
+  const all = [...own, ...parts];
+  if (!all.length) return '';
+  return `<div class="card wide why"><h3>What to check</h3>${all.map((why) => `<div class="why-item">`
+    + `<div class="why-head">${shape(why.level, why.level)}<b>${why.entity ? `<a class="link" data-go="${esc(why.entity)}">${esc(why.who)}</a> · ` : ''}${esc(why.name)}</b></div>`
+    + `<div class="why-msg">${esc(why.message)}</div>${whyLines(why)}</div>`).join('')}</div>`;
 }
 
 // --------------------------------------------------------------------------- chip + modal ----
@@ -541,20 +859,6 @@ function renderChip() {
     + S.data.recent.slice(0, 5).map((e) => `<div class="pop-row" data-tab="activity"><span class="t">${esc(e.time.slice(0, 5))}</span><span class="x">${esc(e.message)}</span></div>`).join('')
     + '<button class="pop-open" data-close="1">Open IO diagnostics</button>'
     + '<div class="pop-foot">The tray renders this same model (/api/v1/state → chip) through V2\'s AppIndicator.</div>';
-}
-
-function renderModal() {
-  const back = $('modal');
-  const action = S.dialog && S.node && (S.node.actions || []).find((a) => a.name === S.dialog.name);
-  back.hidden = !action;
-  if (!action) return;
-  const pre = action.preconditions.map((p) => `<li><span class="st ${p.state}">${{ pass: '✓', fail: '✗', unknown: '?' }[p.state]}</span><span>${esc(p.text)}</span><span class="why">${esc(p.detail)}</span></li>`).join('');
-  back.innerHTML = `<div class="modal" role="dialog"><header><h2>${esc(action.title.replace('…', ''))} · ${esc(S.node.node.name)}</h2><span class="danger ${action.danger}">${esc(action.danger)}</span></header>`
-    + `<div class="body"><div class="muted">${esc(action.description)}</div><div class="confirm">${esc(action.confirm)}</div>`
-    + `<div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-top:10px">Preconditions · checked passively by the host</div><ul class="pre">${pre}</ul>`
-    + (action.reason ? `<div class="banner blocked" style="margin:6px 0 4px">◌ <span><b>${esc(action.reason)}</b></span></div>` : '')
-    + `</div><footer><span class="note">v1 never executes: ${esc(action.owner)} would run it as the port's only owner.</span>`
-    + `<button class="btn" data-cancel="1">Cancel</button><button class="btn primary ${action.danger}" disabled>${esc(action.title.replace('…', ''))}</button></footer></div>`;
 }
 
 function renderStatusbar() {
@@ -591,7 +895,11 @@ function render() {
   $('search').disabled = noSearch;
   $('search').placeholder = noSearch ? `No search in ${S.variant} · try Table` : 'Search entities, ids, ports…';
   $('search').closest('.search').classList.toggle('off', noSearch);
-  $('detail').innerHTML = renderDetail(byPath);
+  renderAttention();
+  const detailHtml = renderDetail(byPath);
+  // WHY compare: the dry-run panel and the What to check list are read, not glanced at; an unchanged detail is not
+  // rewritten every second (selection, focus and scroll stay)
+  if (detailHtml !== S.detailHtml) { $('detail').innerHTML = detailHtml; S.detailHtml = detailHtml; }
   renderChip();
   renderModal();
   renderStatusbar();
@@ -601,6 +909,7 @@ function select(path) {
   S.sel = path;
   S.selKey = null;
   S.node = null;
+  if (S.util && S.util.path !== path) S.util = null; // a utility belongs to the entity it was opened on
   loadNode();
 }
 
@@ -626,9 +935,33 @@ document.addEventListener('click', (event) => {
   if (go) { select(go.dataset.go); S.chip = false; if (S.view === 'activity') S.view = 'tree'; return render(); }
   if (t.closest('[data-tab]')) { S.view = t.closest('[data-tab]').dataset.tab; S.chip = false; return render(); }
   if (t.closest('[data-close]')) { S.chip = false; return render(); }
-  const action = t.closest('[data-action]');
-  if (action) { S.dialog = { name: action.dataset.action }; return render(); }
-  if (t.closest('[data-cancel]') || t.id === 'modal') { S.dialog = null; return render(); }
+  // utilities: a click dry-runs; Run (a query) or Continue… (the confirm modal) only after it
+  const util = t.closest('[data-util]');
+  if (util) { startDryRun(util.dataset.util); return undefined; }
+  if (t.closest('[data-util-again]') && S.util) { startDryRun(S.util.name); return undefined; }
+  if (t.closest('[data-util-run]') && S.util) {
+    const action = S.node && (S.node.actions || []).find((item) => item.name === S.util.name);
+    if (!action) return undefined;
+    if (action.danger === 'query') { runUtility(); return undefined; }
+    S.util.phase = 'confirm';
+    S.util.ticked = false;
+    return render();
+  }
+  if (t.closest('[data-util-confirm]')) {
+    const action = S.util && S.node && (S.node.actions || []).find((item) => item.name === S.util.name);
+    if (action && (action.danger !== 'moves' || S.util.ticked)) runUtility(); // moves: only with the box ticked
+    return undefined;
+  }
+  if (t.closest('[data-util-cancel]') || t.id === 'modal') { if (S.util && S.util.phase === 'confirm') S.util.phase = 'shown'; return render(); }
+  if (t.closest('[data-util-close]')) { S.util = null; return render(); }
+  if (t.closest('[data-util-tick]')) return undefined; // its change event records the tick
+  const att = t.closest('[data-att]');
+  if (att) {
+    const key = att.dataset.att;
+    const first = ((S.data && S.data.summary.attention) || [])[0];
+    if (first && first.path === key) { if (S.attClosed.has(key)) S.attClosed.delete(key); else S.attClosed.add(key); } else if (S.attOpen.has(key)) S.attOpen.delete(key); else S.attOpen.add(key);
+    return render();
+  }
   const row = t.closest('[data-key]');
   if (row) { if (S.view === 'activity') S.view = 'tree'; onTreeSelect(row.dataset.key); return render(); }
   if (S.chip && !t.closest('#chip-pop')) { S.chip = false; render(); }
@@ -638,7 +971,15 @@ $('structure-toggles').addEventListener('change', (event) => {
   const box = event.target.closest('[data-opt]');
   if (box) setToggle(box.dataset.opt, box.checked);
 });
-document.addEventListener('keydown', (event) => { if (event.key === 'Escape') { S.dialog = null; S.chip = false; render(); } });
+document.addEventListener('change', (event) => {
+  if (event.target.closest('[data-util-tick]') && S.util) { S.util.ticked = event.target.checked; render(); }
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape') return;
+  if (S.util && S.util.phase === 'confirm') S.util.phase = 'shown';
+  S.chip = false;
+  render();
+});
 
 async function boot() {
   // index.html's inline script already set data-skin / data-mode from storage, so the first paint is right

@@ -39,6 +39,11 @@
 //   shapes      every row whose own report or folded part is a problem carries a visible shape
 //   right       that shape sits right of the row's name (getBoundingClientRect)
 //   labels      rows show `model · id` labels and no composition part is a row (parts folded)
+//   contrast    WCAG 2.x, measured on the browser's own resolved tokens, for every skin in both modes: every text
+//               token >= 4.5:1 on surface, surface-2, surface-alt and popover; the problem shapes >= 3:1 on the
+//               surface and on the selected row (round 2 integration)
+//   message     the Table's Message column keeps >= MESSAGE_MIN px at 1600 px with the detail pane open, in every
+//               structure with its extra columns (Zach's screenshot showed "ME")
 'use strict';
 
 const fs = require('fs');
@@ -66,7 +71,19 @@ const MUTATION_CSS = '#tree-host [class*="-name"] { color: #5cb85c !important; }
   + ' #tree-host .t1-chev, #tree-host .v3-chev, #tree-host .v4-chev, #tree-host .v5-chev { opacity: 1 !important; }'
   + ' #tree-host .t2-chev { display: block !important; }'
   + ' #tree-host .t6-chev { opacity: 0 !important; }'
-  + ' table.grid .name { color: #5cb85c !important; }';
+  + ' table.grid .name { color: #5cb85c !important; }'
+  // the contrast gate must fail on a faint token that reads too light (light) / too dark (dark)
+  + ' html[data-mode="light"][data-skin] { --io-faint: #b8b8b8 !important; } html[data-mode="dark"][data-skin] { --io-faint: #4a4a4a !important; }'
+  // the Message gate must fail when the table may squeeze it again
+  + ' table.grid { min-width: 0 !important; }';
+const MESSAGE_MIN = 240; // px: app.js keeps 280; a few px of padding / rounding below that still reads a sentence
+const CONTRAST = {
+  text: ['--io-text', '--io-text-strong', '--io-muted', '--io-faint', '--io-accent-text', '--io-warn-text', '--io-error-text', '--io-stale-text',
+    '--io-unknown-text', '--io-info-text', '--io-ok-text'],
+  panes: ['--io-surface', '--io-surface-2', '--io-surface-alt', '--io-popover'],
+  shapes: ['--io-warn', '--io-error', '--io-stale', '--io-unknown'],
+  shapeOn: ['--io-surface', '--io-selected'],
+};
 
 // What each proposal calls its parts. `own` is the shape of the row's OWN self-report (not the advisory hint).
 const SPEC = {
@@ -227,6 +244,9 @@ async function runVariant(browser, base, frame, variant) {
   // WHY dark: this per-variant regression was written against the dark v1 page; light is the foundation phase's job
   const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: 1, colorScheme: 'dark' });
   const page = await context.newPage();
+  // WHY p0: these per-style rules (greyed empty ports, hover chevrons on ports) are about the physical tree; the
+  // default structure (p1) hides the layers, and the foundation phase below gates every structure
+  await page.addInitScript(() => { try { if (!localStorage.getItem('io-diagnostics.structure')) localStorage.setItem('io-diagnostics.structure', 'p0'); } catch (_) { /* none */ } });
   if (MUTATE) {
     await page.addInitScript((css) => document.addEventListener('DOMContentLoaded', () => {
       const style = document.createElement('style');
@@ -515,10 +535,57 @@ function foundationMeasure({ view, tokens, base }) {
   const undeclared = base.filter((token) => !declared.has(token));
   return {
     skin, mode, rows: domRows.length, okRows, problemRows, coloured, shapeless, leftOf, labelMismatch, unset, undeclared,
-    partRows: S.built.flat.filter((row) => row.edge === 'part_of').length,
+    // a composition part (driver, motor, stream) as a row; WHY not edge === 'part_of': the live moteus plugin (and
+    // F1-F3 since round 2) reports the CAN bus part_of its adapter, and P5 draws that bus as its top-level row
+    partRows: S.built.flat.filter((row) => row.kind === 'part' || row.kind === 'stream').length,
     folded: S.built.flat.filter((row) => row.parts.length).map((row) => row.label),
     labels: S.built.flat.filter((row) => row.model).map((row) => row.label),
   };
+}
+
+// Runs in the page: WCAG 2.x contrast of the active skin's tokens, resolved by the browser itself (color-mix and
+// all). Text tokens on the four reading surfaces (>= 4.5:1); the problem SHAPES on the surface and on the selected
+// row (>= 3:1). A see-through token is composited over the surface it sits on.
+function contrastMeasure({ text, panes, shapes, shapeOn }) {
+  const probe = document.createElement('div');
+  probe.style.display = 'none';
+  document.body.appendChild(probe);
+  const parse = (value) => {
+    let m = String(value).match(/^rgba?\(([\d.]+)[ ,]+([\d.]+)[ ,]+([\d.]+)(?:[ ,/]+([\d.]+%?))?\)$/);
+    if (m) return { r: +m[1], g: +m[2], b: +m[3], a: m[4] === undefined ? 1 : (String(m[4]).endsWith('%') ? parseFloat(m[4]) / 100 : +m[4]) };
+    m = String(value).match(/^color\(srgb ([\d.e-]+) ([\d.e-]+) ([\d.e-]+)(?: \/ ([\d.]+%?))?\)$/);
+    if (m) return { r: 255 * m[1], g: 255 * m[2], b: 255 * m[3], a: m[4] === undefined ? 1 : (String(m[4]).endsWith('%') ? parseFloat(m[4]) / 100 : +m[4]) };
+    return null;
+  };
+  const resolve = (token) => { probe.style.color = `var(${token})`; return parse(getComputedStyle(probe).color); };
+  const over = (fg, bg) => ({ r: fg.r * fg.a + bg.r * (1 - fg.a), g: fg.g * fg.a + bg.g * (1 - fg.a), b: fg.b * fg.a + bg.b * (1 - fg.a), a: 1 });
+  const lin = (c) => { const v = c / 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
+  const lum = (c) => 0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b);
+  const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+  const surface = resolve('--io-surface');
+  const solid = (token, under = surface) => { const c = resolve(token); return c && c.a < 1 ? over(c, under) : c; };
+  const pairs = [];
+  const unresolved = [];
+  for (const pane of panes) {
+    const bg = solid(pane);
+    for (const fg of text) {
+      const c = solid(fg, bg);
+      if (!c || !bg) { unresolved.push(`${fg} / ${pane}`); continue; }
+      pairs.push({ fg, bg: pane, ratio: ratio(c, bg), min: 4.5 });
+    }
+  }
+  for (const on of shapeOn) {
+    const bg = solid(on);
+    for (const fg of shapes) {
+      const c = solid(fg, bg);
+      if (!c || !bg) { unresolved.push(`${fg} / ${on}`); continue; }
+      pairs.push({ fg, bg: on, ratio: ratio(c, bg), min: 3 });
+    }
+  }
+  probe.remove();
+  const failing = pairs.filter((pair) => pair.ratio < pair.min).map((pair) => `${pair.fg} on ${pair.bg} ${pair.ratio.toFixed(2)} < ${pair.min}`);
+  const lowest = pairs.reduce((low, pair) => (!low || pair.ratio / pair.min < low.ratio / low.min ? pair : low), null);
+  return { pairs: pairs.length, failing, unresolved, lowest: lowest ? `${lowest.fg} on ${lowest.bg} ${lowest.ratio.toFixed(2)}` : '' };
 }
 
 async function runFoundation(browser, base, frame) {
@@ -547,15 +614,15 @@ async function runFoundation(browser, base, frame) {
     const fresh = await page.evaluate(() => ({ mode: document.documentElement.dataset.mode, skin: document.documentElement.dataset.skin,
       variant: document.getElementById('tree-variant').value, structure: document.getElementById('structure').value,
       skins: [...document.querySelectorAll('#skin option')].map((o) => o.value), structures: [...document.querySelectorAll('#structure option')].map((o) => o.value) }));
-    check(frame, 'found', 'defaults', fresh.mode === 'dark' && fresh.skin === 'claude' && fresh.variant === 'v6' && fresh.structure === 'p0',
+    check(frame, 'found', 'defaults', fresh.mode === 'dark' && fresh.skin === 'claude' && fresh.variant === 'v6' && fresh.structure === 'p1',
       `fresh browser, OS dark: mode ${fresh.mode} (Auto), skin ${fresh.skin} of [${fresh.skins}], tree ${fresh.variant}, structure ${fresh.structure} of [${fresh.structures}]`);
-    // every READY skin (with p0) and every READY structure (with the default skin): a lane that flips its manifest
-    // line gets these gates without touching this file (docs/round2-seams.md)
-    const combos = [{ skin: 'claude', structure: 'p0' },
-      ...readyIds('view/structure/index.json', 'structures').filter((id) => id !== 'p0').map((structure) => ({ skin: 'claude', structure })),
-      ...readyIds('skins/index.json', 'skins').filter((id) => id !== 'claude').map((skin) => ({ skin, structure: 'p0' }))];
+    // every READY skin (with the default structure p1) and every READY structure (with the default skin): a lane that
+    // flips its manifest line gets these gates without touching this file (docs/round2-seams.md)
+    const combos = [{ skin: 'claude', structure: 'p1' },
+      ...readyIds('view/structure/index.json', 'structures').filter((id) => id !== 'p1').map((structure) => ({ skin: 'claude', structure })),
+      ...readyIds('skins/index.json', 'skins').filter((id) => id !== 'claude').map((skin) => ({ skin, structure: 'p1' }))];
     for (const combo of combos) {
-      const isDefault = combo.skin === 'claude' && combo.structure === 'p0';
+      const isDefault = combo.skin === 'claude' && combo.structure === 'p1';
       if (!isDefault) {
         await page.selectOption('#skin', combo.skin);
         await page.selectOption('#structure', combo.structure);
@@ -585,6 +652,21 @@ async function runFoundation(browser, base, frame) {
           check(frame, tag, `${label} right`, m.problemRows > 0 && m.leftOf.length === 0, m.leftOf.length ? `LEFT of name: ${m.leftOf.join(', ')}` : 'every shape right of its name');
           check(frame, tag, `${label} labels`, m.labelMismatch.length === 0 && m.partRows === 0 && m.folded.length > 0 && m.labels.some((l) => /^fdcanusb · /.test(l)),
             `model · id rows: ${m.labels.slice(0, 4).join(' | ')} · parts folded into ${m.folded.length} rows, ${m.partRows} part rows${m.labelMismatch.length ? ` · mismatch ${m.labelMismatch.slice(0, 2).join(', ')}` : ''}`);
+          if (view === 'table') {
+            const widths = await page.evaluate(() => {
+              const head = document.querySelector('table.grid th.msgcol');
+              const left = document.getElementById('left').getBoundingClientRect();
+              return { message: head ? Math.round(head.getBoundingClientRect().width) : 0, pane: Math.round(left.width),
+                detail: Math.round(document.getElementById('detail').getBoundingClientRect().width), columns: S.built.columns.map((column) => column.key) };
+            });
+            check(frame, tag, 'table message', widths.message >= MESSAGE_MIN && widths.detail > 0,
+              `Message column ${widths.message} px (>= ${MESSAGE_MIN}) in a ${widths.pane} px pane beside a ${widths.detail} px detail pane · extra columns [${widths.columns}]`);
+          }
+          if (view === 'tree' && combo.structure === 'p1') {
+            const c = await page.evaluate(contrastMeasure, CONTRAST);
+            check(frame, tag, 'contrast', c.pairs === 52 && c.failing.length === 0 && c.unresolved.length === 0,
+              `${c.pairs} pairs (text 4.5:1 on 4 surfaces, shapes 3:1 on surface + selected) · lowest ${c.lowest}${c.failing.length ? ` · FAIL ${c.failing.join(' | ')}` : ''}${c.unresolved.length ? ` · unresolved ${c.unresolved.join(', ')}` : ''}`);
+          }
           if (view === 'tree') {
             check(frame, tag, 'tokens', m.unset.length === 0 && m.undeclared.length === 0,
               `skin ${m.skin} ${m.mode}: ${all.length - m.unset.length}/${all.length} tokens resolve; skin rule declares ${baseTokens.length - m.undeclared.length}/${baseTokens.length} base tokens${m.unset.length ? ` · unset ${m.unset.join(', ')}` : ''}${m.undeclared.length ? ` · undeclared ${m.undeclared.join(', ')}` : ''}`);
@@ -642,8 +724,12 @@ async function main() {
     // the ruler works when every variant fails both mutated checks
     const caught = VARIANTS.filter((v) => ['no-green', 'chevrons'].every((name) => failed.some((r) => r.variant === v && r.check === name)));
     const quiet = ['tree ', 'table'].filter((view) => ['light', 'dark'].every((mode) => failed.some((r) => r.variant === `found-${mode}` && r.check === `${view} quiet-ok`)));
-    console.log(`\nmutation caught in ${caught.length}/${VARIANTS.length} variants (${caught.join(', ')}) · foundation quiet-ok caught for ${quiet.length}/2 views`);
-    process.exitCode = (ONLY_FOUNDATION || caught.length === VARIANTS.length) && quiet.length === 2 ? 0 : 1;
+    const skins = readyIds('skins/index.json', 'skins');
+    const contrast = skins.filter((skin) => ['light', 'dark'].every((mode) => failed.some((r) => r.variant === (skin === 'claude' ? `found-${mode}` : `found-${skin}-p1-${mode}`) && r.check === 'contrast')));
+    const message = ['light', 'dark'].filter((mode) => failed.some((r) => r.variant === `found-${mode}` && r.check === 'table message'));
+    console.log(`\nmutation caught in ${caught.length}/${VARIANTS.length} variants (${caught.join(', ')}) · foundation quiet-ok caught for ${quiet.length}/2 views`
+      + ` · contrast caught for ${contrast.length}/${skins.length} skins · table message caught in ${message.length}/2 modes`);
+    process.exitCode = (ONLY_FOUNDATION || caught.length === VARIANTS.length) && quiet.length === 2 && contrast.length === skins.length && message.length === 2 ? 0 : 1;
     return;
   }
   const report = { run: new Date().toISOString(), viewport: VIEWPORT, frames: FRAMES, variants: VARIANTS, passed: results.length - failed.length, failed: failed.length, results };

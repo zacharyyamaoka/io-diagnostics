@@ -188,7 +188,8 @@ class Converter:
     def bus(self, bus) -> None:
         path = self.rel(bus)
         serial = self.device.name.split()[-1]
-        self.emit(Entity(path, bus.label, "bus", via=""), icon="bus")
+        # WHY part_of: the live moteus plugin reports the CAN bus as part of its adapter, its boards via the bus
+        self.emit(Entity(path, bus.label, "bus", part_of=""), icon="bus")
         code = "NoAck" if bus.level == "error" else "NoReply" if bus.level == "warn" else ""
         answering, _, expected = bus.count.partition("/")
         measurements = []
@@ -393,7 +394,9 @@ def capture() -> dict:
 
 
 if __name__ == "__main__":
-    document = capture()
+    from live_shape import live_shape  # noqa: E402  (this directory: the live drivers' shape, checklists, vocabulary)
+
+    document = live_shape(capture())
     OUT.write_text(json.dumps(document, indent=1, ensure_ascii=False) + "\n")
     for frame in document["frames"].values():
         print(frame["name"], frame["label"], f"{len(frame['skeleton'])} skeleton nodes,",
