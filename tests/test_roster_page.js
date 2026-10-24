@@ -116,6 +116,9 @@ async function main() {
     const aged = await startScenario(dir, ['--aged', '--ledger']);
     servers.push(aged);
     const context = await browser.newContext({ viewport: VIEWPORT, colorScheme: 'light' });
+    // WHY Physical (p1): the rows below are asserted as the physical tree (the computer is the one root row, the absent adapter's warning is on it);
+    // the page's default grouping is Nested (p6), which draws the rig beside the computer (tests/test_tree_nav.js covers it)
+    await context.addInitScript(() => { try { localStorage.setItem('io-diagnostics.structure', 'p1'); } catch (_) { /* private mode */ } });
     const page = await context.newPage();
     const errors = [];
     page.on('pageerror', (error) => errors.push(String(error)));

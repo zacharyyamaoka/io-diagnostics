@@ -92,7 +92,7 @@ const { check, BOARD, BOARD2, CAMERA, ADAPTER } = H;
     const samples = [];
     for (let i = 0; i < 4; i += 1) { samples.push(await page.evaluate(() => [...document.querySelectorAll('.d6-sr')].map((r) => [r.querySelector('.d6-sn').title, r.querySelector('.d6-sv').textContent.trim()]))); await page.waitForTimeout(400); }
     const byName = (s, name) => (s.find((r) => r[0] === name) || [])[1];
-    check('State: single-line rows name · value · sparkline', await page.evaluate(() => [...document.querySelectorAll('.d6-sr')].every((r) => r.children.length === 3 && r.querySelector('.d6-ss svg, .d6-ss .d6-nospark'))), samples[0].length);
+    check('State: single-line rows name · value · sparkline', await page.evaluate(() => [...document.querySelectorAll('.d6-sr')].every((r) => r.children.length === 3 && r.querySelector('.d6-ss svg, .d6-ss .d6-nospark, .ch-spark svg, .ch-spark .d6-nospark'))), samples[0].length);
     check('State: the numbers update live', new Set(samples.map((s) => byName(s, 'position'))).size >= 3 && new Set(samples.map((s) => byName(s, 'voltage'))).size >= 2, samples.map((s) => byName(s, 'position')));
     check('State: an enumeration and a code read as their meaning', byName(samples[0], 'mode') === '10 · position' && byName(samples[0], 'fault') === '33 · motor driver fault on bridge enable');
     check('State: a sparkline per number', (await page.evaluate(() => document.querySelectorAll('.d6-sr .d6-sp .ln').length)) >= 5);

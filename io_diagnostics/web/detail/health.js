@@ -120,11 +120,11 @@
   // the page vanishes, so heavier is lighter there: the order of weight is kept, the direction of lightness flips.
   // The numbers (contrast against the page, how far apart the greys are): docs/health_palettes.py reads this table.
   const PALETTE = {
-    light: { ok: '#4ebd7d', warn: '#f1c40f', error: '#e74c3c', stale: '#8f8f98', unknown: '#4b4b53' },
-    dark: { ok: '#4ebd7d', warn: '#f1c40f', error: '#e74c3c', stale: '#72727c', unknown: '#c8c8d0' },
+    light: { ok: '#4ebd7d', warn: '#f1c40f', error: '#e74c3c', stale: '#8f8f98', unknown: '#4b4b53', ink: '#1d1d20' },
+    dark: { ok: '#4ebd7d', warn: '#f1c40f', error: '#e74c3c', stale: '#72727c', unknown: '#c8c8d0', ink: '#1d1d20' },
   };
   function paletteCss() {
-    const tokens = (p) => `--hc-ok: ${p.ok}; --hc-warn: ${p.warn}; --hc-error: ${p.error}; --hc-stale: ${p.stale}; --hc-unknown: ${p.unknown};`;
+    const tokens = (p) => `--hc-ok: ${p.ok}; --hc-warn: ${p.warn}; --hc-error: ${p.error}; --hc-stale: ${p.stale}; --hc-unknown: ${p.unknown}; --hc-ink: ${p.ink};`;   // ink: the mark inside a warn shape (the yellow is light, so its ink is dark in both themes)
     return `:root { ${tokens(PALETTE.light)} }\n:root[data-mode="dark"] { ${tokens(PALETTE.dark)} }`;
   }
 

@@ -105,7 +105,7 @@
 /* WHY the health palette (detail/health.js, --hc-*, Statuspage's own colours; Zach, 2026-10-24: one palette): the tree's marks, the roll-up icons and the
    header counts draw in the same colours as the health bars; the skin's own status tokens are the fallback until health.js has loaded */
 .t6-shape.t6-warn { color: var(--hc-warn, var(--io-warn)); }
-.t6-shape.t6-warn { --io-on-status: #1d1d20; } /* the health palette's yellow is a light colour: the mark inside the triangle is dark, in both themes */
+.t6-shape.t6-warn { --io-on-status: var(--hc-ink, var(--io-surface)); } /* the health palette's yellow is light: the mark inside the triangle takes its dark ink (--hc-ink), in both themes */
 .t6-shape.t6-error { color: var(--hc-error, var(--io-error)); }
 .t6-shape.t6-stale { color: var(--hc-stale, var(--io-faint)); }
 .t6-shape.t6-unknown { color: var(--hc-unknown, var(--io-unknown)); }
