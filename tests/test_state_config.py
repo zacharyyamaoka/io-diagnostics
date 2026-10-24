@@ -243,6 +243,8 @@ def test_a_heartbeat_starts_the_watch_with_the_entity_path_and_it_stops_after_th
                        what="the watch running")
     pid = running["pid"]
     assert alive(pid)
+    # WHY wait: "running" is set when the host spawns the watch, a moment before the process writes its verb line
+    wait_for(lambda: joint.verbs("watch"), what="the watch process starting")
     [started] = joint.verbs("watch")
     assert started["path"] == "can/1" and started["frame_dir"] and Path(started["frame_dir"]).is_dir()
     before = joint.host.values_json(joint.board)["cursor"]
@@ -280,6 +282,9 @@ def test_a_holder_pauses_the_watch_in_plain_words_and_clearing_it_resumes(tmp_pa
         rig.os.gates["port_free"] = (True, "no holder")
         resumed = wait_for(lambda: rig.host.watch_heartbeat(rig.board)["watch"]["state"] == "running" and rig.host.watch_json(
             *rig.host._watch_target(rig.board)), what="the watch resuming")
+        # WHY wait for the plugin's own log line: "running" is set when the host spawns the watch, a moment before the
+        # new process writes its verb (failed 2 in 3 runs on main, 2026-10-24); exactly one watch must have started
+        wait_for(lambda: len(rig.verbs("watch")) >= 1, what="the watch process starting")
         assert resumed["reason"] == "" and len(rig.verbs("watch")) == 1
         rig.os.gates["port_free"] = (False, "port held by tview pid 640623")  # a holder arrives while it runs: it is stopped
         pid = resumed["pid"]

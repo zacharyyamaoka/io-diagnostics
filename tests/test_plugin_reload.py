@@ -149,6 +149,8 @@ def test_a_running_watch_restarts_only_when_its_declaration_changed(rig):
     running = wait_for(lambda: (state := rig.host.watch_json(*rig.host._watch_target(rig.device)))["state"] == "running" and state,
                        what="the watch")
     first_pid = running["pid"]
+    # WHY wait: "running" is set when the host spawns the watch, a moment before the process writes its verb line
+    wait_for(lambda: rig.verbs("watch"), what="the watch process starting")
     rig.rewrite(declaration("first", "second", period_s=0.5))  # other things changed, the watch's declaration did not
     rig.host.check_plugin_sources()
     rig.host.watch_heartbeat(rig.device)
