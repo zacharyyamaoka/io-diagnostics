@@ -156,10 +156,12 @@ deliberately no `DiagnosticStatus.STALE`.
 |---|---|---|
 | `code` | str, PascalCase | `Plugged`, `Unplugged`, `ReEnumerated`, `Restarted`, `FaultConfirmed`, … |
 | `stamp` | float | Required |
-| `severity` | `info \| warn \| error` | Log severity. INFO lives here, never in a status level |
+| `severity` | `debug \| info \| warn \| error \| fatal` | Log severity (v0.2 adds `debug` and `fatal`: ROS's five levels). INFO lives here, never in a status level |
 | `message`, `args` | str, dict | The message renders code + args (Redfish MessageArgs, HA translation placeholders) |
 | `path`, `hardware_id` | str | `hardware_id` ties an unplug to the device after its path is gone |
 | `seq`, `source` | int, str | Per-source sequence: a jump means events were lost (MAVLink events) |
+| `received` | float | v0.2. When the observer first saw it, on its own clock; `stamp` is the source's (OpenTelemetry `ObservedTimestamp`) |
+| `count`, `last_stamp` | int, float | v0.2. A coalesced repeat: `count` identical events, `stamp` the first, `last_stamp` the latest (K8s `series.count`) |
 
 ### Fault (host memory; never sent by a driver)
 
@@ -524,3 +526,37 @@ symptom; the Computer's checks written on the host swallowed the rack below.
   projection and validation. `tests/test_caused_by.py`: the same through the host (a plugin composite's relative
   member, the rig naming an absent adapter's row and naming nothing when no row says it, the links line, a check
   naming the host).
+
+## v0.2: the Event is the log record (2026-10-24, additive)
+
+Zach, 2026-10-24: "I feel confident you can come up with a good design. I will take your defaults... Please go ahead with
+implementing this vision for your logs." The research and the six decisions are in `docs/activity-log-v1.md`; this section
+is what changed in the contract (`contract/record.py`, `RECORD_VERSION = "0.2"`). The status record does not change.
+
+- **What changed.**
+  - `EVENT_SEVERITIES` gains `debug` and `fatal`: ROS `rcl_interfaces/Log`'s five levels (10 / 20 / 30 / 40 / 50) and
+    OpenTelemetry's bands, without a lossy squeeze. `ROS_LOG_LEVEL` is the table.
+  - `Event` gains `received` (when the host first saw it), `count` and `last_stamp` (a coalesced repeat). Every field has a
+    default that says nothing, so a v0.1 line reads as before and `to_dict` omits them while they are default.
+  - `validate(Event)` checks `count` is a whole number >= 1 and `last_stamp` is not before `stamp`.
+- **The stock projection, beside `to_diagnostic_status`.** `to_ros_log(event)` is a stock `rcl_interfaces/msg/Log` as a dict
+  and `from_ros_log(message, **added)` takes any `/rosout` line back in. Placement, so a stock viewer shows it where it looks:
+
+  | `Log` | from the Event | WHY |
+  |---|---|---|
+  | `stamp` `{sec, nanosec}` | `stamp`, to the microsecond | a float64 near 1.8e9 s holds ~0.24 us: finer digits are noise, and microseconds keep stock -> v0 -> stock exact |
+  | `level` | `severity` (10 / 20 / 30 / 40 / 50) | the levels are the same five |
+  | `name` | `path`, `/` -> `.` | ROS's logger hierarchy (`abc.def` is under `abc`) then reads "this entity and its children" |
+  | `msg` | `message`, plus ` (xN)` when `count` > 1 | ROS has no count; a person in rqt_console still reads that it repeated |
+  | `file`, `function`, `line` | `source`, `code`, `seq` (0 = none) | rqt_console's Location column reads `source:Code:seq`; an empty `function` is a raw line |
+
+  Stripped (no stock field): `received`, `args`, `hardware_id`, `last_stamp`. `from_ros_log` takes `path` (when the entity is
+  not just the dotted logger name), `hardware_id`, `args` and `received` as `added`; a level between the five falls to the
+  band below. A /rosout line has no code, so it comes in as a raw line (`code` ""). The proof is the one `to_diagnostic_status`
+  has: stock -> v0 -> stock is the identity (a 300-message fuzz), and v0 -> stock -> v0 keeps everything a stock line can hold.
+- **Signalled** as v0.1 was: the schema string is unchanged and a v0 / v0.1 reader ignores the new fields; the revision
+  constant is `"0.2"` and travels only in `describe` and `GET /api/v1/state`.
+- **Left out on purpose.** `to_foxglove_log`, `to_otel_log_record`, the journald sink and the MCAP export are later (the
+  research ordered them behind the stock pair). The mapping table they will be written from is in the research report.
+- **Tests.** `tests/test_activity_log.py` "the Event as the log record": defaults and JSON, severities and `validate`, each
+  placement, the fuzz identity, the round trip; `tests/test_record.py` keeps the v0.1 proofs and now asserts `"0.2"`.

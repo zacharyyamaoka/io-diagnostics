@@ -399,8 +399,10 @@ async function main() {
     check('query: the entity re-reads its diagnostics at once', nodeAfter.some((at) => at >= doneAt - 400 && at <= doneAt + 600), { doneAt, nodeAfter: nodeAfter.map((at) => at - doneAt) });
     await page.click('[data-view="activity"]');
     await page.waitForSelector('.act .ev');
-    const logged = await page.evaluate(() => { const first = document.querySelector('.act .ev'); return { kind: first.querySelector('.kind').textContent, text: first.textContent, go: first.dataset.go }; });
-    check('query: the result lands in Activity', logged.kind === 'utility' && /Check communication: /.test(logged.text) && logged.go === ADAPTER, logged);
+    // activity log v1 (2026-10-24): the host logs the run itself, and RunStarted + RunEnded are ONE `Run` row of the entity it ran on
+    // (it was the page's own "utility" line, with the entity in data-go: the page no longer adds lines of its own)
+    const logged = await page.evaluate(() => { const first = document.querySelector('.act .ev'); return { kind: first.querySelector('.kind').textContent, text: first.textContent, go: first.querySelector('[data-al-scope]').dataset.alScope }; });
+    check('query: the result lands in Activity as the run\'s one row', logged.kind === 'Run' && /Check communication/.test(logged.text) && logged.go === ADAPTER, logged);
     await page.click('[data-view="tree"]');
     // a failed run is the one coloured line: diagnostic-level (data-diagnostic, the error shape, --io-error-text)
     await utilities(page);
@@ -998,7 +1000,8 @@ async function round3Shots(browser, base, scheme) {
     await page.click('[data-view="activity"]');
     await page.waitForTimeout(500);
     await shot('activity');
-    await page.click('[data-act-filter="faults"]');
+    // activity log v1 (2026-10-24): the All / Faults / Runs views are data-al-preset buttons (it was data-act-filter="faults")
+    await page.click('[data-al-preset="faults"]');
     await page.waitForTimeout(300);
     await shot('activity-faults');
   } finally {

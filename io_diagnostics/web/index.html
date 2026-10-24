@@ -30,6 +30,8 @@
 <link rel="stylesheet" href="tree/v4.css">
 <link rel="stylesheet" href="tree/v5.css">
 <link rel="stylesheet" href="tree/v6.css">
+<!-- the Activity view (activity/log.js): its own styles, tokens only -->
+<link rel="stylesheet" href="activity/log.css">
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -118,6 +120,8 @@
       <!-- one persistent pane per tree proposal: a renderer keeps its expansion and scroll in its own pane -->
       <div id="tree-host"></div>
       <div id="left-other" hidden></div>
+      <!-- the Activity log keeps its own DOM (its search box, scroll and pause survive the page's once-a-second render) -->
+      <div id="activity-host" hidden></div>
     </section>
     <!-- the pane boundary: drag to resize (remembered), double-click for the default, arrow keys when focused -->
     <div class="sash" id="sash" role="separator" aria-orientation="vertical" aria-label="Resize the panes" tabindex="0" title="Drag to resize · double-click to reset"></div>
@@ -157,6 +161,8 @@
 <script src="vendor/xterm/xterm.js"></script>
 <script src="vendor/xterm/addon-fit.js"></script>
 <script src="runs/core.js"></script>
+<script src="activity/core.js"></script>
+<script src="activity/log.js"></script>
 <script src="view/core.js"></script>
 <script src="tree/v1.js"></script>
 <script src="tree/v2.js"></script>

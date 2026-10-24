@@ -43,7 +43,7 @@ KIND_LABEL = {"Booted": "boot", "ShutDown": "shutdown", "Plugged": "plugged", "U
               "LinkSpeed": "link speed", "LinkDowngraded": "link downgraded", "DriverBound": "driver bound",
               "DriverUnbound": "driver unbound", "NetCarrierUp": "link up", "NetCarrierDown": "link down",
               "PcieAerError": "PCIe AER error", "LevelChanged": "level changed", "RunStarted": "run started",
-              "RunEnded": "run ended"}
+              "RunEnded": "run ended", "Run": "run", "FoundAtStart": "found at start"}
 # Every event's ``type`` (docs/api-v1.md "Activity"): what ``?types=`` filters on. Any code not listed is a plugin's.
 TYPES = ("usb", "link", "usb_error", "driver", "network", "pcie", "level", "fault", "boot", "run", "plugin")
 EVENT_TYPES = {"Booted": "boot", "ShutDown": "boot",
@@ -52,7 +52,7 @@ EVENT_TYPES = {"Booted": "boot", "ShutDown": "boot",
                **{code: "usb_error" for _pattern, code, _severity in kernel_log.USB_ERRORS},
                "DriverBound": "driver", "DriverUnbound": "driver", "NetCarrierUp": "network", "NetCarrierDown": "network",
                "PcieAerError": "pcie", "FaultConfirmed": "fault", "FaultHealed": "fault", "FaultCleared": "fault",
-               "LevelChanged": "level", "RunStarted": "run", "RunEnded": "run"}
+               "LevelChanged": "level", "RunStarted": "run", "RunEnded": "run", "Run": "run", "FoundAtStart": "fault"}
 DRIVER_CODES = ("DriverBound", "DriverUnbound")
 SUPERSPEED_MBPS = 5000.0
 MAX_LIVE_EVENTS = 500
@@ -65,13 +65,16 @@ def event_type(code: str) -> str:
 
 
 def event_id(event: Event) -> str:
-    """The event's stable id: the host's own events carry it in ``args["id"]``; a plugin's is its source and seq."""
+    """The event's stable id: the host's own events carry it in ``args["id"]``; a plugin's is its source, seq and stamp.
+
+    WHY the stamp: a sequence restarts at 1 with every host (and plugin) process, and since the log is kept on disk
+    (eventlog.py) two processes' ``fault_manager#1`` must not be one event."""
 
     args = event.args if isinstance(event.args, dict) else {}
     if args.get("id"):
         return str(args["id"])
     if event.seq is not None:
-        return f"{event.source or 'plugin'}#{event.seq}"
+        return f"{event.source or 'plugin'}#{event.seq}@{event.stamp or 0:.3f}"
     return f"{event.code}@{event.stamp or 0:.3f}:{event.path}:{args.get('fault', '')}"
 
 
@@ -575,16 +578,25 @@ def level_events(transitions: list[tuple], names: dict[str, str] | None = None) 
     return out
 
 
-def event_json(event: Event, utc_offset_s: int | None, path_names: dict[str, str] | None = None) -> dict:
+def event_json(event: Event, utc_offset_s: int | None, path_names: dict[str, str] | None = None, *, channel: str = "activity",
+               badges: list[dict] | None = None, members: list[dict] | None = None) -> dict:
+    """One event (or one log row, ``logview.fold``) as the API's JSON. Every key is always present: ``count`` /
+    ``last_stamp`` for a coalesced repeat, ``received`` for when the host first saw it, ``badges`` for a fault's
+    lifecycle folded onto this row, ``members`` for the events a row folds (a run's two, a start-up group)."""
+
     stamp = event.stamp
     when = iso(stamp, utc_offset_s)
+    last = iso(event.last_stamp, utc_offset_s)
+    received = iso(event.received, utc_offset_s)
     args = {key: value for key, value in dict(event.args).items() if key not in ("id", "provisional")}
     return {"stamp": stamp, "iso": when, "time": when[11:19] if when else "", "code": event.code,
             "kind": kind_label(event.code), "type": event_type(event.code), "id": event_id(event),
             "provisional": bool(dict(event.args).get("provisional")), "severity": event.severity, "message": event.message,
             "path": event.path, "name": (path_names or {}).get(event.path, ""), "hardware_id": event.hardware_id,
             "port": str(event.args.get("port", "")) if isinstance(event.args, dict) else "", "source": event.source,
-            "seq": event.seq, "args": args}
+            "seq": event.seq, "args": args, "channel": channel, "count": event.count, "last_stamp": event.last_stamp,
+            "last_iso": last, "last_time": last[11:19] if last else "", "received": event.received, "received_iso": received,
+            "badges": badges or [], "members": members or []}
 
 
 def link_health(rows: Rows, layer, utc_offset_s: int | None = None) -> list[dict]:

@@ -680,6 +680,9 @@ class JobCache:
             elif isinstance(record, Event):
                 if record.stamp is None:
                     record = dataclasses.replace(record, stamp=received)
+                if record.received is None:
+                    # WHY here: this is the moment the host first heard it, and the log keeps that (OpenTelemetry's ObservedTimestamp)
+                    record = dataclasses.replace(record, received=received)
                 key = (record.source or outcome.plugin, record.seq) if record.seq is not None else (
                     record.code, record.stamp, record.path, record.message)
                 if key not in self.events:

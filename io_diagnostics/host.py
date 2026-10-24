@@ -23,8 +23,10 @@ from pathlib import Path
 
 from io_diagnostics import API, FIXTURE_PLUGINS_DIR, PLUGINS_DIR
 from io_diagnostics import activity as activity_module
+from io_diagnostics import eventlog as eventlog_module
 from io_diagnostics import expected as expected_module
 from io_diagnostics import history as history_module
+from io_diagnostics import logview as logview_module
 from io_diagnostics import probe as probe_module
 from io_diagnostics import settings as settings_module
 from io_diagnostics import tree
@@ -55,6 +57,7 @@ FAST_REFRESH_S = 0.5
 WAITING = "waiting"
 GATE_CACHE_S = 2.0
 RECENT = 6
+FOLD_EVENTS = 8000  # the newest events the Activity log folds (the store may hold 50,000; a row needs only its neighbours)
 RUNS_IN_STATE = 30  # the newest runs /api/v1/state carries (docs/runs-v1.md)
 
 
@@ -410,7 +413,9 @@ class Host:
                  recheck_poll_s: float | None = None, recheck_settle_s: float | None = None,
                  recheck_backoff_s: float | None = None, runs_dir: Path | None = None, run_grace_s: float | None = None,
                  run_ring_bytes: int | None = None, run_budget_bytes: int | None = None, run_bus_wait_s: float | None = None,
-                 run_bus_poll_s: float | None = None, run_bus_settle_s: float | None = None):
+                 run_bus_poll_s: float | None = None, run_bus_settle_s: float | None = None,
+                 event_log_dir: Path | None = None, boot_id: str = "", boot_start: float | None = None,
+                 event_log_cap_bytes: int | None = None, event_log_segment_bytes: int | None = None):
         self.plugins_dir = Path(plugins_dir)
         # WHY settable: the defaults are the product (probe.py: holders' pids every 1 s, 0.5 s settle, 10 s first
         # backoff); a test of the backoff alone shortens the last
@@ -455,6 +460,14 @@ class Host:
         self.change_reason = ""
         self._wake = threading.Event()
         self.faults = Faults()
+        # the host's events on disk (docs/activity-log-v1.md): ``event_log_dir`` None keeps the same history in memory
+        # only (a host built by hand, a fixture replay, ``once``)
+        boot_id, boot_start = self._boot_identity(boot_id, boot_start)
+        self.eventlog = eventlog_module.EventLog(
+            event_log_dir, boot_id=boot_id, boot_start=boot_start,
+            cap_bytes=event_log_cap_bytes or eventlog_module.CAP_BYTES,
+            segment_bytes=event_log_segment_bytes or eventlog_module.SEGMENT_BYTES)
+        self.raw_kernel = logview_module.RawKernel()
         self.describes: dict[str, dict | None] = {spec.name: None for spec in self.specs}
         self.url = ""
         self.lock = threading.RLock()
@@ -482,6 +495,18 @@ class Host:
     @property
     def utc_offset_s(self) -> int | None:
         return self.clock.utc_offset_s
+
+    def _boot_identity(self, boot_id: str, boot_start: float | None) -> tuple[str, float]:
+        """Which boot the event log's file is: the machine's (the kernel's boot id), or a replay's frame."""
+
+        if self.fixture is not None:
+            return boot_id or f"fixture-{self.fixture['name']}", boot_start if boot_start is not None else float(self.fixture["clock"])
+        if not boot_id:
+            try:
+                boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+            except OSError:
+                boot_id = "unknown"
+        return boot_id, boot_start if boot_start is not None else (activity_module.boot_start() or time.time())
 
     # --- plugins that declare their matches in describe ------------------------------------------------------------
     def adopt_described_matches(self) -> None:
@@ -987,10 +1012,22 @@ class Host:
             try:
                 self.refresh()
                 self.faults.tick(self.clock.now())
+                self._keep_log()
             except Exception as error:  # noqa: BLE001 - a bad read must not stop the refresher; it shows in sources
                 self.sources = [*self.sources, {"name": "refresh", "state": "skipped", "note": f"{type(error).__name__}: {error}"}]
 
+    def _keep_log(self) -> None:
+        """Write what the host now knows to the event log. WHY here, not only in a view: a service nobody is looking at
+        (a tray with no window) must still keep its events, and a view is where they are all gathered."""
+
+        if self.eventlog.directory is not None:
+            self.view()
+
     def stop(self) -> None:
+        try:
+            self._keep_log()
+        except Exception:  # noqa: BLE001 - a failing flush never keeps the host from stopping
+            pass
         self._stop.set()
         self._wake.set()
         if self._scheduler:
@@ -1037,7 +1074,11 @@ class Host:
                     events += [dataclasses.replace(event, path=absolute(event.path, device_path), source=event.source or job.spec.name)
                                for event in job.cache.events.values()]
         events = [event for event in events if event.stamp is None or event.stamp <= now]
-        events.sort(key=lambda event: (event.stamp or 0.0, event.seq or 0), reverse=True)
+        # WHY the log between what the host derives and what a page reads: the derived events live in RAM (the fault
+        # memory, the level history, the runs) or in a journal that ends with the boot, so the log keeps each one when
+        # it is final and gives back the ones this process no longer produces (docs/activity-log-v1.md decision 4)
+        self.eventlog.record(events, now)
+        events = [event for event in self.eventlog.overlay(events, now) if event.stamp is None or event.stamp <= now]
         return View(now, layer, merged, rows, events, self.faults.open_by_path(), setup, checks)
 
     def _layer_with(self, extra: list[tuple[Entity, str]]) -> tree.OsLayer:
@@ -1776,16 +1817,68 @@ class Host:
         return run.to_json(detail=True) if run else None
 
     # --- activity, records, plugins -----------------------------------------------------------------------------
-    def activity(self, limit: int = 200, types: tuple[str, ...] | None = None) -> dict:
-        """``types``: only events of these types (``activity.TYPES``); raises ValueError for one it does not know."""
+    def activity(self, limit: int = 200, types: tuple[str, ...] | None = None, *, fold: bool = False, channel: str = "activity",
+                 path: str = "", scope: str = "children", severity: str = "debug") -> dict:
+        """``types``: only events of these types (``activity.TYPES``); raises ValueError for one it does not know.
+
+        ``fold`` is the Activity log's model (``logview``): the events as rows (a fault folded onto its cause, a run as
+        one row, repeats counted), by ``channel`` (``activity`` coded events, ``raw`` the entity's kernel lines, ``all``),
+        for the entity ``path`` and its ``scope`` (``children`` / ``self`` / ``host``), at or above ``severity``."""
 
         unknown = sorted(set(types or ()) - set(activity_module.TYPES))
         if unknown:
             raise ValueError(f"unknown event type {', '.join(map(repr, unknown))}: one of {', '.join(activity_module.TYPES)}")
         view = self.view()
+        if fold:
+            return self.log_json(view, limit, types, channel=channel, path=path, scope=scope, severity=severity)
         return {"clock": self.clock_json(view.now), "events": self.events_json(view, limit, types),
                 "faults": [self.fault_json(fault, view) for fault in self.faults.all()],
                 "link_health": activity_module.link_health(view.rows, view.layer, self.utc_offset_s)}
+
+    def log_json(self, view: View, limit: int, types, *, channel: str, path: str, scope: str, severity: str) -> dict:
+        for value, allowed, what in ((channel, logview_module.CHANNELS, "channel"), (scope, logview_module.SCOPES, "scope"),
+                                     (severity, logview_module.FLOORS, "severity")):
+            if value not in allowed:
+                raise ValueError(f"unknown {what} {value!r}: one of {', '.join(allowed)}")
+        if path and path not in view.merged.entities:
+            raise ValueError(f"no entity {path!r}")
+        entity = view.merged.entities.get(path)
+        hardware_id = entity.hardware_id if entity else ""
+        names = self._names(view)
+        out: list[dict] = []
+        total = 0
+        if channel in ("activity", "all"):
+            folded = logview_module.fold(view.events[:FOLD_EVENTS], active_runs={run.id for run in self.runs.active()})
+            chosen = logview_module.select(folded, entity=path, entity_hardware_id=hardware_id, scope=scope, floor=severity, types=types)
+            total += len(chosen)
+            out += [logview_module.row_json(row, self.utc_offset_s, names) for row in chosen[:limit]]
+        if channel in ("raw", "all"):
+            raw, count = self._raw_rows(view, path, hardware_id, scope, severity, limit, names)
+            total += count
+            out += raw
+        out.sort(key=lambda row: ((row["last_stamp"] if row["last_stamp"] is not None else row["stamp"]) or 0.0, row["seq"] or 0), reverse=True)
+        return {"clock": self.clock_json(view.now), "events": out[:limit],
+                "log": {"channel": channel, "path": path, "name": names.get(path, ""), "scope": scope, "severity": severity,
+                        "matching": total, "shown": min(len(out), limit), "persisted": self.eventlog.directory is not None,
+                        "note": self.eventlog.note}}
+
+    def _raw_rows(self, view: View, path: str, hardware_id: str, scope: str, floor: str, limit: int,
+                  names: dict[str, str]) -> tuple[list[dict], int]:
+        """The Raw channel: this boot's kernel lines about the entity (a USB device's lines are its port's), newest first."""
+
+        layer = view.layer
+        out, count = [], 0
+        for line in reversed(self.raw_kernel.lines(self.os.boots())):
+            if not logview_module.severity_at_least(line.severity, floor):
+                continue
+            device_id = layer.port_devices.get(line.port) if line.port else None
+            where = (layer.device_paths.get(device_id) if device_id else None) or (layer.port_paths.get(line.port) if line.port else None) or tree.HOST_PATH
+            if not logview_module.in_scope(where, "", path, hardware_id, scope):
+                continue
+            count += 1
+            if len(out) < limit:
+                out.append(logview_module.raw_json(line, where, self.utc_offset_s, names))
+        return out, count
 
     def records(self) -> dict:
         view = self.view()
@@ -1931,17 +2024,20 @@ def make_host(*, fixture: str | None = None, plugins_dir: Path | None = None, on
     # WHY runs are recorded live, and in a replay only when the state dir is named: a replayed frame's runs must never
     # land in the person's own run history (docs/runs-v1.md section 4)
     replay_runs = default_state_dir() / "runs" if os.environ.get("IO_DIAGNOSTICS_STATE_DIR") else None
+    # the same rule for the event log (docs/activity-log-v1.md): live it is on disk for a service, never for a one-shot ``once``
+    replay_log = default_state_dir() / "log" if os.environ.get("IO_DIAGNOSTICS_STATE_DIR") else None
     if machine is not None:
         if fixture is not None:
             raise SystemExit("--machine and --fixture are two different OS sides: pick one")
         clock = FixedClock(time.time()) if once else Clock()
         return Host(plugins_dir=plugins_dir or PLUGINS_DIR, clock=clock, os_source=MachineOs(machine), enable=enable,
-                    expected_file=expected, runs_dir=replay_runs, **settings)
+                    expected_file=expected, runs_dir=replay_runs, event_log_dir=replay_log, **settings)
     if fixture is None:
         # WHY live only: the remembered devices are this machine's; a fixture or a fake machine must never add to them
         clock = FixedClock(time.time()) if once else Clock()
         return Host(plugins_dir=plugins_dir or PLUGINS_DIR, clock=clock, os_source=LiveOs(), enable=enable,
                     state_file=default_state_dir() / SEEN_FILE, runs_dir=default_state_dir() / "runs",
+                    event_log_dir=None if once else default_state_dir() / "log",
                     expected_file=expected or expected_module.default_config_dir() / expected_module.EXPECTED_FILE,
                     **settings)
     document, frame = load_fixture(fixture)
@@ -1952,7 +2048,7 @@ def make_host(*, fixture: str | None = None, plugins_dir: Path | None = None, on
     return Host(plugins_dir=plugins_dir or FIXTURE_PLUGINS_DIR, clock=clock, os_source=FixtureOs(frame),
                 fixture=fixture_info(document, frame), enable=enable, expected_file=expected,
                 plugin_env={"IO_DIAGNOSTICS_FIXTURE": frame["name"], "IO_DIAGNOSTICS_FIXTURE_FILE": str(FIXTURE_FILE)},
-                runs_dir=replay_runs, **settings)
+                runs_dir=replay_runs, event_log_dir=replay_log, **settings)
 
 
 __all__ = ["Clock", "ReplayClock", "FixedClock", "LiveOs", "FixtureOs", "MachineOs", "Host", "View", "make_host",

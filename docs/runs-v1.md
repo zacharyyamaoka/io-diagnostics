@@ -169,8 +169,15 @@ One event per run, so actions are finally in the log. Both are Events of type `r
 | `RunStarted` | info | `Run calibration started on CAN 1` | `id` `run:<run id>:started`, `run_id`, `action`, `node`, `plugin`, `danger` |
 | `RunEnded` | info (done) · warn (stopped, timed_out) · error (failed) | `Run calibration on CAN 1 stopped after 12 s (exit -2); the plugin's stop sent` | `id` `run:<run id>:ended`, `run_id`, `state`, `exit_code`, `duration_s`, `stop` |
 
-`stamp` is the host clock. Events live in memory for this host process; the persisted runs are the long record. A
-queued run says `RunStarted` when its process starts, not when it is queued.
+`stamp` is the host clock. The events are kept with the rest of the host's log (`docs/activity-log-v1.md`: append-only JSONL
+per boot), so they survive a restart; the persisted runs (`.cast` + `.json`) hold the output. A queued run says `RunStarted`
+when its process starts, not when it is queued.
+
+**The Activity log shows them as one row** (2026-10-24, `GET /api/v1/activity?fold=1`): `RunStarted` + `RunEnded` become one
+`Run` row (stamp the start, `last_stamp` the end, `args.state` `running | done | failed | stopped | timed_out | interrupted`).
+`GET /api/v1/activity` without `fold=1` still lists the two events, as above. `interrupted` is a run the log holds a start for
+and the host no longer knows (the host died while it ran). The run's output is the Raw channel under that row: `web/runs/r4.js`
+follows the run's stream and the log draws the lines (docs/activity-log-v1.md "r4").
 
 ## 6. Input, Stop, and the plugin's stop
 

@@ -36,7 +36,8 @@ SCHEMA = "diagnostics-record/0"
 # (``"record_version": "0.1"``), and the host states its own in its API. v0.1 (2026-10-22): identity ``model_id``,
 # danger ``moves``, the standard action names (docs/diagnostics-record-v0.md "v0.1"); its addendum (2026-10-23):
 # ``DiagnosticStatus.caused_by`` and the counting rule in ``summarize`` (same doc, "v0.1 addendum: caused_by").
-RECORD_VERSION = "0.1"
+# v0.2 (2026-10-24): the Event is the log record (docs/diagnostics-record-v0.md "v0.2: the Event is the log record").
+RECORD_VERSION = "0.2"
 
 # caused_by on the stock side: one value, appended last, the member paths joined by ", ". A person reads it in rqt;
 # ``from_diagnostic_status`` leaves it a plain value (a stock message is never re-read as v0 structure), so the trip
@@ -69,7 +70,10 @@ MODES = ("operational", "initialization", "maintenance", "software_update", "off
 STALE_FACTOR = 3.0
 STALE_FLOOR_S = 5.0
 
-EVENT_SEVERITIES = ("info", WARN, ERROR)  # log severity: INFO is an event, never a status (ROS #268 debate)
+# Log severity: INFO is an event, never a status (ROS #268 debate). v0.2 adds debug and fatal so an Event maps onto
+# rcl_interfaces/Log's five levels (10 / 20 / 30 / 40 / 50) and OpenTelemetry's six bands without a lossy squeeze.
+EVENT_SEVERITIES = ("debug", "info", WARN, ERROR, "fatal")
+ROS_LOG_LEVEL = {"debug": 10, "info": 20, WARN: 30, ERROR: 40, "fatal": 50}
 PENDING, CONFIRMED, HEALED, CLEARED = "pending", "confirmed", "healed", "cleared"
 FAULT_STATUSES = (PENDING, CONFIRMED, HEALED, CLEARED)
 # HA device_info names. v0.1 adds model_id (HA DeviceInfo's own key): the robotparts part id ("mjbots-moteus-c1"),
@@ -260,13 +264,17 @@ class Event:
 
     code: str  # "Plugged", "Unplugged", "ReEnumerated", "Restarted", "FaultConfirmed", ...
     stamp: float | None = None
-    severity: str = "info"  # info | warn | error
+    severity: str = "info"  # debug | info | warn | error | fatal
     message: str = ""
     path: str = ""
     hardware_id: str = ""  # so an unplug is tied to the device even after its path is gone
     args: Mapping[str, Any] = field(default_factory=dict)  # what the message renders: {"port": "1-5", "flaps": 4}
     seq: int | None = None  # per source, +1 per event: a jump means events were lost
     source: str = ""
+    # v0.2, the log record (OpenTelemetry LogRecord: Timestamp is ``stamp``, ObservedTimestamp is ``received``)
+    received: float | None = None  # when the observer (the host) first saw it, on its own clock; ``stamp`` is the source's
+    count: int = 1  # a coalesced repeat: this many identical events (same code, source, path, message) in one row
+    last_stamp: float | None = None  # ... the latest of them; ``stamp`` stays the first (K8s Event series.count)
 
 
 @dataclass
@@ -354,6 +362,63 @@ def from_diagnostic_array(array, received: float | None = None) -> list[Diagnost
     stamp_message = _get(_get(array, "header", {}), "stamp", {})
     stamp = _get(stamp_message, "sec", 0) + _get(stamp_message, "nanosec", 0) / 1e9
     return [from_diagnostic_status(status, stamp=stamp, received=received) for status in _get(array, "status", ())]
+
+
+# ----- stock ROS log projection (v0.2) --------------------------------------------------------------------------
+# WHY these placements (docs/diagnostics-record-v0.md "v0.2"): rcl_interfaces/Log has stamp, level, name, msg, file,
+# function and line. The logger ``name`` is the entity path dotted, so ROS's own hierarchy (``abc.def`` sits under
+# ``abc``) gives "this entity and its children"; ``function`` carries the code (an empty one is a raw line), ``file``
+# the source and ``line`` the per-source sequence (0 = none). It is the trick ``caused_by`` plays on DiagnosticStatus:
+# a place a stock viewer already shows, so rqt_console's Location column reads ``source:Code:seq``. ``received``,
+# ``args``, ``hardware_id`` and ``last_stamp`` have no stock field and are stripped.
+def _split_stamp(stamp: float) -> tuple[int, int]:
+    # microsecond resolution: a float64 near 1.8e9 s holds ~0.24 us, so finer digits are noise and would break the
+    # stock -> v0 -> stock identity; any stamp a ROS clock wrote at us resolution comes back exactly
+    seconds = math.floor(stamp)
+    microseconds = round((stamp - seconds) * 1e6)
+    if microseconds >= 1_000_000:
+        seconds, microseconds = seconds + 1, microseconds - 1_000_000
+    return int(seconds), int(microseconds) * 1000
+
+
+def to_ros_log(event: Event) -> dict:
+    """The stock ``rcl_interfaces/msg/Log`` as a plain dict: what rqt_console, Foxglove's Log panel and Lichtblick read.
+
+    ``level`` is 10 / 20 / 30 / 40 / 50 (debug .. fatal). A coalesced repeat is one stock line with `` (xN)`` after
+    its message: ROS has no count, and a person in rqt_console should still read that it repeated."""
+
+    if event.severity not in ROS_LOG_LEVEL:
+        raise ValueError(f"severity {event.severity!r} is not one of {EVENT_SEVERITIES}")
+    if event.stamp is None:
+        raise ValueError("an event needs a stamp: a stock Log without one is unordered in every viewer")
+    seconds, nanoseconds = _split_stamp(event.stamp)
+    return {"stamp": {"sec": seconds, "nanosec": nanoseconds}, "level": ROS_LOG_LEVEL[event.severity],
+            "name": event.path.replace("/", "."), "msg": event.message + (f" (x{event.count})" if event.count > 1 else ""),
+            "file": event.source, "function": event.code, "line": event.seq or 0}
+
+
+def _severity_of_level(level: int) -> str:
+    for name, below in (("debug", 20), ("info", 30), (WARN, 40), (ERROR, 50)):
+        if level < below:
+            return name
+    return "fatal"
+
+
+def from_ros_log(message, **added) -> Event:
+    """Any stock ``rcl_interfaces/msg/Log`` (a dict, or an rclpy message) -> an Event. A /rosout line has no code, so it
+    comes in as a raw line (``code`` ""); one that went through ``to_ros_log`` brings its code back from ``function``.
+    ``added`` sets v0-only fields the caller knows: ``path`` when the entity is not just the dotted logger name,
+    ``hardware_id``, ``args``, ``received``. Levels between the stock five fall to the band below (25 is info)."""
+
+    stamp_message = _get(message, "stamp", {})
+    level = _get(message, "level", 20)
+    if isinstance(level, (bytes, bytearray)):  # ROS 2 Python delivers a byte field as bytes of length 1
+        level = level[0]
+    stamp = _get(stamp_message, "sec", 0) + _get(stamp_message, "nanosec", 0) / 1e9
+    fields = {"path": str(_get(message, "name", "")).replace(".", "/"), **added}
+    return Event(code=_get(message, "function", ""), stamp=stamp, severity=_severity_of_level(int(level)),
+                 message=_get(message, "msg", ""), seq=int(_get(message, "line", 0)) or None,
+                 source=_get(message, "file", ""), **fields)
 
 
 # ----- JSON transport (all five shapes) ------------------------------------------------------------------------
@@ -502,6 +567,10 @@ def validate(record) -> list[str]:
             problems.append(f"{where}: stamp is required")
         if record.severity not in EVENT_SEVERITIES:
             problems.append(f"{where}: severity {record.severity!r} must be one of {EVENT_SEVERITIES}")
+        if not isinstance(record.count, int) or isinstance(record.count, bool) or record.count < 1:
+            problems.append(f"{where}: count must be a whole number >= 1")
+        if record.last_stamp is not None and record.stamp is not None and not record.last_stamp >= record.stamp:
+            problems.append(f"{where}: last_stamp must not be before stamp")
     elif isinstance(record, Fault):
         where = f"fault {record.path} / {record.code}"
         problems += _code_problem(record.code, where)
@@ -931,7 +1000,7 @@ __all__ = [
     "STALE_FACTOR", "STALE_FLOOR_S", "EVENT_SEVERITIES", "PENDING", "CONFIRMED", "HEALED", "CLEARED",
     "FAULT_STATUSES", "IDENTITY_KEYS", "PASSIVE", "TOUCHES", "CHANGES", "DANGERS",
     "KeyValue", "Measurement", "DiagnosticStatus", "Action", "Entity", "Event", "Fault",
-    "to_diagnostic_status", "from_diagnostic_status", "to_diagnostic_array", "from_diagnostic_array",
+    "to_diagnostic_status", "from_diagnostic_status", "to_diagnostic_array", "from_diagnostic_array", "to_ros_log", "from_ros_log", "ROS_LOG_LEVEL",
     "to_dict", "from_dict", "validate", "effective_level", "restarted",
     "Rollup", "Summary", "summarize", "Debounce", "DEFAULT_DEBOUNCE", "FaultManager",
 ]

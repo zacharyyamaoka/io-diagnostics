@@ -10,7 +10,7 @@ page's writes: `POST /api/v1/act`, the Utilities panel (see "Actions from the pa
 device; "Editing the expected setup" below), and `POST /api/v1/settings`, the View options (the history window,
 written to the person's settings file; "Settings" below). Any other method or path returns **405**. **Agents never call `POST /api/v1/act`**: they dry-run with `io-diagnostics act --dry-run`; a real
 action runs only from a person's click on the page (or `io-diagnostics act` typed by a person at a TTY). The record contract underneath is `contract/record.py`
-(`SCHEMA = "diagnostics-record/0"`, `RECORD_VERSION = "0.1"`); `docs/diagnostics-record-v0.md` explains every rule
+(`SCHEMA = "diagnostics-record/0"`, `RECORD_VERSION = "0.2"`); `docs/diagnostics-record-v0.md` explains every rule
 this API applies.
 
 ```bash
@@ -21,7 +21,7 @@ uv run --project /home/bam/io-diagnostics python /home/bam/io-diagnostics/io_dia
 |---|---|---|
 | `GET /api/v1/state` | Everything a page draws every tick: clock, chip, the whole tree (nested), the last 6 events | 1 s |
 | `GET /api/v1/node?path=<entity path>` | The detail panel of one row: its checks, values, measurements, actions with gate state, faults, events | on select, then 1-2 s |
-| `GET /api/v1/activity[?limit=N][&types=usb,driver]` | Activity log (all events, newest first, typed), faults, link-health rows | 2-5 s |
+| `GET /api/v1/activity[?limit=N][&types=usb,driver][&fold=1&...]` | Activity log (all events, newest first, typed), faults, link-health rows | 2-5 s |
 | `GET /api/v1/events[?types=...]` | Server-Sent Events: each new or changed activity event (a provisional plug, then the same id confirmed) and a `tick` per change | stream |
 | `GET /api/v1/records` | The raw v0 records the host holds (entities, statuses with `received`, events, faults) | rarely |
 | `GET /api/v1/plugins` | Plugin registry: loaded `plugins.d/*.toml`, matched devices, last run per device | rarely |
@@ -56,7 +56,7 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
 {
   "api": "io-diagnostics/1",
   "schema": "diagnostics-record/0",
-  "record_version": "0.1",
+  "record_version": "0.2",
   "clock": {"now": 1761095510.0, "iso": "2026-10-21T18:11:50-07:00", "time": "18:11:50",
             "mode": "fixture", "utc_offset_s": -25200,
             "rank": ["ok", "warn", "unknown", "stale", "error"], "stale_factor": 3.0, "stale_floor_s": 5.0},
@@ -84,8 +84,8 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
 }
 ```
 
-- `record_version`: the additive revision of the record contract this host validates against (`"0.1"`: identity
-  `model_id`, danger `moves`, the standard action names). `schema` stays `"diagnostics-record/0"`.
+- `record_version`: the additive revision of the record contract this host validates against (`"0.2"`: identity
+  `model_id`, danger `moves`, the standard action names, and the Event as the log record). `schema` stays `"diagnostics-record/0"`.
 - `fixture` is `null` in live mode. In fixture mode the host replays a recorded scenario through the same code path
   as live plugins; `clock` runs at 1× from the frame's clock (plus `--offset`).
 - `host.sources`: which OS skeleton sources were used and which were skipped (with the reason), so a page can say
@@ -290,7 +290,7 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
   `false` while the file is not `editable`. `confirm[op]` is the exact sentence the confirm shows, built from the same
   plan the edit runs. `needs_rig`: the device is in no rig and there are several, so the page asks which.
 
-## `GET /api/v1/activity[?limit=N][&types=<type>,...]`
+## `GET /api/v1/activity[?limit=N][&types=<type>,...][&fold=1&channel=&path=&scope=&severity=]`
 
 ```json
 {
@@ -300,7 +300,9 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
      "kind": "plugged", "type": "usb", "id": "usb:1-7:21:add", "provisional": false, "severity": "info",
      "message": "fdcanusb 28B3A25D plugged on 1-5 after 4 flaps on 1-7",
      "path": "host/usb1/port-1-5", "name": "Port 1-5", "hardware_id": "usb:0483:5740:28B3A25D", "port": "1-5",
-     "source": "io_facts.journal", "seq": 12, "args": {"port": "1-5", "flaps": 4, "merged": ["usb:1-7:21:add", "usb:1-7:21:remove"]}}
+     "source": "io_facts.journal", "seq": 12, "args": {"port": "1-5", "flaps": 4, "merged": ["usb:1-7:21:add", "usb:1-7:21:remove"]},
+     "channel": "activity", "count": 1, "last_stamp": null, "last_iso": null, "last_time": "", "received": 1761095503.4,
+     "received_iso": "2026-10-21T18:11:43-07:00", "badges": [], "members": []}
   ],
   "faults": [
     {"path": "host/usb1/port-1-3/usb-1-3/can/15/driver", "code": "MoteusFault.33", "severity": "error",
@@ -318,7 +320,13 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
 
 - `events`: newest first, `limit` default 200; `types` (comma separated) keeps only events of those types (an
   unknown type → **400**, naming the known ones). `code` is the contract `Event.code`; `kind` its human label
-  (`"re-enumerated"`, `"plugging in"`); `severity` is `info | warn | error`; `port` is the USB port when known, else `""`.
+  (`"re-enumerated"`, `"plugging in"`); `severity` is `debug | info | warn | error | fatal` (record v0.2); `port` is the USB port when known, else `""`.
+  The v0.2 fields: `received` / `received_iso` (when the host first saw it: `stamp` is the source's clock),
+  `count` / `last_stamp` / `last_iso` / `last_time` (a coalesced repeat: `count` identical events, `stamp` the first,
+  `last_stamp` the latest; `count` 1 and `last_stamp` `null` otherwise), `channel` (`activity` here, `raw` in the log's
+  Raw channel), and `badges` / `members` (empty here; the log model below fills them). The events are the host's
+  whole kept history: they survive a restart of the host and a reboot of the machine (`io_diagnostics/eventlog.py`:
+  append-only JSONL, one file per boot, `~/.local/state/io-diagnostics/log/`, about 20 MB in all; `$IO_DIAGNOSTICS_STATE_DIR` for a replay).
   Every event is **typed** (`type`), so a page can show "a complete view of all the port activity" (Zach, 2026-10-23)
   and filter it. Only passive sources feed it (the kernel log, udev, sysfs, the host's own memory); nothing opens a device.
 
@@ -353,11 +361,63 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
   the last hour, link speed) and every entity of kind `bus` (its own checks, and the age of its last report).
   `level` uses the same vocabulary as rows.
 
+### The Activity log model: `fold=1` (record v0.2, 2026-10-24; `docs/activity-log-v1.md`)
+
+`fold=1` answers the Activity view's model instead of the raw event list: the same events, folded into the rows a
+person reads. It is a pure function of the stored events (`io_diagnostics/logview.py`), so a restart gives the same rows.
+
+```json
+{
+  "clock": {"...": "as in /state"},
+  "events": [
+    {"stamp": 1761095504.0, "iso": "2026-10-21T18:11:44-07:00", "time": "18:11:44", "code": "BusErrorPassive",
+     "kind": "bus error passive", "type": "plugin", "id": "moteus_servo#1@1761095504.000", "provisional": false,
+     "severity": "warn", "message": "28B3A25D bus error-passive: nobody ACKs its frames", "path": "host/usb1/port-1-5/usb-1-5/can",
+     "name": "CAN bus", "hardware_id": "", "port": "", "source": "moteus_servo", "seq": 1, "args": {"serial": "28B3A25D"},
+     "channel": "activity", "count": 1, "last_stamp": null, "last_iso": null, "last_time": "", "received": 1761095504.6,
+     "received_iso": "2026-10-21T18:11:44-07:00",
+     "badges": [{"id": "fault:FaultConfirmed:host/usb1/port-1-5/usb-1-5/can|NoAck|1761095504.000", "code": "FaultConfirmed", "label": "fault confirmed", "stamp": 1761095504.0,
+                 "severity": "error", "fault": "NoAck", "occurrence": 1, "state": "confirmed", "ended": null,
+                 "message": "NoAck confirmed on host/usb1/port-1-5/usb-1-5/can: error-passive", "time": "18:11:44", "ended_time": ""}],
+     "members": [{"id": "fault:FaultConfirmed:host/usb1/port-1-5/usb-1-5/can|NoAck|1761095504.000", "code": "FaultConfirmed", "severity": "error", "message": "NoAck confirmed",
+                  "path": "host/usb1/port-1-5/usb-1-5/can", "name": "CAN bus", "stamp": 1761095504.0, "time": "18:11:44",
+                  "args": {"fault": "NoAck", "occurrence": 1}}]}
+  ],
+  "log": {"channel": "activity", "path": "", "name": "", "scope": "children", "severity": "debug", "matching": 17, "shown": 17,
+          "persisted": true, "note": ""}
+}
+```
+
+- **Parameters.** `channel`: `activity` (default: the coded events), `raw` (the uncoded lines: this boot's kernel lines
+  about the entity) or `all`. `path` + `scope`: only the log of that entity (**400** for an unknown one): `children`
+  (default: the entity and everything below it, plus the rows that name its `hardware_id`), `self`, or `host` (children
+  plus every ancestor, so the ports, hubs and controller it hangs off). `severity`: the floor, `debug` (default, every
+  row) `info` `warn` `error` `fatal`; the page filters further itself. `types` and `limit` as above (up to 5000);
+  `log.matching` counts the rows before `limit`.
+- **One fact, one row.**
+  - A fault's `FaultConfirmed` rides on the producer's own event it repeats (same entity, within 10 s, warn or worse) as a
+    `badges[]` entry (`state` `confirmed`, then `healed` / `cleared` with `ended` when that happened) and in `members`.
+  - A confirmation with no such event that the host made in its first 30 s is one of the `FoundAtStart` row per host
+    process (`path` `host`, `args.faults` lists them): the memory catching up, not something that happened then.
+  - Any other confirmation is a row of its own, and `FaultHealed` / `FaultCleared` stay rows (`args.confirmed_row` names the
+    row the confirmation landed on).
+  - `RunStarted` + `RunEnded` are one `Run` row (`stamp` the start, `last_stamp` the end, `args.state` `running | done |
+    failed | stopped | timed_out | interrupted`, `args.run_id`); its output is the Raw channel under it (`web/runs/r4.js`).
+  - Identical repeats (same `code`, `source`, `path`, `message`, `severity`, each within 60 s of the last) are one row with
+    `count` and `last_stamp`; plugs, boots and the fault lifecycle never merge. Rows sort by `last_stamp`, newest first.
+- **Status transitions** (`LevelChanged`): to warn or error, folded into its fault's row (`members`); to stale or unknown,
+  a `warn` row only when no plug or unplug on its entity's path in the 2 minutes before explains it; every other
+  transition is a `debug` row.
+- **Raw rows** have `channel` `raw`, `code` `""`, `kind` `kernel`, `type` `raw`, `source` `kernel`, `path` the device (its
+  port's lines are the device's) or the port; they are never stored (the journal keeps them).
+
 ## `GET /api/v1/events[?types=<type>,...]` (Server-Sent Events)
 
 A `text/event-stream` (`Cache-Control: no-store`) for as long as the client stays: the page's `new
 EventSource("/api/v1/events")`, same-origin and read-only (no CORS header, so another origin cannot read it). `types`
-filters as on `/activity` (unknown → **400** before the stream starts).
+filters as on `/activity` (unknown → **400** before the stream starts); it takes the same `fold`, `channel`, `path`, `scope` and
+`severity`, and then streams ROWS: a row is sent again when its `count`, `last_stamp`, `badges`, `members` or a run's
+`args.state` changed, and a row can disappear (absorbed by another), so a page re-reads `/activity?fold=1` on a `tick`.
 
 ```
 retry: 2000

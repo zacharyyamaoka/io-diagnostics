@@ -382,7 +382,7 @@ VOCABULARY = Path(__file__).resolve().parents[1] / "docs" / "actions-vocabulary-
 def test_v0_1_is_signalled_by_a_constant_never_by_the_schema_string():
     from contract.record import RECORD_VERSION
 
-    assert (SCHEMA, RECORD_VERSION) == ("diagnostics-record/0", "0.1")
+    assert (SCHEMA, RECORD_VERSION) == ("diagnostics-record/0", "0.2")  # 0.2 (2026-10-24): the Event is the log record
     line = to_dict(Entity("host/usb-1-3", identity={"model_id": "mjbots-fdcanusb"}))
     assert line["schema"] == SCHEMA and "record_version" not in line  # a v0 reader still reads every v0.1 line
 

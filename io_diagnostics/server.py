@@ -54,6 +54,16 @@ def _types(query: dict) -> tuple[str, ...] | None:
     return tuple(word.strip() for word in raw.split(",") if word.strip()) or None
 
 
+def _log_query(query: dict) -> dict:
+    """The Activity log model's parameters (docs/api-v1.md "Activity"): ``fold=1`` turns it on, the rest narrow it."""
+
+    def one(name: str, default: str = "") -> str:
+        return (query.get(name) or [default])[0]
+
+    return {"fold": one("fold") in ("1", "true"), "channel": one("channel", "activity"), "path": one("path"),
+            "scope": one("scope", "children"), "severity": one("severity", "debug")}
+
+
 class ActGate:
     """The page's dry-run tokens: one per dry run, for that path / action / node / new id, single use, valid
     ``window_s``.
@@ -97,7 +107,10 @@ class ActGate:
 
 
 def _signature(event: dict) -> tuple:
-    return (event["code"], event["provisional"], event["message"], event["stamp"], event["severity"], event["path"])
+    # what a page draws from a row: a repeat (count), a fault folded onto it (badges, members) and a run's state change it
+    return (event["code"], event["provisional"], event["message"], event["stamp"], event["severity"], event["path"], event["count"],
+            event["last_stamp"], tuple((badge["id"], badge["state"]) for badge in event["badges"]), len(event["members"]),
+            event["args"].get("state"))
 
 
 def _int_or_null(value) -> bool:
@@ -124,7 +137,7 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/api/v1/activity":
                 limit = int((query.get("limit") or ["200"])[0])
                 try:
-                    return self._json(self.host.activity(max(1, min(limit, 5000)), _types(query)))
+                    return self._json(self.host.activity(max(1, min(limit, 5000)), _types(query), **_log_query(query)))
                 except ValueError as error:
                     return self._json({"error": str(error)}, 400)
             if parsed.path == "/api/v1/events":
@@ -184,9 +197,9 @@ class Handler(BaseHTTPRequestHandler):
         (something a page draws changed) until the client leaves or the host stops. Read-only; no CORS header, so only
         the page's own origin can read it (EventSource is same-origin unless the server allows otherwise)."""
 
-        host, types = self.host, _types(query)
+        host, types, log = self.host, _types(query), _log_query(query)
         try:
-            host.activity(1, types)
+            host.activity(1, types, **log)
         except ValueError as error:
             return self._json({"error": str(error)}, 400)
         self.send_response(200)
@@ -195,7 +208,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Accel-Buffering", "no")
         self.end_headers()
         revision = host.revision
-        snapshot = host.activity(EVENTS_WINDOW, types)
+        snapshot = host.activity(EVENTS_WINDOW, types, **log)
         sent = {event["id"]: _signature(event) for event in snapshot["events"]}
         try:
             self._sse("hello", {"api": host.health()["api"], "revision": revision, "now": snapshot["clock"]["now"],
@@ -211,7 +224,7 @@ class Handler(BaseHTTPRequestHandler):
                     continue
                 time.sleep(EVENTS_COALESCE_S)
                 revision, reason = host.revision, host.change_reason
-                current = host.activity(EVENTS_WINDOW, types)
+                current = host.activity(EVENTS_WINDOW, types, **log)
                 for event in reversed(current["events"]):  # oldest first, as they happened
                     if sent.get(event["id"]) != _signature(event):
                         sent[event["id"]] = _signature(event)

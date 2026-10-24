@@ -68,12 +68,10 @@ const S = {
   menu: null,          // the utility menu drawing the Utilities section (utilities/*.js)
   runView: null,       // the run view drawing runs (runs/*.js): r1 by default
   closed: new Set(),   // detail section ids the viewer folded (remembered per section)
-  actFilter: 'all',    // the activity log's filter: all | faults
   opened: new Set(),   // detail section ids the viewer opened that start folded (ctx.section(..., {defaultOpen: false}))
   layoutChoice: null,  // the Prototype picker's explicit detail layout (remembered), or null: the per-entity default
   menuOpen: false,     // the entity header's Utilities ▾ dropdown
   runs: new Map(),     // entity path -> its utility run (running / done) while the viewer looks at another entity
-  ran: [],             // the utility runs this page made, newest first: drawn at the top of the Activity log
   runDetails: false,   // the result line's Details ▸ is open
   sheetMore: false,    // the dry-run sheet's "How it runs ▸" (its steps, the plugin command line) is open
   settings: null,      // GET /api/v1/settings (the app-wide history window)
@@ -850,23 +848,14 @@ function eventRow(event) {
     + `<span>${esc(event.message)}</span><span class="src" title="${esc(event.source)}">${esc(event.severity === 'info' ? '' : event.severity)}</span></div>`;
 }
 
-const isFaultEvent = (event) => /^Fault/.test(String(event.code || '')) || /^fault /.test(String(event.kind || ''));
-// The Activity view is one full-width log (Zach, 2026-10-23: two columns were "very busy"). The host's fault memory
-// is a filter of that log (its pending → confirmed → healed events, the memory's count above them); link health
-// moved to the Computer's detail (detail section "links").
-function renderActivity() {
-  const act = S.act;
-  if (!act) return '<div class="err muted">loading activity…</div>';
-  const faults = S.actFilter === 'faults';
-  // the utilities this page ran come first (newest first): the host logs no action runs of its own yet
-  // WHY the host's RunStarted / RunEnded of a run this page started are left out: this page's own line says the same
-  const mine = new Set(S.ran.map((line) => line.runId).filter(Boolean));
-  const events = faults ? act.events.filter(isFaultEvent) : [...S.ran, ...act.events.filter((event) => !(event.type === 'run' && mine.has((event.args || {}).run_id)))];
-  const active = act.faults.filter((fault) => fault.active).length;
-  const filter = `<div class="seg small act-filter" role="radiogroup" aria-label="Show">${[['all', 'All events'], ['faults', 'Faults']].map(([id, label]) => `<button data-act-filter="${id}" role="radio" aria-checked="${S.actFilter === id}" class="${S.actFilter === id ? 'on' : ''}">${label}</button>`).join('')}</div>`;
-  const memory = faults ? `<div class="act-note muted">The host's fault memory holds ${act.faults.length} fault${act.faults.length === 1 ? '' : 's'}${act.faults.length ? ` (${active} active)` : ''}: pending → confirmed → healed, as logged below.</div>` : '';
-  return `<div class="act"><section><h2>Activity log <span class="act-count">· ${events.length} ${faults ? 'fault events' : 'events'}, newest first</span>${filter}</h2>${memory}`
-    + (events.map(eventRow).join('') || `<div class="muted">${faults ? 'No fault events.' : 'No events yet.'}</div>`) + '</section></div>';
+// The Activity view is activity/log.js (docs/activity-log-v1.md): one calm table of the host's folded events, newest first,
+// with its own DOM so its search box, scroll position and pause survive this page's once-a-second render. The host's fault
+// memory, its runs and its kernel lines all arrive through GET /api/v1/activity?fold=1; link health moved to the Computer's
+// detail (detail section "links"). The page only shows and hides it.
+function renderActivityView() {
+  if (!window.IOActivityLog) { $('activity-host').textContent = 'The activity log (activity/log.js) did not load.'; return; }
+  window.IOActivityLog.setVisible(true);
+  window.IOActivityLog.main($('activity-host'));
 }
 
 // --------------------------------------------------------------------------------- detail ----
@@ -1223,15 +1212,12 @@ async function runUtility() {
   finishUtility(util, status, data);
 }
 
-// The utility is over: its result (a refusal, or the finished run's) becomes the run line and an Activity line.
+// The utility is over: its result (a refusal, or the finished run's) becomes the run line. (The Activity log has the run
+// as a row of its own: the host logs RunStarted / RunEnded, so the page no longer adds a line for it.)
 function finishUtility(util, status, data) {
   util.phase = 'done';
   util.doneAt = Date.now();
   if (status === 200 && data.result) util.result = data.result; else { util.refused = data.refused || `HTTP ${status}`; util.error = data.error || ''; }
-  const outcome = runOutcome(util);
-  S.ran.unshift({ time: new Date(util.doneAt).toTimeString().slice(0, 8), kind: 'utility', port: util.label, message: `${plainTitle(util.title)}: ${outcome.text}`,
-    severity: outcome.stopped ? 'warn' : outcome.ok ? 'info' : 'error', source: 'this page (POST /api/v1/act)', path: util.path, stamp: util.doneAt / 1000, runId: util.runId || null });
-  S.ran = S.ran.slice(0, 50);
   S.actAt = 0; // the Activity log and the entity's diagnostics are read again now: the action may have changed them
   if (S.sel === util.path) { S.nodeAt = 0; loadNode(); }
   render();
@@ -1771,10 +1757,14 @@ function render() {
   const legacy = treeView && isLegacy(S.variant);
   $('structure-switch').classList.toggle('dim', legacy);
   $('structure-switch').title = legacy ? `${S.variant} is a legacy style: it always draws the physical API tree` : 'Structure: what the rows are';
+  const activityView = S.view === 'activity';
   $('tree-host').hidden = !treeView;
-  $('left-other').hidden = treeView;
+  $('left-other').hidden = treeView || activityView;
+  $('activity-host').hidden = !activityView;
+  if (!activityView && window.IOActivityLog) window.IOActivityLog.setVisible(false);
   if (treeView) renderTreePane();
-  else $('left-other').innerHTML = S.view === 'table' ? renderTable() : renderActivity();
+  else if (activityView) renderActivityView();
+  else $('left-other').innerHTML = renderTable();
   const noSearch = treeView && NO_QUERY.has(S.variant);
   $('search').disabled = noSearch;
   $('search').placeholder = noSearch ? `No search in ${S.variant} · try Table` : 'Search entities, ids, ports…';
@@ -1831,8 +1821,6 @@ document.addEventListener('click', (event) => {
   if (t.closest('#insp-close')) { S.inspPinned = false; writePref(PREFS.inspectorPinned, '0'); return setInspector(false); }
   const sec = t.closest('[data-sec-toggle]');
   if (sec) return toggleSection(sec.dataset.secToggle, sec.getAttribute('aria-expanded') === 'true');
-  const filter = t.closest('[data-act-filter]');
-  if (filter) { S.actFilter = filter.dataset.actFilter; return render(); }
   const view = t.closest('[data-view]');
   if (view) { S.view = view.dataset.view; pushNav(); return render(); }
   if (t.closest('#chip')) { S.chip = !S.chip; return render(); }

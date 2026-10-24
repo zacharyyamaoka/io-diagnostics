@@ -1,0 +1,9 @@
+# ... plus a driver that probes on connect (docs/probe-on-connect.md): its own `Found` and `Probed` events, so the hero shows the
+# driver's words in the log beside the kernel's. activity_probe.py never touches hardware; $HERO_FOUND_AT is the recording's clock.
+name = "activity_probe"
+description = "tests/fixtures/plugins-activity/activity_probe.py: Found / Probed on connect, for the activity hero"
+command = ["{python}", "{here}/activity_probe.py"]
+timeout_s = 10
+period_s = 30
+matches = ["usb:0483:5740"]
+env = { HERO_FOUND_AT = "1792631503.0" }
