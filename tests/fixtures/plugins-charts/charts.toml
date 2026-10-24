@@ -1,0 +1,10 @@
+# Fixture plugin for the chart proposals (lane chart-enlarge): the Computer's statuses with MOVING series, deterministic in
+# the wall clock, at 2 Hz, so a sparkline has something to enlarge. Never touches hardware.
+#   serve --fixture F1 --plugins tests/fixtures/plugins-charts --port 0 --no-udev
+name = "charts_fixture"
+description = "moving Computer series for the chart proposals (CPU, memory, swap, network, USB bandwidth, temperature)"
+enabled = true
+command = ["{python}", "{here}/charts_plugin.py"]
+timeout_s = 10
+period_s = 5
+matches = ["host"]

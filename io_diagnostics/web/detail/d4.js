@@ -464,6 +464,16 @@
     return `<div class="d4-cores" aria-label="per-core load">${bars}</div><div class="d4-cores-cap"><span>core 0</span><span>per-core load now</span><span>core ${cores.length - 1}</span></div>`;
   }
 
+  // A sparkline's grid cell, as the chart proposals' helper wraps it (charts/core.js, IOCharts.wrap): the cell says which series
+  // it draws, and the selected chart view decides what a click or a hover on it enlarges. Without the helper: the plain cell.
+  // WHY here and not in spark(): the wrapper IS the grid cell of the row, and only the caller knows which series and label.
+  function charted(items, label, html, tag = 'span') {
+    const lead = (items || []).find(Boolean);
+    if (!root.IOCharts || !lead) return `<${tag}>${html}</${tag}>`;
+    const series = items.filter((item) => item && item.path === lead.path).map((item) => [item.status, item.key, item.style || '']);
+    return root.IOCharts.wrap({ p: lead.path, l: label, s: series }, html);
+  }
+
   function groupHtml(group, win, ctx) {
     const h = ctx.h;
     const lead = group.big || group.item0 || group.items[0];
@@ -474,7 +484,7 @@
     const from = win(lead).from; const to = win(lead).to;
     let html = `<div class="d4-g" data-d4-group="${h.esc(group.id)}"><div class="d4-gh" ${attr(h, lead.path, lead.status, goAttr(lead))} title="Open ${h.esc(lead.status)}">`
       + `<div><div class="d4-gname">${h.shape(level, level)}<span>${h.esc(group.title)}</span></div><div class="d4-big">${bigHtml}</div></div>`
-      + `<div>${spark(group.spark.map((item) => ({ ...item })), from, to, { h: 34, auto: group.sparkAuto })}</div></div>`
+      + `${charted(group.spark, group.title, spark(group.spark.map((item) => ({ ...item })), from, to, { h: 34, auto: group.sparkAuto }), 'div')}</div>`
       + (group.sub ? `<div class="d4-gsub">${h.esc(group.sub)}</div>` : '')
       + (group.extra || '');
     const rows = group.rows || [];
@@ -485,7 +495,7 @@
         return `<div class="d4-r" ${attr(h, row.item.path, row.item.status, goAttr(row.item))} title="${h.esc([row.item.status, row.title].filter(Boolean).join(' · '))}">`
           + `<span class="n">${h.shape(row.item.level, row.item.level)}<span>${h.esc(row.label)}</span></span>`
           + `<span class="v">${tinted(row.item.level, h.esc(row.value))}</span>`
-          + `<span>${spark(row.spark || [row.item], w.from, w.to, { h: 16, area: false, auto: row.auto })}</span></div>`;
+          + `${charted(row.spark || [row.item], row.label, spark(row.spark || [row.item], w.from, w.to, { h: 16, area: false, auto: row.auto }))}</div>`;
       }).join('')}</div>`;
       if (rows.length > shown.length) html += `<div class="d4-more">${rows.length - shown.length} more on its page</div>`;
     }
@@ -638,7 +648,7 @@
       const small = items.slice(4);
       if (small.length) {
         trend += `<div class="d4-rows">${small.map((item) => `<div class="d4-r" title="${h.esc(limitWords(item))}"><span class="n">${h.shape(item.level, item.level)}<span>${h.esc(item.key)}</span></span>`
-          + `<span class="v">${tinted(item.level, h.esc(fmt(item.value, item.unit)))}</span><span>${spark([item], hist.from, hist.to, { h: 18, area: false })}</span></div>`).join('')}</div>`;
+          + `<span class="v">${tinted(item.level, h.esc(fmt(item.value, item.unit)))}</span>${charted([item], item.key, spark([item], hist.from, hist.to, { h: 18, area: false }))}</div>`).join('')}</div>`;
       }
     } else {
       trend = `<div class="d4-quiet">${histEntry.error ? `No history: ${h.esc(histEntry.error)}` : hist ? 'No history for this status in the window.' : 'history loading…'}</div>`;

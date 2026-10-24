@@ -252,6 +252,24 @@ def test_settings_are_read_by_anyone_and_written_only_by_the_page(served):
     assert call(host, "/api/v1/settings")[1]["history_window_s"] == 300.0
 
 
+def test_the_dashboard_is_a_setting_written_with_the_window_and_read_back_whole(served, tmp_path):
+    host, file = served
+    tiles = [{"key": "k1", "id": "t1", "spec": {"p": "host", "l": "Memory \"%\" é", "s": [["bam: RAM", "RAM Load Average", ""]]}, "w": 4, "h": 3}]
+    assert call(host, "/api/v1/settings")[1]["dashboard"] == []
+    status, answer = call(host, "/api/v1/settings", {"dashboard": tiles}, PAGE)
+    assert status == 200 and answer["dashboard"] == tiles
+    status, answer = call(host, "/api/v1/settings", {"history_window_s": "10m"}, PAGE)  # the window write keeps the board
+    assert status == 200 and answer["dashboard"] == tiles and answer["history_window_s"] == 600.0
+    assert Settings(file).dashboard == tiles and Settings(file).history_window_s == 600.0  # a restart reads both back
+    for bad in ({"dashboard": "tiles"}, {"dashboard": [1]}, {"dashboard": [{"spec": 3}]}, {"dashboard": [{"spec": {}}] * 61}):
+        status, answer = call(host, "/api/v1/settings", bad, PAGE)
+        assert (status, answer["refused"]) == (400, "BadSetting"), bad
+    status, answer = call(host, "/api/v1/settings", {"dashboard": [], "history_window_s": 5}, PAGE)  # one bad key applies nothing
+    assert status == 400 and call(host, "/api/v1/settings")[1]["dashboard"] == tiles
+    status, answer = call(host, "/api/v1/settings", {"dashboard": []}, PAGE)
+    assert status == 200 and answer["dashboard"] == [] and Settings(file).dashboard == []
+
+
 def test_history_endpoints_answer_and_refuse_bad_queries(served):
     host, _file = served
     assert call(host, "/api/v1/history?path=host")[0] == 200
