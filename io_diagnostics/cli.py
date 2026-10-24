@@ -78,6 +78,8 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--new-id", type=int, metavar="N", help="set_id only: the board's new CAN id (1-126)")
             command.add_argument("--confirm", metavar="TOKEN", help="the confirm token; required unless the danger is query")
             command.add_argument("--dry-run", action="store_true", help="run nothing: the plugin prints what it would run")
+            command.add_argument("--confirm-holders", action="store_true",
+                                 help="reset_port only: reset it although another process has it open (the second confirmation)")
         elif name in ("expect", "forget", "retire"):
             command.add_argument("--path", help="the row's tree path (expect runs every plugin once to see its nodes)")
             command.add_argument("--hardware-id", default="", help="name the device by id instead (usb:<vid>:<pid>:<serial>)")
@@ -138,7 +140,7 @@ def _act(args) -> int:
                      machine=args.machine, expected=args.expected)
     host.refresh()
     result = host.act(args.path, args.action, node=args.node, confirm=args.confirm, dry_run=args.dry_run,
-                      new_id=args.new_id)
+                      new_id=args.new_id, extra=["--confirm-holders"] if args.confirm_holders else None)
     json.dump(result, sys.stdout, default=str, ensure_ascii=False)
     print()
     if result["refused"]:

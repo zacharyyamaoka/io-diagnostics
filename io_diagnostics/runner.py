@@ -257,6 +257,12 @@ class Running:
         with self._lock:
             return session in self._passive or pid in self._passive
 
+    def passive_sessions(self) -> list[int]:
+        """The session ids of this host's own ``follow`` / ``watch`` processes (what ``is_passive`` tests a pid against)."""
+
+        with self._lock:
+            return sorted(self._passive)
+
     def owner(self, pid: int) -> tuple[str, float] | None:
         """``(what runs, seconds so far)`` when ``pid`` belongs to one of this host's running processes, else None."""
 

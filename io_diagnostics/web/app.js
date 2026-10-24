@@ -1146,7 +1146,7 @@ function renderDetail(byPath) {
 // plugin's own confirm text) before anything can; a query then runs with one more click, anything else only from a
 // confirm modal that repeats the danger (moves: a ticked box that states the physical precondition). The server
 // runs a real action only with the dry run's token, from this page (io_diagnostics/server.py, docs/api-v1.md).
-const STANDARD_ORDER = ['check_comms', 'check_firmware', 'update_firmware', 'update_config', 'clear_faults', 'set_id', 'reboot',
+const STANDARD_ORDER = ['check_comms', 'check_firmware', 'update_firmware', 'update_config', 'clear_faults', 'set_id', 'reboot', 'reset_port',
   'stop_all', 'open_console', 'calibrate', 'identify'];
 const STANDARD = new Set(STANDARD_ORDER);
 const DANGER_WORDS = {
@@ -1155,6 +1155,10 @@ const DANGER_WORDS = {
   changes: 'Changes what the device stores: its configuration, id, faults or firmware.',
   moves: 'Makes hardware move: a motor spins, and a loaded joint can fall.',
 };
+// The host's own reset_port asks twice when something else has the device open (docs/usb-reset.md): the dry run's
+// `second_confirm` names who loses it, and the confirm modal's box must be ticked, like moves' box, before the button works.
+const secondConfirmOf = (util) => String(((util && util.dry && util.dry.result && util.dry.result.action_result) || {}).second_confirm || '');
+const needsTick = (action, util) => action.danger === 'moves' || Boolean(secondConfirmOf(util));
 // a precondition only a person can check (the host cannot read it passively): what the moves box states
 const PHYSICAL = new Set(['joint_free', 'joint_clear', 'joints_clear', 'target_in_view']);
 const RUNNABLE = new Set(['ready', 'unknown']); // blocked / nothing_to_do keep the Run button disabled
@@ -1166,6 +1170,7 @@ const UTIL_ICONS = {
   clear_faults: '<circle cx="12" cy="12" r="9"/><path d="m9 9 6 6M15 9l-6 6"/>',
   set_id: '<path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"/>',
   reboot: '<path d="M21 12a9 9 0 1 1-2.6-6.4L21 8"/><path d="M21 3v5h-5"/>',
+  reset_port: '<path d="M9 2v5M15 2v5M6 7h12v4a6 6 0 0 1-12 0ZM12 17v5"/>',
   stop_all: '<path d="M7.9 2h8.2L22 7.9v8.2L16.1 22H7.9L2 16.1V7.9Z"/><rect x="9" y="9" width="6" height="6" rx="1"/>',
   open_console: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 9 3 3-3 3M11 15h6"/>',
   calibrate: '<circle cx="12" cy="12" r="8"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/><circle cx="12" cy="12" r="1.5"/>',
@@ -1248,7 +1253,7 @@ async function runUtility() {
   render();
   // the run repeats the dry run's new id: the server's token is bound to it (a token for CAN 7 never runs CAN 9).
   // WHY detach: the run is a terminal session that may wait for a typed answer, so the page does not hold the request
-  const { status, data } = await postAct({ path: util.path, action: util.name, node: util.node, ...(util.newId !== null ? { new_id: util.newId } : {}), token: util.dry.token, detach: true });
+  const { status, data } = await postAct({ path: util.path, action: util.name, node: util.node, ...(util.newId !== null ? { new_id: util.newId } : {}), ...(secondConfirmOf(util) ? { confirm_holders: true } : {}), token: util.dry.token, detach: true });
   if (status === 202 && data.run && window.IORuns) {
     // WHY no "is it still the open one" return: the run is going; its end (syncRunUtilities) belongs to its entity's run
     // line (kept in S.runs while the viewer looks elsewhere) and to the Activity log either way
@@ -1456,6 +1461,8 @@ function dryRunPanel(action) {
     + `<div class="u-k">Will run</div><div class="u-v"><code class="u-cmd">${esc(command || 'in-process (no command line)')}</code>`
     + `${answer.command_kind ? ` <span class="tag recorded">${esc(answer.command_kind)}</span>` : ''}</div>`
     + `<div class="u-k">Preconditions</div><div class="u-v">${preconditionsHtml(preconditionRows(action, answer))}</div>`
+    // WHY the fix before the confirm: when RobotDx may not reset the device, what to do about it is the sheet's point
+    + `${answer.fix ? `<div class="u-k">To allow it</div><div class="u-v"><pre class="u-tail u-fix">${esc(answer.fix)}</pre></div>` : ''}`
     + `${confirm ? `<div class="u-k">Confirm</div><div class="u-v"><div class="confirm">${esc(confirm)}</div></div>` : ''}`
     + `${!runnable ? `<div class="banner blocked">◌ <span><b>${esc(action.reason || action.state)}</b></span></div>` : ''}`
     + `<button class="u-how-t" data-sheet-more aria-expanded="${S.sheetMore}">How it runs ${S.sheetMore ? '▾' : '▸'}</button>`
@@ -1606,9 +1613,10 @@ function renderModal() {
   back.hidden = false;
   const answer = (util.dry.result || {}).action_result || {};
   const rows = preconditionRows(action, answer);
-  const moves = action.danger === 'moves';
+  const again = secondConfirmOf(util);
+  const moves = needsTick(action, util);
   const physical = rows.find((row) => PHYSICAL.has(row.check)) || rows.find((row) => /person confirms/.test(row.plugin || ''));
-  const tick = physical ? physical.text : (answer.confirm || action.confirm);
+  const tick = again || (physical ? physical.text : (answer.confirm || action.confirm));
   const label = (S.built && S.built.byEntity.has(util.path) && S.built.byKey.get(S.built.byEntity.get(util.path)).entity === util.path)
     ? S.built.byKey.get(S.built.byEntity.get(util.path)).label : S.node.node.name;
   const html = `<div class="modal m-${esc(action.danger)}" role="dialog" aria-modal="true" aria-labelledby="m-title">`
@@ -1620,7 +1628,7 @@ function renderModal() {
     + `${util.name === 'set_id' && util.newId !== null ? `<div class="m-newid">CAN ${esc(util.node)} → CAN ${esc(util.newId)}</div>` : ''}`
     + `<div class="m-runs">Runs <code>${esc(commandOf(answer) || 'in-process')}</code></div>`
     + `<div class="m-pre-h">Preconditions</div>${preconditionsHtml(rows)}`
-    + `${moves ? `<label class="m-tick"><input type="checkbox" data-util-tick${util.ticked ? ' checked' : ''}><span>I checked: ${esc(tick)}</span></label>` : ''}`
+    + `${moves ? `<label class="m-tick"><input type="checkbox" data-util-tick${util.ticked ? ' checked' : ''}><span>${again ? 'I understand: ' : 'I checked: '}${esc(tick)}</span></label>` : ''}`
     + `</div><footer><span class="note">${esc(action.owner)} runs it once you press the button; the dry run's token is good for ${esc(Math.round((util.dry.window_s || 300) / 60))} min.</span>`
     + `<button class="btn" data-util-cancel>Cancel</button>`
     + `<button class="btn primary ${esc(action.danger)}" data-util-confirm${moves && !util.ticked ? ' disabled' : ''}>${esc(plainTitle(action.title))}</button></footer></div>`;
@@ -1899,7 +1907,7 @@ document.addEventListener('click', (event) => {
   }
   if (t.closest('[data-util-confirm]')) {
     const action = S.util && S.node && (S.node.actions || []).find((item) => item.name === S.util.name);
-    if (action && (action.danger !== 'moves' || S.util.ticked)) runUtility(); // moves: only with the box ticked
+    if (action && (!needsTick(action, S.util) || S.util.ticked)) runUtility(); // moves, or something else has the device open: only with the box ticked
     return undefined;
   }
   if (t.closest('[data-util-cancel]') || t.id === 'modal') { if (S.util && S.util.phase === 'confirm') S.util.phase = 'shown'; return render(); }

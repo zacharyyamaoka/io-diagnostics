@@ -32,7 +32,7 @@ HOST_VERBS = ("once", "serve", "tray", "act", "expect", "forget", "retire")
 TRIPPED: list[list[str]] = []
 
 
-def tripwire_refuses(argv) -> str:
+def tripwire_refuses(argv, env=None) -> str:
     """Why this argv must not run in a test, or "" (allowed)."""
 
     words = [os.fspath(word) for word in ([argv] if isinstance(argv, (str, bytes, os.PathLike)) else list(argv))]
@@ -40,6 +40,14 @@ def tripwire_refuses(argv) -> str:
     guarded = len(words) > 1 and words[1].endswith("passive_guard.py")
     if any(word in REAL_DRIVER_MODULES for word in words) and not guarded:
         return "a real driver module without passive_guard.py in front of it"
+    # the host's own reset_port utility (docs/usb-reset.md): the real usbreset / uhubctl only ever as a fake under the temp dir,
+    # and a real (not dry) reset only with a fake sysfs tree named in the environment, so no test can reset a real port
+    if words and Path(words[0]).name in ("usbreset", "uhubctl") and not (
+            Path(words[0]).is_absolute() and Path(words[0]).resolve().is_relative_to(Path(tempfile.gettempdir()).resolve())):
+        return "a real USB reset tool (only a fake under the temp dir may run)"
+    if "io_diagnostics.usb_reset" in words and "act" in words and "--dry-run" not in words \
+            and not (env if env is not None else os.environ).get("IO_DIAGNOSTICS_USB_SYSFS"):
+        return "a real USB port reset with no fake sysfs tree in IO_DIAGNOSTICS_USB_SYSFS"
     host = next((index for index, word in enumerate(words) if word.endswith("io_diagnostics/cli.py") or word == "io-diagnostics"), None)
     if host is not None and any(word in HOST_VERBS for word in words[host + 1:host + 2]) \
             and not {"--plugins", "--fixture"} & set(words):
@@ -49,7 +57,7 @@ def tripwire_refuses(argv) -> str:
 
 class _TripwirePopen(subprocess.Popen):
     def __init__(self, args, *rest, **options):
-        why = tripwire_refuses(args)
+        why = tripwire_refuses(args, options.get("env"))
         if why:
             TRIPPED.append([str(word) for word in ([args] if isinstance(args, str) else args)])
             print(f"hardware tripwire: refused {why}: {args!r}", file=sys.stderr)
