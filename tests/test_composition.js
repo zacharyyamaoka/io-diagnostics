@@ -42,7 +42,7 @@ const row = (page, entity) => page.evaluate((p) => {
     const robot1 = await row(page, PATHS.robot1);
     const arm1 = await row(page, PATHS.arm1);
     const can11 = await row(page, J1[0]);
-    check('the tree nests rack > robot > arm to three levels under the Computer', rack && robot1 && arm1 && robot1.level === rack.level + 1 && arm1.level === robot1.level + 1 && rack.level === 2, { rack, robot1, arm1 });
+    check('the tree nests rack > robot > arm to three levels, the rack a top-level row beside the Computer (Nested)', rack && robot1 && arm1 && robot1.level === rack.level + 1 && arm1.level === robot1.level + 1 && rack.level === 1, { rack, robot1, arm1 });
     check("a composite's members are rows under it, one level below (the three boards, the camera)", can11 && can11.level === arm1.level + 1
       && (await Promise.all(J1.map((p) => row(page, p)))).every((r) => r && r.level === arm1.level + 1), can11);
     const counts = await page.evaluate((paths) => Object.fromEntries(paths.map((p) => [p, document.querySelectorAll(`[data-t6-path="${p}"]`).length])), [...J1, ...J2, PATHS.arm1]);

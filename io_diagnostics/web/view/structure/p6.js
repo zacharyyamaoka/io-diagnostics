@@ -47,10 +47,14 @@
       rigRow.defaultOpen = rigRow.children.length > 0;
       rigRows.push(rigRow);
     }
+    // a composite (docs/composition-v1.md) is a top-level row too when nothing contains it: it comes out of the computer like a rig; its
+    // own members and sub-composites were nested under it by p1's rows
+    const composites = root.IOComposites ? root.IOComposites.lift(tops, state) : { rows: [], lost: [] };
+    composites.lost.forEach((row) => lost.add(row));
     // deepest first: a parent's roll-up reads its children's new ones
     [...lost].reverse().forEach((row) => V.setRollup(row));
     rigRows.forEach((row) => { if (row.children.length) V.setRollup(row); });
-    return [...tops, ...rigRows];
+    return [...tops, ...rigRows, ...composites.rows];
   }
 
   root.IOStructures = root.IOStructures || {};

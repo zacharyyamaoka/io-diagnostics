@@ -58,5 +58,21 @@
     return rows;
   }
 
-  root.IOComposites = { nest, detach, find };
+  // The root composites (the ones no other composite contains) out of the Computer's row, for a structure whose top level is "whatever
+  // nothing contains" (p6 Nested: the computer, the rigs and these). Returns {rows, lost}; `lost` = the rows that lost a child, deepest first.
+  function lift(tops, state) {
+    const composites = (state && state.composition && state.composition.composites) || [];
+    const rows = [];
+    const lost = new Set();
+    for (const composite of composites) {
+      if (composite.parent) continue;
+      const taken = detach(tops, composite.path);
+      if (!taken.row) continue;
+      taken.lost.forEach((row) => lost.add(row));
+      rows.push(taken.row);
+    }
+    return { rows, lost: [...lost] };
+  }
+
+  root.IOComposites = { nest, lift, detach, find };
 })(typeof window !== 'undefined' ? window : globalThis);
