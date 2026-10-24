@@ -1,0 +1,15 @@
+{
+  "about": "Page layouts (layouts/host.js): window.IOLayouts[id] = {name, description, order, keepTree, reach, mount(ctx), unmount(ctx), update(ctx)}. Five proposals for where navigation, search, views and the log live; each is ONE file that re-arranges the page's own parts. The bottom-right Layout select lists every one that registered mount() and remembers the pick.",
+  "default": "l1",
+  "layouts": [
+    {"id": "l1", "name": "Obsidian", "file": "l1.js", "ready": true},
+
+    {"id": "l2", "name": "VS Code", "file": "l2.js", "ready": true},
+
+    {"id": "l3", "name": "Claude desktop", "file": "l3.js", "ready": true},
+
+    {"id": "l4", "name": "Notion", "file": "l4.js", "ready": true},
+
+    {"id": "l5", "name": "System Monitor", "file": "l5.js", "ready": true}
+  ]
+}

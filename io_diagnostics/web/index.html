@@ -139,6 +139,11 @@
          Everything else lives in View options. -->
     <span id="runs-status"></span>
     <div class="controls" id="controls">
+      <!-- the page layout (layouts/*.js): five proposals for where navigation, search, views and the log live -->
+      <div class="ctl" id="layout-switch" title="Layout: switch the page layout (L1 Obsidian, L2 VS Code, L3 Claude, L4 Notion, L5 System Monitor)">
+        <span class="ctl-label">Layout</span>
+        <select id="layout-pick" aria-label="Layout"></select>
+      </div>
       <div class="ctl" id="skin-bar-switch" title="Skin: every skin (View options has the same list)">
         <span class="ctl-label">Skin</span>
         <select id="skin-bar" aria-label="Skin (bottom bar)"></select>
@@ -164,6 +169,7 @@
 <script src="tree/v4.js"></script>
 <script src="tree/v5.js"></script>
 <script src="tree/v6.js"></script>
+<script src="layouts/host.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

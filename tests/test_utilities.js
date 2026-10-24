@@ -147,6 +147,10 @@ async function main() {
   fs.mkdirSync(ROUND3, { recursive: true });
   const { chromium } = require(PLAYWRIGHT);
   const browser = await chromium.launch({ executablePath: CHROME, headless: true });
+  // WHY L0: this suite measures the page's classic arrangement (the toolbar over the tree | detail panes); the page layouts
+  // (web/layouts/, tests/test_layouts.js) re-arrange it, so every context here starts on L0 "Today". No assertion changed.
+  const newContext = browser.newContext.bind(browser);
+  browser.newContext = async (options) => { const context = await newContext(options); await context.addInitScript(() => { try { localStorage.setItem('io-diagnostics.page-layout', 'l0'); } catch (_) { /* none */ } }); return context; };
   const server = await startServer('F1');
   const base = server.base;
   try {
