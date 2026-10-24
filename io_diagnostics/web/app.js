@@ -67,6 +67,7 @@ const S = {
   layout: null,        // the detail layout drawing the detail panel (detail/*.js)
   menu: null,          // the utility menu drawing the Utilities section (utilities/*.js)
   runView: null,       // the run view drawing runs (runs/*.js): r1 by default
+  chartView: null,     // the chart view enlarging a sparkline (charts/*.js): c0 (nothing enlarges) by default
   closed: new Set(),   // detail section ids the viewer folded (remembered per section)
   opened: new Set(),   // detail section ids the viewer opened that start folded (ctx.section(..., {defaultOpen: false}))
   layoutChoice: null,  // the Prototype picker's explicit detail layout (remembered), or null: the per-entity default
@@ -109,6 +110,7 @@ const PREFS = {
   layout: 'io-diagnostics.detail-layout',
   menu: 'io-diagnostics.utility-menu',
   runView: 'io-diagnostics.runs-view',
+  chartView: 'io-diagnostics.chart-view',
   sections: 'io-diagnostics.detail-sections',
   sectionsOpen: 'io-diagnostics.detail-sections-open',
 };
@@ -167,7 +169,7 @@ function loadScript(src) {
 // stock shadcn for now ... what matters is the location of things"; every other skin stays one pick away (bottom-right)
 // WHY d4 for the Computer (Zach, 2026-10-23, via the orchestrator): its page is the ROS2 System Webview's data (RAM, CPU,
 // swap, load, disks, temperatures, GPU, network, USB); every other entity keeps d0 until he picks one
-const DEFAULTS = { skin: 'shadcn', structure: 'p1', variant: 'v6', sort: 'status', layout: 'd0', computerLayout: 'd4', menu: 'u0', runs: 'r1' };
+const DEFAULTS = { skin: 'shadcn', structure: 'p1', variant: 'v6', sort: 'status', layout: 'd0', computerLayout: 'd4', menu: 'u0', runs: 'r1', charts: 'c0' };
 const darkQuery = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
 
 // <html data-skin data-mode>: the skin's tokens for the mode. Auto follows the OS until the viewer picks one.
@@ -361,6 +363,33 @@ async function setWindow(seconds) {
   S.cache.clear(); // every bar and trend now answers over the new window
   renderWindowPicker();
   render();
+}
+
+// The chart views' hooks (charts/core.js, mount): the shared history cache, the app-wide window and settings, the entity names
+// and a way to go to an entity. WHY a ctx and not globals: the same seam the run views have (makeRunsCtx); a chart view never
+// reads S.
+function makeChartsCtx() {
+  return {
+    fetch: (url, everyMs) => cached(url, everyMs),
+    settings: () => S.settings,
+    setWindow,
+    // POST /api/v1/settings with `body` (the page-only write); resolves to the new settings or throws the host's reason
+    async saveSettings(body) {
+      const response = await fetch('/api/v1/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-IO-Diagnostics': 'ui' }, body: JSON.stringify(body) });
+      const answer = await response.json();
+      if (!response.ok) throw new Error(answer.error || answer.refused || `HTTP ${response.status}`);
+      S.settings = answer;
+      return answer;
+    },
+    nameOf: (path) => entityLabel(path),
+    openEntity(path) { select(path); pushNav(); render(); },
+    // the page-level drill (one browser-history entry per step): a chart view's own sub-page, id in the URL's `page`
+    page: () => S.drill.page || null,
+    openPage,
+    closePage: closeDiagnostic,
+    selected: () => S.sel,
+    redraw: redrawDetail,
+  };
 }
 
 function index(tree) {
@@ -702,19 +731,21 @@ function setPinned(pinned) {
 const layouts = () => window.IODetailLayouts || {};
 const menus = () => window.IOUtilityMenus || {};
 const runViews = () => window.IORunViews || {};
+const chartViews = () => window.IOChartViews || {};
 const registryIds = (registry, prefix) => Object.keys(registry).filter((id) => registry[id] && typeof registry[id][prefix] === 'function')
   .sort((a, b) => ((registry[a].order ?? 50) - (registry[b].order ?? 50)) || a.localeCompare(b));
-function setupPrototype(layoutDefault, menuDefault, runsDefault) {
+function setupPrototype(layoutDefault, menuDefault, runsDefault, chartsDefault) {
   const wire = (select, registry, method, pref, fallback, key) => {
     const ids = registryIds(registry, method);
     const stored = readPref(pref);
     S[key] = ids.includes(stored) ? stored : ids.includes(fallback) ? fallback : ids[0] || null;
     // WHY the run view shows only its id ("r1"): the bar's room is limited and the skin switcher beside it must stay in reach;
     // its name and description are the option's tooltip
-    const label = (id) => (key === 'runView' ? esc(id) : `${esc(id)} · ${esc(registry[id].name || id)}`);
-    const tip = (id) => (key === 'runView' ? `${registry[id].name || id}: ${registry[id].description || ''}` : registry[id].description || '');
+    const label = (id) => (key === 'runView' || key === 'chartView' ? esc(id) : `${esc(id)} · ${esc(registry[id].name || id)}`);
+    const tip = (id) => (key === 'runView' || key === 'chartView' ? `${registry[id].name || id}: ${registry[id].description || ''}` : registry[id].description || '');
     select.innerHTML = ids.map((id) => `<option value="${esc(id)}" title="${esc(tip(id))}">${label(id)}</option>`).join('');
     if (key === 'runView') select.title = 'Runs view: how a running utility shows its terminal (r1 · Terminal panel with tabs ... r5)';
+    if (key === 'chartView') select.title = 'Chart view: how a sparkline enlarges (c0 · nothing ... c5)';
     select.value = S[key] || '';
     select.addEventListener('change', () => {
       if (!registry[select.value]) return;
@@ -722,17 +753,20 @@ function setupPrototype(layoutDefault, menuDefault, runsDefault) {
       writePref(pref, select.value);
       if (key === 'layout') S.layoutChoice = select.value; // an explicit pick wins on every entity, the Computer too
       if (key === 'runView') mountRunView();
+      if (key === 'chartView') window.IOCharts.select(S.chartView);
       render();
     });
     return ids.length;
   };
   const shown = wire($('detail-layout'), layouts(), 'render', PREFS.layout, layoutDefault || DEFAULTS.layout, 'layout')
     + wire($('utility-menu'), menus(), 'html', PREFS.menu, menuDefault || DEFAULTS.menu, 'menu')
-    + wire($('run-view'), runViews(), 'mount', PREFS.runView, runsDefault || DEFAULTS.runs, 'runView');
+    + wire($('run-view'), runViews(), 'mount', PREFS.runView, runsDefault || DEFAULTS.runs, 'runView')
+    + (window.IOCharts ? wire($('chart-view'), chartViews(), 'mount', PREFS.chartView, chartsDefault || DEFAULTS.charts, 'chartView') : 0);
   // no stored layout: the per-entity default (layoutFor) decides, and the picker shows what it chose
   S.layoutChoice = registryIds(layouts(), 'render').includes(readPref(PREFS.layout)) ? readPref(PREFS.layout) : null;
   $('proto-switch').hidden = shown < 4; // one layout, one menu and one run view: nothing to switch
   mountRunView();
+  if (window.IOCharts) { window.IOCharts.mount(makeChartsCtx()); window.IOCharts.select(S.chartView); }
   try { S.closed = new Set(JSON.parse(readPref(PREFS.sections) || '[]')); } catch (_) { S.closed = new Set(); }
   try { S.opened = new Set(JSON.parse(readPref(PREFS.sectionsOpen) || '[]')); } catch (_) { S.opened = new Set(); }
 }
@@ -1944,9 +1978,9 @@ document.addEventListener('keydown', (event) => {
 
 async function boot() {
   // index.html's inline script already set data-skin / data-mode from storage, so the first paint is right
-  const [skins, structures, detailLayouts, utilityMenus, runEntries] = await Promise.all([readManifest('skins/index.json', 'skins'),
+  const [skins, structures, detailLayouts, utilityMenus, runEntries, chartEntries] = await Promise.all([readManifest('skins/index.json', 'skins'),
     readManifest('view/structure/index.json', 'structures'), readManifest('detail/index.json', 'layouts'), readManifest('utilities/index.json', 'menus'),
-    readManifest('runs/index.json', 'runs')]);
+    readManifest('runs/index.json', 'runs'), readManifest('charts/index.json', 'charts')]);
   S.skins = skins.entries.length ? skins.entries : [{ id: DEFAULTS.skin, name: 'shadcn/ui', file: 'shadcn.css', primary: true }];
   await Promise.all([
     ...S.skins.map((skin) => loadStylesheet(`skins/${skin.file}`, skin.id)),
@@ -1954,11 +1988,12 @@ async function boot() {
     ...detailLayouts.entries.map((entry) => loadScript(`detail/${entry.file}`)),
     ...utilityMenus.entries.map((entry) => loadScript(`utilities/${entry.file}`)),
     ...runEntries.entries.map((entry) => loadScript(`runs/${entry.file}`)),
+    ...chartEntries.entries.map((entry) => loadScript(`charts/${entry.file}`)),
   ]);
   setupSkins(skins.default);
   setupStructures(structures);
   setupSwitcher();
-  setupPrototype(detailLayouts.default, utilityMenus.default, runEntries.default);
+  setupPrototype(detailLayouts.default, utilityMenus.default, runEntries.default, chartEntries.default);
   S.inspPinned = readPref(PREFS.inspectorPinned) === '1';
   if (S.view === 'table' && (S.sel || S.selKey) && (S.drill.diag || S.drill.page)) S.inspOpen = true;
   setupPanes();

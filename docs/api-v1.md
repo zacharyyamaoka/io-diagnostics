@@ -769,7 +769,7 @@ The health bar (rqt_robot_monitor's timeline) of one entity and of each of its c
 ## Settings: `GET /api/v1/settings`, `POST /api/v1/settings`
 
 ```json
-{"history_window_s": 900.0, "visibility": {"usb:046d:c34b:KB1": "show"}, "source": "default", "file": "/home/bam/.config/io-diagnostics/settings.toml", "note": "",
+{"history_window_s": 900.0, "visibility": {"usb:046d:c34b:KB1": "show"}, "dashboard": [], "source": "default", "file": "/home/bam/.config/io-diagnostics/settings.toml", "note": "",
  "limits": {"history_window_s": {"min": 60.0, "max": 86400.0, "default": 900.0}}}
 ```
 
@@ -783,6 +783,10 @@ The health bar (rqt_robot_monitor's timeline) of one entity and of each of its c
   row whose ERROR was acknowledged (the page ends it when the error ends). The default is no choice: a row no driver
   claims (`claimed` false) is hidden, everything else shown, and a hidden row that reports a WARN or ERROR of its own shows itself again until acknowledged. It only
   filters what the tree draws: the counts, the chip and every parent's roll-up still count a hidden row's problems.
+- `dashboard` (the chart view c4, `web/charts/c4.js`): the tiles a person pinned from sparklines, a list of objects each
+  with a `spec` object (at most 60 tiles, 32 KB of JSON). The host stores it whole in the same file (a top-level JSON
+  string, `dashboard = '[...]'`) and never reads inside a tile: the page owns the shape. `POST {"dashboard": [...]}`
+  replaces it; a body with any refused key applies none of its keys.
 - `POST /api/v1/settings` with `{"history_window_s": 600}` (seconds, or `"10m"`) sets it now AND writes the file
   (atomically; the file holds `history_window_s = 600`). The same page-only rule as `POST /api/v1/act`: the page's
   `X-IO-Diagnostics: ui` header, `Sec-Fetch-Site: same-origin`, a JSON body, else **403** (`NotFromPage`,

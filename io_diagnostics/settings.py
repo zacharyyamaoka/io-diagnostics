@@ -1,8 +1,9 @@
 """App-wide settings the page can change, remembered in ``~/.config/io-diagnostics/settings.toml``.
 
-Two settings: the history window (docs/api-v1.md "Settings"), the rolling window every health bar and history
-answer covers, and the Visibility choices (Zach, 2026-10-24: a row the person hid or showed, kept with the app's
-settings so both channels and the tray agree). Where a value comes from, first that applies: ``serve --history-window`` (this run only, never written),
+Three settings: the history window (docs/api-v1.md "Settings"), the rolling window every health bar and history
+answer covers, the Visibility choices (Zach, 2026-10-24: a row the person hid or showed, kept with the app's
+settings so both channels and the tray agree), and the page's dashboard (the tiles a person pinned from sparklines:
+the chart-enlarge lane's c4). Where a value comes from, first that applies: ``serve --history-window`` (this run only, never written),
 the file, the default (15 min). ``POST /api/v1/settings`` from the page sets it for this run AND writes the file.
 WHY the flag is not written: like ``--enable``, a run-time switch must not silently become the person's preference.
 """
@@ -21,10 +22,13 @@ from io_diagnostics.history import DEFAULT_WINDOW_S, MAX_WINDOW_S, MIN_WINDOW_S
 SETTINGS_FILE = "settings.toml"
 HEADER = ("# IO diagnostics · app settings. The page's View options rewrite this file whole (comments are not kept).\n"
           "# history_window_s: the rolling window of every health bar and history, in seconds (60 .. 86400).\n"
+          "# dashboard: the tiles pinned from sparklines, as JSON text (the page owns its shape).\n"
           "# [visibility]: a row's id (its hardware id, else its path) = \"hide\" | \"show\" | \"ack\" (hidden, and its error acknowledged).\n")
 VISIBILITY_CHOICES = ("hide", "show", "ack")
 MAX_VISIBILITY = 500
 MAX_KEY = 200
+MAX_TILES = 60
+MAX_DASHBOARD_BYTES = 32768
 _DURATION = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(s|sec|m|min|h|hr)?\s*$", re.I)
 _UNIT_S = {"": 1.0, "s": 1.0, "sec": 1.0, "m": 60.0, "min": 60.0, "h": 3600.0, "hr": 3600.0}
 
@@ -52,6 +56,22 @@ def check_window(seconds: float) -> float:
     return float(seconds)
 
 
+def check_dashboard(value) -> list:
+    """The page's dashboard: a list of tiles (objects, each with a ``spec`` object), at most ``MAX_TILES`` and
+    ``MAX_DASHBOARD_BYTES`` of JSON. The host stores it and never reads inside a tile: the page owns the shape."""
+
+    if not isinstance(value, list):
+        raise SettingsError("the dashboard is a list of tiles")
+    if len(value) > MAX_TILES:
+        raise SettingsError(f"the dashboard holds at most {MAX_TILES} tiles, got {len(value)}")
+    for tile in value:
+        if not isinstance(tile, dict) or not isinstance(tile.get("spec"), dict):
+            raise SettingsError("every dashboard tile is an object with a spec object")
+    if len(json.dumps(value, separators=(",", ":"))) > MAX_DASHBOARD_BYTES:
+        raise SettingsError(f"the dashboard is over {MAX_DASHBOARD_BYTES} bytes of JSON")
+    return value
+
+
 class Settings:
     """``path=None``: memory only (tests, a host built by hand). ``history_window_s`` given: this run's override."""
 
@@ -59,6 +79,7 @@ class Settings:
         self.path = Path(path) if path else None
         self.history_window_s = DEFAULT_WINDOW_S
         self.visibility: dict[str, str] = {}
+        self.dashboard: list = []
         self.source = "default"  # default | file | flag | page
         self.note = ""  # why the file could not be read or written
         if self.path and self.path.exists():
@@ -67,10 +88,12 @@ class Settings:
                 if "history_window_s" in data:
                     self.history_window_s = check_window(parse_duration(data["history_window_s"]))
                     self.source = "file"
+                if "dashboard" in data:
+                    self.dashboard = check_dashboard(json.loads(data["dashboard"]))
                 if isinstance(data.get("visibility"), dict):
                     self.visibility = {str(key): value for key, value in data["visibility"].items()
                                        if value in VISIBILITY_CHOICES and 0 < len(str(key)) <= MAX_KEY}
-            except (OSError, tomllib.TOMLDecodeError, SettingsError) as error:
+            except (OSError, tomllib.TOMLDecodeError, SettingsError, json.JSONDecodeError, TypeError) as error:
                 self.note = f"{self.path}: unreadable ({type(error).__name__}: {error}); using the default"
         if history_window_s is not None:
             self.history_window_s, self.source = check_window(history_window_s), "flag"
@@ -79,6 +102,12 @@ class Settings:
         """The page's change: applied now and written (atomically). Raises SettingsError for a value out of range."""
 
         self.history_window_s, self.source = check_window(parse_duration(seconds)), "page"
+        self._write()
+
+    def set_dashboard(self, tiles) -> None:
+        """The page's dashboard: applied now and written. Raises SettingsError for a value the host refuses."""
+
+        self.dashboard = check_dashboard(tiles)
         self._write()
 
     def set_visibility(self, changes) -> None:
@@ -111,6 +140,9 @@ class Settings:
             handle, temporary = tempfile.mkstemp(prefix=f".{self.path.name}.", dir=self.path.parent)
             with os.fdopen(handle, "w") as file:
                 file.write(HEADER + f"history_window_s = {self.history_window_s:g}\n")
+                # WHY json.dumps as the TOML string, and before [visibility]: its escapes (\", \\, \n, \uXXXX with ensure_ascii)
+                # are all valid TOML ones, and a top-level key must come before the first table
+                file.write(f"dashboard = {json.dumps(json.dumps(self.dashboard, separators=(',', ':')))}\n")
                 if self.visibility:
                     file.write("\n[visibility]\n")
                     for key, value in sorted(self.visibility.items()):
@@ -125,9 +157,9 @@ class Settings:
             self.note = f"{self.path}: not written ({type(error).__name__}: {error})"
 
     def json(self) -> dict:
-        return {"history_window_s": self.history_window_s, "visibility": dict(self.visibility), "source": self.source,
+        return {"history_window_s": self.history_window_s, "visibility": dict(self.visibility), "dashboard": self.dashboard, "source": self.source,
                 "file": str(self.path) if self.path else None, "note": self.note,
                 "limits": {"history_window_s": {"min": MIN_WINDOW_S, "max": MAX_WINDOW_S, "default": DEFAULT_WINDOW_S}}}
 
 
-__all__ = ["Settings", "SettingsError", "SETTINGS_FILE", "parse_duration", "check_window"]
+__all__ = ["Settings", "SettingsError", "SETTINGS_FILE", "parse_duration", "check_window", "check_dashboard"]

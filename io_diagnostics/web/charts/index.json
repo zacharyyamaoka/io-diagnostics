@@ -1,0 +1,15 @@
+{
+  "about": "Chart views (charts/core.js): window.IOChartViews[id] = {name, description, order, mount(env), unmount(env), on(kind, event, hit), update(env), sync(env), attrs, tip, icon}. One entry per proposal, pre-listed; the page loads charts/<file> only for entries with ready=true and lists every one that registered mount() in the bottom-right Prototype picker ('Charts'). c0 is registered by core.js itself (today's page: nothing enlarges).",
+  "default": "c0",
+  "charts": [
+    {"id": "c1", "name": "Peek", "file": "c1.js", "ready": true},
+
+    {"id": "c2", "name": "Unfold in place", "file": "c2.js", "ready": true},
+
+    {"id": "c3", "name": "Plot pane", "file": "c3.js", "ready": true},
+
+    {"id": "c4", "name": "Pin to my dashboard", "file": "c4.js", "ready": true},
+
+    {"id": "c5", "name": "Focus page", "file": "c5.js", "ready": true}
+  ]
+}

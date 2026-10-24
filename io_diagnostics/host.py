@@ -2069,17 +2069,24 @@ class Host:
         return self.settings.json()
 
     def set_settings(self, body: dict) -> dict:
-        """The page's View options: ``{"history_window_s": 600}`` (seconds, or "10m"), and its Visibility choices:
-        ``{"visibility": {"<row id>": "hide" | "show" | "ack" | null}}``. Raises SettingsError."""
+        """The page's View options: ``{"history_window_s": 600}`` (seconds, or "10m"), its Visibility choices:
+        ``{"visibility": {"<row id>": "hide" | "show" | "ack" | null}}``, and the chart view c4's pinned board:
+        ``{"dashboard": [tiles]}``. Raises SettingsError."""
 
-        unknown = sorted(set(body) - {"history_window_s", "visibility"})
+        unknown = sorted(set(body) - {"history_window_s", "visibility", "dashboard"})
         if unknown:
-            raise settings_module.SettingsError(f"no setting {', '.join(map(repr, unknown))}: only history_window_s and visibility")
+            raise settings_module.SettingsError(f"no setting {', '.join(map(repr, unknown))}: only history_window_s, visibility and dashboard")
+        if "dashboard" in body:
+            settings_module.check_dashboard(body["dashboard"])  # before anything is applied: a refused body changes nothing
+        if "history_window_s" in body:
+            settings_module.check_window(settings_module.parse_duration(body["history_window_s"]))
         if "visibility" in body:
             self.settings.set_visibility(body["visibility"])
         if "history_window_s" in body:
             self.settings.set_history_window(body["history_window_s"])
             self.history.window_s = self.settings.history_window_s
+        if "dashboard" in body:
+            self.settings.set_dashboard(body["dashboard"])
         return self.settings_json()
 
 
