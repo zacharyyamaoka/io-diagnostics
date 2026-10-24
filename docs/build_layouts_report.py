@@ -102,7 +102,7 @@ def image_uri(path: Path) -> str:
     return f"data:image/webp;base64,{base64.b64encode(buffer.getvalue()).decode('ascii')}"
 
 
-def build(media: Path, proof: dict[str, str], lane: str) -> str:
+def build(media: Path, proof: dict[str, str], lane: str, main_sha: str) -> str:
     manifest = json.loads((media / "manifest.json").read_text())
     shots = {(s["layout"], s["state"], s["scheme"]): s for s in manifest["shots"]}
     heroes = {h["layout"]: h for h in manifest["heroes"]}
@@ -246,7 +246,9 @@ ul {{ padding-left: 20px; }} li {{ margin: 4px 0; }}
 <li>Every pane boundary drags, is remembered and folds away; no horizontal scroll at 1280x720 and 1400x900.</li>
 <li>app.js changed in three places: one <code>start()</code> call, one <code>update()</code> hook, and <code>keepTree</code> (the tree stays drawn beside the Table and Activity when a layout holds it in a sidebar).</li></ul></div>
 <div><h4>Left</h4><ul>
-<li>Not merged, not pushed. The Activity view lane (<code>activity/log.js</code>) is uncommitted in the main checkout: L2 and L3 draw the log through one function, <code>ctx.activity.draw</code> in <code>host.js</code>, so adopting <code>IOActivityLog.create({{scope, compact}})</code> is a change in that one place.</li>
+<li>Not merged, not pushed; rebased on main {html.escape(main_sha)}.</li>
+<li>The Activity view lane (<code>activity/log.js</code>) is uncommitted in the main checkout. When it lands, its <code>activityView</code> branch and my <code>keepTree</code> edit meet in the four lines of <code>render()</code> that hide and draw the tree: keep both (the tree is hidden unless the view is Tree or the layout keeps it; the Activity view is theirs). L2 and L3 draw the log through one function, <code>ctx.activity.draw</code> in <code>host.js</code>; without <code>renderActivity</code> it already falls back to the page's event rows, and moving it onto <code>IOActivityLog.create({{scope, compact}})</code> is a change in that one place.</li>
+<li>Run views r2, r3, r5 (prototypes on main) draw fixed-height panels of their own: they scroll inside L2's, L3's and L5's smaller containers, and r2 has no panel, so the Runs controls open nothing under it. The layouts are built around r1.</li>
 <li>Side by side boards (L2's tabs are one board at a time): needs the detail to take a node as a parameter. Not a shell job.</li></ul></div>
 <div><h4>Needs you</h4><ul>
 <li><strong>Pick a layout.</strong> Recommendation: L1 as the default. Default if you say nothing: L1 stays the default, the other four stay in the picker.</li>
@@ -283,9 +285,10 @@ def main() -> int:
     parser.add_argument("--out", required=True, help="the report .html (absolute path)")
     parser.add_argument("--proof", required=True, help="view_core=N,utilities=N,tree=N,runs=N,layouts=N")
     parser.add_argument("--lane", default="lane/layout-proposals")
+    parser.add_argument("--main-sha", default="main", help="the main commit the lane is rebased on")
     args = parser.parse_args()
     proof = dict(item.split("=") for item in args.proof.split(","))
-    report = build(Path(args.media), proof, args.lane)
+    report = build(Path(args.media), proof, args.lane, args.main_sha)
     Path(args.out).write_text(report, encoding="utf-8")
     print(f"{args.out}  {len(report) / 1e6:.1f} MB")
     return 0

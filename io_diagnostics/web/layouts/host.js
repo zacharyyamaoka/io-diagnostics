@@ -194,8 +194,9 @@ body.lx-dragging.lx-y { cursor: row-resize; }
         draw(container, opts) {
           if (!S.act) return;
           let html;
-          if (!opts) html = api.renderActivity();
+          if (!opts && api.renderActivity) html = api.renderActivity();
           else {
+            opts = opts || { scope: null, title: 'Activity log' };
             const events = (S.act.events || []).filter((event) => !opts.scope || event.path === opts.scope || String(event.path || '').startsWith(`${opts.scope}/`));
             html = `<div class="act"><section><h2>${opts.title} <span class="act-count">· ${events.length} event${events.length === 1 ? '' : 's'}</span>${opts.controls || ''}</h2>`
               + `${events.map((event) => api.eventRow(event)).join('') || `<div class="muted">${opts.empty || 'Nothing logged yet.'}</div>`}</section></div>`;

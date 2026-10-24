@@ -40,6 +40,7 @@
 .l3-rbody { flex: 1; min-height: 0; position: relative; }
 .l3-ract { position: absolute; inset: 0; overflow: auto; }
 .l3-ract .act > section { padding: 10px 14px 16px; }
+.l3-ract .act h2 { flex-wrap: wrap; row-gap: 6px; }
 .l3-ract .ev { grid-template-columns: 52px auto 1fr auto; }
 .l3-ract .ev .p { display: none; }
 .l3-ract .scope { margin-left: auto; text-transform: none; letter-spacing: 0; }

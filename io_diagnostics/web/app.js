@@ -1965,7 +1965,7 @@ async function boot() {
   S.inspPinned = readPref(PREFS.inspectorPinned) === '1';
   // the page layout (layouts/host.js): moves the page's parts into one of five arrangements; everything it draws is ours
   if (window.IOLayoutHost) {
-    await window.IOLayoutHost.start({ S, $, esc, render, entityLabel, renderActivity, eventRow, setViewOptions, setToggle, structureOptions,
+    await window.IOLayoutHost.start({ S, $, esc, render, entityLabel, renderActivity: typeof renderActivity === 'function' ? renderActivity : null, eventRow, setViewOptions, setToggle, structureOptions,
       toggleShown: (toggle) => IOView.toggleShown(toggle, structureOptions()), startDryRun, select: onSelectEntity,
       setView(view) { S.view = view; pushNav(); render(); } });
   }
