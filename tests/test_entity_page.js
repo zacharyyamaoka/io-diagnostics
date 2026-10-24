@@ -393,10 +393,12 @@ const { check, BOARD, BOARD2, CAMERA, ADAPTER } = H;
       const cpage = await (await H.newContext(browser)).newPage();
       // the tree has no Computer row: bam-GPU, the root, IS the host entity; clicking it opens the Computer's page
       await cpage.goto(`${computer.base}/?sel=host`);
-      await cpage.waitForFunction(() => typeof S !== 'undefined' && S.node && document.querySelector('.d6-tabs') && document.querySelectorAll('.t6-row').length > 2, null, { timeout: 40000 });
+      await cpage.waitForFunction(() => typeof S !== 'undefined' && S.node && document.querySelector('.d6-tabs') && document.querySelector('.t6-row[data-t6-path="p1:host"]'), null, { timeout: 40000 });
+      await cpage.click('.t6-row[data-t6-path="p1:host#hidden"]'); // the machine's own rows are hidden until asked for
+      await cpage.waitForFunction(() => document.querySelectorAll('.t6-row').length > 3, null, { timeout: 15000 });
       await cpage.click('.t6-row:nth-of-type(2) .t6-name');
       await cpage.waitForFunction(() => S.node && S.node.node.path !== 'host', null, { timeout: 15000 });
-      await cpage.click('.t6-row[data-t6-path="host"] .t6-name');
+      await cpage.click('.t6-row[data-t6-path="p1:host"] .t6-name');
       await cpage.waitForFunction(() => S.node && S.node.node.path === 'host' && document.querySelector('.d6-tabs'), null, { timeout: 15000 });
       check('the bam-GPU root row opens the Computer\'s page in the entity page', await cpage.evaluate(() => Boolean(document.querySelector('.d6-tabs')) && /bam-GPU|Computer/.test(document.querySelector('.d6-head .d-title').textContent)), await cpage.evaluate(() => document.querySelector('.d6-head .d-title').textContent));
       await cpage.waitForSelector('[data-d6-tab="processes"]', { timeout: 20000 });
