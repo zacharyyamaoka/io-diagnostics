@@ -59,11 +59,14 @@ def slug(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "-", text).strip("-")
 
 
-def speed_text(mbps: float | int | None) -> str:
+def speed_text(mbps: float | int | None, *, usb: bool = True) -> str:
+    """A link speed in words; the USB generation's name only for a USB link (``usb=False`` for a network card,
+    whose 10 Gb/s is not "USB 3.2 Gen 2": found 2026-10-24)."""
+
     if not mbps:
         return ""
     rate = f"{mbps / 1000:g} Gb/s" if mbps >= 1000 else f"{mbps:g} Mb/s"
-    name = USB_SPEED_NAMES.get(mbps, "")
+    name = USB_SPEED_NAMES.get(mbps, "") if usb else ""
     return f"{name} · {rate}" if name else rate
 
 
@@ -413,7 +416,7 @@ def os_statuses(layer: OsLayer, history: dict[str, PortHistory], now: float, plu
         if attrs.get("port"):
             bits.append(f"on port {attrs['port']}")
         if attrs.get("speed_mbps"):
-            bits.append(speed_text(attrs["speed_mbps"]))
+            bits.append(speed_text(attrs["speed_mbps"], usb=device.get("bus") == "usb"))
         if attrs.get("operstate"):
             bits.append(f"link {attrs['operstate']}")
         if device.get("bus") == "pci":

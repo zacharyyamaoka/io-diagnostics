@@ -522,7 +522,7 @@ class LiveActivity:
                     continue
                 changes = attrs.get("carrier_changes")
                 speed = attrs.get("speed_mbps")
-                link = f" · {speed_text(speed)}" if carrier and speed and speed > 0 else ""
+                link = f" · {speed_text(speed, usb=False)}" if carrier and speed and speed > 0 else ""
                 self._put(Event("NetCarrierUp" if carrier else "NetCarrierDown", self.now(), "info" if carrier else "warn",
                                 f"{name}: link {'up' if carrier else 'down (no carrier)'}{link}", path="host", source=SYSFS_SOURCE,
                                 args={"id": f"net:{name}:{changes if changes is not None else self.now()}", "interface": name,
