@@ -146,6 +146,15 @@ class KeyValue(NamedTuple):
 
 
 @dataclass(frozen=True)
+class SourceRef:
+    """Where a number came from: another entity's State (v0.2, docs/composition-v1.md section 5). A composite's measurement
+    says "this is CAN 13's position" with ``SourceRef("host/.../can/13", "position")``; a page draws a link to it."""
+
+    path: str
+    key: str = ""
+
+
+@dataclass(frozen=True)
 class Measurement:
     """A typed value: number + UCUM unit + limits in the same unit + its own read time (Redfish ``Sensor``)."""
 
@@ -160,6 +169,9 @@ class Measurement:
     # v0.2: the human reading of the value, for an enumeration or a code ("mode 10" -> "position", "fault 33" -> "motor
     # driver fault on bridge enable"); the page draws "33 · motor driver fault on bridge enable"
     meaning: str = ""
+    # v0.2 (composites): the entity (and State key) this value is read from, when it is not this entity's own; the host passes it
+    # through unchanged and never follows it
+    source: SourceRef | None = None
 
     @property
     def level(self) -> str:
@@ -550,6 +562,8 @@ def _build(cls, data: Mapping):
             value = tuple(tuple(pair) for pair in value)
         elif name == "caused_by":
             value = (value,) if isinstance(value, str) else tuple(value)
+        elif name == "source" and cls is Measurement and isinstance(value, Mapping):
+            value = SourceRef(path=str(value.get("path") or ""), key=str(value.get("key") or ""))
         elif name in ("range", "choices") and isinstance(value, list):
             value = tuple(value)
         kwargs[name] = value
@@ -592,6 +606,8 @@ def _measurement_problems(where: str, measurements) -> list[str]:
         present = [limit for limit in limits if limit is not None]
         if present != sorted(present):
             problems.append(f"{where}: {measurement.key} limits must satisfy error_low <= warn_low <= warn_high <= error_high")
+        if measurement.source is not None and not (isinstance(measurement.source, SourceRef) and measurement.source.path):
+            problems.append(f"{where}: {measurement.key} source must be {{\"path\": <an entity path>, \"key\": <its State key>}}")
     return problems
 
 
@@ -1115,7 +1131,7 @@ __all__ = [
     "SCHEMA", "RECORD_VERSION", "CAUSED_BY_KEY", "CAUSED_BY_SEPARATOR", "STANDARD_ACTIONS", "QUALIFIED_ACTIONS", "STANDARD_EVENT_CODES", "UNKNOWN", "OK", "WARN", "ERROR", "STALE", "LEVELS", "RANK", "ROS_LEVEL", "FROM_ROS_LEVEL", "MODES",
     "STALE_FACTOR", "STALE_FLOOR_S", "EVENT_SEVERITIES", "PENDING", "CONFIRMED", "HEALED", "CLEARED",
     "FAULT_STATUSES", "IDENTITY_KEYS", "PASSIVE", "TOUCHES", "CHANGES", "DANGERS",
-    "KeyValue", "Measurement", "DiagnosticStatus", "Action", "Entity", "Event", "Fault",
+    "KeyValue", "Measurement", "SourceRef", "DiagnosticStatus", "Action", "Entity", "Event", "Fault",
     "to_diagnostic_status", "from_diagnostic_status", "to_diagnostic_array", "from_diagnostic_array", "to_ros_log", "from_ros_log", "ROS_LOG_LEVEL",
     "to_dict", "from_dict", "validate", "effective_level", "restarted",
     "Rollup", "Summary", "summarize", "Debounce", "DEFAULT_DEBOUNCE", "FaultManager",

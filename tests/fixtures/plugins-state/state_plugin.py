@@ -12,6 +12,9 @@ meaning) every ``$STATE_PERIOD_S`` (0.1 s). ``camera`` (usb:8086:0b5b): its watc
 ``$IO_DIAGNOSTICS_FRAME_DIR`` every ``$STATE_FRAME_PERIOD_S`` (0.2 s) and prints a ``frame`` record for each.
 Both print ``config`` records, some with an ``expected`` that differs, in ``diagnose``.
 
+``$STATE_NODES`` (default 1): how many boards the joint adapter reports (``can/1`` .. ``can/N``); only ``can/1`` has the driver fault and the
+configuration, the others answer and stream State (the composition fixtures put a 3-joint arm on each of two adapters).
+``$STATE_ACT_S`` (default 0): how long a real (refused) utility run lasts, so a batch's queue can be watched.
 ``$STATE_LOG`` (a file) gets one JSON line per verb (verb, argv, pid, the frame dir) so a test can see what ran.
 ``$STATE_HOLD_PORT`` set: ``watch`` prints a ``PortBusy`` status and exits (the plugin found the port held itself).
 """
@@ -40,6 +43,7 @@ EXPECTED_SOURCE = "deployment record rack-2026-10-21"
 # did: no state, config or frame record, no watch, streams, tabs or configuration writes in describe, so an older host is never surprised.
 HOST_VERSION = tuple(int(part) for part in (os.environ.get("IO_DIAGNOSTICS_RECORD_VERSION") or "0.1").split(".") if part.isdigit())
 NEW = HOST_VERSION >= (0, 2)
+NODES = max(1, int(os.environ.get("STATE_NODES") or 1))
 
 
 _BASE = float(os.environ.get("IO_DIAGNOSTICS_NOW") or time.time())
@@ -314,19 +318,25 @@ def diagnose(device: str) -> None:
         emit(record="entity", path="", name="fdcanusb fixture", kind="adapter",
              identity={"manufacturer": "mjbots", "model": "fdcanusb", "serial_number": "FDA81D29", "sw_version": "1.2.0"}, actions=actions_of("device"))
         emit(record="entity", path="can", name="CAN bus", kind="bus", via="")
-        emit(record="entity", path="can/1", name="CAN 1", kind="servo", via="can", owner="state_joint",
-             identity={"manufacturer": "mjbots", "model": "moteus c1", "model_id": "mjbots-moteus-c1", "serial_number": "9A31",
-                       "sw_version": "1.0.0", "hw_version": "c1 r4.5"}, actions=actions_of("node"))
+        for number in range(1, NODES + 1):
+            node = f"can/{number}"
+            emit(record="entity", path=node, name=f"CAN {number}", kind="servo", via="can", owner="state_joint",
+                 identity={"manufacturer": "mjbots", "model": "moteus c1", "model_id": "mjbots-moteus-c1", "serial_number": f"9A3{number}",
+                           "sw_version": "1.0.0", "hw_version": "c1 r4.5"}, actions=actions_of("node"))
         emit(record="status", level="ok", name="fixture: ran", path="", stamp=now, expected_period_s=30)
-        emit(record="status", level="ok", name="CAN 1: comms", path="can/1", message="answers in 1.2 ms", stamp=now, expected_period_s=30,
-             values=[{"key": "bitrate", "value": "5 Mbit/s BRS"}])
-        emit(record="status", level="error", name="CAN 1: driver", path="can/1", code="MoteusFault.33",
-             message="the driver is in fault", stamp=now, expected_period_s=30,
-             values=[{"key": "fault_code", "value": "33"}, {"key": "fault_meaning", "value": FAULT_MEANING},
-                     {"key": "what_to_check", "value": "1. Check the motor phase wiring\n2. Clear faults, then try again"}])
-        emit(record="status", level="ok", name="CAN 1: firmware", path="can/1", message="1.0.0 is the latest", stamp=now, expected_period_s=30)
+        for number in range(1, NODES + 1):
+            node = f"can/{number}"
+            emit(record="status", level="ok", name=f"CAN {number}: comms", path=node, message="answers in 1.2 ms", stamp=now, expected_period_s=30,
+                 values=[{"key": "bitrate", "value": "5 Mbit/s BRS"}])
+            if number == 1:
+                emit(record="status", level="error", name="CAN 1: driver", path=node, code="MoteusFault.33",
+                     message="the driver is in fault", stamp=now, expected_period_s=30,
+                     values=[{"key": "fault_code", "value": "33"}, {"key": "fault_meaning", "value": FAULT_MEANING},
+                             {"key": "what_to_check", "value": "1. Check the motor phase wiring\n2. Clear faults, then try again"}])
+            emit(record="status", level="ok", name=f"CAN {number}: firmware", path=node, message="1.0.0 is the latest", stamp=now, expected_period_s=30)
         if NEW:
-            emit(**motor_state("can/1", now, 30))
+            for number in range(1, NODES + 1):
+                emit(**motor_state(f"can/{number}", now, 30))
             time.sleep(float(os.environ.get("STATE_CONFIG_S") or 0))
             for row in [*configs("can/1", clock()), *extra_configs("can/1", clock())]:
                 emit(**{key: value for key, value in row.items() if key != "schema"})
@@ -369,16 +379,28 @@ def watch(path: str) -> None:
         time.sleep(PERIOD_S if ROLE == "joint" else min(PERIOD_S, 0.1))
 
 
+def token_of(action: str) -> str:
+    """The token a dry run names: the action's, and for a utility on one board the board's too (moteus's token names the action and the board),
+    so a token read for CAN 1 never runs CAN 2 (a composite's batch carries one per board)."""
+
+    node = arg("--node")
+    return f"tok-{action}-{node}" if node and action not in CONFIG_WRITES else f"tok-{action}"
+
+
 def act(action: str) -> int:
     """A dry run answers for any action; a REAL one only for the three configuration writes, which change this fixture's own file."""
 
     if "--dry-run" in ARGS:
         emit(record="action-result", action=action, dry_run=True, command=["fixture-tool", f"--{action}"],
              steps=[{"purpose": "do it", "runs": "subprocess", "argv": ["fixture-tool", f"--{action}"]}], preconditions=[],
-             confirm=f"Do {action}?", token=f"tok-{action}")
+             confirm=f"Do {action}?", token=token_of(action))
         return 0
     out = records()
     if action not in CONFIG_WRITES or not NEW:
+        if arg("--node") and arg("--confirm") != token_of(action):  # a board's utility needs that board's own token
+            emit_to(out, record="event", code="ConfirmationRequired", severity="info", stamp=clock(), message="pass the token")
+            return 0
+        time.sleep(float(os.environ.get("STATE_ACT_S") or 0))  # a real run that takes this long (so a queue of them can be watched)
         emit_to(out, record="event", code="ActionRefused", severity="warn", stamp=clock(), message="the state fixture only dry-runs that")
         return 0
     if arg("--confirm") != f"tok-{action}":

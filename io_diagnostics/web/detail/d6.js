@@ -357,6 +357,15 @@
       + `<span class="d6-dim" title="${stream.colormap ? `colormap ${h.esc(stream.colormap)}` : ''}">${h.esc(size)} · ${h.esc(rate)}</span></figcaption>`
       + `<button class="d6-pic" data-d6-enlarge="${h.esc(stream.name)}" aria-label="Enlarge ${h.esc(stream.title)}"${on && stream.seq !== null ? '' : ' disabled'}>${picture}</button></figure>`;
   }
+  // a composite's value that is a child's (docs/composition-v1.md section 5): "↳ CAN 13" after it, a click selects that child through the page's own
+  // data-go selection. The name is the tree's own; a path the tree does not know is plain text, never a dead link.
+  let childName = () => null;
+  function sourceLink(row, h) {
+    if (!row.source || !row.source.path) return '';
+    const name = childName(row.source.path);
+    const title = `${row.source.key ? `${row.source.key} of ` : ''}${name || row.source.path}`;
+    return name ? ` <a class="link d6-src" data-go="${h.esc(row.source.path)}" title="${h.esc(title)}">↳ ${h.esc(name)}</a>` : ` <span class="d6-src muted" title="${h.esc(title)}">↳ ${h.esc(row.source.path.split('/').pop())}</span>`;
+  }
   // The sparkline's grid cell. With the chart helper (charts/core.js, IOCharts.wrap) the cell is the wrapper: the page says which
   // series the sparkline draws (the state record's name, the measurement) and the selected chart view (c6 by default) makes it
   // unfold, open on a page of its own or pin to the Dashboard. WHY the wrapper replaces `.d6-ss`: an unfolded chart spans the
@@ -375,13 +384,14 @@
       const value = row.meaning ? `${h.esc(typeof row.value === 'number' ? num(row.value) : row.text)} · ${h.esc(row.meaning)}` : h.esc(row.text);
       const id = d.id === null ? row.key : d.id;
       return `<div class="d6-sr${bad ? ' bad' : ''}"${bad ? ' data-diagnostic' : ''} ${er.rowAttrs(d.parent, id, 'state')} style="--er-depth:${d.depth}"><span class="d6-sn" title="${h.esc(row.key)}"><span class="er-ctl">${er.star(stateId(group, row), d.pinned)}${er.handle(d.parent, id)}</span>${h.esc(d.label === null ? row.key : d.label)}</span>`
-        + `<span class="d6-sv${row.meaning ? ' txt' : ''}">${bad ? h.shape(row.level, `${row.key}: ${row.level}`) : ''}${value}</span>`
+        + `<span class="d6-sv${row.meaning ? ' txt' : ''}">${bad ? h.shape(row.level, `${row.key}: ${row.level}`) : ''}${value}${sourceLink(row, h)}</span>`
         + sparkCell(group, row, ring) + '</div>';
     };
   }
   const stateId = (group, row) => (group.name ? `${group.name}::${row.key}` : row.key);
   function statePanel(node, detail, ctx) {
     const h = ctx.h;
+    childName = (path) => (ctx.byPath && ctx.byPath.has(path) ? ctx.byPath.get(path).name : null);
     const note = watchNote(detail);
     const streams = Live.streams && Live.streams.length ? Live.streams : (detail.streams || []);
     const head = `<div class="d6-note ${note.cls}" role="status" data-d6-watch="${h.esc((Live.watch || detail.watch || {}).state || '')}">${note.cls === 'paused' ? '⏸ ' : note.cls === 'live' ? '<span class="d6-dot"></span>' : ''}${h.esc(note.text)}</div>`;
@@ -603,6 +613,7 @@
 .d6-sv { font: 12px var(--io-font-mono); color: var(--io-text-strong); font-variant-numeric: tabular-nums; min-width: 0; overflow-wrap: anywhere; display: inline-flex; align-items: center; gap: 4px; }
 .d6-sv.txt { font-family: var(--io-font-ui); }
 .d6-sv .shape { width: 12px; height: 12px; }
+.d6-src { margin-left: 6px; font-size: 11.5px; white-space: nowrap; }
 .d6-ss { min-width: 0; }
 .d6-sp { display: block; width: 100%; height: 20px; overflow: visible; }
 .d6-sp .ln { fill: none; stroke: var(--io-muted); stroke-width: 1.25; stroke-linejoin: round; }

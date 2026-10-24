@@ -1301,7 +1301,9 @@ const UTIL_ICONS = {
   identify: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
   more: '<circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/><rect x="2" y="5" width="20" height="14" rx="3"/>',
 };
-const utilIcon = (name) => `<svg class="u-ic" viewBox="0 0 24 24" aria-hidden="true">${UTIL_ICONS[STANDARD.has(name) ? name : 'more']}</svg>`;
+// a composite's batch (all:<action>, docs/composition-v1.md section 6) is drawn, grouped and ordered as the action it repeats
+const baseName = (name) => String(name).replace(/^all:/, '');
+const utilIcon = (name) => `<svg class="u-ic" viewBox="0 0 24 24" aria-hidden="true">${UTIL_ICONS[STANDARD.has(baseName(name)) ? baseName(name) : 'more']}</svg>`;
 const plainTitle = (title) => String(title || '').replace(/…$/, '');
 
 // WHY Tools: a vendor's own console (tview, realsense-viewer) is something a person looks for by name (Zach, 2026-10-24: he
@@ -1311,15 +1313,15 @@ const TOOLS = new Set(['open_console']);
 const CONFIG_WRITES = new Set(['set_config', 'persist_config', 'reset_config']);
 function utilityGroups(allActions) {
   const actions = allActions.filter((action) => !CONFIG_WRITES.has(action.name));
-  const order = (action) => (STANDARD.has(action.name) ? STANDARD_ORDER.indexOf(action.name) : STANDARD_ORDER.length);
+  const order = (action) => (STANDARD.has(baseName(action.name)) ? STANDARD_ORDER.indexOf(baseName(action.name)) : STANDARD_ORDER.length);
   const sorted = [...actions].sort((a, b) => order(a) - order(b));
-  const standard = sorted.filter((action) => STANDARD.has(action.name));
+  const standard = sorted.filter((action) => STANDARD.has(baseName(action.name)));
   return [
     { id: 'checks', title: 'Checks', items: standard.filter((action) => action.danger === 'query' && !TOOLS.has(action.name)) },
     { id: 'tools', title: 'Tools', items: standard.filter((action) => TOOLS.has(action.name)) },
     { id: 'maintenance', title: 'Maintenance', items: standard.filter((action) => action.danger !== 'query' && action.danger !== 'moves' && !TOOLS.has(action.name)) },
     { id: 'motion', title: 'Motion · makes hardware move', items: standard.filter((action) => action.danger === 'moves') },
-    { id: 'more', title: 'More', items: sorted.filter((action) => !STANDARD.has(action.name)) },
+    { id: 'more', title: 'More', items: sorted.filter((action) => !STANDARD.has(baseName(action.name))) },
   ].filter((group) => group.items.length);
 }
 
@@ -1378,11 +1380,13 @@ async function runUtility() {
   // the run repeats the dry run's new id: the server's token is bound to it (a token for CAN 7 never runs CAN 9).
   // WHY detach: the run is a terminal session that may wait for a typed answer, so the page does not hold the request
   const { status, data } = await postAct({ path: util.path, action: util.name, node: util.node, ...(util.newId !== null ? { new_id: util.newId } : {}), ...(secondConfirmOf(util) ? { confirm_holders: true } : {}), token: util.dry.token, detach: true });
-  if (status === 202 && data.run && window.IORuns) {
+  if (status === 202 && (data.run || data.runs) && window.IORuns) {
     // WHY no "is it still the open one" return: the run is going; its end (syncRunUtilities) belongs to its entity's run
     // line (kept in S.runs while the viewer looks elsewhere) and to the Activity log either way
-    util.runId = data.run.id;
-    window.IORuns.ingest([data.run]);
+    const started = data.runs || [data.run]; // a batch (all:<action>) answers every run it created, all queued or running
+    util.runId = started[0].id;
+    util.runIds = data.runs ? started.map((run) => run.id) : null;
+    window.IORuns.ingest(started);
     // a quiet query keeps the panel as the person left it; anything that changes or moves a device shows its terminal
     if (util.danger !== 'query') openRun(util.runId);
     render();
@@ -1402,15 +1406,26 @@ function finishUtility(util, status, data) {
   render();
 }
 
+// A batch's result is one line: how many of its runs finished, and the names of the ones that did not (a run the driver refused or
+// that failed). Each run keeps its own terminal and result; this is only the entity's one-line status.
+function batchResult(details) {
+  const bad = details.filter((detail) => detail.state !== 'done' || (detail.result || {}).outcome !== 'ok'
+    || ((detail.result || {}).records || []).some((record) => FAILED_CODES.has(record.code)));
+  const names = bad.map((detail) => String(detail.label || detail.id).split(' · ')[0]);
+  return { outcome: bad.length ? 'failed' : 'ok', returncode: 0, records: [], rejected: [], run_id: details[0].id, batch: true,
+    duration_s: Math.round(details.reduce((sum, detail) => sum + ((detail.result || {}).duration_s || 0), 0) * 10) / 10,
+    message: bad.length ? `${details.length - bad.length} of ${details.length} runs done · ${names.join(', ')} did not finish` : `${details.length} runs done` };
+}
+
 // A utility whose run has ended on the host: read its result once and finish it. Called after every poll.
 function syncRunUtilities() {
   for (const util of [S.util, ...S.runs.values()]) {
     if (!util || util.phase !== 'running' || !util.runId || util.syncing) continue;
-    const run = window.IORuns.get(util.runId);
-    if (!run || run.active) continue;
+    const ids = util.runIds || [util.runId];
+    if (ids.some((id) => { const run = window.IORuns.get(id); return !run || run.active; })) continue;
     util.syncing = true;
-    window.IORuns.detail(util.runId)
-      .then((detail) => finishUtility(util, 200, { result: { ...(detail.result || {}), run_id: detail.id } }))
+    Promise.all(ids.map((id) => window.IORuns.detail(id)))
+      .then((details) => finishUtility(util, 200, { result: util.runIds ? batchResult(details) : { ...(details[0].result || {}), run_id: details[0].id } }))
       .catch((error) => finishUtility(util, 0, { refused: 'Unreachable', error: String(error) }));
   }
 }
@@ -1554,6 +1569,19 @@ function resultHtml(util) {
     + `<div class="muted">${esc(result.plugin || '')} · ${esc(result.outcome)} · ${esc(result.duration_s)} s · exit ${esc(result.returncode)}</div></div>`;
 }
 
+// The N runs of a batch, in the order they start: one line each (the board's name and the action, and when it starts: now, or behind how
+// many earlier runs of its exclusive group), then the members the batch leaves out and why.
+function batchRunsHtml(batch) {
+  const skipped = (batch.skipped || []).map((item) => `${item.name} (${item.why})`);
+  const queued = [...new Set(batch.runs.filter((run) => run.after > 0).map((run) => run.group))];
+  const text = skipped.length > 3 ? `${skipped.length} members (${[...new Set((batch.skipped || []).map((item) => item.why))].join('; ')})` : skipped.join(', ');
+  return `<div class="u-batch-h"><b>${esc(batch.n)} runs</b> · one confirm <span class="tag recorded">batch</span>`
+    + `${queued.length ? ` <span class="muted">· runs of ${esc(queued.join(', '))} go one at a time</span>` : ''}</div>`
+    + `<ol class="u-batch" data-batch-runs="${esc(batch.n)}">${batch.runs.map((run) => `<li><span class="u-b-n">${esc(run.order)}</span><span class="u-b-l">${esc(run.label)}</span>`
+      + `<span class="u-b-s muted" title="${esc(run.starts)}">${run.after > 0 ? `after ${esc(run.after)}` : 'now'}</span></li>`).join('')}</ol>`
+    + (skipped.length ? `<div class="u-b-skip muted">Not included: ${esc(text)}</div>` : '');
+}
+
 function dryRunPanel(action) {
   const util = S.util;
   const close = '<button class="btn" data-util-close>Cancel</button>';
@@ -1567,6 +1595,7 @@ function dryRunPanel(action) {
     return `<div class="u-panel"><div class="u-result fail"><div class="u-result-h">${shape('error', 'dry run failed')}<b>The dry run did not answer</b> · ${esc(result.refused || result.outcome)}</div>`
       + `<div>${esc(result.message || '')}</div>${result.stderr_tail ? `<pre class="u-tail">${esc(result.stderr_tail)}</pre>` : ''}</div><div class="u-foot">${close}</div></div>`;
   }
+  const batch = result.batch || null; // an all:<action> of a composite: N runs, one confirm (docs/composition-v1.md section 6)
   const command = commandOf(answer);
   const confirm = answer.confirm || action.confirm;
   const runnable = RUNNABLE.has(action.state);
@@ -1578,12 +1607,14 @@ function dryRunPanel(action) {
   else foot = `<button class="btn primary ${esc(action.danger)}" data-util-run${runnable ? '' : ' disabled'}>Continue…</button>${close}`;
   // the sheet stays small (round 3.5): what will run, its preconditions, the confirm text, Run / Cancel; the steps and
   // the plugin command line it runs through are one click further ("How it runs ▸")
-  const how = `${stepsHtml(answer) ? `<div class="u-k">Steps</div><div class="u-v">${stepsHtml(answer)}</div>` : ''}`
+  const how = batch ? `<div class="u-k">Each run</div><div class="u-v"><ol class="u-steps">${batch.runs.map((run) => `<li><span>${esc(run.label)}</span> <code>${esc((run.argv || []).join(' '))}</code></li>`).join('')}</ol></div>`
+    : `${stepsHtml(answer) ? `<div class="u-k">Steps</div><div class="u-v">${stepsHtml(answer)}</div>` : ''}`
     + `<div class="u-k">Through</div><div class="u-v"><code class="u-argv">${esc((result.argv || []).join(' '))}</code></div>`;
   return `<div class="u-panel">`
     + `<div class="u-panel-h">Dry run · nothing ran<span class="right muted">its token is good for ${esc(expires)}</span></div>`
-    + `<div class="u-k">Will run</div><div class="u-v"><code class="u-cmd">${esc(command || 'in-process (no command line)')}</code>`
-    + `${answer.command_kind ? ` <span class="tag recorded">${esc(answer.command_kind)}</span>` : ''}</div>`
+    + (batch ? `<div class="u-k">Will run</div><div class="u-v">${batchRunsHtml(batch)}</div>`
+      : `<div class="u-k">Will run</div><div class="u-v"><code class="u-cmd">${esc(command || 'in-process (no command line)')}</code>`
+      + `${answer.command_kind ? ` <span class="tag recorded">${esc(answer.command_kind)}</span>` : ''}</div>`)
     + `<div class="u-k">Preconditions</div><div class="u-v">${preconditionsHtml(preconditionRows(action, answer))}</div>`
     // WHY the fix before the confirm: when RobotDx may not reset the device, what to do about it is the sheet's point
     + `${answer.fix ? `<div class="u-k">To allow it</div><div class="u-v"><pre class="u-tail u-fix">${esc(answer.fix)}</pre></div>` : ''}`
@@ -1736,6 +1767,7 @@ function renderModal() {
   }
   back.hidden = false;
   const answer = (util.dry.result || {}).action_result || {};
+  const batch = (util.dry.result || {}).batch || null;
   const rows = preconditionRows(action, answer);
   const again = secondConfirmOf(util);
   const moves = needsTick(action, util);
@@ -1750,7 +1782,7 @@ function renderModal() {
     + `<div class="body"><div class="m-danger">${utilIcon(action.name)}<b>${esc(DANGER_WORDS[action.danger] || 'Needs your confirmation: its danger class is not one this page knows.')}</b></div>`
     + `<div class="confirm">${esc(answer.confirm || action.confirm)}</div>`
     + `${util.name === 'set_id' && util.newId !== null ? `<div class="m-newid">CAN ${esc(util.node)} → CAN ${esc(util.newId)}</div>` : ''}`
-    + `<div class="m-runs">Runs <code>${esc(commandOf(answer) || 'in-process')}</code></div>`
+    + (batch ? `<div class="m-runs">${batchRunsHtml(batch)}</div>` : `<div class="m-runs">Runs <code>${esc(commandOf(answer) || 'in-process')}</code></div>`)
     + `<div class="m-pre-h">Preconditions</div>${preconditionsHtml(rows)}`
     + `${moves ? `<label class="m-tick"><input type="checkbox" data-util-tick${util.ticked ? ' checked' : ''}><span>${again ? 'I understand: ' : 'I checked: '}${esc(tick)}</span></label>` : ''}`
     + `</div><footer><span class="note">${esc(action.owner)} runs it once you press the button; the dry run's token is good for ${esc(Math.round((util.dry.window_s || 300) / 60))} min.</span>`

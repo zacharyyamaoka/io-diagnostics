@@ -199,15 +199,20 @@
     let disposed = false;
     let lastSize = '';
     const writable = () => { const run = get(id); return Boolean(run && run.active && run.interactive && !opts.readOnly); };
+    // WHY the run must be running to be sized: a queued run (a batch of utilities waits on its bus group) has no terminal yet and the host
+    // answers 409; the size is sent when it starts (the store's change below), never as a failed request
+    const sizeable = () => { const run = get(id); return Boolean(writable() && run && (run.state === 'running' || run.state === 'waiting')); };
+    let unsent = false;
     function fit() {
       if (disposed || !fitter || !el.offsetWidth || !el.offsetHeight) return;
       try { fitter.fit(); } catch (_) { return; }
       const size = `${term.cols}x${term.rows}`;
-      if (size !== lastSize) {
+      if (size !== lastSize || unsent) {
         lastSize = size;
-        if (writable()) resize(id, term.cols, term.rows);
+        if (sizeable()) { unsent = false; resize(id, term.cols, term.rows); } else unsent = writable();
       }
     }
+    const sizeWhenRunning = onChange(() => { if (unsent && sizeable()) fit(); });
     term.onData((text) => { if (writable()) sendInput(id, text); });
     // WHY Escape and the page's own shortcuts stay with the process: a terminal program (vi, less) needs them
     term.attachCustomKeyEventHandler((event) => !(event.ctrlKey && event.key === '`'));
@@ -224,6 +229,7 @@
       dispose() {
         disposed = true;
         stop();
+        sizeWhenRunning();
         observer.disconnect();
         theme.disconnect();
         term.dispose();

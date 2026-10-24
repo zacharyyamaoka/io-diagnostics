@@ -37,7 +37,7 @@ DEFAULT_PERIOD_S = 30.0
 # WHY far longer than a diagnose: an act may flash firmware (rs-fw-update is given 300 s) or calibrate (~30-120 s);
 # a diagnose timeout would kill it half-way. Used only by act, never by diagnose.
 DEFAULT_ACT_TIMEOUT_S = 900.0
-MATCH_KINDS = ("usb", "pci", "pci-class", "by-id", "tty", "v4l", "netdev", "host")
+MATCH_KINDS = ("usb", "pci", "pci-class", "by-id", "tty", "v4l", "netdev", "host", "composite")
 KNOWN_KEYS = {"name", "command", "cwd", "timeout_s", "period_s", "timeout", "period", "matches", "enabled", "replay", "env",
               "description", "diagnose_args", "exclusive", "act_timeout_s", "act_timeout", "kind", "attach"}
 # WHY two kinds: a "driver" speaks describe | diagnose | act in JSON lines; a "check" is ANY command that speaks the
@@ -95,6 +95,10 @@ class Match:
     def accepts(self, device: dict) -> bool:
         attrs = device.get("attrs") or {}
         bus = device.get("bus")
+        # WHY composite is its own kind, and the only one that sees a composite (docs/composition-v1.md section 4): a composite is
+        # a name in a file, not a device, so no device glob may claim one and a composite pattern never claims a device
+        if self.kind == "composite" or bus == "composite":
+            return self.kind == "composite" and bus == "composite" and fnmatch.fnmatchcase(str(attrs.get("kind") or ""), self.pattern)
         # WHY host is its own kind, and the only one that sees the host: the Computer is THE host entity (Zach,
         # 2026-10-23: "we kinda have the Computer as an entity"); a device glob must never claim it by accident
         if self.kind == "host" or is_host(device):
@@ -156,6 +160,8 @@ def _match_from_bus_dict(item: dict) -> tuple[str, str]:
     bus = str(item["bus"]).lower()
     if bus == "host":
         return "host", str(item.get("name") or "*")
+    if bus == "composite":
+        return "composite", str(item.get("kind") or item.get("name") or "*")
     if bus == "usb":
         return "usb", f"{item.get('vid', '*')}:{item.get('pid', '*')}"
     if bus == "pci":
@@ -166,7 +172,7 @@ def _match_from_bus_dict(item: dict) -> tuple[str, str]:
         return "netdev", str(item.get("interface") or item.get("name") or "*")
     if bus in ("tty", "v4l"):
         return bus, str(item.get("devnode") or item.get("name") or "*")
-    raise PluginConfigError(f"match {item!r}: bus {bus!r} must be host, usb, pci, net, tty or v4l")
+    raise PluginConfigError(f"match {item!r}: bus {bus!r} must be host, composite, usb, pci, net, tty or v4l")
 
 
 def parse_match(item: Any) -> Match:

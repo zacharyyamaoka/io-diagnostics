@@ -1,0 +1,14 @@
+{
+ "schema": "cad2robot/1.1",
+ "design": "Two_Arm_Cell",
+ "mjcf": "mjcf/scene.xml",
+ "joints": [
+  {"name": "base_yaw", "station": "arm A, joint 1", "can_id": 1, "bus": null, "rotor_to_output_ratio": 0.1},
+  {"name": "shoulder", "station": "arm A, joint 2", "can_id": 2, "bus": null, "rotor_to_output_ratio": 0.1},
+  {"name": "elbow", "station": "arm A, joint 3", "can_id": 3, "bus": null, "rotor_to_output_ratio": 0.1},
+  {"name": "turntable", "station": "unpowered", "can_id": null, "bus": null, "rotor_to_output_ratio": null},
+  {"name": "wrist", "station": "arm B, joint 1", "can_id": 21, "bus": "bus_b", "rotor_to_output_ratio": 0.1}
+ ],
+ "unactuated": [],
+ "source": {"notice": "a trimmed fixture of a Cad2Robot bundle: only what the composition generator reads"}
+}

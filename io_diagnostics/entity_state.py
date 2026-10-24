@@ -51,7 +51,8 @@ def _row(measurement: Measurement, points) -> dict:
     return {"key": measurement.key, "value": measurement.value, "unit": measurement.unit, "text": measurement.render(),
             "meaning": measurement.meaning, "level": measurement.level, "stamp": measurement.stamp,
             "warn_low": measurement.warn_low, "warn_high": measurement.warn_high, "error_low": measurement.error_low,
-            "error_high": measurement.error_high, "points": points}
+            "error_high": measurement.error_high, "points": points,
+            "source": {"path": measurement.source.path, "key": measurement.source.key} if measurement.source is not None else None}
 
 
 def state_groups(cache: JobCache, rel: str, now: float, since: int = 0) -> list[dict]:

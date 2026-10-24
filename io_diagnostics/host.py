@@ -26,6 +26,7 @@ from pathlib import Path
 
 from io_diagnostics import API, FIXTURE_PLUGINS_DIR, PLUGINS_DIR
 from io_diagnostics import activity as activity_module
+from io_diagnostics import composition as composition_module
 from io_diagnostics import eventlog as eventlog_module
 from io_diagnostics import entity_state
 from io_diagnostics.arrangements import ARRANGEMENTS_FILE, Arrangements
@@ -441,6 +442,7 @@ class View:
     memory: dict[str, float] = dataclasses.field(default_factory=dict)  # path -> last heard: restored, no fresh report yet
     live: frozenset = frozenset()  # paths whose data is arriving now (a follower is running)
     expected_paths: frozenset = frozenset()  # device rows the expected setup (or its retired list) names
+    composition: composition_module.CompositeView | None = None  # the composites against this tree (docs/composition-v1.md)
 
 
 class _Blank(dict):
@@ -529,6 +531,10 @@ class Host:
         self.roster = roster_module.Roster(ledger_file)
         # the person's rig manifest (docs/expected-setup.md); None = nothing expected and no edits (fixture / machine)
         self.setup = expected_module.ExpectedSetup(expected_file)
+        # the composites (docs/composition-v1.md): the file's, none while it has problems; the latest view's rollups and where each
+        # child is, which a composite plugin's environment is made from
+        self._composites: list = []
+        self._composition: composition_module.CompositeView | None = None
         # the app-wide settings (settings.toml; None: memory only) and the rolling history they size (history.py)
         self.settings = settings_module.Settings(settings_file, history_window_s)
         self.history = history_module.History(self.settings.history_window_s)
@@ -665,6 +671,8 @@ class Host:
         boots = self.os.boots()
         usb = activity_module.usb_activity(boots, now, self.utc_offset_s)
         layer = tree.build_os_layer(self.os.hostname, devices, extra_ports=frozenset(usb.recent_ports))
+        composites = self.setup.manifest.active_composites()
+        composition_module.add_to_layer(layer, composites)  # their rows (the file's) right under the Computer
         usb.events = [self._placed(event, layer) for event in usb.events]
         usb.events = self._downgrades(usb.events, layer)
         self.live.carriers([device for device in devices if device.get("bus") == "net"])
@@ -684,7 +692,8 @@ class Host:
                                   "note": " · ".join(text for text in (self.roster.note, self.roster.write_note) if text)}]
         with self.lock:
             wanted = {}
-            for spec, device in pairs:
+            self._composites = composites
+            for spec, device in [*pairs, *self._composite_pairs(composites)]:
                 key = (spec.name, str(device.get("id")))
                 job = self.jobs.get(key)
                 if job is None:
@@ -712,6 +721,19 @@ class Host:
         self.faults.observe(changed, now)
         self._sync_followers()
         self.notify("refresh")
+
+    def _composite_pairs(self, composites: list) -> list[tuple]:
+        """``(plugin, device)`` for each composite that names a plugin which can serve it (enabled, a driver, a ``composite:`` match
+        for its kind). A composite whose plugin cannot is judged by ``_composition_notes``; its rollup still works."""
+
+        specs = {spec.name: spec for spec in self.specs}
+        pairs = []
+        for composite in composites:
+            spec = specs.get(composite.plugin) if composite.plugin else None
+            device = composition_module.device_dict(composite)
+            if spec is not None and spec.accepts(device):
+                pairs.append((spec, device))
+        return pairs
 
     # --- activity: where an event lands, and what only sysfs knows -------------------------------------------------
     @staticmethod
@@ -868,6 +890,8 @@ class Host:
         serials = [str(job.device.get("serial") or ""), str(((plugin_row.identity if plugin_row else {}) or {}).get("serial_number") or "")]
         env["IO_DIAGNOSTICS_EXPECTED"] = self.setup.plugin_env(hardware_id, tuple(serial for serial in serials if serial)).get(
             "IO_DIAGNOSTICS_EXPECTED", "")
+        if str(job.device.get("bus")) == "composite":
+            env.update(self._composite_env(job))
         return env
 
     def run_job(self, job: Job) -> None:
@@ -1270,7 +1294,7 @@ class Host:
             # DRIVER reports (the RealSense SDK serial), which only the plugins' records carry
             setup = expected_module.evaluate(self.setup, merged, layer, now, RUNNER_SOURCE)
             notes = (self._host_notes(merged, now) + self._links_summary(merged, now) + self._console_notes(merged, now)
-                     + roster_module.stopped_answering(merged, now) + self._describe_notes(now))
+                     + roster_module.stopped_answering(merged, now) + self._describe_notes(now) + self._composition_notes(now))
             # WHY here: the rig rows and the host's own lines are judged per view, never stored; their changes are
             # what the history keeps
             self.history.sync("view", setup.statuses + notes, now)
@@ -1278,6 +1302,15 @@ class Host:
             if setup.entities or setup.statuses or notes or checks:
                 layer = self._layer_with(setup.entities)
                 merged = tree.merge(layer, jobs, self.os_records + setup.statuses + notes + checks)
+            # WHY a first summary: a composite's rollup is its children's levels, which only the summarized tree knows. The rollups
+            # join the statuses, and the tree is summarized again with them (a composite's own level is the worse of its plugin's
+            # and the rollup's); they are judged per view and never stored, so a composite cannot go stale
+            composed = None
+            if self._composites:
+                composed = composition_module.evaluate(self._composites, merged, layer, tree.build_rows(merged, now), now)
+                merged.statuses.extend(composed.statuses)
+            self.history.sync("composition", composed.statuses if composed else [], now)
+            self._composition = composed
             rows = tree.build_rows(merged, now)
             memory = self.roster.pending([(roster_module.memory_key(job.spec.name, self._device_hardware_id(job)),
                                            self.layer.device_paths.get(str(job.device.get("id")), job.device_path)) for job in jobs])
@@ -1303,7 +1336,7 @@ class Host:
         # it is final and gives back the ones this process no longer produces (docs/activity-log-v1.md decision 4)
         self.eventlog.record(events, now)
         events = [event for event in self.eventlog.overlay(events, now) if event.stamp is None or event.stamp <= now]
-        return View(now, layer, merged, rows, events, self.faults.open_by_path(), setup, checks, memory, streaming, claimed)
+        return View(now, layer, merged, rows, events, self.faults.open_by_path(), setup, checks, memory, streaming, claimed, composed)
 
     def _device_hardware_id(self, job: Job) -> str:
         entity = self.layer.entities.get(self.layer.device_paths.get(str(job.device.get("id")), job.device_path))
@@ -1536,7 +1569,8 @@ class Host:
                 "chip": chip_model(summary, recent, self.url),
                 "tree": tree.node_json(tree.HOST_PATH, view.rows, view.layer, view.faults_by_path, nested=True,
                                        memory=view.memory, live=view.live, expected_paths=view.expected_paths),
-                "recent": recent, "expected_setup": self.setup_summary(view), "runs": self.runs.json(RUNS_IN_STATE)}
+                "recent": recent, "expected_setup": self.setup_summary(view), "composition": self.composition_json(view),
+                "runs": self.runs.json(RUNS_IN_STATE)}
 
     def setup_summary(self, view: View) -> dict:
         manifest = self.setup.manifest
@@ -1569,7 +1603,9 @@ class Host:
                 "faults": [self.fault_json(fault, view) for fault in self.faults.all() if fault.path == path],
                 "events": [activity_module.event_json(event, self.utc_offset_s, self._names(view)) for event in view.events
                            if event.path == path or event.path.startswith(path + "/")][:20],
-                "entity": to_dict(merged.entities[path]), "setup": self.setup_json(path, view)}
+                "entity": to_dict(merged.entities[path]), "setup": self.setup_json(path, view),
+                "composite": (self.composite_json(view.composition.by_path[path], view.composition)
+                              if view.composition is not None and path in view.composition.by_path else None)}
 
     def _page_json(self, path: str, view: View, target: tuple[Job, str] | None) -> dict:
         """What the entity page adds to a node (docs/state-config-v1.md): the connection badge, when the host last heard from
@@ -2061,6 +2097,8 @@ class Host:
                         "preconditions": results, "state": state, "reason": reason, "executable": False,
                         "owner": host_utilities.OWNER if action in host_utilities.OFFERED else entity.owner,
                         "second_confirm": second["detail"] if second else "", "last_run": self._last_run(path, action.name)})
+        if view.composition is not None and path in view.composition.by_path:
+            out += self.batch_actions_json(path, view)
         return out
 
     def _entity_actions(self, path: str, entity, view: View) -> list[Action]:
@@ -2137,6 +2175,11 @@ class Host:
         - A dry run asks the plugin on pipes. A real run is a RUN (docs/runs-v1.md): a process on a PTY with a
           recording, here waited for; ``start_act`` is the same run without the wait."""
 
+        if action.startswith(composition_module.BATCH_PREFIX):
+            if dry_run:
+                return self.batch_dry_run(path, action)
+            return {**self._batch_out(path, action, dry_run=False), "refused": "BatchFromPage",
+                    "message": "a batch of runs starts from the page, after its dry run (the CLI runs one board's action at a time)"}
         out, plan = self._plan_act(path, action, node=node, confirm=confirm, dry_run=dry_run, human=human, new_id=new_id, extra=extra)
         if plan is None:
             return out
@@ -2250,6 +2293,13 @@ class Host:
         return self.describes[job.spec.name]
 
     def _launch_run(self, plan: "_ActPlan", out: dict, *, interactive: bool):
+        run = self._create_run(plan, out, interactive=interactive)
+        run.launch()
+        return run
+
+    def _create_run(self, plan: "_ActPlan", out: dict, *, interactive: bool, label: str | None = None):
+        """The run, registered and ``queued``, not started: a batch creates all of its runs at once and starts them in order."""
+
         job, spec = plan.job, plan.job.spec
         started = self.clock.now()
         device_id = str(job.device.get("id", ""))
@@ -2257,7 +2307,7 @@ class Host:
         if plan.registered.danger == "moves" and (self._describe_for(job) or {}).get("stop"):
             # the plugin's own stop verb (docs/runs-v1.md section 6): run by the host after a moves run that did not finish
             stop_argv = [*spec.command, "stop", "--device", device_id, *(["--node", str(plan.node)] if plan.node is not None else [])]
-        label = f"{plan.entity.name} · {terminal_module.plain_title(plan.registered.title)}"
+        label = label or f"{plan.entity.name} · {terminal_module.plain_title(plan.registered.title)}"
         builtin = spec is host_utilities.SPEC
         run_spec = terminal_module.RunSpec(
             plugin=spec.name, device_id=device_id, device_path=plan.device_path, path=out["path"], action=out["action"],
@@ -2266,9 +2316,7 @@ class Host:
             timeout_s=spec.act_timeout_s, node=plan.node, new_id=plan.new_id, hardware_id=plan.entity.hardware_id,
             stop_argv=stop_argv, group=spec.exclusive,
             hold=(lambda: self._utility_hold(job)) if builtin else (lambda: self._run_hold(job, spec.exclusive)))
-        run = self.runs.create(run_spec, interactive=interactive)
-        run.launch()
-        return run
+        return self.runs.create(run_spec, interactive=interactive)
 
     def _act_env(self, job: Job) -> dict[str, str]:
         """``_job_env`` for an act. The host's own utility also learns whether this host is a replay, and which sessions are
@@ -2385,6 +2433,9 @@ class Host:
         """The page's heartbeat for one entity (``POST /api/v1/watch``): start its plugin's ``watch`` if it is not running,
         and keep it for ``watch_grace_s`` more. Answers the watch's state in plain words."""
 
+        composite = self._composite_of_path(path)
+        if composite is not None and composite.plugin:
+            self._cascade_heartbeat(composite)
         target = self._watch_target(path)
         declared = self._watch_declared(target[0]) if target else None
         if target is None or declared is None or "refused" in declared:
@@ -2426,6 +2477,8 @@ class Host:
             if time.monotonic() - watch.last_beat > self.watch_grace_s:
                 self._watch_stop(watch)
                 return
+            if str(watch.job.device.get("bus")) == "composite":
+                self._refresh_composite_values(watch.job)  # its plugin reads its children's latest State from this file
             if watch.paused:
                 watch.gate = {"reason": "paused while a write to this board runs", "holders": []}
                 return
@@ -2666,6 +2719,333 @@ class Host:
             return None
         out = run.to_json()
         return {key: out[key] for key in ("id", "state", "active", "started", "started_iso", "ended", "ended_iso", "exit_code", "elapsed_s")}
+
+    # --- composites (docs/composition-v1.md) --------------------------------------------------------------------------
+    def _composition_notes(self, now: float) -> list[DiagnosticStatus]:
+        """What is wrong with the composition file, as statuses (never a crash): the Computer's one ``composition`` UNKNOWN naming
+        each problem (no composite loads while any exists), and a WARN on a composite whose plugin cannot serve it."""
+
+        notes = []
+        manifest = self.setup.manifest
+        if manifest.composite_problems:
+            problems = manifest.composite_problems
+            numbered = "\n".join(f"{number}. {problem}" for number, problem in enumerate(problems, start=1))
+            notes.append(DiagnosticStatus(
+                level=UNKNOWN, name="composition", code="CompositionInvalid", path=tree.HOST_PATH, stamp=now, received=now,
+                source=composition_module.SOURCE,
+                message=f"{len(problems)} problem{'s' if len(problems) != 1 else ''} in the composite tables of "
+                        f"{self.setup.path}: no composite is shown until they are fixed · {problems[0]}",
+                values=(KeyValue("what_to_check", numbered), KeyValue("file", str(self.setup.path)))))
+        specs = {spec.name: spec for spec in self.specs}
+        for composite in self._composites:
+            if not composite.plugin:
+                continue
+            spec, why = specs.get(composite.plugin), ""
+            if spec is None:
+                why = f"plugin {composite.plugin!r} is not in {self.plugins_dir}"
+            elif not spec.enabled or spec.kind != "driver":
+                why = f"plugin {composite.plugin!r} is disabled" if not spec.enabled else f"plugin {composite.plugin!r} is not a driver"
+            elif not spec.accepts(composition_module.device_dict(composite)):
+                patterns = ", ".join(match.text() for match in spec.matches) or "none"
+                why = f"plugin {composite.plugin!r} does not handle kind {composite.kind!r} (its matches: {patterns})"
+            if why:
+                notes.append(DiagnosticStatus(
+                    level=WARN, name=f"{composite.label()}: plugin", code="PluginNotUsable", path=composite.path, stamp=now, received=now,
+                    source=composition_module.SOURCE, message=why,
+                    values=(KeyValue("what_to_check", f"1. Declare a plugin named {composite.plugin!r} in {self.plugins_dir} with "
+                                                      f"matches = [\"composite:{composite.kind}\"], or take plugin out of the composite"),)))
+        return notes
+
+    def _composition_view(self) -> composition_module.CompositeView:
+        """The latest view's composites; one view is built if none has been yet (a plugin can be asked before a page is)."""
+
+        if self._composition is None and self._composites:
+            self.view()
+        return self._composition or composition_module.CompositeView()
+
+    def _child_json(self, child, cv: composition_module.CompositeView) -> dict:
+        info = cv.info.get(child.path) or {} if child.path else {}
+        level = cv.levels.get(child.ref) if child.kind == "composite" else info.get("level")
+        return {"ref": child.ref, "id": child.ref, "kind": child.kind, "path": child.path, "name": child.name, "present": child.present,
+                "level": level, "message": info.get("message", "")}
+
+    def composite_json(self, composite, cv: composition_module.CompositeView) -> dict:
+        """One composite, as ``GET /api/v1/state`` ``composition`` and ``GET /api/v1/node`` ``composite`` say it."""
+
+        parent = next((other.path for other in cv.composites if composite.id in other.children), None)
+        resolved = cv.resolved.get(composite.id, [])
+        return {"id": composite.id, "path": composite.path, "kind": composite.kind, "title": composite.label(), "parent": parent,
+                "plugin": composite.plugin or None, "batch": composite.batch, "source": composite.source or None,
+                "expects": composite.expects, "level": cv.levels.get(composite.id),
+                "children": [self._child_json(child, cv) for child in resolved],
+                "members": composition_module.members(composite.id, cv.resolved),
+                "leaves": len(composition_module.leaves(composite.id, cv.resolved))}
+
+    def composition_json(self, view: View) -> dict:
+        manifest = self.setup.manifest
+        cv = view.composition
+        return {"file": str(self.setup.path) if self.setup.path else None, "problems": list(manifest.composite_problems),
+                "composites": [self.composite_json(composite, cv) for composite in composition_module.preorder(cv.composites)] if cv else []}
+
+    def _state_of(self, path: str, now: float) -> dict:
+        """A child's latest State as ``{group: {key: {"value", "unit", "stamp"}}}`` (what a composite plugin reads)."""
+
+        target = self._watch_target(path)
+        if target is None:
+            return {}
+        job, rel = target
+        with self.lock:
+            groups = entity_state.state_groups(job.cache, rel, now, job.cache.serial)
+        return {group["name"]: {row["key"]: {"value": row["value"], "unit": row["unit"], "stamp": group["received"]}
+                               for row in group["rows"]} for group in groups}
+
+    def _composite_values(self, composite, cv: composition_module.CompositeView) -> Path:
+        """Write the children's latest levels and State where the composite's plugin reads them (atomically, a file renamed over:
+        the frames directory's precedent), and return its path."""
+
+        now = self.clock.now()
+        entries: list[dict] = []
+
+        def walk(composite_id: str) -> None:
+            for child in cv.resolved.get(composite_id, []):
+                state = self._state_of(child.path, now) if child.kind == "entity" and child.present else {}
+                entries.append({**self._child_json(child, cv), "state": state})
+                if child.kind == "composite":
+                    walk(child.ref)
+
+        walk(composite.id)
+        folder = self._frames_base() / ("composite-" + re.sub(r"[^A-Za-z0-9._-]+", "-", composite.id))
+        folder.mkdir(parents=True, exist_ok=True)
+        final, temporary = folder / "values.json", folder / ".values.json.tmp"
+        temporary.write_text(json.dumps({"stamp": now, "children": entries}, default=str))
+        os.replace(temporary, final)
+        return final
+
+    def _composite_tree(self, composite_id: str, cv: composition_module.CompositeView) -> list[dict]:
+        known = composition_module.by_id(cv.composites)
+        out = []
+        for child in cv.resolved.get(composite_id, []):
+            entry = {"ref": child.ref, "id": child.ref, "kind": child.kind, "path": child.path, "name": child.name, "present": child.present}
+            if child.kind == "composite":
+                entry["composite_kind"] = known[child.ref].kind
+                entry["children"] = self._composite_tree(child.ref, cv)
+            out.append(entry)
+        return out
+
+    def _composite_env(self, job: Job) -> dict[str, str]:
+        """``IO_DIAGNOSTICS_COMPOSITE`` (the composite as the file says it, resolved now) and ``IO_DIAGNOSTICS_COMPOSITE_VALUES``
+        (the file of its children's latest levels and State), for a composite plugin's call (docs/composition-v1.md section 4)."""
+
+        self.view()  # WHY a fresh one: a plugin run is rare (a diagnose per period, a watch start), and it must see where its children are NOW
+        cv = self._composition_view()
+        composite = next((item for item in cv.composites if composition_module.device_id(item) == str(job.device.get("id"))), None)
+        if composite is None:
+            return {}
+        body = {"id": composite.id, "kind": composite.kind, "title": composite.label(), "path": composite.path,
+                "expects": composite.expects, "children": self._composite_tree(composite.id, cv)}
+        return {"IO_DIAGNOSTICS_COMPOSITE": json.dumps(body), "IO_DIAGNOSTICS_COMPOSITE_VALUES": str(self._composite_values(composite, cv))}
+
+    def _composite_of_path(self, path: str) -> object | None:
+        cv = self._composition
+        return cv.by_path.get(path) if cv else None
+
+    def _refresh_composite_values(self, job: Job) -> None:
+        cv = self._composition
+        composite = next((item for item in cv.composites if composition_module.device_id(item) == str(job.device.get("id"))), None) if cv else None
+        if composite is not None:
+            try:
+                self._composite_values(composite, cv)
+            except OSError:  # the frames directory is gone (the host is stopping): the plugin keeps its last file
+                pass
+
+    def _cascade_heartbeat(self, composite) -> None:
+        """A page looking at a composite keeps its children's watches (and theirs) running: their State is what the composite's
+        plugin reads. WHY here and not in the page: the page knows one entity; the file knows the members."""
+
+        cv = self._composition
+        for child in (cv.resolved.get(composite.id, []) if cv else []):
+            if child.present and child.path:
+                self.watch_heartbeat(child.path)
+
+    # --- composites: batch actions (docs/composition-v1.md section 6) ---------------------------------------------------
+    def _leaf_actions(self, view: View):
+        def actions_of(path: str) -> dict:
+            entity = view.merged.entities.get(path)
+            return {action.name: action for action in entity.actions} if entity is not None else {}
+
+        return actions_of
+
+    def _leaf_group(self, view: View):
+        def group_of(path: str) -> tuple[str, str]:
+            entity = view.merged.entities.get(path)
+            job = self._owning_job(path, entity) if entity is not None else None
+            return (job.spec.name, job.spec.exclusive) if job is not None else ("", "")
+
+        return group_of
+
+    def batch_plans(self, path: str, view: View) -> list:
+        composite = view.composition.by_path.get(path) if view.composition else None
+        if composite is None:
+            return []
+        return composition_module.offered(composite, view.composition.resolved, self._leaf_actions(view), self._leaf_group(view))
+
+    def batch_actions_json(self, path: str, view: View) -> list[dict]:
+        """The composite's ``all:<action>`` entries, in the shape of every action, state and reason from its leaves' own gates."""
+
+        composite = view.composition.by_path.get(path) if view.composition else None
+        out = []
+        for plan in self.batch_plans(path, view):
+            self._label_batch(plan, view)
+            states = [(item, next((a for a in self.actions_json(item.child.path, view) if a["name"] == plan.name), None)) for item in plan.items]
+            blocked = next(((item, a) for item, a in states if a and a["state"] == "blocked"), None)
+            unknown = next(((item, a) for item, a in states if a and a["state"] == "unknown"), None)
+            waiting = next(((item, a) for item, a in states if a and a["state"] == WAITING), None)
+            if blocked:
+                state, reason = "blocked", f"{blocked[0].child.name}: {blocked[1]['reason']}"
+            elif unknown:
+                state, reason = "unknown", f"can't tell: {unknown[0].child.name}: {unknown[1]['reason']}"
+            elif waiting:
+                state, reason = WAITING, f"{waiting[0].child.name}: {waiting[1]['reason']}"
+            elif states and all(a and a["state"] == "nothing_to_do" for _item, a in states):
+                state, reason = "nothing_to_do", states[0][1]["reason"]
+            else:
+                state, reason = "ready", ""
+            names = ", ".join(item.who for item in plan.items)
+            # the boards' own preconditions, one row per check: its sentences for the first three boards, the worst state, the first detail
+            # that is not a pass (the page's tick for a moves batch quotes them)
+            severity = {"fail": 3, "unknown": 2, WAITING: 1, "pass": 0}
+            by_check: dict[str, dict] = {}
+            for _item, found in states:
+                for pre in (found or {}).get("preconditions", []):
+                    row = by_check.setdefault(pre["check"], {"check": pre["check"], "texts": [], "state": "pass", "detail": ""})
+                    row["texts"].append(pre["text"])
+                    if severity.get(pre["state"], 0) > severity[row["state"]]:
+                        row["state"], row["detail"] = pre["state"], pre["detail"]
+            preconditions = [{"check": row["check"], "text": "; ".join(row["texts"][:3]) + ("; …" if len(row["texts"]) > 3 else ""),
+                              "state": row["state"], "detail": row["detail"]} for row in by_check.values()]
+            groups = sorted({item.group for item in plan.items if item.group})
+            queue = (f"; runs of {', '.join(groups)} go one at a time" if groups else "")
+            skipped = self._skipped_text(plan)
+            out.append({
+                "name": composition_module.BATCH_PREFIX + plan.name, "title": plan.title,
+                "description": f"{plan.items[0].action.title.rstrip('…')} on each of the {len(plan.items)} under {composite.label()}. "
+                               f"One dry run lists the runs, one confirm starts them{queue}"
+                               + (f". Not included: {skipped}" if skipped else ""),
+                "danger": plan.danger, "scope": "composite", "kind": plan.items[0].action.kind,
+                "confirm": f"{plan.title.rstrip('…')} under {composite.label()}? {len(plan.items)} runs: {names}.",
+                "preconditions": preconditions, "state": state, "reason": reason, "executable": False, "owner": "io_diagnostics",
+                "last_run": None, "batch": {"action": plan.name, "n": len(plan.items), "groups": groups,
+                                            "skipped": [{"path": child.path, "name": child.name, "why": why} for child, why in plan.skipped]}})
+        return out
+
+    @staticmethod
+    def _skipped_text(plan) -> str:
+        """The members a batch leaves out, in a line: their names while there are three or fewer, else how many and why."""
+
+        if not plan.skipped:
+            return ""
+        if len(plan.skipped) <= 3:
+            return ", ".join(f"{child.name} ({why})" for child, why in plan.skipped)
+        reasons = sorted({why for _child, why in plan.skipped})
+        return f"{len(plan.skipped)} members ({'; '.join(reasons)})"
+
+    def _batch_out(self, path: str, action: str, *, dry_run: bool) -> dict:
+        return {"path": path, "action": action, "node": None, "new_id": None, "dry_run": dry_run, "plugin": None, "device_id": None,
+                "title": "", "danger": None, "registered_by": "composite", "argv": None, "refused": None, "outcome": "refused",
+                "returncode": None, "duration_s": 0.0, "records": [], "action_result": None, "rejected": [], "stderr_tail": "",
+                "message": "", "batch": None}
+
+    def _batch_plan(self, path: str, action: str, out: dict):
+        """``(plan, view, None)`` or ``(None, view, refusal)``."""
+
+        view = self.view()
+        composite = view.composition.by_path.get(path) if view.composition else None
+        if composite is None:
+            return None, view, {**out, "refused": "NoSuchComposite", "message": f"no composite at {path!r}"}
+        name = action.removeprefix(composition_module.BATCH_PREFIX)
+        plan = composition_module.plan_batch(composite, name, view.composition.resolved, self._leaf_actions(view), self._leaf_group(view))
+        if plan.refused:
+            return None, view, {**out, "refused": plan.refused, "message": plan.message}
+        self._label_batch(plan, view)
+        return plan, view, None
+
+    def _label_batch(self, plan, view: View) -> None:
+        """Name each run's board the way a person tells two apart (``CAN 1 · fdcanusb 272813EF``), not only ``CAN 1``: two adapters
+        both have a CAN 1, and so do the tabs of their runs."""
+
+        for item in plan.items:
+            item.who = self._display_name(item.child.path, view.merged.entities.get(item.child.path))
+            item.label = f"{item.who} · {terminal_module.plain_title(item.action.title)}"
+
+    @staticmethod
+    def _batch_summary(plan) -> dict:
+        return {"action": plan.name, "title": plan.title, "n": len(plan.items), "danger": plan.danger,
+                "skipped": [{"path": child.path, "name": child.name, "why": why} for child, why in plan.skipped],
+                "runs": [{"order": item.order, "path": item.child.path, "label": item.label, "node": item.node, "plugin": item.plugin,
+                          "group": item.group, "starts": item.starts, "after": item.after, "danger": item.action.danger}
+                         for item in plan.items]}
+
+    def batch_dry_run(self, path: str, action: str) -> dict:
+        """One dry run for ``all:<action>`` on a composite: every leaf's own dry run (so each plugin's preconditions and token are
+        honoured), one answer. ``plugin_tokens`` (leaf path -> that leaf's plugin token) is for the server's gate, never for a page."""
+
+        out = self._batch_out(path, action, dry_run=True)
+        plan, _view, refusal = self._batch_plan(path, action, out)
+        if refusal is not None:
+            return refusal
+        summary = self._batch_summary(plan)
+        tokens: dict[str, str | None] = {}
+        for item, run in zip(plan.items, summary["runs"]):
+            answer = self.act(item.child.path, plan.name, node=item.node, dry_run=True, human=False)
+            if answer.get("refused") is not None or answer.get("outcome") != "ok":
+                why = answer.get("message") or answer.get("refused") or answer.get("outcome")
+                return {**out, "refused": answer.get("refused") or "DryRunFailed", "message": f"{item.child.name}: {why}",
+                        "title": plan.title, "batch": {**summary, "failed": item.child.path}}
+            result = answer.get("action_result") or {}
+            tokens[item.child.path] = result.get("token") or result.get("confirm_token") or None
+            run.update(argv=answer.get("argv"), confirm=result.get("confirm") or "", message=result.get("message") or "")
+        names = ", ".join(item.who for item in plan.items)
+        confirm = f"{plan.title.rstrip('…')}? {len(plan.items)} runs: {names}."
+        return {**out, "outcome": "ok", "title": plan.title, "danger": plan.danger, "batch": summary, "plugin_tokens": tokens,
+                "action_result": {"action": composition_module.BATCH_PREFIX + plan.name, "title": plan.title, "dry_run": True,
+                                  "danger": plan.danger, "command_kind": "batch", "confirm_required": plan.danger != "query",
+                                  "confirm": confirm, "token": "batch", "message": f"{len(plan.items)} runs, one confirm",
+                                  "steps": [{"purpose": run["label"], "runs": "subprocess", "argv": run["argv"]} for run in summary["runs"]]}}
+
+    def start_batch(self, path: str, action: str, plugin_tokens: dict, *, interactive: bool = True):
+        """The confirmed batch: N runs created at once (all ``queued``), started in the plan's order, runs of one ``exclusive`` group
+        one after another. Returns ``(runs, out)``; ``runs`` is empty when it is refused (``out["refused"]``)."""
+
+        out = self._batch_out(path, action, dry_run=False)
+        plan, _view, refusal = self._batch_plan(path, action, out)
+        if refusal is not None:
+            return [], refusal
+        prepared = []
+        for item in plan.items:
+            answer, run_plan = self._plan_act(item.child.path, plan.name, node=item.node, confirm=plugin_tokens.get(item.child.path),
+                                              dry_run=False, human=True, new_id=None)
+            if run_plan is None:
+                return [], {**out, "refused": answer.get("refused"), "message": f"{item.child.name}: {answer.get('message')}",
+                            "batch": self._batch_summary(plan)}
+            prepared.append((item, answer, run_plan))
+        runs = [(item, self._create_run(run_plan, answer, interactive=interactive, label=item.label)) for item, answer, run_plan in prepared]
+        by_group: dict[str, list] = {}
+        for item, run in runs:
+            by_group.setdefault(item.group, []).append(run)
+
+        def one_at_a_time(group_runs: list) -> None:
+            for run in group_runs:
+                run.launch()
+                run.wait()
+
+        for group, group_runs in by_group.items():
+            if group:
+                threading.Thread(target=one_at_a_time, args=(group_runs,), name=f"batch-{group}", daemon=True).start()
+            else:
+                for run in group_runs:
+                    run.launch()
+        return [run for _item, run in runs], {**out, "outcome": "ok", "title": plan.title, "danger": plan.danger,
+                                              "batch": self._batch_summary(plan)}
 
     # --- runs (docs/runs-v1.md) ---------------------------------------------------------------------------------
     def runs_json(self) -> dict:

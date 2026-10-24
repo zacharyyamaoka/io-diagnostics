@@ -208,7 +208,8 @@
         // each host is a root row (usually exactly one: the machine itself), its entities below
         rows = top.nodes.map((host) => computerRow(host, lift(host, options, [], []), `p1:${host.path}`));
       }
-      return rows; // core's search reads the Connection column too (row.columns), so "ttyACM0" finds the adapter
+      // a composite's leaf members (a board, a camera) come out of where they were drawn and go under it (docs/composition-v1.md)
+      return root.IOComposites ? root.IOComposites.nest(rows, state) : rows; // core's search reads the Connection column too (row.columns), so "ttyACM0" finds the adapter
     },
   };
 })(typeof window !== 'undefined' ? window : globalThis);

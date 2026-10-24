@@ -89,6 +89,20 @@ board, Revert all; safety keys ask twice and are written only to a stopped board
 uv run --project /home/bam/io-diagnostics python /home/bam/io-diagnostics/io_diagnostics/cli.py serve --fixture F1 --plugins /home/bam/io-diagnostics/tests/fixtures/plugins-state --port 5412 --no-udev
 ```
 
+## Composites: an arm, a robot, a rack (docs/composition-v1.md)
+
+The same expected-setup file can say what a thing is made of: `[[composite]]` tables (an id, a kind word, the boards or other composites it
+contains, any depth). RobotDx never reads what the word means: it nests the rows (a rack over robots over arms over their boards), rolls the
+worst child's level up as an icon (the chip still counts each fault once), offers "Calibrate all 6…" when every board offers `calibrate`
+(one dry run lists the six runs, one confirm starts them, queued by their bus), and runs an optional plugin per composite for everything
+that needs to know what an arm is (end-effector position, "tracking error within limit"); that plugin's State can carry `↳ CAN 13` links to
+the board a number came from. A Cad2Robot bundle writes the tables for you (here a trimmed fixture bundle; the arm plugin and six fixture joints
+that drive the page tests are in `tests/fixtures/plugins-state`, never any hardware):
+
+```bash
+uv run --project /home/bam/io-diagnostics python /home/bam/io-diagnostics/tools/cad2robot_composites.py /home/bam/io-diagnostics/tests/fixtures/cad2robot/robot.json --adapter usb:0483:5740:272813EF
+```
+
 ## Add a device: one executable + one toml
 
 A plugin is any executable that answers three verbs with JSON lines on stdout. The host runs

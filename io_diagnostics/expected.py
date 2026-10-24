@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from io_diagnostics import ROOT, activity, tree
+from io_diagnostics import composite as composite_module
 
 from contract.record import ERROR, OK, STALE, UNKNOWN, WARN, DiagnosticStatus, Entity, KeyValue, effective_level
 
@@ -106,6 +107,13 @@ class Retired:
 class Manifest:
     rigs: list[Rig] = field(default_factory=list)
     retired: list[Retired] = field(default_factory=list)
+    # docs/composition-v1.md: the same file holds the composites. ``composite_problems`` are kept beside them, never raised: a typo in
+    # a composite must not take the rigs away; while any exist, no composite loads and the file is not rewritten (edits refused)
+    composites: list = field(default_factory=list)
+    composite_problems: list = field(default_factory=list)
+
+    def active_composites(self) -> list:
+        return [] if self.composite_problems else list(self.composites)
 
     def entries(self):
         for rig in self.rigs:
@@ -190,6 +198,7 @@ def parse(text: str) -> Manifest:
             raise ManifestError(f"{where}: needs a hardware_id or a serial")
         entry.name = entry.name or entry.hardware_id or entry.serial
         manifest.retired.append(entry)
+    manifest.composites, manifest.composite_problems = composite_module.parse(data.get("composite"))
     return manifest
 
 
@@ -228,6 +237,7 @@ def dump(manifest: Manifest) -> str:
         for key in ("hardware_id", "serial", "date", "reason"):
             if getattr(entry, key):
                 lines.append(f"{key} = {_string(getattr(entry, key))}")
+    lines += composite_module.dump(manifest.composites)
     return "\n".join(lines) + "\n"
 
 
@@ -302,9 +312,15 @@ class ExpectedSetup:
             raise ManifestError("no expected-setup file on this host (a fixture or a fake machine without --expected)")
         if self.note:
             raise ManifestError(f"the expected-setup file does not read, so it is not rewritten: {self.note}")
+        if self.manifest.composite_problems:
+            # WHY: the composites that did not load are not in the Manifest, and a rewrite would drop them from the person's file
+            raise ManifestError("the composite tables in the expected-setup file have problems, so it is not rewritten: "
+                                + "; ".join(self.manifest.composite_problems[:3]))
         return dataclasses.replace(self.manifest, rigs=[dataclasses.replace(rig, devices=[
             dataclasses.replace(device, nodes=[dataclasses.replace(node) for node in device.nodes]) for device in rig.devices])
-            for rig in self.manifest.rigs], retired=[dataclasses.replace(entry) for entry in self.manifest.retired])
+            for rig in self.manifest.rigs], retired=[dataclasses.replace(entry) for entry in self.manifest.retired],
+            composites=[dataclasses.replace(item, children=list(item.children), expects=dict(item.expects))
+                        for item in self.manifest.composites])
 
     def retired_entry(self, hardware_id: str = "", serials: tuple[str, ...] = ()) -> Retired | None:
         for entry in self.manifest.retired:

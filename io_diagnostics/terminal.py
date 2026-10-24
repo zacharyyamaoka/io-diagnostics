@@ -716,6 +716,7 @@ class RunRegistry:
         self.runs: dict[str, Run] = {}
         self._events: list[Event] = []
         self._seq = 0
+        self._last_suffix: tuple[str, int] = ("", 0)
         self._lock = threading.RLock()
         self._load()
 
@@ -723,7 +724,12 @@ class RunRegistry:
     def create(self, spec: RunSpec, *, interactive: bool) -> Run:
         with self._lock:
             while True:
-                run_id = time.strftime("%Y%m%dT%H%M%S") + "-" + secrets.token_hex(2)
+                stamp = time.strftime("%Y%m%dT%H%M%S")
+                # WHY a counting suffix inside one second (and a random start, so two hosts on one directory rarely meet): the id "sorts by
+                # start time", and a batch creates its runs in one instant; a random suffix would shuffle them in every list and tab bar
+                suffix = (self._last_suffix[1] + 1) if self._last_suffix[0] == stamp and self._last_suffix[1] < 0xFFFF else secrets.randbelow(0x7000)
+                run_id = f"{stamp}-{suffix:04x}"
+                self._last_suffix = (stamp, suffix)
                 if run_id not in self.runs and not (self.directory and (self.directory / f"{run_id}.json").exists()):
                     break
             run = Run(self, run_id, spec, interactive=interactive)

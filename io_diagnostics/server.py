@@ -26,6 +26,7 @@ from urllib.parse import parse_qs, urlparse
 from io_diagnostics import WEB
 from io_diagnostics import host_utilities, release_channels
 from io_diagnostics.arrangements import ArrangementError
+from io_diagnostics.composition import BATCH_PREFIX
 from io_diagnostics.history import MAX_BINS
 from io_diagnostics.host import Host
 from io_diagnostics.settings import SettingsError
@@ -555,17 +556,22 @@ class Handler(BaseHTTPRequestHandler):
         path, action, node, new_id = body.get("path"), body.get("action"), body.get("node"), body.get("new_id")
         if not isinstance(path, str) or not isinstance(action, str) or not _int_or_null(node) or not _int_or_null(new_id):
             return self._json({"refused": "BadRequest", "error": "path and action are strings; node and new_id are integers or null"}, 400)
+        batch = action.startswith(BATCH_PREFIX)
         if body.get("dry_run") is True:
             result = self.host.act(path, action, node=node, dry_run=True, human=False, new_id=new_id)
+            # a batch's plugin tokens (one per board) stay in the gate with the page's one token; the page never sees them
+            tokens = result.pop("plugin_tokens", None)
             token = None
             if result.get("refused") is None and result.get("outcome") == "ok":
                 answer = result.get("action_result") or {}
-                plugin_token = answer.get("token") or answer.get("confirm_token") or None
+                plugin_token = json.dumps(tokens) if batch else answer.get("token") or answer.get("confirm_token") or None
                 token = self.gate.issue(path, action, node, plugin_token, new_id)
             return self._json({"dry_run": True, "result": result, "token": token, "window_s": self.gate.window_s})
         entry, refused, reason = self.gate.redeem(str(body.get("token") or ""), path, action, node, new_id)
         if entry is None:
             return self._json({"refused": refused, "error": reason}, 403)
+        if batch:
+            return self._batch(path, action, entry, body.get("detach") is True)
         # WHY human=True here and nowhere else in the server: the person read the dry run on the page and clicked
         # (a confirm modal for anything but a query); the plugin still checks its own token against the device.
         # The run is interactive: started from the page, so the page may type into it and stop it (docs/runs-v1.md)
@@ -580,6 +586,23 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"dry_run": False, "run": run.to_json()}, 202)
         run.wait()
         return self._json({"dry_run": False, "result": {**result, **(run.result or {}), "run_id": run.id}})
+
+    def _batch(self, path: str, action: str, entry: dict, detach: bool):
+        """The confirmed ``all:<action>`` of a composite: N runs, each with its own plugin token from the dry run (docs/composition-v1.md
+        section 6). 202 with the runs at once when the page detaches; else it waits for every one."""
+
+        try:
+            tokens = json.loads(entry["plugin_token"] or "{}")
+        except (TypeError, ValueError):
+            tokens = {}
+        runs, result = self.host.start_batch(path, action, tokens, interactive=True)
+        if not runs:
+            return self._json({"dry_run": False, "result": result})
+        if detach:
+            return self._json({"dry_run": False, "batch": result.get("batch"), "runs": [run.to_json() for run in runs]}, 202)
+        for run in runs:
+            run.wait()
+        return self._json({"dry_run": False, "result": {**result, "runs": [{"run_id": run.id, **(run.result or {})} for run in runs]}})
 
     def _refuse(self):
         self._json({"error": NO_ACTIONS}, 405, extra={"Allow": "GET"})

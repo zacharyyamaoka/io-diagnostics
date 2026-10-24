@@ -57,6 +57,7 @@ shipped files write the `_s` spelling.
 | `tty:<glob>` / `v4l:<glob>` | a device exposing that tty / video node, or the node itself | `tty:/dev/ttyACM*` |
 | `netdev:<glob>` | a network interface | `netdev:enp*` |
 | `host` (or `host:<hostname glob>`) | THE host entity, the Computer, and nothing else; no other kind ever matches it | `host` (`computer.toml`) |
+| `composite:<kind glob>` | a composite of the expected setup (docs/composition-v1.md) whose `kind` matches, and nothing else; no device glob ever matches one. A composite runs it only when its `[[composite]]` names it (`plugin = "<name>"`) | `composite:arm` (`tests/fixtures/plugins-state/state_arm.toml`) |
 
 The host passes the PHYSICAL device when a match is through one of its function nodes (the fdcanusb, not its
 `/dev/ttyACM0`). Host structure (buses, groups, ports) never matches; the host itself matches only `host`, and its

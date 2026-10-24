@@ -647,6 +647,8 @@ def _id_text(path: str, entity: Entity, layer: OsLayer) -> str:
     if entity.kind in ("host", "group", "bus") and path in layer.entities:
         count = physical_count(path, layer)
         return f"{count} device{'s' if count != 1 else ''}"
+    if entity.kind == "composite":  # the file's own word for it ("arm"): shown, never read (docs/composition-v1.md)
+        return str(entity.identity.get("model", ""))
     if entity.kind == "port":
         device_id = layer.port_devices.get(entity.name.removeprefix("Port "))
         if not device_id:

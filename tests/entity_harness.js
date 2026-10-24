@@ -46,14 +46,14 @@ function pluginDir(root, periodS = 2) {
   return dir;
 }
 
-function startServer(root, fixture = 'F1', extraEnv = {}) {
+function startServer(root, fixture = 'F1', extraEnv = {}, options = {}) {
   const board = { file: path.join(root, 'board.json'), mode: path.join(root, 'mode'), log: path.join(root, 'plugin.log') };
   if (!fs.existsSync(board.mode)) fs.writeFileSync(board.mode, '10');
   const env = { ...process.env, IO_DIAGNOSTICS_STATE_DIR: path.join(root, 'state'), IO_DIAGNOSTICS_CONFIG_DIR: path.join(root, 'config'),
     STATE_CONFIG_FILE: board.file, STATE_MODE_FILE: board.mode, STATE_LOG: board.log, ...extraEnv };
   delete env.VIRTUAL_ENV;
   const child = spawn(UV, ['run', '--project', ROOT, 'python', path.join(ROOT, 'io_diagnostics', 'cli.py'), 'serve', '--fixture', fixture,
-    '--plugins', pluginDir(root), '--port', '0', '--no-udev'], { cwd: ROOT, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    '--plugins', options.plugins || pluginDir(root), '--port', '0', '--no-udev', ...(options.args || [])], { cwd: ROOT, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
   return new Promise((resolve, reject) => {
     let output = '';
     const timer = setTimeout(() => { stopServer(child); reject(new Error(`server did not start: ${output}`)); }, 60000);

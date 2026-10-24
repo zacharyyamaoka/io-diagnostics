@@ -314,7 +314,7 @@
   // · 1/2 adapters · 3/4 boards", docs/expected-setup.md), the line read before the devices it counts.
   const SORTS = ['status', 'name', 'change'];
   const isContainer = (row) => !row.entity || row.kind === 'host';
-  const place = (row) => (row.kind === 'rig' ? -1 : 0);
+  const place = (row) => (row.kind === 'rig' || row.kind === 'composite' ? -1 : 0); // a composite (docs/composition-v1.md) is a summary row too: before the devices it contains
   const statusKey = (row) => {
     const status = row.status || {};
     const self = Math.max(rank(status.own), rank(status.part && status.part.level));

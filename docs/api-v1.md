@@ -92,9 +92,25 @@ Besides `IO_DIAGNOSTICS_DEVICE`, `_DEVICE_PATH`, `_NOW` and `_SCHEMA`, every plu
                      "retired": [{"name": "fdcanusb 28B3A25D", "hardware_id": "usb:0483:5740:28B3A25D", "serial": "",
                                   "date": "2026-10-23", "reason": "frames never reached the bus (2026-10-22) ...",
                                   "path": null}]},
+  "composition": {"file": "/home/bam/.config/io-diagnostics/expected.toml", "problems": [],
+                  "composites": [{"id": "lab/robot-1/arm", "path": "host/composite-lab-robot-1-arm", "kind": "arm", "title": "Arm 1",
+                                  "parent": "host/composite-lab-robot-1", "plugin": "state_arm", "batch": "all", "source": null,
+                                  "expects": {"tracking_error_rev": 0.5}, "level": "error",
+                                  "children": [{"ref": "usb:0483:5740:272813EF#can/1", "id": "usb:0483:5740:272813EF#can/1", "kind": "entity",
+                                                "path": "host/usb1/port-1-3/usb-1-3/can/1", "name": "CAN 1", "present": true,
+                                                "level": "error", "message": "the driver is in fault"}],
+                                  "members": ["host/usb1/port-1-3/usb-1-3/can/1"], "leaves": 1}]},
   "runs": {"active": 0, "total": 0, "items": []}
 }
 ```
+
+- `composition` (docs/composition-v1.md, 2026-10-24): the composites of the expected setup in tree order, each with its children as the
+  file lists them (`ref`, the entity `path` now or `null`, `present`, the child's `level` and `message`), the `members` (paths of the
+  present leaf children, which a page nests under the composite's row) and `leaves` (how many entities it contains, recursively).
+  `problems` lists what is wrong with the composite tables; while any exists `composites` is empty and the Computer carries a
+  `composition` check (`unknown`, `CompositionInvalid`). A composite's row is `kind` `"composite"`, `edge` `"via"` to its parent
+  composite (or the Computer), its `id_text` the file's own word for it ("arm"); its check `<title>: children` is the worst child's
+  level, with `caused_by` naming the children that report a problem.
 
 - `record_version`: the additive revision of the record contract this host validates against (`"0.2"`: identity
   `model_id`, danger `moves`, the standard action names, and the Event as the log record). `schema` stays `"diagnostics-record/0"`.
@@ -278,9 +294,15 @@ specified in `docs/state-config-v1.md`; `history`'s `state: true` marks a series
             "can": {"expect": true, "forget": false, "retire": true},
             "confirm": {"expect": "Expect fdcanusb 272813EF in 1-DOF test rack with can/1, can/14 (can/15 no longer expected)?",
                         "retire": "Retire fdcanusb 272813EF? It leaves 1-DOF test rack. Plugged in again, ..."},
-            "needs_rig": false}
+            "needs_rig": false},
+  "composite": null
 }
 ```
+
+- `composite`: `null` for every entity but a composite row, where it is that composite's object as `GET /api/v1/state`
+  `composition.composites[]` carries it. A composite's `actions` hold its plugin's own and, for each standard action that all (or, with
+  `batch = "having"`, enough) of its leaves offer, one `all:<action>` (`scope` `"composite"`, a title that says the count, `batch`:
+  `{"action", "n", "groups", "skipped"}`); `POST /api/v1/act` takes it like any action ("Composites" below).
 
 - `checks`: the row's own `DiagnosticStatus` records, latest per check name, worst first. `level` is what the
   producer said; `effective_level` is what to act on now (`"stale"` once overdue). Values and measurements are
@@ -700,6 +722,17 @@ disabled until the box holds a whole number 1-126 other than the board's own id,
 "CAN 15 → CAN 7", and typing another id closes a dry run shown for the old one. Agents must not
 replay this flow: the headers are what a browser sends, and a command-line client can forge them, which is why the
 rule is written here and not only enforced.
+
+### Composites: `all:<action>` (docs/composition-v1.md section 6)
+
+A composite offers `all:<action>` (its leaves' shared standard action; "Calibrate all 6…"). The same two requests, with the composite's
+path and `"action": "all:calibrate"`: the dry run dry-runs every leaf's own action and answers one result with `batch`
+(`{"action", "title", "n", "danger", "skipped": [{"path", "name", "why"}], "runs": [{"order", "path", "label", "node", "plugin", "group",
+"starts", "after", "danger", "argv", "confirm"}]}`) and one token for the batch; the confirm with that token (and `"detach": true`) creates
+all N runs at once, runs of one `exclusive` group going one at a time in the listed order, and answers **202** `{"dry_run": false, "runs":
+[{...}, ...], "batch": {...}}`. Every refusal above applies; a leaf's own refusal (`Busy`, `ConfirmRequired`, ...) refuses the whole batch, and
+the plan itself can be refused `ChildLacksAction`, `ChildMissing` (`batch = "all"`), `NotBatchable`, `TooFew` or `NoSuchComposite`.
+`io-diagnostics act` runs a batch's dry run but never the real thing (`BatchFromPage`).
 
 ## Editing the expected setup: `POST /api/v1/expect`, `/forget`, `/retire`
 

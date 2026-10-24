@@ -1,0 +1,9 @@
+# Fixture COMPOSITE plugin (docs/composition-v1.md): an "arm" over joint boards. It matches composites of kind "arm" (never a device) and runs
+# only for a [[composite]] that names it: plugin = "state_arm". Use it with the joint fixture's STATE_NODES=3.
+#   serve --fixture F1 --plugins <a copy of this directory> --expected <a file with [[composite]] tables> --port 0 --no-udev
+name = "state_arm"
+description = "an arm composite: joint angles with links to the joints, planar forward kinematics, tracking error, Home the arm"
+command = ["{python}", "{here}/arm_plugin.py"]
+timeout_s = 10
+period_s = 30
+matches = ["composite:arm"]
