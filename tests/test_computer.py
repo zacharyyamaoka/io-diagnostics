@@ -370,7 +370,7 @@ def test_links_summary_names_unhappy_links_and_counts_each_once(tmp_path):
     links = _links(host)
     assert links.level == WARN and links.code == "UsbLinkDowngraded"  # nobody else says the D405 runs at USB 2
     assert links.message.startswith("2 USB ports · 1 PCIe link · 2 unhappy: Frame grabber: trained narrower")
-    assert "RealSense D405 on 9-2: a USB 3.20 device linked at USB 2 high-speed · 480 Mb/s" in links.message
+    assert "RealSense D405 on 9-2: a USB 3.20 device linked at USB 2.0 · 480 Mb/s" in links.message
     assert dict((m.key, m.value) for m in links.measurements) == {"usb ports": 2, "pcie links": 1, "unhappy links": 2}
     # a flapping port reports on its own row: the Computer's line names it but stays OK
     host2 = make_host(tmp_path / "b", [host_dict(), usb_bus(9), usb_device("9-1", "1234", "abcd", "SER")],

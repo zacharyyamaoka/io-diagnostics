@@ -1,0 +1,7 @@
+# Fixture plugin for the entity page (docs/state-config-v1.md): a camera-like device whose watch streams colour and depth frames.
+name = "state_camera"
+description = "a camera-like device that streams images through watch (entity page fixture)"
+command = ["{python}", "{here}/state_plugin.py", "--role", "camera"]
+timeout_s = 10
+period_s = 30
+matches = ["usb:8086:0b5b"]

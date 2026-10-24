@@ -38,6 +38,8 @@ SCHEMA = "diagnostics-record/0"
 # ``DiagnosticStatus.caused_by`` and the counting rule in ``summarize`` (same doc, "v0.1 addendum: caused_by").
 # v0.2 (2026-10-24): the Event is the log record (docs/diagnostics-record-v0.md "v0.2: the Event is the log record").
 RECORD_VERSION = "0.2"
+# 0.2 also (2026-10-24, docs/state-config-v1.md): the ``state``, ``config`` and ``frame`` record kinds, ``Measurement.meaning`` and
+# the ``watch`` verb: the entity page's State, Configuration and image sections.
 
 # caused_by on the stock side: one value, appended last, the member paths joined by ", ". A person reads it in rqt;
 # ``from_diagnostic_status`` leaves it a plain value (a stock message is never re-read as v0 structure), so the trip
@@ -147,6 +149,9 @@ class Measurement:
     warn_high: float | None = None
     error_low: float | None = None
     error_high: float | None = None
+    # v0.2: the human reading of the value, for an enumeration or a code ("mode 10" -> "position", "fault 33" -> "motor
+    # driver fault on bridge enable"); the page draws "33 · motor driver fault on bridge enable"
+    meaning: str = ""
 
     @property
     def level(self) -> str:
@@ -219,6 +224,58 @@ class DiagnosticStatus:
         object.__setattr__(self, "measurements", tuple(self.measurements))
         caused_by = (self.caused_by,) if isinstance(self.caused_by, str) else self.caused_by  # one path is one member
         object.__setattr__(self, "caused_by", tuple(caused_by))
+
+
+@dataclass(frozen=True)
+class State:
+    """v0.2: an entity's live values, with no health claim (docs/state-config-v1.md section 1).
+
+    No level and no code: the host does not roll it up, debounce it into a fault or draw it in a health bar. ``name`` is
+    the group heading in the State section (empty = the entity's one group). ``received`` is set by the observer.
+    """
+
+    path: str = ""
+    name: str = ""
+    stamp: float | None = None
+    received: float | None = None
+    expected_period_s: float | None = None
+    source: str = ""
+    measurements: tuple[Measurement, ...] = ()
+
+    def __post_init__(self):
+        object.__setattr__(self, "measurements", tuple(self.measurements))
+
+
+@dataclass(frozen=True)
+class Config:
+    """v0.2: one read-only setting of an entity, as the driver read it (docs/state-config-v1.md section 2)."""
+
+    path: str = ""
+    key: str = ""
+    value: Any = None  # a JSON scalar
+    unit: str = ""
+    group: str = ""
+    expected: Any = None  # what it should be, and where that comes from
+    expected_source: str = ""
+    stamp: float | None = None  # when the driver read it
+    source: str = ""
+
+
+@dataclass(frozen=True)
+class Frame:
+    """v0.2: the metadata of one image of a declared stream; the image itself is the file ``file`` in the directory the
+    host named in ``IO_DIAGNOSTICS_FRAME_DIR`` (docs/state-config-v1.md section 3)."""
+
+    path: str = ""
+    stream: str = ""
+    file: str = ""  # a plain file name
+    format: str = "jpeg"  # jpeg | png
+    width: int | None = None
+    height: int | None = None
+    stamp: float | None = None
+    seq: int | None = None
+    band: int | None = None  # hyperspectral: the band index this preview shows
+    received: float | None = None
 
 
 @dataclass(frozen=True)
@@ -295,7 +352,8 @@ class Fault:
     snapshot: Mapping[str, Any] = field(default_factory=dict)  # freeze frame: to_dict() of the confirming status
 
 
-_KINDS = {"status": DiagnosticStatus, "entity": Entity, "event": Event, "fault": Fault, "action": Action}
+_KINDS = {"status": DiagnosticStatus, "entity": Entity, "event": Event, "fault": Fault, "action": Action,
+          "state": State, "config": Config, "frame": Frame}
 _KIND_OF = {cls: kind for kind, cls in _KINDS.items()}
 
 
@@ -501,6 +559,23 @@ def _code_problem(code: str, what: str) -> list[str]:
     return []
 
 
+def _measurement_problems(where: str, measurements) -> list[str]:
+    problems: list[str] = []
+    for measurement in measurements:
+        value = measurement.value
+        if not measurement.key:
+            problems.append(f"{where}: a measurement has no key")
+        if value is not None and not isinstance(value, bool) and not _finite(value):
+            problems.append(f"{where}: {measurement.key} must be a finite number, a bool or None")
+        limits = [measurement.error_low, measurement.warn_low, measurement.warn_high, measurement.error_high]
+        if any(limit is not None and not _finite(limit) for limit in limits):
+            problems.append(f"{where}: {measurement.key} limits must be finite")
+        present = [limit for limit in limits if limit is not None]
+        if present != sorted(present):
+            problems.append(f"{where}: {measurement.key} limits must satisfy error_low <= warn_low <= warn_high <= error_high")
+    return problems
+
+
 def validate(record) -> list[str]:
     """Problems with a natively produced record; [] = conforms. Records imported from a stock stream lack path
     and code by construction and are not expected to pass."""
@@ -533,18 +608,7 @@ def validate(record) -> list[str]:
                 problems.append(f"{where}: caused_by names its own entity; a record cannot be its own member's consequence")
             if CAUSED_BY_KEY in keys:
                 problems.append(f"{where}: key {CAUSED_BY_KEY!r} is where caused_by rides on the stock side; rename the value")
-        for measurement in record.measurements:
-            value = measurement.value
-            if not measurement.key:
-                problems.append(f"{where}: a measurement has no key")
-            if value is not None and not isinstance(value, bool) and not _finite(value):
-                problems.append(f"{where}: {measurement.key} must be a finite number, a bool or None")
-            limits = [measurement.error_low, measurement.warn_low, measurement.warn_high, measurement.error_high]
-            if any(limit is not None and not _finite(limit) for limit in limits):
-                problems.append(f"{where}: {measurement.key} limits must be finite")
-            present = [limit for limit in limits if limit is not None]
-            if present != sorted(present):
-                problems.append(f"{where}: {measurement.key} limits must satisfy error_low <= warn_low <= warn_high <= error_high")
+        problems += _measurement_problems(where, record.measurements)
     elif isinstance(record, Entity):
         where = f"entity {record.path or '?'}"
         if not record.path:
@@ -560,6 +624,32 @@ def validate(record) -> list[str]:
                 problems.append(f"{where}: identity key {key!r} is not one of {IDENTITY_KEYS}")
         for action in record.actions:
             problems += validate(action)
+    elif isinstance(record, State):
+        where = f"state {record.path or '?'} / {record.name or '-'}"
+        if record.expected_period_s is not None and not (_finite(record.expected_period_s) and record.expected_period_s > 0):
+            problems.append(f"{where}: expected_period_s must be a positive number or None")
+        keys = [measurement.key for measurement in record.measurements]
+        for key, count in Counter(keys).items():
+            if count > 1:
+                problems.append(f"{where}: key {key!r} appears {count} times")
+        problems += _measurement_problems(where, record.measurements)
+    elif isinstance(record, Config):
+        where = f"config {record.path or '?'} / {record.key or '?'}"
+        if not record.key:
+            problems.append(f"{where}: key is required")
+        for name in ("value", "expected"):
+            if isinstance(getattr(record, name), (dict, list)):
+                problems.append(f"{where}: {name} must be a JSON scalar")
+        if record.expected is None and record.expected_source:
+            problems.append(f"{where}: expected_source without an expected value")
+    elif isinstance(record, Frame):
+        where = f"frame {record.path or '?'} / {record.stream or '?'}"
+        if not record.stream:
+            problems.append(f"{where}: stream is required")
+        if not record.file or "/" in record.file or record.file.startswith("."):
+            problems.append(f"{where}: file must be a plain file name in the frame directory, got {record.file!r}")
+        if record.format not in ("jpeg", "png"):
+            problems.append(f"{where}: format {record.format!r} must be jpeg or png")
     elif isinstance(record, Event):
         where = f"event {record.code or '?'}"
         problems += _code_problem(record.code, where)

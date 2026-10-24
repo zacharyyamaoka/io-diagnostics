@@ -37,8 +37,8 @@ from typing import Any, Callable
 from io_diagnostics.plugins import PluginSpec
 from io_diagnostics.probe import Blocked
 
-from contract.record import (ERROR, OK, SCHEMA, UNKNOWN, WARN, DiagnosticStatus, Entity, Event, KeyValue, Measurement,
-                             from_dict, validate)
+from contract.record import (ERROR, OK, SCHEMA, UNKNOWN, WARN, Config, DiagnosticStatus, Entity, Event, Frame, KeyValue,
+                             Measurement, State, from_dict, validate)
 
 RUNNER_SOURCE = "io_diagnostics.runner"
 STDERR_TAIL = 800
@@ -82,8 +82,8 @@ def parse_lines(text: str, *, replay: bool = False) -> Parsed:
         if kind == "action":
             parsed.rejected.append((number, "a bare Action: actions travel inside their Entity's 'actions'"))
             continue
-        if kind not in ("entity", "status", "event"):
-            parsed.rejected.append((number, f"record {kind!r} is not entity, status or event"))
+        if kind not in ("entity", "status", "event", "state", "config", "frame"):
+            parsed.rejected.append((number, f"record {kind!r} is not entity, status, event, state, config or frame"))
             continue
         if data.get("schema", SCHEMA) != SCHEMA:
             parsed.rejected.append((number, f"schema {data.get('schema')!r} is not {SCHEMA!r}"))
@@ -152,7 +152,7 @@ def reroot(records: list, device_path: str, hardware_id: str) -> tuple[list, str
             moved.append(dataclasses.replace(record, path=move(record.path), via=move(record.via), part_of=move(record.part_of)))
         elif isinstance(record, DiagnosticStatus):
             moved.append(dataclasses.replace(record, path=move(record.path), caused_by=tuple(map(move, record.caused_by))))
-        else:
+        else:  # event / state / config / frame: one path
             moved.append(dataclasses.replace(record, path=move(record.path)))
     return moved, alias
 
@@ -501,9 +501,14 @@ class Follower:
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, name=f"io-follow-{spec.name}", daemon=True)
 
+    verb = "follow"
+
     @property
     def argv(self) -> list[str]:
-        return [*self.spec.command, "follow", "--device", str(self.device.get("id", "")), *self.spec.diagnose_args]
+        return [*self.spec.command, self.verb, "--device", str(self.device.get("id", "")), *self.extra_args(), *self.spec.diagnose_args]
+
+    def extra_args(self) -> list[str]:
+        return []
 
     @property
     def silence_s(self) -> float:
@@ -552,7 +557,7 @@ class Follower:
         watchdog = threading.Thread(target=self._watch, args=(process,), name=f"io-follow-dog-{self.spec.name}", daemon=True)
         watchdog.start()
         self._report()
-        with RUNNING.run(process, f"{self.spec.name} follow {self.device.get('id', '')}"):
+        with RUNNING.run(process, f"{self.spec.name} {self.verb} {self.device.get('id', '')}"):
             while True:
                 line = process.stdout.readline(FOLLOW_MAX_LINE + 1)
                 if not line:
@@ -570,7 +575,7 @@ class Follower:
             how = f"killed by signal {-code}" if code is not None and code < 0 else f"exited {code}"
             ran = time.monotonic() - (self.last_line or time.monotonic())
             tail = self.stderr[-1] if self.stderr else ""
-            self.exit = f"follow {how}" + (f" ({ran:.0f} s after its last line)" if ran >= 1 else "") + (f": {tail}" if tail else "")
+            self.exit = f"{self.verb} {how}" + (f" ({ran:.0f} s after its last line)" if ran >= 1 else "") + (f": {tail}" if tail else "")
 
     def _drain(self, process: subprocess.Popen) -> None:
         for raw in iter(lambda: process.stderr.readline(4096), b""):
@@ -613,6 +618,22 @@ class Follower:
                 "stderr": self.stderr[-1] if self.stderr else None}
 
 
+class Watcher(Follower):
+    """``<command> watch --device <id> --path <relative path>``: a Follower of one ENTITY, run only while a page looks at it
+    (docs/state-config-v1.md section 4). Same process rules as ``follow`` (one line at a time, a backoff, a silence
+    kill, a bounded stderr); its lines are applied by ``Host._absorb_watch``, and it never touches the device row's
+    ``<plugin>: plugin run`` check."""
+
+    verb = "watch"
+
+    def __init__(self, *args, path: str = "", **options):
+        self.path = path
+        super().__init__(*args, **options)
+
+    def extra_args(self) -> list[str]:
+        return ["--path", self.path]
+
+
 def follow_status(spec: PluginSpec, follower: Follower, hardware_id: str, now: float) -> DiagnosticStatus:
     """The device row's ``<plugin>: plugin run`` check for a follower: OK while it runs, ERROR while it is down."""
 
@@ -641,12 +662,21 @@ def follow_status(spec: PluginSpec, follower: Follower, hardware_id: str, now: f
                             measurements=measurements)
 
 
+SERIES_MAX_POINTS = 1200  # per measurement: the sparkline's recent past (about two minutes at 10 Hz)
+SERIES_MAX_AGE_S = 120.0
+HOST_SOURCES = "io_diagnostics."  # a record whose source starts with this is the host's own: never lifted into State
+
+
 @dataclass
 class JobCache:
     """What one (plugin, device) pair has told the host, latest per key, paths relative to the device.
 
     WHY merge rather than replace per run: entities are "sent once and on change" and a check that could not run
     this time (port busy) simply is not resent; its last record must stay and age toward STALE on the host's clock.
+
+    v0.2 (docs/state-config-v1.md): ``states`` / ``configs`` / ``frames`` hold the latest ``state`` / ``config`` /
+    ``frame`` record per key, and ``series`` the recent values of every State measurement (a state record's and a
+    status's), each point numbered by ``serial`` so a page asks only for what is new.
     """
 
     entities: dict[str, Entity] = field(default_factory=dict)
@@ -655,6 +685,29 @@ class JobCache:
     statuses: dict[tuple[str, str], DiagnosticStatus] = field(default_factory=dict)
     events: dict[tuple, Event] = field(default_factory=dict)
     host_status: DiagnosticStatus | None = None
+    states: dict[tuple[str, str], State] = field(default_factory=dict)  # (path, group name)
+    configs: dict[tuple[str, str], Config] = field(default_factory=dict)  # (path, key)
+    frames: dict[tuple[str, str], Frame] = field(default_factory=dict)  # (path, stream)
+    series: dict[tuple[str, str, str], collections.deque] = field(default_factory=dict)  # (path, group, key) -> (received, value, serial)
+    serial: int = 0
+    fresh_states: list[State] = field(default_factory=list)  # what the latest apply() found new
+    fresh_frames: list[Frame] = field(default_factory=list)
+
+    def _point(self, path: str, group: str, measurement: Measurement, at: float) -> None:
+        points = self.series.setdefault((path, group, measurement.key), collections.deque())
+        self.serial += 1
+        value = measurement.value
+        points.append((at, value if isinstance(value, (bool, int, float)) or value is None else None, self.serial))
+        while len(points) > SERIES_MAX_POINTS or (len(points) > 1 and at - points[0][0] > SERIES_MAX_AGE_S):
+            points.popleft()
+
+    def heard(self, path: str) -> float | None:
+        """When the host last received a record of the plugin's about exactly this entity (host clock), or None."""
+
+        times = [status.received for (status_path, _name), status in self.statuses.items()
+                 if status_path == path and status.received is not None and not status.source.startswith(HOST_SOURCES)]
+        times += [state.received for (state_path, _name), state in self.states.items() if state_path == path and state.received is not None]
+        return max(times) if times else None
 
     def apply(self, outcome: RunOutcome, received: float) -> tuple[list[DiagnosticStatus], list[Event]]:
         """Merge one run; returns the statuses that are NEW evaluations and the events not seen before.
@@ -663,7 +716,9 @@ class JobCache:
         fault debounce counts reports, not deliveries."""
 
         fresh_statuses, fresh_events = [], []
+        self.fresh_states, self.fresh_frames = [], []
         for index, record in enumerate(outcome.records):
+            at = outcome.received.get(index, received)
             if isinstance(record, Entity):
                 if record.path not in self.entities:
                     self.order.append(record.path)
@@ -671,12 +726,27 @@ class JobCache:
                 if index in outcome.icons:
                     self.icons[record.path] = outcome.icons[index]
             elif isinstance(record, DiagnosticStatus):
-                stamped = dataclasses.replace(record, received=outcome.received.get(index, received))
+                stamped = dataclasses.replace(record, received=at)
                 key = (stamped.path, stamped.name)
                 previous = self.statuses.get(key)
                 if previous is None or (previous.stamp, previous.received) != (stamped.stamp, stamped.received):
                     fresh_statuses.append(stamped)
+                    if not stamped.source.startswith(HOST_SOURCES):
+                        for measurement in stamped.measurements:
+                            self._point(stamped.path, stamped.name, measurement, at)
                 self.statuses[key] = stamped
+            elif isinstance(record, State):
+                stamped = dataclasses.replace(record, received=at)
+                self.states[(stamped.path, stamped.name)] = stamped
+                self.fresh_states.append(stamped)
+                for measurement in stamped.measurements:
+                    self._point(stamped.path, stamped.name, measurement, at)
+            elif isinstance(record, Config):
+                self.configs[(record.path, record.key)] = dataclasses.replace(record, stamp=record.stamp if record.stamp is not None else at)
+            elif isinstance(record, Frame):
+                stamped = dataclasses.replace(record, received=at)
+                self.frames[(stamped.path, stamped.stream)] = stamped
+                self.fresh_frames.append(stamped)
             elif isinstance(record, Event):
                 if record.stamp is None:
                     record = dataclasses.replace(record, stamp=received)

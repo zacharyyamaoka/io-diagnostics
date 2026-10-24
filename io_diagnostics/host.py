@@ -7,11 +7,13 @@ replay exercises the code the rack will run.
 
 from __future__ import annotations
 
+import collections
 import dataclasses
 import datetime as dt
 import json
 import os
 import re
+import shutil
 import socket
 import string
 import sys
@@ -24,6 +26,7 @@ from pathlib import Path
 from io_diagnostics import API, FIXTURE_PLUGINS_DIR, PLUGINS_DIR
 from io_diagnostics import activity as activity_module
 from io_diagnostics import eventlog as eventlog_module
+from io_diagnostics import entity_state
 from io_diagnostics import expected as expected_module
 from io_diagnostics import history as history_module
 from io_diagnostics import logview as logview_module
@@ -34,12 +37,13 @@ from io_diagnostics import tree
 from io_diagnostics.faults import Faults
 from io_diagnostics import terminal as terminal_module
 from io_diagnostics.plugins import load_plugins, match_devices
-from io_diagnostics.runner import (RUNNER_SOURCE, RUNNING, Follower, Gates, Job, RunOutcome, Scheduler, absolute, act_argv,
-                                   describe, follow_period, follow_status, host_status, plugin_env, rebase, run_act,
-                                   run_check, run_plugin)
+from io_diagnostics.runner import (RUNNER_SOURCE, RUNNING, Follower, Gates, Job, RunOutcome, Scheduler, Watcher, absolute,
+                                   act_argv, describe, follow_period, follow_status, host_status, plugin_env, rebase,
+                                   relative, run_act, run_check, run_plugin)
 
 from contract.record import (OK, RANK, RECORD_VERSION, SCHEMA, STALE, STALE_FACTOR, STALE_FLOOR_S, UNKNOWN, WARN, Action,
-                             DiagnosticStatus, Entity, Event, KeyValue, Measurement, effective_level, from_dict, to_dict)
+                             DiagnosticStatus, Entity, Event, Frame, KeyValue, Measurement, State, effective_level, from_dict,
+                             to_dict)
 
 HOST_SOURCE = "io_diagnostics.host"
 # WHY a code and not a driver name: any driver that says "my frames never reached the wire" this way gets the
@@ -57,6 +61,12 @@ FAST_REFRESH_S = 0.5
 # so it frees by itself in a few seconds. Never "blocked", never a warning (round 3 brief item 10).
 WAITING = "waiting"
 GATE_CACHE_S = 2.0
+# docs/state-config-v1.md section 4: a page's heartbeat keeps a plugin's ``watch`` running; it stops this long after the last one
+WATCH_GRACE_S = 10.0
+WATCH_TICK_S = 0.5  # how often the host re-checks every watch's gates and heartbeat
+WATCH_NOTIFY_S = 1.0  # a 10 Hz watch tells a page's event stream at most this often
+STATE_HISTORY_GAP_S = 1.0  # the history keeps a state series at 1 Hz at most
+FRAME_FPS_WINDOW_S = 3.0
 RECENT = 6
 FOLD_EVENTS = 8000  # the newest events the Activity log folds (the store may hold 50,000; a row needs only its neighbours)
 RUNS_IN_STATE = 30  # the newest runs /api/v1/state carries (docs/runs-v1.md)
@@ -396,6 +406,27 @@ class _Blank(dict):
 
 
 @dataclass
+class Watch:
+    """One entity a page is looking at: the plugin's ``watch`` process for it, why it is not running, when it was last asked for."""
+
+    job: Job
+    rel: str  # the entity's path relative to its device ("" = the device)
+    declared: dict  # describe's ``watch``: {"period_s", "gates"}
+    frame_dir: Path
+    last_beat: float  # time.monotonic() of the latest heartbeat
+    follower: Watcher | None = None
+    gate: dict | None = None  # the host's own reason it does not run: {"reason", "holders"}
+    plugin_blocked: dict | None = None  # the plugin said PortBusy / BusLockHeld itself: {"reason", "holders"}
+    started: float | None = None
+    notified: float = 0.0
+    stopped: bool = False
+
+
+class _NoOwner:
+    owner = ""
+
+
+@dataclass
 class _ActPlan:
     """What a real or dry act would run: the owning job, the argv, and the entity and action it is for."""
 
@@ -419,7 +450,8 @@ class Host:
                  run_bus_poll_s: float | None = None, run_bus_settle_s: float | None = None,
                  event_log_dir: Path | None = None, boot_id: str = "", boot_start: float | None = None,
                  event_log_cap_bytes: int | None = None, event_log_segment_bytes: int | None = None,
-                 ledger_file: Path | None = None):
+                 ledger_file: Path | None = None,
+                 watch_grace_s: float | None = None, watch_tick_s: float | None = None, frames_dir: Path | None = None):
         self.plugins_dir = Path(plugins_dir)
         # WHY settable: the defaults are the product (probe.py: holders' pids every 1 s, 0.5 s settle, 10 s first
         # backoff); a test of the backoff alone shortens the last
@@ -461,6 +493,15 @@ class Host:
         self.live = activity_module.LiveActivity(self.clock.now)  # udev's provisional plugs and binds, sysfs carriers
         self.pending: list[str] = []  # provisional event ids the kernel log has not settled yet
         self.followers: dict[tuple[str, str], Follower] = {}
+        # the entity page's live data (docs/state-config-v1.md): the watches pages keep alive, their frame directories
+        self.watch_grace_s = watch_grace_s if watch_grace_s is not None else WATCH_GRACE_S
+        self.watch_tick_s = watch_tick_s if watch_tick_s is not None else WATCH_TICK_S
+        self.watches: dict[tuple, Watch] = {}
+        self._watch_lock = threading.RLock()
+        self._watch_thread: threading.Thread | None = None
+        self._frames_dir = Path(frames_dir) if frames_dir else None
+        self._frames_owned = False
+        self._frame_times: dict[tuple, collections.deque] = {}
         # every change a page could see (a refresh, a udev event, a plugin's records): /api/v1/events waits on it
         self.changes = threading.Condition()
         self.revision = 0
@@ -814,6 +855,7 @@ class Host:
                     job.cache.host_status = status
             device_path = self.layer.device_paths.get(str(job.device.get("id")), job.device_path)
         observed = [rebase(status, device_path) for status in fresh_statuses]
+        self._observe_states(job, device_path, now)
         if job.cache.host_status is not previous or follower is None:
             observed.append(dataclasses.replace(job.cache.host_status, path=device_path))
         self.faults.observe(observed, now)
@@ -1035,6 +1077,10 @@ class Host:
         for follower in list(self.followers.values()):
             follower.stop()
         self.followers.clear()
+        for watch in list(self.watches.values()):
+            self._watch_stop(watch)
+        if self._frames_owned and self._frames_dir is not None:
+            shutil.rmtree(self._frames_dir, ignore_errors=True)
         self.runs.shutdown()
         if hasattr(self.os, "close"):
             self.os.close()
@@ -1315,14 +1361,36 @@ class Host:
         while current is not None:
             ancestors.insert(0, {"path": current, "name": merged.entities[current].name, "edge": merged.edge.get(current)})
             current = merged.parent.get(current)
+        job_rel = self._watch_target(path)
+        extra = self._page_json(path, view, job_rel)
         return {"node": tree.node_json(path, rows, view.layer, view.faults_by_path, nested=False, memory=view.memory,
                                        live=view.live, expected_paths=view.expected_paths), "ancestors": ancestors,
                 "checks": [self.check_json(status, view.now) for status in rows.own.get(path, [])],
-                "actions": self.actions_json(path, view),
+                "actions": self.actions_json(path, view), **extra,
                 "faults": [self.fault_json(fault, view) for fault in self.faults.all() if fault.path == path],
                 "events": [activity_module.event_json(event, self.utc_offset_s, self._names(view)) for event in view.events
                            if event.path == path or event.path.startswith(path + "/")][:20],
                 "entity": to_dict(merged.entities[path]), "setup": self.setup_json(path, view)}
+
+    def _page_json(self, path: str, view: View, target: tuple[Job, str] | None) -> dict:
+        """What the entity page adds to a node (docs/state-config-v1.md): the connection badge, when the host last heard from
+        it, its Configuration, whether it can be watched, its declared image streams and the driver's extra tabs."""
+
+        out = {"badge": self._badge(path, view), "config": [], "watch": self.watch_json(None, ""), "streams": [], "tabs": [],
+               "heard": {"received": None, "age_s": None}}
+        if target is None:
+            return out
+        job, rel = target
+        describe_answer = self.describes.get(job.spec.name)
+        with self.lock:
+            cache = job.cache
+            heard = cache.heard(rel)
+            out["config"] = entity_state.config_rows(cache, rel, view.now)
+        out["heard"] = {"received": heard, "age_s": round(view.now - heard, 3) if heard is not None else None}
+        out["watch"] = self.watch_json(job, rel)
+        out["streams"] = entity_state.stream_rows(describe_answer, cache, rel, view.now, lambda r, name: self._fps(job, r, name))
+        out["tabs"] = entity_state.declared_tabs(describe_answer, rel)
+        return out
 
     # --- the expected setup: what a row offers, and the edits (host-side file writes; never a device) -----------------
     def _setup_target(self, path: str, view: View) -> tuple[str, dict] | None:
@@ -1741,7 +1809,7 @@ class Host:
                         "scope": action.scope, "kind": action.kind,
                         "confirm": string.Formatter().vformat(action.confirm, (), fill),
                         "preconditions": results, "state": state, "reason": reason, "executable": False,
-                        "owner": entity.owner})
+                        "owner": entity.owner, "last_run": self._last_run(path, action.name)})
         return out
 
     # --- actions: run one, for a person ------------------------------------------------------------------------------
@@ -1884,6 +1952,282 @@ class Host:
         run.launch()
         return run
 
+    # --- the entity page: State, Configuration, image streams, watch (docs/state-config-v1.md) -------------------------------
+    def _observe_states(self, job: Job, device_path: str, now: float) -> None:
+        """The state records the latest apply() found: their measurements into the history (1 Hz at most)."""
+
+        for state in job.cache.fresh_states:
+            self.history.measure(absolute(state.path, device_path), state.name, state.measurements,
+                                 state.received if state.received is not None else now, now, min_gap_s=STATE_HISTORY_GAP_S)
+
+    def _frames_base(self) -> Path:
+        with self._watch_lock:
+            if self._frames_dir is None:
+                import tempfile
+
+                self._frames_dir, self._frames_owned = Path(tempfile.mkdtemp(prefix="io-diagnostics-frames-")), True
+            self._frames_dir.mkdir(parents=True, exist_ok=True)
+            return self._frames_dir
+
+    def _watch_target(self, path: str) -> tuple[Job, str] | None:
+        """``(job, path relative to its device)`` of an entity a plugin described (or its device row), else None."""
+
+        job = self._owning_job(path, _NoOwner)
+        if job is None:
+            return None
+        with self.lock:
+            device_path = self.layer.device_paths.get(str(job.device.get("id")), job.device_path)
+            known = set(job.cache.entities)
+        rel = relative(path, device_path)
+        return (job, rel) if rel == "" or rel in known else None
+
+    def _watch_declared(self, job: Job) -> dict | None:
+        """The plugin's describe ``watch``: ``{"period_s", "gates"}``, ``{"refused": why}`` or None (it declares none)."""
+
+        declared = (self.describes.get(job.spec.name) or {}).get("watch")
+        if not declared:
+            return None
+        declared = {} if declared is True else declared
+        if not isinstance(declared, dict):
+            return {"refused": "watch must be true or an object"}
+        if declared.get("danger", "query") != "query":
+            return {"refused": f"watch is query-only; this plugin declares danger {declared.get('danger')!r}"}
+        period = declared.get("period_s", 1.0)
+        period = float(period) if isinstance(period, (int, float)) and not isinstance(period, bool) and period > 0 else 1.0
+        return {"period_s": period, "gates": [str(check) for check in declared.get("gates") or []]}
+
+    def _watch_gate(self, watch: Watch) -> dict | None:
+        """Why this watch must not run now, in plain words, or None: a run of the plugin's exclusive group is active, or one
+        of the gates the plugin declared says a person's tool holds the port, the camera or the rack bus lock. WAITING (the
+        host's own check holds the lock for a few seconds) and "can't tell" never pause it."""
+
+        job, group = watch.job, watch.job.spec.exclusive
+        if group:
+            run = next((run for run in self.runs.active() if run.spec.group == group), None)
+            if run is not None:
+                return {"reason": f"{run.spec.label} is running", "holders": []}
+            if self.gates.person_waiting(group):
+                return {"reason": "a utility is about to run", "holders": []}
+        with self.lock:
+            device_id = str(job.device.get("id"))
+            device = self.layer.matchable(device_id) if device_id in self.layer.devices else dict(job.device)
+        for check in watch.declared.get("gates") or []:
+            state, detail = self.os.gate(device, check)
+            if state is False:
+                return entity_state.holder_reason(check, detail)
+        return None
+
+    def watch_heartbeat(self, path: str) -> dict:
+        """The page's heartbeat for one entity (``POST /api/v1/watch``): start its plugin's ``watch`` if it is not running,
+        and keep it for ``watch_grace_s`` more. Answers the watch's state in plain words."""
+
+        target = self._watch_target(path)
+        declared = self._watch_declared(target[0]) if target else None
+        if target is None or declared is None or "refused" in declared:
+            reason = (declared or {}).get("refused") or "no plugin of this entity declares watch"
+            return {"path": path, "watch": {"supported": False, "state": "unsupported", "reason": reason, "holders": []}}
+        job, rel = target
+        key = (job.key, rel)
+        with self._watch_lock:
+            watch = self.watches.get(key)
+            if watch is None:
+                folder = self._frames_base() / re.sub(r"[^A-Za-z0-9._-]+", "-", f"{job.key[0]}-{job.key[1]}-{rel or 'device'}")
+                folder.mkdir(parents=True, exist_ok=True)
+                watch = self.watches[key] = Watch(job, rel, declared, folder, time.monotonic())
+            watch.last_beat = time.monotonic()
+            watch.declared = declared
+            self._watch_thread_start()
+        self._watch_step(watch)
+        return {"path": path, "watch": self.watch_json(job, rel)}
+
+    def _watch_thread_start(self) -> None:
+        with self._watch_lock:
+            if self._stop.is_set() or (self._watch_thread is not None and self._watch_thread.is_alive()):
+                return
+            self._watch_thread = threading.Thread(target=self._watch_loop, name="io-watch", daemon=True)
+            self._watch_thread.start()
+
+    def _watch_loop(self) -> None:
+        while not self._stop.wait(self.watch_tick_s):
+            for watch in list(self.watches.values()):
+                self._watch_step(watch)
+
+    def _watch_step(self, watch: Watch) -> None:
+        """One look at one watch: past its grace it stops; a gate that says no stops (or keeps down) its process, and
+        the gate clearing starts it again."""
+
+        with self._watch_lock:
+            if watch.stopped:
+                return
+            if time.monotonic() - watch.last_beat > self.watch_grace_s:
+                self._watch_stop(watch)
+                return
+            watch.gate = self._watch_gate(watch)
+            if watch.gate is not None:
+                if watch.follower is not None:
+                    watch.follower.stop()
+                    watch.follower = None
+                return
+            if watch.follower is None:
+                job = watch.job
+                with self.lock:
+                    device_path = self.layer.device_paths.get(str(job.device.get("id")), job.device_path)
+                    entity = self.layer.entities.get(device_path)
+                watch.plugin_blocked, watch.started = None, self.clock.now()
+                frame_env = {"IO_DIAGNOSTICS_FRAME_DIR": str(watch.frame_dir)}
+                watch.follower = Watcher(job.spec, job.device, device_path, watch.declared["period_s"], self.clock.now,
+                                         lambda job=job, env=frame_env: {**self._job_env(job), **env},
+                                         lambda outcome, watch=watch: self._absorb_watch(watch, outcome),
+                                         hardware_id=entity.hardware_id if entity else "", backoff_s=self.follow_backoff_s,
+                                         path=watch.rel)
+                watch.follower.start()
+
+    def _watch_stop(self, watch: Watch) -> None:
+        with self._watch_lock:
+            watch.stopped = True
+            if watch.follower is not None:
+                watch.follower.stop()
+                watch.follower = None
+            self.watches.pop((watch.job.key, watch.rel), None)
+        self.notify("watch")
+
+    def _absorb_watch(self, watch: Watch, outcome: RunOutcome) -> None:
+        """One line of a watch: its records into the job's cache like a follow line, but never into the device row's own
+        plugin-run check; State into the history and the pages' event stream, at most once per ``WATCH_NOTIFY_S``."""
+
+        if watch.stopped or not outcome.records:
+            return
+        job, now = watch.job, self.clock.now()
+        with self.lock:
+            fresh_statuses, fresh_events = job.cache.apply(outcome, received=now)
+            frames = list(job.cache.fresh_frames)
+            device_path = self.layer.device_paths.get(str(job.device.get("id")), job.device_path)
+            self._observe_states(job, device_path, now)
+        blocked = probe_module.blocked_by(outcome.records)
+        if blocked is not None:
+            sentence = probe_module.blocked_sentence(blocked, 0.0)
+            watch.plugin_blocked = {"reason": sentence, "holders": [{"pid": holder.pid, "program": holder.program}
+                                                                    for holder in blocked.holders]}
+        elif any(isinstance(record, (State, Frame)) for record in outcome.records):
+            watch.plugin_blocked = None
+        for frame in frames:
+            self._frame_times.setdefault((job.key, frame.path, frame.stream), collections.deque(maxlen=30)).append(time.monotonic())
+        observed = [rebase(status, device_path) for status in fresh_statuses]
+        if observed:
+            self.faults.observe(observed, now)
+            self.history.observe(observed, now, source=("job", *job.key))
+        if observed or fresh_events or time.monotonic() - watch.notified >= WATCH_NOTIFY_S:
+            watch.notified = time.monotonic()
+            self.notify("watch")
+
+    def _fps(self, job: Job, rel: str, stream: str) -> float | None:
+        times = self._frame_times.get((job.key, rel, stream))
+        if not times or time.monotonic() - times[-1] > FRAME_FPS_WINDOW_S:
+            return None
+        recent = [at for at in times if times[-1] - at <= FRAME_FPS_WINDOW_S]
+        return round((len(recent) - 1) / (recent[-1] - recent[0]), 1) if len(recent) > 1 and recent[-1] > recent[0] else None
+
+    def watch_json(self, job: Job | None, rel: str) -> dict:
+        """The watch of one entity, in plain words: ``supported`` (its plugin declares one), ``state`` (idle · starting ·
+        running · paused · restarting · unsupported) and, when paused, ``reason`` and ``holders``."""
+
+        declared = self._watch_declared(job) if job else None
+        if declared is None or "refused" in declared:
+            return {"supported": False, "state": "unsupported", "reason": (declared or {}).get("refused", ""), "holders": []}
+        out = {"supported": True, "state": "idle", "reason": "", "holders": [], "pid": None, "since": None,
+               "grace_s": self.watch_grace_s, "period_s": declared["period_s"], "gates": declared["gates"]}
+        watch = self.watches.get((job.key, rel))
+        if watch is None:
+            return out
+        out["beat_age_s"] = round(time.monotonic() - watch.last_beat, 2)
+        if watch.gate is not None:
+            return {**out, "state": "paused", **watch.gate}
+        if watch.plugin_blocked is not None:
+            return {**out, "state": "paused", **watch.plugin_blocked}
+        follower = watch.follower
+        if follower is None:
+            return {**out, "state": "starting"}
+        state = follower.state()
+        mapped = {"running": "running", "restarting": "restarting"}.get(state["state"], "starting")
+        return {**out, "state": mapped, "pid": state["pid"], "since": state["since"], "restarts": state["restarts"],
+                "reason": (state["exit"] or "") if mapped == "restarting" else ""}
+
+    def values_json(self, path: str, since: int = 0) -> dict | None:
+        """The entity page's live numbers and images, cheap (no tree build): State groups with the points newer than
+        ``since``, the declared image streams, when the host last heard from the entity, the watch. None: no such entity."""
+
+        target = self._watch_target(path)
+        now = self.clock.now()
+        if target is None:
+            return None
+        job, rel = target
+        with self.lock:
+            cache = job.cache
+            groups = entity_state.state_groups(cache, rel, now, since)
+            streams = entity_state.stream_rows(self.describes.get(job.spec.name), cache, rel, now, lambda r, name: self._fps(job, r, name))
+            heard = cache.heard(rel)
+            cursor = cache.serial
+        return {"path": path, "now": now, "cursor": cursor, "groups": groups, "streams": streams,
+                "heard": {"received": heard, "age_s": round(now - heard, 3) if heard is not None else None},
+                "watch": self.watch_json(job, rel)}
+
+    def frame_file(self, path: str, stream: str) -> tuple[bytes, dict] | None:
+        """The latest image of a declared stream: ``(bytes, meta)`` or None. The file is the plugin's own, in the frame
+        directory the host named; only a plain file name inside it is read."""
+
+        target = self._watch_target(path)
+        if target is None:
+            return None
+        job, rel = target
+        with self.lock:
+            frame = job.cache.frames.get((rel, stream))
+        folder = (self._frames_base() / re.sub(r"[^A-Za-z0-9._-]+", "-", f"{job.key[0]}-{job.key[1]}-{rel or 'device'}")).resolve()
+        if frame is None:
+            return None
+        found = (folder / frame.file).resolve()
+        if found.parent != folder or not found.is_file():
+            return None
+        try:
+            data = found.read_bytes()
+        except OSError:
+            return None
+        return data, {"format": frame.format, "seq": frame.seq, "stamp": frame.stamp, "width": frame.width, "height": frame.height}
+
+    def frame_seq(self, path: str, stream: str) -> int | None:
+        """The latest frame's sequence number, for an MJPEG stream deciding whether to send again (None: no frame)."""
+
+        target = self._watch_target(path)
+        if target is None:
+            return None
+        job, rel = target
+        with self.lock:
+            frame = job.cache.frames.get((rel, stream))
+        return None if frame is None else (frame.seq if frame.seq is not None else int((frame.received or 0) * 1000))
+
+    def _badge(self, path: str, view: View) -> dict | None:
+        """The connection badge of the page header (realsense-viewer's "2.1"): a USB device and what hangs below it carry its link's
+        ``speed_mbps`` and bcdUSB ``version`` and the PAGE names it (``web/usb.js``, the one USB-label mapping: "USB 2.1", "USB 3.2
+        Gen 1", the raw speed in the tooltip); a board adds ``CAN 1 · fdcanusb FDA81D29``."""
+
+        merged, layer = view.merged, view.layer
+        device_path = tree.nearest_device(path, merged, layer)
+        if device_path is None or path == tree.HOST_PATH:
+            return None
+        device = layer.devices.get(layer.device_of_path.get(device_path, ""), {})
+        attrs = device.get("attrs") or {}
+        usb = {"speed_mbps": attrs.get("speed_mbps"), "version": attrs.get("usb_version")} if device.get("bus") == "usb" and attrs.get("speed_mbps") else None
+        found = re.search(r"(?:^|/)can/(\d+)$", path)
+        if found and path != device_path:
+            return {"kind": "can", "text": f"CAN {found.group(1)} · {merged.entities[device_path].name}", "usb": usb}
+        return {"kind": "usb", "text": "", "usb": usb} if usb else None
+
+    def _last_run(self, path: str, action: str) -> dict | None:
+        run = next((run for run in self.runs.list() if run.spec.path == path and run.spec.action == action), None)
+        if run is None:
+            return None
+        out = run.to_json()
+        return {key: out[key] for key in ("id", "state", "active", "started", "started_iso", "ended", "ended_iso", "exit_code", "elapsed_s")}
+
     # --- runs (docs/runs-v1.md) ---------------------------------------------------------------------------------
     def runs_json(self) -> dict:
         everything = self.runs.json()
@@ -2025,7 +2369,7 @@ class Host:
         """Per-status level spans and measurement series of one entity over the window; None: no such entity."""
 
         view = self.view()
-        keys = [key for key in self.history.keys(path) if status in (None, "", key[1])]
+        keys = [key for key in self.history.keys(path, health=False) if status in (None, "", key[1])]
         if path not in view.merged.entities and not keys:
             return None
         seconds = self._window(window)
@@ -2033,7 +2377,8 @@ class Host:
         statuses = []
         for key in keys:
             period = self.history.period(key)
-            statuses.append({"name": key[1], "expected_period_s": period, "stale_after_s": history_module.stale_after(period),
+            statuses.append({"name": key[1], "state": self.history.is_state(key), "expected_period_s": period,
+                             "stale_after_s": history_module.stale_after(period),
                              "levels": self.history.timeline(key, start, end),
                              "measurements": self.history.series(key, start, end)})
         entity = view.merged.entities.get(path)

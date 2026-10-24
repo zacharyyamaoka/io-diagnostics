@@ -63,6 +63,8 @@ class _Series:
     values: dict[str, deque] = field(default_factory=dict)  # measurement key -> deque of (received, value)
     units: dict[str, dict] = field(default_factory=dict)  # measurement key -> its latest unit and limits
     heard: float = 0.0  # latest arrival, for eviction
+    state: bool = False  # v0.2: carries only State measurements (a ``state`` record): no level spans, never in a health bar
+    measured: float = -1e18  # the arrival of the latest stored state point, for the 1 Hz downsample
 
     def points(self) -> int:
         return len(self.spans) + sum(len(points) for points in self.values.values())
@@ -152,7 +154,11 @@ class History:
                     self._transitions.append((at, key[0], key[1], before, level, status.code, status.message))
             spans.append(_Span(at, at, level, status.expected_period_s, status.code, status.message))
             self._points += 1
-        for measurement in status.measurements:
+        self._add_measurements(series, status.measurements, at)
+        self._prune(series, now)
+
+    def _add_measurements(self, series: _Series, measurements, at: float) -> None:
+        for measurement in measurements:
             points = series.values.get(measurement.key)
             if points is None:
                 if len(series.values) >= self.max_measurements:
@@ -168,7 +174,22 @@ class History:
             else:
                 points.append(point)
             self._points += 1
-        self._prune(series, now)
+
+    def measure(self, path: str, name: str, measurements, at: float, now: float, *, min_gap_s: float = 1.0) -> None:
+        """v0.2: a ``state`` record's measurements, with no level: a series that is never in a health bar. WHY a minimum
+        gap: a watch delivers 10 Hz, and the history keeps a trend, not every sample (the page's sparkline has its own ring)."""
+
+        with self._lock:
+            series = self._series.get((path, name))
+            if series is None:
+                series = self._series[(path, name)] = _Series(path, name, state=True)
+            if at - series.measured < min_gap_s:
+                return
+            series.measured = at
+            series.heard = max(series.heard, at)
+            self._add_measurements(series, measurements, at)
+            self._prune(series, now)
+            self._enforce(now)
 
     def _end(self, key: tuple[str, str], now: float) -> None:
         series = self._series.get(key)
@@ -208,9 +229,12 @@ class History:
                 self._points -= 1
 
     # --- reading -------------------------------------------------------------------------------------------------
-    def keys(self, path: str, *, below: bool = False) -> list[tuple[str, str]]:
+    def keys(self, path: str, *, below: bool = False, health: bool = True) -> list[tuple[str, str]]:
+        """The series of an entity (and below it). ``health``: only statuses (the health bar's); False adds State's."""
+
         with self._lock:
-            return [key for key in self._series if key[0] == path or (below and key[0].startswith(path + "/"))]
+            return [key for key, series in self._series.items()
+                    if (key[0] == path or (below and key[0].startswith(path + "/"))) and (not health or not series.state)]
 
     def timeline(self, key: tuple[str, str], start: float, end: float) -> list[dict]:
         """``[{"from", "to", "level", "code", "message"}]`` covering [start, end] exactly; ``level`` None = no data."""
@@ -269,6 +293,11 @@ class History:
                 if last.last + limit >= oldest:
                     out.append((last.last + limit, path, name, last.level, STALE, "", ""))
         return sorted(out, key=lambda item: item[0])
+
+    def is_state(self, key: tuple[str, str]) -> bool:
+        with self._lock:
+            series = self._series.get(key)
+            return bool(series and series.state)
 
     def period(self, key: tuple[str, str]) -> float | None:
         with self._lock:

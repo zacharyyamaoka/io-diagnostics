@@ -70,13 +70,23 @@ def same_keys(actual: dict, documented: dict, where: str) -> None:
 def test_every_documented_endpoint_answers(server):
     endpoints = re.findall(r"^\| `GET (/api/v1/[a-z]+)", DOC, re.M)
     assert endpoints == ["/api/v1/state", "/api/v1/node", "/api/v1/activity", "/api/v1/events", "/api/v1/records", "/api/v1/plugins",
-                         "/api/v1/health", "/api/v1/history", "/api/v1/history", "/api/v1/settings", "/api/v1/runs"]  # history and history/bar (2026-10-23)
+                         "/api/v1/health", "/api/v1/history", "/api/v1/history", "/api/v1/settings", "/api/v1/runs", "/api/v1/values",
+                         "/api/v1/frames"]  # history and history/bar (2026-10-23); values and frames (2026-10-24)
     for endpoint in endpoints:
         query = "?path=host" if endpoint in ("/api/v1/node", "/api/v1/history") else ""
         if endpoint == "/api/v1/events":  # a stream: its status and first message, then hang up
             with urllib.request.urlopen(server.url.rstrip("/") + endpoint, timeout=10) as response:
                 assert response.status == 200 and response.headers["Content-Type"].startswith("text/event-stream")
                 assert response.readline().startswith(b"retry: ")
+            continue
+        if endpoint in ("/api/v1/values", "/api/v1/frames"):  # an entity a plugin describes; no stream yet, so no frame
+            device = "host/usb1/port-1-3/usb-1-3"
+            if endpoint.endswith("values"):
+                assert get(server, f"{endpoint}?path={device}")[0] == 200
+            else:
+                with pytest.raises(urllib.error.HTTPError) as refused:
+                    get(server, f"{endpoint}?path={device}&stream=color")
+                assert refused.value.code == 404
             continue
         assert get(server, endpoint + query)[0] == 200
 

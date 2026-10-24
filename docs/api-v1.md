@@ -30,6 +30,9 @@ uv run --project /home/bam/io-diagnostics python /home/bam/io-diagnostics/io_dia
 | `GET /api/v1/history/bar?path=<entity path>&bins=N[&window=<duration>]` | The health bar of an entity and of each child row: the worst level held per bin | 2-5 s |
 | `GET /api/v1/settings`, `POST /api/v1/settings` | The app-wide settings (the history window); the POST is the page's View options ONLY | on open / on change |
 | `GET /api/v1/runs` (and `/runs/<id>`, `/runs/<id>/stream`, `/runs/<id>/cast`; `POST /runs/<id>/input`, `/signal`, `/resize`, page-only) | Every real utility is a run on a terminal: the list, one run, its live output (SSE), its recording, and the page's typing and Stop. The whole contract is docs/runs-v1.md | stream / on open |
+| `GET /api/v1/values?path=<entity path>[&since=N]` | The entity page's live numbers and images (State), cheap: no tree build. Docs: docs/state-config-v1.md | 250 ms while State shows |
+| `GET /api/v1/frames?path=&stream=` (and `/frames/stream`, MJPEG) | The latest image of a declared stream, and the live multipart stream | on show / stream |
+| `POST /api/v1/watch` | The entity page's heartbeat ONLY: keeps the plugin's `watch` running while a page looks at the entity | 3 s while shown |
 | `POST /api/v1/act` | The Utilities panel ONLY: a dry run, then a person's confirmed run with the dry run's token | on click |
 | `POST /api/v1/expect`, `/forget`, `/retire` | The Expected setup card ONLY: one edit of the rig file after a person's confirm | on click |
 | `GET /`, `/<file>` | The page in `io_diagnostics/web/` | — |
@@ -216,6 +219,9 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
 
 ## `GET /api/v1/node?path=<entity path>`
 
+(The entity page's additions, `badge`, `heard`, `config`, `watch`, `streams`, `tabs` and each action's `last_run`, are
+specified in `docs/state-config-v1.md`; `history`'s `state: true` marks a series that carries State only: no levels, never in a health bar.)
+
 ```json
 {
   "node": {"...": "the node as in /state, with children replaced by a list of child paths"},
@@ -235,10 +241,21 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
      "confirm": "Reboot CAN 15 (serial ABoA...)? ...",
      "preconditions": [{"check": "port_free", "text": "Port not held by another process", "state": "fail",
                         "detail": "port held by 640623 tview"}],
-     "state": "blocked", "reason": "blocked: port held by 640623 tview", "executable": false, "owner": "moteus_servo"}
+     "state": "blocked", "reason": "blocked: port held by 640623 tview", "executable": false, "owner": "moteus_servo",
+     "last_run": {"id": "r7", "state": "done", "active": false, "started": 1761096000.0, "started_iso": "2026-10-21T18:20:00-07:00",
+                  "ended": 1761096012.0, "ended_iso": "2026-10-21T18:20:12-07:00", "exit_code": 0, "elapsed_s": 12.0}}
   ],
   "faults": [{"...": "fault, see Activity"}],
   "events": [{"...": "event for this path or below, newest first, at most 20"}],
+  "badge": {"kind": "can", "text": "CAN 1 · fdcanusb FDA81D29", "title": "USB 1.1 via fdcanusb FDA81D29", "usb": "USB 1.1"},
+  "heard": {"received": 1761095510.0, "age_s": 1.2},
+  "config": [{"key": "servo.max_current_A", "value": 20.0, "unit": "A", "group": "servo", "expected": 25.0,
+              "expected_source": "deployment record rack-2026-10-21", "differs": true, "stamp": 1761095500.0, "age_s": 10.0, "source": ""}],
+  "watch": {"supported": true, "state": "idle", "reason": "", "holders": [], "pid": null, "since": null, "grace_s": 10.0,
+            "period_s": 0.1, "gates": ["port_free"]},
+  "streams": [{"name": "color", "kind": "image", "title": "Color", "colormap": null, "bands": null, "preview_band": null,
+               "width": 640, "height": 480, "seq": 41, "stamp": 1761095510.3, "band": null, "age_s": 0.2, "fps": 5.0}],
+  "tabs": [{"id": "processes", "title": "Processes", "kind": "table", "status": "Processes", "values": ["top_cpu", "top_memory"]}],
   "entity": {"schema": "diagnostics-record/0", "record": "entity", "path": "...", "...": "contract to_dict(Entity)"},
   "setup": {"role": "device", "file": "/home/bam/.config/io-diagnostics/expected.toml", "note": "", "editable": true,
             "rigs": ["1-DOF test rack"], "rig": "1-DOF test rack", "expected": true, "retired": null,
@@ -704,7 +721,7 @@ per-view lines (rig rows, `another adapter`, the Computer's `USB/PCIe links`). A
   "from": 130.0,
   "to": 1030.0,
   "statuses": [
-    {"name": "DEAD CAN bus: bus", "expected_period_s": 2, "stale_after_s": 6.0,
+    {"name": "DEAD CAN bus: bus", "state": false, "expected_period_s": 2, "stale_after_s": 6.0,
      "levels": [{"from": 130.0, "to": 1000.0, "level": null, "code": "", "message": ""},
                 {"from": 1000.0, "to": 1010.0, "level": "ok", "code": "", "message": "error-active"},
                 {"from": 1010.0, "to": 1012.0, "level": "stale", "code": "", "message": "no update for 6 s (last: error-active)"},

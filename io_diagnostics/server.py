@@ -5,7 +5,8 @@ page"). Every click is a dry run first; a real run needs that dry run's token an
 (same origin, the page's own header). Agents never call it: they use ``io-diagnostics act --dry-run``. The Expected
 setup card's ``POST /api/v1/expect | forget | retire`` rewrite the person's rig file under the same page-only rule
 (no device is touched, so no dry run and no token), and ``POST /api/v1/settings`` (the View options: the history
-window, written to settings.toml) likewise. Every other POST / PUT / DELETE / PATCH is 405. Binds to 127.0.0.1 by
+window, written to settings.toml) likewise, and ``POST /api/v1/watch`` (the entity page's heartbeat: it keeps the plugin's
+``watch`` running while the page looks at an entity, docs/state-config-v1.md). Every other POST / PUT / DELETE / PATCH is 405. Binds to 127.0.0.1 by
 default; the page polls ``/api/v1/state`` once a second, and may listen to ``GET /api/v1/events`` (Server-Sent
 Events: each new or changed activity event, and a tick per change) so a plug shows without waiting for the poll. Run by the release-channels runtime as Preview or an agent's
 lane, it also answers ``/__sps/*`` for the Stable / Preview chip (release_channels.py, docs/release-channels.md).
@@ -41,6 +42,10 @@ SETUP_EDITS = {"/api/v1/expect": "expect", "/api/v1/forget": "forget", "/api/v1/
 UI_HEADER = "X-IO-Diagnostics"
 UI_HEADER_VALUE = "ui"
 MAX_BODY = 64 * 1024
+FRAME_TYPES = {"jpeg": "image/jpeg", "png": "image/png"}
+MJPEG_BOUNDARY = "ioframe"
+MJPEG_POLL_S = 0.04  # how often an MJPEG stream looks for a newer frame
+MJPEG_MAX_FPS = 30.0
 RUN_PATH = re.compile(r"^/api/v1/runs/([0-9A-Za-z_-]+)(?:/(stream|cast|input|signal|resize))?$")
 RUN_WRITES = ("input", "signal", "resize")
 MAX_TERMINAL = 500  # columns or rows a resize may ask for
@@ -150,6 +155,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(self.host.health())
             if parsed.path == "/api/v1/runs":
                 return self._json(self.host.runs_json())
+            if parsed.path == "/api/v1/values":
+                return self._values(query)
+            if parsed.path in ("/api/v1/frames", "/api/v1/frames/stream"):
+                return self._frames(parsed.path, query)
             found = RUN_PATH.match(parsed.path)
             if found and found[2] not in RUN_WRITES:
                 return self._run_get(found[1], found[2], query)
@@ -157,7 +166,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._history(parsed.path, query)
             if parsed.path == "/api/v1/settings":
                 return self._json(self.host.settings_json())
-            if parsed.path == "/api/v1/act" or parsed.path in SETUP_EDITS:
+            if parsed.path in ("/api/v1/act", "/api/v1/watch") or parsed.path in SETUP_EDITS:
                 return self._json({"error": "POST only, and only from the page (docs/api-v1.md)"}, 405, extra={"Allow": "POST"})
             if parsed.path.startswith("/api/"):
                 return self._json({"error": f"no endpoint {parsed.path!r} (see docs/api-v1.md)"}, 404)
@@ -182,11 +191,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._run_write(found[1], found[2])
             except Exception as error:  # noqa: BLE001 - show the failure, keep serving
                 return self._json({"error": f"{type(error).__name__}: {error}"}, 500)
-        if endpoint not in ("/api/v1/act", "/api/v1/settings", *SETUP_EDITS):
+        if endpoint not in ("/api/v1/act", "/api/v1/settings", "/api/v1/watch", *SETUP_EDITS):
             return self._refuse()
         try:
             if endpoint == "/api/v1/settings":
                 return self._settings()
+            if endpoint == "/api/v1/watch":
+                return self._watch()
             return self._act() if endpoint == "/api/v1/act" else self._setup_edit(SETUP_EDITS[endpoint])
         except Exception as error:  # noqa: BLE001 - show the failure, keep serving
             return self._json({"error": f"{type(error).__name__}: {error}"}, 500)
@@ -333,6 +344,67 @@ class Handler(BaseHTTPRequestHandler):
         body = self.rfile.read(length) if length else b""
         status, payload = release_channels.api(script, method, self.path, self.headers, body)
         return self._json(payload, status)
+
+    # --- the entity page: live values, images, the watch heartbeat (docs/state-config-v1.md) --------------------------
+    def _values(self, query: dict):
+        path = (query.get("path") or [""])[0]
+        since = (query.get("since") or ["0"])[0]
+        if not since.isdigit():
+            return self._json({"error": f"since is a whole number (the cursor of the last answer), got {since!r}"}, 400)
+        found = self.host.values_json(path, int(since))
+        return self._json(found) if found else self._json({"error": f"no entity {path!r} a plugin describes"}, 404)
+
+    def _frames(self, endpoint: str, query: dict):
+        path, stream = (query.get("path") or [""])[0], (query.get("stream") or [""])[0]
+        if endpoint == "/api/v1/frames/stream":
+            return self._mjpeg(path, stream, (query.get("fps") or [""])[0])
+        found = self.host.frame_file(path, stream)
+        if found is None:
+            return self._json({"error": f"no frame yet for stream {stream!r} of {path!r}"}, 404)
+        data, meta = found
+        return self._send(200, data, FRAME_TYPES.get(meta["format"], "application/octet-stream"),
+                          {"X-Frame-Seq": str(meta["seq"]), "X-Frame-Stamp": str(meta["stamp"]),
+                           "X-Frame-Width": str(meta["width"]), "X-Frame-Height": str(meta["height"])})
+
+    def _mjpeg(self, path: str, stream: str, fps: str):
+        """``multipart/x-mixed-replace``: each NEW frame once, at most ``fps`` a second, until the client leaves (an <img>
+        whose source is this URL shows it live). WHY polled: a frame is a file the plugin replaced; nothing signals it."""
+
+        try:
+            gap = 1.0 / max(0.5, min(float(fps), MJPEG_MAX_FPS)) if fps else 1.0 / 15.0
+        except ValueError:
+            return self._json({"error": f"fps is a number, got {fps!r}"}, 400)
+        if self.host.frame_seq(path, stream) is None and not self.host.values_json(path):
+            return self._json({"error": f"no stream {stream!r} of {path!r}"}, 404)
+        self.send_response(200)
+        self.send_header("Content-Type", f"multipart/x-mixed-replace; boundary={MJPEG_BOUNDARY}")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        last, sent = None, 0.0
+        try:
+            while not self.host._stop.is_set():
+                seq = self.host.frame_seq(path, stream)
+                if seq is not None and seq != last and time.monotonic() - sent >= gap:
+                    found = self.host.frame_file(path, stream)
+                    if found is not None:
+                        data, meta = found
+                        self.wfile.write(f"--{MJPEG_BOUNDARY}\r\nContent-Type: {FRAME_TYPES.get(meta['format'], 'image/jpeg')}\r\n"
+                                         f"Content-Length: {len(data)}\r\nX-Frame-Seq: {meta['seq']}\r\n\r\n".encode() + data + b"\r\n")
+                        self.wfile.flush()
+                        last, sent = seq, time.monotonic()
+                time.sleep(MJPEG_POLL_S)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            return  # the client left
+
+    def _watch(self):
+        # WHY the same page-only rule as /act: a heartbeat makes the host run a plugin's query-only verb against hardware
+        body, answer = self._body()
+        if body is None:
+            return self._json(*answer)
+        path = body.get("path")
+        if not isinstance(path, str) or not path:
+            return self._json({"refused": "BadRequest", "error": "path is the entity's path (a string)"}, 400)
+        return self._json(self.host.watch_heartbeat(path))
 
     # --- history and settings ------------------------------------------------------------------------------------
     def _history(self, endpoint: str, query: dict):

@@ -1,0 +1,8 @@
+# Fixture plugin for the entity page (docs/state-config-v1.md): a joint-like adapter whose watch streams State at 10 Hz.
+#   serve --fixture F1 --plugins tests/fixtures/plugins-state --port 0 --no-udev
+name = "state_joint"
+description = "a joint-like device that streams live State through watch (entity page fixture)"
+command = ["{python}", "{here}/state_plugin.py", "--role", "joint"]
+timeout_s = 10
+period_s = 30
+matches = ["usb:0483:5740"]
