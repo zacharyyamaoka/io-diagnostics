@@ -2,8 +2,9 @@
 
 Three settings: the history window (docs/api-v1.md "Settings"), the rolling window every health bar and history
 answer covers, the Visibility choices (Zach, 2026-10-24: a row the person hid or showed, kept with the app's
-settings so both channels and the tray agree), and the page's dashboard (the tiles a person pinned from sparklines:
-the chart-enlarge lane's c4). Where a value comes from, first that applies: ``serve --history-window`` (this run only, never written),
+settings so both channels and the tray agree), the page's dashboard (the tiles a person pinned from sparklines: the chart view c4) and
+the depth colour map (Zach, 2026-10-24: "in the settings of this app please give the option to set the color map for the depth map").
+Where the history window comes from, first that applies: ``serve --history-window`` (this run only, never written),
 the file, the default (15 min). ``POST /api/v1/settings`` from the page sets it for this run AND writes the file.
 WHY the flag is not written: like ``--enable``, a run-time switch must not silently become the person's preference.
 """
@@ -23,8 +24,20 @@ SETTINGS_FILE = "settings.toml"
 HEADER = ("# IO diagnostics · app settings. The page's View options rewrite this file whole (comments are not kept).\n"
           "# history_window_s: the rolling window of every health bar and history, in seconds (60 .. 86400).\n"
           "# dashboard: the tiles pinned from sparklines, as JSON text (the page owns its shape).\n"
-          "# [visibility]: a row's id (its hardware id, else its path) = \"hide\" | \"show\" | \"ack\" (hidden, and its error acknowledged).\n")
+          "# [visibility]: a row's id (its hardware id, else its path) = \"hide\" | \"show\" | \"ack\" (hidden, and its error acknowledged).\n"
+          "# depth_colormap: realsense-viewer's colour scheme names (Jet, Classic, White to Black, ..., Hue, or Turbo); depth_equalize: histogram\n"
+          "# equalization; depth_min_m / depth_max_m: the colours' reach in metres, used when equalization is off.\n")
 VISIBILITY_CHOICES = ("hide", "show", "ack")
+# The depth colour map: the names of realsense-viewer's "Color Scheme" (the SDK's rs.colorizer option color_scheme, values
+# 0..9 in this order; verified against librealsense src/proc/colorizer.cpp, 2026-10-24), then "Turbo", which the SDK lacks
+# and the RealSense driver keeps from before this setting. WHY the default is Jet with equalization on, 0 .. 6 m: those are
+# the colorizer's own defaults and realsense-viewer sets none of its own (it only narrows a D405 to 0.05 .. 4 m).
+DEPTH_COLORMAPS = ("Jet", "Classic", "White to Black", "Black to White", "Bio", "Cold", "Warm", "Quantized", "Pattern", "Hue", "Turbo")
+DEFAULT_DEPTH_COLORMAP = "Jet"
+DEFAULT_DEPTH_EQUALIZE = True
+DEFAULT_DEPTH_MIN_M, DEFAULT_DEPTH_MAX_M = 0.0, 6.0
+DEPTH_RANGE_LIMIT_M = 16.0  # the colorizer's min / max distance option range
+DEPTH_KEYS = ("depth_colormap", "depth_equalize", "depth_min_m", "depth_max_m")
 MAX_VISIBILITY = 500
 MAX_KEY = 200
 MAX_TILES = 60
@@ -72,6 +85,26 @@ def check_dashboard(value) -> list:
     return value
 
 
+def _check_depth(key: str, value):
+    """One depth colour map value, checked and normalised (a colour map name to its listed spelling)."""
+
+    if key == "depth_colormap":
+        wanted = str(value).strip().lower().replace("_", " ")
+        for name in DEPTH_COLORMAPS:
+            if name.lower() == wanted:
+                return name
+        raise SettingsError(f"depth_colormap {value!r} is not one of {', '.join(DEPTH_COLORMAPS)}")
+    if key == "depth_equalize":
+        if not isinstance(value, bool):
+            raise SettingsError(f"depth_equalize is true or false, got {value!r}")
+        return value
+    if key in ("depth_min_m", "depth_max_m"):
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0.0 <= value <= DEPTH_RANGE_LIMIT_M:
+            raise SettingsError(f"{key} is metres from 0 to {DEPTH_RANGE_LIMIT_M:g}, got {value!r}")
+        return float(value)
+    raise SettingsError(f"no depth setting {key!r}")
+
+
 class Settings:
     """``path=None``: memory only (tests, a host built by hand). ``history_window_s`` given: this run's override."""
 
@@ -80,6 +113,9 @@ class Settings:
         self.history_window_s = DEFAULT_WINDOW_S
         self.visibility: dict[str, str] = {}
         self.dashboard: list = []
+        self.depth_colormap = DEFAULT_DEPTH_COLORMAP
+        self.depth_equalize = DEFAULT_DEPTH_EQUALIZE
+        self.depth_min_m, self.depth_max_m = DEFAULT_DEPTH_MIN_M, DEFAULT_DEPTH_MAX_M
         self.source = "default"  # default | file | flag | page
         self.note = ""  # why the file could not be read or written
         if self.path and self.path.exists():
@@ -93,10 +129,46 @@ class Settings:
                 if isinstance(data.get("visibility"), dict):
                     self.visibility = {str(key): value for key, value in data["visibility"].items()
                                        if value in VISIBILITY_CHOICES and 0 < len(str(key)) <= MAX_KEY}
+                self._read_depth(data)
             except (OSError, tomllib.TOMLDecodeError, SettingsError, json.JSONDecodeError, TypeError) as error:
                 self.note = f"{self.path}: unreadable ({type(error).__name__}: {error}); using the default"
         if history_window_s is not None:
             self.history_window_s, self.source = check_window(history_window_s), "flag"
+
+    def _read_depth(self, data: dict) -> None:
+        """The depth colour map keys of the file; a key that is not valid keeps its default (the others are still read)."""
+
+        for key in DEPTH_KEYS:
+            if key not in data:
+                continue
+            try:
+                setattr(self, key, _check_depth(key, data[key]))
+            except SettingsError as error:
+                self.note = f"{self.path}: {error}; using the default"
+        if not self.depth_min_m < self.depth_max_m:
+            self.depth_min_m, self.depth_max_m = DEFAULT_DEPTH_MIN_M, DEFAULT_DEPTH_MAX_M
+
+    def depth(self) -> dict:
+        """The depth colour map choices, as the host passes them to a watch (``Host._watch_env``) and the page shows them."""
+
+        return {key: getattr(self, key) for key in DEPTH_KEYS}
+
+    def set_depth(self, changes: dict) -> bool:
+        """The page's depth colour map choices: any of ``depth_colormap`` (a name of ``DEPTH_COLORMAPS``, any case),
+        ``depth_equalize`` (bool), ``depth_min_m`` / ``depth_max_m`` (metres, min below max). Applied now and written. Returns True
+        when something changed (a running watch must restart to use it). Raises SettingsError; nothing changes then."""
+
+        merged = self.depth()
+        for key, value in changes.items():
+            merged[key] = _check_depth(key, value)
+        if not merged["depth_min_m"] < merged["depth_max_m"]:
+            raise SettingsError(f"the depth range needs a minimum below its maximum, got {merged['depth_min_m']:g} m .. {merged['depth_max_m']:g} m")
+        changed = merged != self.depth()
+        for key, value in merged.items():
+            setattr(self, key, value)
+        if changed:
+            self._write()
+        return changed
 
     def set_history_window(self, seconds) -> None:
         """The page's change: applied now and written (atomically). Raises SettingsError for a value out of range."""
@@ -143,6 +215,8 @@ class Settings:
                 # WHY json.dumps as the TOML string, and before [visibility]: its escapes (\", \\, \n, \uXXXX with ensure_ascii)
                 # are all valid TOML ones, and a top-level key must come before the first table
                 file.write(f"dashboard = {json.dumps(json.dumps(self.dashboard, separators=(',', ':')))}\n")
+                file.write(f"depth_colormap = {json.dumps(self.depth_colormap)}\ndepth_equalize = {json.dumps(self.depth_equalize)}\n"
+                           f"depth_min_m = {self.depth_min_m:g}\ndepth_max_m = {self.depth_max_m:g}\n")
                 if self.visibility:
                     file.write("\n[visibility]\n")
                     for key, value in sorted(self.visibility.items()):
@@ -157,9 +231,13 @@ class Settings:
             self.note = f"{self.path}: not written ({type(error).__name__}: {error})"
 
     def json(self) -> dict:
-        return {"history_window_s": self.history_window_s, "visibility": dict(self.visibility), "dashboard": self.dashboard, "source": self.source,
+        return {"history_window_s": self.history_window_s, "visibility": dict(self.visibility), "dashboard": self.dashboard, **self.depth(),
+                "source": self.source,
                 "file": str(self.path) if self.path else None, "note": self.note,
-                "limits": {"history_window_s": {"min": MIN_WINDOW_S, "max": MAX_WINDOW_S, "default": DEFAULT_WINDOW_S}}}
+                "limits": {"history_window_s": {"min": MIN_WINDOW_S, "max": MAX_WINDOW_S, "default": DEFAULT_WINDOW_S},
+                           "depth_colormap": {"choices": list(DEPTH_COLORMAPS), "default": DEFAULT_DEPTH_COLORMAP},
+                           "depth_equalize": {"default": DEFAULT_DEPTH_EQUALIZE},
+                           "depth_range_m": {"min": 0.0, "max": DEPTH_RANGE_LIMIT_M, "default": [DEFAULT_DEPTH_MIN_M, DEFAULT_DEPTH_MAX_M]}}}
 
 
-__all__ = ["Settings", "SettingsError", "SETTINGS_FILE", "parse_duration", "check_window", "check_dashboard"]
+__all__ = ["Settings", "SettingsError", "SETTINGS_FILE", "DEPTH_COLORMAPS", "DEPTH_KEYS", "parse_duration", "check_window", "check_dashboard"]

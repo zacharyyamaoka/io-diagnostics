@@ -126,6 +126,15 @@ A plugin that can stream declares `"watch": {"period_s": 0.1, "gates": ["port_fr
   watch again if the page is still sending heartbeats (the State tab is open), otherwise the watch ends at its grace like any
   other. Nothing waits for the grace period to run out. The stop happens when the run *starts* (after it has its `exclusive`
   group), not when it is pressed, so the State tab keeps moving while a press queues behind a routine diagnose.
+- **Depth colour map.** Beside the frame directory the host puts the app's depth colour choice in every watch's environment
+  (2026-10-24; the setting is `depth_colormap` etc. of `GET /api/v1/settings`): `IO_DIAGNOSTICS_DEPTH_COLORMAP` (a realsense-viewer
+  colour scheme name: Jet, Classic, White to Black, Black to White, Bio, Cold, Warm, Quantized, Pattern, Hue, or Turbo),
+  `IO_DIAGNOSTICS_DEPTH_EQUALIZE` (`1` / `0`), `IO_DIAGNOSTICS_DEPTH_MIN_M` and `IO_DIAGNOSTICS_DEPTH_MAX_M` (metres, used when
+  equalization is off). A driver that draws depth uses them only under record revision 0.2 (the compatibility guard, section 10);
+  without the variable it draws what it always did (RealSense: its turbo map), so its output is byte-for-byte unchanged. The host
+  restarts a running watch when the person changes the setting: a watch reads its environment once, at start. A driver that does not
+  draw depth ignores them. The RealSense driver uses the SDK's `rs.colorizer` (`color_scheme`, `min_distance`, `max_distance`,
+  `histogram_equalization_enabled`), the filter realsense-viewer draws depth with.
 - `GET /api/v1/values?path=` (cheap, no tree build) returns the latest State rows with a recent series each (about two
   minutes, for the sparkline), the streams with their size and fps, `heard` (when the host last received anything from
   this entity: the page's ticking "heard 2 s ago") and `watch`.

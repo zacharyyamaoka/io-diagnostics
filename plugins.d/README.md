@@ -106,6 +106,15 @@ exits (and on a 10/20/40 s backoff capped at `period_s`), inside the `exclusive`
 `query`) and bounded by its `timeout_s`. A plugin without `probe` keeps diagnose-on-connect. Contract:
 `docs/probe-on-connect.md`.
 
+**A driver updated in place is described again.** The bam_ws drivers run live from their path, so the host looks at each driver's
+Python source about every 10 s (the newest modification time and the file count under its `cwd` project's `src/`, or the whole
+`cwd` when it has none, plus any `.py` file its `command` names; tests and hidden folders are skipped). When it changed, the host
+runs `describe` again, applies what it now declares (the actions, `watch`, `streams`, `tabs`, `follow`, `probe`, `expected`, and
+`matches` when they came from describe) and logs a `PluginReloaded` event on the Computer, listing the declaration keys that
+changed. A running follow or watch is restarted only when its own declaration changed; a changed `probe` makes a job that is not
+followed probe again. If the new `describe` fails, the old declaration keeps running and the Computer shows an UNKNOWN
+`<plugin>: describe` line (`DescribeFailed`) until the next edit describes cleanly. Tests: `tests/test_plugin_reload.py`.
+
 `act` runs only through `io-diagnostics act --path <entity path> --action <n> [--node N] [--confirm T] [--dry-run]`,
 never on a schedule and never over HTTP in v1. The host refuses everything but `--dry-run` when stdin is not a TTY
 (agents can't click), and any action whose `danger` is not `query` without `--confirm`; it passes the token through
