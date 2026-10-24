@@ -22,11 +22,11 @@ def data_uri(path: Path, mime: str) -> str:
     return f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode()}"
 
 
-def jpeg(path: Path, quality: int = 5) -> str:
-    """A PNG screenshot as a small JPEG (the page is flat colour and text: q5 reads cleanly)."""
+def jpeg(path: Path, quality: int = 14) -> str:
+    """A PNG screenshot as a small JPEG, 1000 px wide (the page is flat colour and text: it reads cleanly)."""
 
     with tempfile.NamedTemporaryFile(suffix=".jpg") as out:
-        subprocess.run(["/usr/bin/ffmpeg", "-y", "-loglevel", "error", "-i", str(path), "-q:v", str(quality), out.name], check=True)
+        subprocess.run(["/usr/bin/ffmpeg", "-y", "-loglevel", "error", "-i", str(path), "-vf", "scale=940:-2", "-q:v", str(quality), out.name], check=True)
         return data_uri(Path(out.name), "image/jpeg")
 
 
@@ -38,10 +38,12 @@ def figure(media: Path, name: str, caption: str, *, wide: bool = False) -> str:
 
 
 def clip(media: Path, name: str, caption: str) -> str:
-    mp4, gif = media / f"{name}.mp4", media / f"{name}.gif"
+    mp4 = media / f"{name}.mp4"
     if not mp4.exists():
         return f"<p>{html.escape(caption)} (not recorded)</p>"
-    fallback = f'<details><summary>GIF fallback</summary><img src="{data_uri(gif, "image/gif")}" alt="{html.escape(caption)} (gif)"></details>' if gif.exists() else ""
+    with tempfile.NamedTemporaryFile(suffix=".gif") as out:  # the fallback, small: 480 px, 5 fps
+        subprocess.run(["/usr/bin/ffmpeg", "-y", "-loglevel", "error", "-i", str(mp4), "-vf", "fps=5,scale=380:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=32[p];[b][p]paletteuse=dither=none", out.name], check=True)
+        fallback = f'<details><summary>GIF fallback</summary><img src="{data_uri(Path(out.name), "image/gif")}" alt="{html.escape(caption)} (gif)"></details>'
     return (f'<figure class="clip"><video src="{data_uri(mp4, "video/mp4")}" muted loop autoplay playsinline controls preload="auto"></video>'
             f"<figcaption>{html.escape(caption)}</figcaption>{fallback}</figure>")
 
@@ -96,7 +98,7 @@ def build(media: Path, facts: dict) -> str:
 {clip(media, 'config', 'Edit… (one confirm naming the board), Enter applies live, accepted / rejected (the board kept 10.0) / not saved, Save to board, a safety key asks a second confirm.')}
 <div class="grid">{figure(media, 'config-edit-confirm', 'One confirm names the board and says it is live')}{figure(media, 'config-edit-live', 'accepted · not saved · the bar · reset to stored, the record or the default')}
 {figure(media, 'config-safety-confirm', 'A safety key asks a second confirm (and is refused unless the board is stopped)')}{figure(media, 'joint-log-light', 'Log: every write is a line (who, key, old → new, accepted or not)')}
-{figure(media, 'joint-utilities-light', 'Utilities: every action with its danger and last run')}{figure(media, 'computer-processes', 'The Computer\\'s own tab: Processes, sortable')}</div>
+{figure(media, 'joint-utilities-light', 'Utilities: every action with its danger and last run')}{figure(media, 'computer-processes', 'Own tab of the Computer: Processes, sortable')}</div>
 
 <h2>Done and proved</h2>
 <div class="card"><table><tr><th>gate</th><th>result</th></tr>{gates}</table>
