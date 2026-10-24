@@ -39,6 +39,8 @@ ACTIONS = [
      "preconditions": [["joint_free", "CAN {id}'s joint is free to spin"]]},
     {"name": "open_console", "title": "Open console (tview)", "description": "launches a harmless detached process", "danger": "interrupts",
      "scope": "device", "confirm": "Open the console on {name}?", "kind": "changes"},
+    {"name": "open_console", "title": "Open console (tview)", "description": "launches a harmless detached process on this board only",
+     "danger": "interrupts", "scope": "node", "confirm": "Open the console on CAN {id} on {name}?", "kind": "changes"},
     {"name": "hang", "title": "Hang (ignores Stop)", "description": "ignores SIGINT and SIGTERM", "danger": "changes",
      "scope": "device", "confirm": "Hang on {name}?", "kind": "changes"},
     {"name": "old", "title": "Old plugin", "description": "prints its records on stdout", "danger": "query",
@@ -150,7 +152,7 @@ def main() -> int:
         # stands in for tview: a detached process that outlives this one and holds nothing
         child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(float(__import__('os').environ.get('TERMINAL_CONSOLE_S', '30')))"],
                                  stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-        print(f"tview opened on CAN 1 (pid {child.pid}); it holds the port until you close it", flush=True)
+        print(f"tview opened on CAN {arg('--node') or 'every board'} (pid {child.pid}); it holds the port until you close it", flush=True)
         emit(records(), {"record": "event", "code": "ActionCompleted", "severity": "info", "message": f"tview opened (pid {child.pid})",
                          "args": {"pid": child.pid}})
         return 0

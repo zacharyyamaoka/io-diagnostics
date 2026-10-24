@@ -729,6 +729,10 @@ def test_while_the_launched_console_is_open_the_adapters_row_says_so(tmp_path):
     try:
         run = rig.start("open_console", node=None)
         assert run["label"] == "fdcanusb fixture · Open console (tview)" and run["danger"] == "interrupts"
+        # one name at both scopes: the board's row offers it too, and its run carries --node
+        board = rig.call("GET", f"/api/v1/node?path={rig.can1}")[1]["actions"]
+        assert [a["scope"] for a in board if a["name"] == "open_console"] == ["node"]
+
         final = rig.wait_ended(run["id"])
         assert final["state"] == "done"
         pid = final["result"]["records"][0]["args"]["pid"]  # the process the run launched (a stand-in for tview)
@@ -746,5 +750,11 @@ def test_while_the_launched_console_is_open_the_adapters_row_says_so(tmp_path):
         while console_check() and time.monotonic() < deadline:
             time.sleep(0.1)
         assert console_check() is None  # and the row stops saying it
+        on_board = rig.start("open_console", node=1)  # on one board: the same name at node scope, --node on its argv
+        assert on_board["label"] == "CAN 1 · Open console (tview)" and on_board["node"] == 1 and "--node" in on_board["argv"]
+        finished = rig.wait_ended(on_board["id"])
+        board_pid = finished["result"]["records"][0]["args"]["pid"]
+        assert console_check()["message"] == f"tview open (launched from RobotDx, pid {board_pid})"  # the adapter's row says it too
+        os.kill(board_pid, signal.SIGKILL)
     finally:
         rig.close()
