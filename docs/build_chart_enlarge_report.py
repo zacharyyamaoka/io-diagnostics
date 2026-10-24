@@ -201,7 +201,7 @@ def media_block(media: Path, proposal: dict) -> str:
     info_path = media / f"{pid}-hero.json"
     seconds = json.loads(info_path.read_text())["seconds"] if info_path.exists() else None
     cap = f"{seconds:.0f} s, muted, loops" if seconds else "muted, loops"
-    video = (f'<figure class="hero"><video controls muted loop autoplay playsinline preload="auto" poster="">'
+    video = (f'<figure class="hero"><video controls muted loop autoplay playsinline preload="auto" poster="chart-enlarge/{pid}-{proposal["states"][0][0]}-light.png">'
              f'<source src="chart-enlarge/{pid}-hero.mp4" type="video/mp4"><img src="chart-enlarge/{pid}-hero.gif" alt="{esc(proposal["name"])} hero (GIF fallback)">'
              f'</video><figcaption>Hero: the real page on the fixture host, {cap}. <a href="chart-enlarge/{pid}-hero.gif">GIF fallback</a></figcaption></figure>')
     stills = ""
@@ -290,7 +290,7 @@ def build(args) -> str:
     out.append("<h2>What was exercised, and the boundary</h2><ul>"
                "<li>The real page (<code>io_diagnostics/web</code>) in headless Chrome, on <code>cli.py serve --fixture F1 --plugins tests/fixtures/plugins-charts</code>: the Computer's statuses with deterministic sine series at 2 Hz and real limits (temperature crosses its warn limit every 150 s). The fixture plugin never touches hardware.</li>"
                "<li>Data: the existing <code>/api/v1/history</code> only. The one host addition is the <code>dashboard</code> setting for c4 (<code>io_diagnostics/settings.py</code>, <code>host.py</code>, <code>docs/api-v1.md</code>, <code>tests/test_history.py</code>).</li>"
-               "<li>The page shell changed in three small places: a fifth Prototype select (<code>#chart-view</code>), <code>makeChartsCtx</code> in <code>app.js</code>, and <code>charted()</code> in <code>d4.js</code>.</li>"
+               "<li>The page shell changed in a few small places: a fifth Prototype select (<code>#chart-view</code>) and one script tag in <code>index.html</code>, <code>makeChartsCtx</code> in <code>app.js</code> (the history cache, the window, the settings write and the page drill), and <code>charted()</code> in <code>d4.js</code>.</li>"
                f"<li>Lane server and branch: <code>{esc(args.sha)}</code> on <code>lane/chart-enlarge</code>; {esc(args.lane_url)}</li></ul>")
     out.append("</main></body></html>")
     return "".join(out)
