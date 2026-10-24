@@ -167,7 +167,7 @@ def test_activity_events_are_typed_with_stable_ids():
     ids = [activity.event_id(event) for event in out.events]
     assert len(ids) == len(set(ids)) and ids == [activity.event_id(event) for event in boot_events(EVERY_KIND + NOTES).events]
     downgrade = next(event for event in out.events if event.code == "LinkDowngraded")
-    assert downgrade.message == "D405 CAM on 6-2 linked at USB 2.0 · 480 Mb/s; it linked at USB 3.2 Gen 1 · 5 Gb/s earlier this boot"
+    assert downgrade.message == "D405 CAM on 6-2 linked at USB 2 high-speed · 480 Mb/s; it linked at USB 3.2 Gen 1 · 5 Gb/s earlier this boot"
     bound = next(event for event in out.events if event.code == "DriverBound" and event.args["driver"] == "cdc_acm")
     assert activity.event_id(bound) == "usb:1-5:13:add/cdc_acm:bind" and bound.message == "cdc_acm bound on 1-5 → /dev/ttyACM1"
     assert out.consumed >= {"usb:1-7:9:add", "usb:1-7:9:remove", "usb:6-2:4:add"}
@@ -643,6 +643,6 @@ def test_a_usb3_device_on_a_usb2_link_is_a_downgrade_event(tmp_path):
     host.refresh()
     [link] = host.activity(50, ("link",))["events"]
     assert (link["code"], link["severity"], link["id"]) == ("LinkDowngraded", "warn", "usb:1-1:12:add:link")
-    assert link["message"] == ("Intel(R) RealSense(TM) Depth Camera 435 8086:0b07@1-1 on 1-1 linked at USB 2.0 · 480 Mb/s,"
+    assert link["message"] == ("Intel(R) RealSense(TM) Depth Camera 435 8086:0b07@1-1 on 1-1 linked at USB 2 high-speed · 480 Mb/s,"
                                " but it is a USB 3.20 device: a USB 2 cable, hub or port is in the way")
     assert link["path"] == host.layer.port_paths["1-1"]

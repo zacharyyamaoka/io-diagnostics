@@ -129,9 +129,11 @@ badge on its row) opens that fault in Diagnostics, and the Diagnostics row of a 
 
 ## 6. USB labels
 
-Wherever a USB link is drawn: from the device's `bcdUSB` (sysfs `version`) and the link speed. 1.5 / 12 Mb/s →
-**USB 1.1**; 480 Mb/s → **USB 2.0** (the device's own 2.1 when `bcdUSB` says so); 5 Gb/s → **USB 3.2 Gen 1**; 10 Gb/s →
-**USB 3.2 Gen 2**; 20 Gb/s → **USB 3.2 Gen 2x2**; 40 Gb/s → **USB4**. The raw speed is the tooltip.
+Wherever a USB link is drawn it is named by version, never by speed: 1.5 / 12 Mb/s **USB 1.1**; 480 Mb/s **USB 2.0** (the
+device's own 2.1 when its `bcdUSB` says so); 5 Gb/s **USB 3.2 Gen 1**; 10 Gb/s **USB 3.2 Gen 2**; 20 Gb/s **USB 3.2 Gen 2x2**;
+40 Gb/s **USB4**; the raw speed is the tooltip. There is **one mapping, `web/usb.js`** (the entity-tree lane's `window.IOUsb`);
+the host sends the raw link (`badge.usb = {speed_mbps, version}` in `node`) and the page names it. An earlier Python mapping of this
+lane was dropped in favour of it.
 
 ## 7. Tabs
 

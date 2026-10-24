@@ -188,32 +188,24 @@ def test_a_holder_gate_reads_in_plain_words():
     assert entity_state.holder_reason("port_free", "no idea")["holders"] == []
 
 
-# ----- USB labels -------------------------------------------------------------------------------------------------
-@pytest.mark.parametrize("mbps, version, label", [(1.5, "1.10", "USB 1.1"), (12, "2.00", "USB 1.1"), (480, "2.00", "USB 2.0"),
-                                                   (480, "2.10", "USB 2.1"), (480, "3.20", "USB 2.0"), (5000, "3.20", "USB 3.2 Gen 1"),
-                                                   (10000, None, "USB 3.2 Gen 2"), (20000, "3.20", "USB 3.2 Gen 2x2"),
-                                                   (40000, "4.00", "USB4"), (None, "2.0", "")])
-def test_usb_links_are_named_by_version(mbps, version, label):
-    assert tree.usb_label(mbps, version) == label
-
-
-def test_the_raw_speed_is_the_tooltip_and_a_usb3_device_on_a_usb2_link_says_so():
-    assert tree.usb_title(480, "2.10") == "480 Mb/s · bcdUSB 2.10"
-    assert "USB 3 device linked at USB 2 speed" in tree.usb_title(480, "3.20")
-    assert tree.speed_text(5000) == "USB 3.2 Gen 1 · 5 Gb/s" and tree.speed_text(480, "2.10") == "USB 2.1 · 480 Mb/s"
+# ----- USB: the host sends the link, the page names it (web/usb.js, the one mapping) ----------------------------------
+def test_the_badge_carries_the_usb_link_raw_and_the_page_names_it(joint):
+    badge = joint.host.node(joint.device)["badge"]
+    assert badge == {"kind": "usb", "text": "", "usb": {"speed_mbps": 12, "version": None}}
+    assert joint.host.node(joint.board)["badge"]["usb"] == {"speed_mbps": 12, "version": None}
 
 
 # ----- the node: badge, heard, configuration ----------------------------------------------------------------------
 def test_the_node_carries_badge_configuration_and_the_watch_declaration(joint):
     node = joint.host.node(joint.board)
-    assert node["badge"]["text"] == "CAN 1 · fdcanusb fixture" and node["badge"]["usb"] == "USB 1.1"
+    assert node["badge"]["text"] == "CAN 1 · fdcanusb fixture" and node["badge"]["usb"]["speed_mbps"] == 12
     assert node["watch"]["supported"] and node["watch"]["state"] == "idle" and node["watch"]["gates"] == ["port_free"]
     by_key = {row["key"]: row for row in node["config"]}
     assert by_key["servo.max_current_A"]["differs"] and not by_key["servo.pid_position.kp"]["differs"]
     assert by_key["servo.default_timeout_s"]["expected_source"].startswith("deployment record")
     assert node["heard"]["age_s"] is not None
     device = joint.host.node(joint.device)
-    assert device["badge"]["text"] == "USB 1.1" and device["badge"]["title"].startswith("12 Mb/s")
+    assert device["badge"]["kind"] == "usb" and device["badge"]["usb"]["speed_mbps"] == 12
 
 
 def test_the_state_and_the_health_are_two_things_on_one_entity(joint):

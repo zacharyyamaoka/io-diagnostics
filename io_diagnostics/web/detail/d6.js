@@ -216,7 +216,10 @@
     const id = node.identity || {};
     const model = [id.manufacturer, id.model].filter(Boolean).join(' ');
     const showModel = model && !title.toLowerCase().includes(String(id.model || '').toLowerCase());
-    const badge = detail && detail.badge ? `<span class="d6-badge-c" title="${h.esc(detail.badge.title || '')}">${h.esc(detail.badge.text)}</span>` : '';
+    // the USB words are web/usb.js's (the one mapping: "USB 2.1", "USB 3.2 Gen 1"; the raw speed in the tooltip); a board adds its CAN id
+    const usb = detail && detail.badge && detail.badge.usb && root.IOUsb ? root.IOUsb.describe(detail.badge.usb) : { text: '', tip: '' };
+    const badgeText = detail && detail.badge ? (detail.badge.kind === 'can' ? detail.badge.text : usb.text) : '';
+    const badge = badgeText ? `<span class="d6-badge-c" title="${h.esc([usb.tip, detail.badge.kind === 'can' ? `via ${detail.badge.text.split(' · ')[1] || ''}` : ''].filter(Boolean).join(' · '))}">${h.esc(badgeText)}</span>` : '';
     const stale = node.stale ? ' · stale' : '';
     const hw = hardwareItems(node);
     const open = U.more.has(node.path);

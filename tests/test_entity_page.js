@@ -37,7 +37,7 @@ const { check, BOARD, BOARD2, CAMERA, ADAPTER } = H;
     check('header: name and model, connection badge, heard clock, hardware line, Utilities', /moteus c1 · CAN 1/.test(head.title) && head.badge === 'CAN 1 · fdcanusb fixture'
       && /^heard /.test(head.heard) && /serial 9A31/.test(head.hw) && /firmware 1\.0\.0/.test(head.hw) && /model id mjbots-moteus-c1/.test(head.hw) && head.utilities, head);
     check('tabs in order, Diagnostics the default', head.tabs.join() === 'Diagnostics,State,Configuration,Log,Utilities' && head.active === 'diagnostics', head.tabs);
-    check('the badge says its USB link as a version, the speed in its tooltip', /USB 1\.1/.test(head.badgeTitle) || /fdcanusb/.test(head.badgeTitle), head.badgeTitle);
+    check('the board badge names its adapter, its tooltip the USB link as a version and the raw speed', /link USB 1\.1 · 12 Mb\/s/.test(head.badgeTitle), head.badgeTitle);
 
     // the last-heard clock is first-class and ticks: it counts up between two receipts, and starts again when the host hears the board again
     const ages = [];
@@ -121,7 +121,7 @@ const { check, BOARD, BOARD2, CAMERA, ADAPTER } = H;
       badge: document.querySelector('.d6-badge-c').textContent }));
     check('camera State: image tiles come before the numbers', camera.order.indexOf('d6-block') < camera.order.lastIndexOf('d6-block') && await page.evaluate(() => document.querySelector('.d6-tiles').compareDocumentPosition(document.querySelector('.d6-sh')) & Node.DOCUMENT_POSITION_FOLLOWING), camera.order);
     check('camera tiles: toggle, name, resolution and fps', camera.tiles.length === 2 && camera.tiles.every((t) => t.on && /160×120 · [\d.]+ fps/.test(t.meta)) && camera.tiles.map((t) => t.name).join() === 'Color,Depth', camera.tiles);
-    check('the USB link reads as a version, the raw speed in the tooltip', camera.badge === 'USB 3.2 Gen 1' && /5 Gb\/s/.test(await page.evaluate(() => document.querySelector('.d6-badge-c').title)), camera.badge);
+    check('the USB link reads as a version, the raw speed in the tooltip', camera.badge === 'USB 3.2' && /link USB 3\.2 Gen 1 · 5 Gb\/s/.test(await page.evaluate(() => document.querySelector('.d6-badge-c').title)), camera.badge);
     const hashOf = () => page.evaluate(() => { const img = document.querySelector('.d6-tile img'); const c = document.createElement('canvas'); c.width = 40; c.height = 30; const g = c.getContext('2d'); g.drawImage(img, 0, 0, 40, 30); const d = g.getImageData(0, 0, 40, 30).data; let h = 0; for (let i = 0; i < d.length; i += 7) h = (h * 31 + d[i]) | 0; return h; });
     const hashes = [];
     for (let i = 0; i < 5; i += 1) { hashes.push(await hashOf()); await page.waitForTimeout(450); }
@@ -147,7 +147,7 @@ const { check, BOARD, BOARD2, CAMERA, ADAPTER } = H;
     check('a camera has no Processes or driver tab', (await page.evaluate(() => [...document.querySelectorAll('.d6-tab')].map((t) => t.dataset.d6Tab))).join() === 'diagnostics,state,config,log,utilities');
     await H.goTo(page, ADAPTER);
     const adapterBadge = await page.evaluate(() => (document.querySelector('.d6-badge-c') || {}).textContent);
-    check('a full-speed device reads as USB 1.1', adapterBadge === 'USB 1.1', adapterBadge);
+    check('a full-speed USB 2 device reads as its version and its link', adapterBadge === 'USB 2.0 · on a USB 1.1 link', adapterBadge);
 
     // ---- Configuration: folders, pins, order -----------------------------------------------------------------------------------
     await H.goTo(page, BOARD);

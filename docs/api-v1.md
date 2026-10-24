@@ -249,7 +249,7 @@ specified in `docs/state-config-v1.md`; `history`'s `state: true` marks a series
   ],
   "faults": [{"...": "fault, see Activity"}],
   "events": [{"...": "event for this path or below, newest first, at most 20"}],
-  "badge": {"kind": "can", "text": "CAN 1 · fdcanusb FDA81D29", "title": "USB 1.1 via fdcanusb FDA81D29", "usb": "USB 1.1"},
+  "badge": {"kind": "can", "text": "CAN 1 · fdcanusb FDA81D29", "usb": {"speed_mbps": 12, "version": "2.00"}},
   "heard": {"received": 1761095510.0, "age_s": 1.2},
   "config": [{"key": "servo.max_current_A", "value": 20.0, "unit": "A", "group": "servo", "expected": 25.0,
               "expected_source": "deployment record rack-2026-10-21", "differs": true, "stamp": 1761095500.0, "age_s": 10.0, "source": "",
