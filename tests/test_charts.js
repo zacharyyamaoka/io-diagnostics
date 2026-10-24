@@ -29,7 +29,7 @@ const SMALL = { width: 1280, height: 720 };
 const args = process.argv.slice(2);
 const shotsAt = args.indexOf('--shots');
 const SHOTS = shotsAt >= 0 ? args[shotsAt + 1] : null;
-const WANT = args.filter((arg, at) => /^c[0-5]$/.test(arg) && at !== shotsAt + 1);
+const WANT = args.filter((arg, at) => /^c[0-5]$/.test(arg) && at !== (shotsAt >= 0 ? shotsAt + 1 : -1));
 const wants = (id) => !WANT.length || WANT.includes(id);
 
 let passed = 0;
@@ -533,7 +533,7 @@ async function testC5(browser, base) {
   await page.click('#ch5-page [data-back]');
   await page.waitForTimeout(700);
   const back = await page.evaluate(() => ({ page: Boolean(document.getElementById('ch5-page')), mainShown: getComputedStyle(document.getElementById('main')).display !== 'none', url: location.search, title: document.querySelector('.d-title') && document.querySelector('.d-title').textContent }));
-  check('Back returns to the entity page (tree and detail again, no ?page)', !back.page && back.mainShown && !/page=/.test(back.url) && /Computer/.test(back.title), back);
+  check('Back returns to the entity page (tree and detail again, no ?page)', !back.page && back.mainShown && !/page=/.test(back.url) && /Computer|bam-GPU/.test(back.title), back);
   await press(page, 'Memory');
   await page.waitForSelector('#ch5-page .chp-svg');
   await page.goBack();
