@@ -296,6 +296,46 @@ def load_plugin(path: Path) -> tuple[PluginSpec, list[str]]:
     return spec, notes
 
 
+# WHY these: what a plugin's ``describe`` is made of is its Python source. The newest modification time and the number of files
+# are the cheapest signal that cannot miss an edit (a deletion changes the count); a build directory or a virtual environment
+# would change under a running driver without the driver changing.
+SOURCE_SKIP_DIRS = frozenset({"__pycache__", "node_modules", "tests", "test", "build", "dist"})
+
+
+def source_stamp(spec: PluginSpec) -> tuple[int, int] | None:
+    """``(newest mtime in ns, file count)`` of the plugin's Python source, or None when it has none the host can see.
+
+    The source is the ``.py`` files under the plugin's ``cwd`` project's ``src/`` (the whole ``cwd`` when it has no ``src/``),
+    and any ``.py`` file the command itself names (a script plugin). Hidden directories (``.venv``, ``.git``) and tests are
+    skipped. A change of this stamp is the host's cue to ask ``describe`` again (``Host.check_plugin_sources``)."""
+
+    roots: list[Path] = []
+    project = spec.cwd / "src" if (spec.cwd / "src").is_dir() else spec.cwd
+    if project.is_dir():
+        roots.append(project)
+    for argument in spec.command:
+        script = Path(argument) if Path(argument).is_absolute() else spec.cwd / argument
+        if script.suffix == ".py" and script.is_file():
+            roots.append(script)
+    newest = count = 0
+    seen: set[Path] = set()
+    stack = list(roots)
+    while stack:
+        path = stack.pop()
+        if path in seen:
+            continue
+        seen.add(path)
+        try:
+            if path.is_dir():
+                stack.extend(child for child in path.iterdir()
+                             if not (child.is_dir() and (child.name.startswith(".") or child.name in SOURCE_SKIP_DIRS)))
+            elif path.suffix == ".py":
+                newest, count = max(newest, path.stat().st_mtime_ns), count + 1
+        except OSError:
+            continue  # gone between the listing and the stat: the next look sees the new count
+    return (newest, count) if count else None
+
+
 def load_plugins(directory: Path) -> tuple[list[PluginSpec], list[str]]:
     """Every ``*.toml`` in ``directory`` (not recursive), sorted by file name. A broken file is skipped with a
     problem line; two files with one name keep the first."""

@@ -39,7 +39,7 @@ from io_diagnostics import settings as settings_module
 from io_diagnostics import tree
 from io_diagnostics.faults import Faults
 from io_diagnostics import terminal as terminal_module
-from io_diagnostics.plugins import load_plugins, match_devices
+from io_diagnostics.plugins import load_plugins, match_devices, source_stamp
 from io_diagnostics.runner import (RUNNER_SOURCE, RUNNING, Follower, Gates, Job, RunOutcome, Scheduler, Watcher, absolute,
                                    _outcome, _records, act_argv, describe, follow_period, follow_status, host_status, plugin_env, rebase,
                                    relative, run_act, run_check, run_plugin)
@@ -67,6 +67,9 @@ GATE_CACHE_S = 2.0
 # docs/state-config-v1.md section 4: a page's heartbeat keeps a plugin's ``watch`` running; it stops this long after the last one
 WATCH_GRACE_S = 10.0
 WATCH_TICK_S = 0.5  # how often the host re-checks every watch's gates and heartbeat
+# how often the host looks at each driver's source for an edit; a changed driver is asked ``describe`` again
+DESCRIBE_CHECK_S = 10.0
+MAX_PLUGIN_EVENTS = 200
 WATCH_NOTIFY_S = 1.0  # a 10 Hz watch tells a page's event stream at most this often
 STATE_HISTORY_GAP_S = 1.0  # the history keeps a state series at 1 Hz at most
 FRAME_FPS_WINDOW_S = 3.0
@@ -475,8 +478,10 @@ class Host:
                  event_log_dir: Path | None = None, boot_id: str = "", boot_start: float | None = None,
                  event_log_cap_bytes: int | None = None, event_log_segment_bytes: int | None = None,
                  ledger_file: Path | None = None,
-                 watch_grace_s: float | None = None, watch_tick_s: float | None = None, frames_dir: Path | None = None):
+                 watch_grace_s: float | None = None, watch_tick_s: float | None = None, frames_dir: Path | None = None,
+                 describe_check_s: float | None = None):
         self.plugins_dir = Path(plugins_dir)
+        self.describe_check_s = describe_check_s if describe_check_s is not None else DESCRIBE_CHECK_S
         # WHY settable: the defaults are the product (probe.py: holders' pids every 1 s, 0.5 s settle, 10 s first
         # backoff); a test of the backoff alone shortens the last
         self.recheck_poll_s = recheck_poll_s if recheck_poll_s is not None else probe_module.POLL_S
@@ -564,6 +569,14 @@ class Host:
         self.started = time.monotonic()
         self._last_os_level: dict[tuple[str, str], tuple[str, str]] = {}
         self._described: set[str] = set()
+        # a driver updated in place keeps being run from its path: its source stamp when describe was last asked, the plugins whose
+        # matches came from describe (a reload may change them), why a re-describe failed (the old one keeps running) and the
+        # PluginReloaded events (check_plugin_sources)
+        self._source_stamps: dict[str, tuple[int, int] | None] = {}
+        self._adopted: set[str] = set()
+        self.describe_failed: dict[str, str] = {}
+        self.plugin_events: list[Event] = []
+        self._plugin_event_seq = 0
         self._scheduler: Scheduler | None = None
         self._stop = threading.Event()
         self._udev = None
@@ -598,6 +611,7 @@ class Host:
         results: dict[str, dict] = {}
 
         def ask(spec) -> None:
+            self._source_stamps[spec.name] = source_stamp(spec)  # before describe: an edit made while it runs is seen next
             results[spec.name] = describe(spec, timeout_s=min(spec.timeout_s, 30.0), extra_env=self._job_env())
 
         threads = [threading.Thread(target=ask, args=(spec,), daemon=True) for spec in pending]
@@ -620,7 +634,9 @@ class Host:
             if answer.get("error") or not matches:
                 self.plugin_problems.append(f"{spec.name}: no matches in its declaration or its describe"
                                             + (f" ({answer['error']})" if answer.get("error") else ""))
+                self._adopted.add(spec.name)  # a later describe may have them
                 continue
+            self._adopted.add(spec.name)
             self.specs = [dataclasses.replace(spec, matches=tuple(matches)) if other is spec else other for other in self.specs]
 
     # --- refresh: OS skeleton + kernel log -> layer, jobs, OS checks ----------------------------------------------
@@ -1052,7 +1068,118 @@ class Host:
     def describe_all(self) -> None:
         for spec in list(self.specs):
             if spec.enabled and spec.kind == "driver" and self.describes.get(spec.name) is None:
+                self._source_stamps[spec.name] = source_stamp(spec)
                 self.describes[spec.name] = describe(spec, extra_env=self._job_env())
+
+    # --- a driver updated in place ---------------------------------------------------------------------------------------
+    def check_plugin_sources(self) -> list[str]:
+        """Ask ``describe`` again of every driver whose source changed since it was last asked, and apply what it now declares.
+        Returns the names it re-described. Called about every ``describe_check_s`` seconds by the ``io-reload`` thread.
+
+        WHY (Zach, 2026-10-24: Preview still showed the old moteus and RealSense describe after the new drivers landed): the bam_ws
+        plugins are run live from their path, and ``describe`` was read once, at start, so an update in place changed what a
+        diagnose printed but never the actions, watch, streams or probe the host offered, until the host restarted.
+
+        What is re-applied (``_apply_describe``): matches (when they came from describe), actions, ``watch``, ``streams``, ``tabs``,
+        ``follow``, ``probe`` and ``expected`` all read ``self.describes`` where they are used. Running follows and watches are
+        restarted only when their own declaration changed. A describe that fails keeps the old one running and shows an UNKNOWN
+        ``<plugin>: describe`` line on the Computer until the next good one."""
+
+        redescribed = []
+        for spec in list(self.specs):
+            if not (spec.enabled and spec.kind == "driver") or self.describes.get(spec.name) is None or spec.name not in self._source_stamps:
+                continue
+            stamp = source_stamp(spec)
+            if stamp is None or stamp == self._source_stamps[spec.name]:
+                continue
+            self._source_stamps[spec.name] = stamp  # first: a failing describe is asked again only after the next edit
+            redescribed.append(spec.name)
+            self._reload_describe(spec)
+        return redescribed
+
+    def _reload_describe(self, spec) -> None:
+        old = self.describes.get(spec.name) or {}
+        answer = describe(spec, timeout_s=min(spec.timeout_s, 30.0), extra_env=self._job_env())
+        if answer.get("error"):
+            with self.lock:
+                self.describe_failed[spec.name] = str(answer["error"])
+            self.notify("plugin")
+            return
+        with self.lock:
+            self.describe_failed.pop(spec.name, None)
+            self.describes[spec.name] = answer
+        changed = sorted(key for key in set(old) | set(answer) if old.get(key) != answer.get(key))
+        self._apply_describe(spec, old, answer)
+        self._plugin_event(spec, "PluginReloaded", f"{spec.name}: its code changed; describe was read again"
+                           + (f" (changed: {', '.join(changed)})" if changed else " (nothing it declares changed)"), changed=changed)
+
+    def _apply_describe(self, spec, old: dict, new: dict) -> None:
+        from io_diagnostics.plugins import PluginConfigError, parse_match
+
+        if spec.name in self._adopted and new.get("matches"):
+            try:
+                matches = tuple(parse_match(item) for item in new["matches"])
+            except PluginConfigError as error:
+                self.plugin_problems.append(f"{spec.name}: describe {error}")
+                matches = ()
+            if matches and matches != spec.matches:
+                self.specs = [dataclasses.replace(other, matches=matches) if other.name == spec.name else other for other in self.specs]
+                self.wake()  # the next refresh matches devices again
+        if follow_period(old) != follow_period(new):
+            for key in [key for key in self.followers if key[0] == spec.name]:
+                self.followers.pop(key).stop()
+            self._sync_followers()
+        if old.get("watch") != new.get("watch"):
+            self._redeclare_watches(spec)
+        if probe_module.probe_timeout(old, spec.timeout_s) != probe_module.probe_timeout(new, spec.timeout_s) and new.get("probe"):
+            with self.lock:
+                for job in self.jobs.values():
+                    if job.spec.name == spec.name:  # a followed job is not probed again (scheduled_jobs): its follow keeps running
+                        job.probed, job.blocked, job.next_due = False, None, 0.0
+
+    def _redeclare_watches(self, spec) -> None:
+        """A driver's ``watch`` declaration changed: each running watch of it takes the new period and gates (its process restarts
+        when the declaration it started with differs); a plugin that no longer declares one has its watches stopped."""
+
+        with self._watch_lock:
+            current = [watch for watch in self.watches.values() if watch.job.spec.name == spec.name and not watch.stopped]
+            for watch in current:
+                declared = self._watch_declared(watch.job)
+                if declared is None or "refused" in declared:
+                    self._watch_stop(watch)
+                elif declared != watch.declared:
+                    watch.declared = declared
+                    if watch.follower is not None:
+                        watch.follower.stop()
+                        watch.follower = None
+        for watch in current:
+            if not watch.stopped:
+                self._watch_step(watch)
+
+    def _plugin_event(self, spec, code: str, message: str, **args) -> None:
+        with self.lock:
+            self._plugin_event_seq += 1
+            self.plugin_events.append(Event(code, self.clock.now(), "info", message, path=tree.HOST_PATH, args=args,
+                                            seq=self._plugin_event_seq, source=spec.name))
+            del self.plugin_events[:-MAX_PLUGIN_EVENTS]
+        self.notify("plugin")
+
+    def _reload_loop(self) -> None:
+        while not self._stop.wait(self.describe_check_s):
+            try:
+                self.check_plugin_sources()
+            except Exception as error:  # noqa: BLE001 - a bad read must not stop the watcher of the sources
+                self.sources = [*self.sources, {"name": "plugin sources", "state": "skipped", "note": f"{type(error).__name__}: {error}"}]
+
+    def _describe_notes(self, now: float) -> list[DiagnosticStatus]:
+        """One UNKNOWN line per driver whose changed code could not be described again: nothing says the old declaration is
+        wrong, so it keeps running, and nothing says the new code is fine either."""
+
+        return [DiagnosticStatus(
+            level=UNKNOWN, name=f"{name}: describe", code="DescribeFailed", path=tree.HOST_PATH, stamp=now, received=now, source=HOST_SOURCE,
+            message=f"{name}'s code changed but describe failed ({why}); the previous declaration is still in use",
+            values=(KeyValue("what_to_check", "1. Run the plugin's describe by hand and read its error; the host asks again at the next edit"),))
+            for name, why in list(self.describe_failed.items())]
 
     # --- background service ------------------------------------------------------------------------------------
     def start(self, *, udev: bool = True) -> None:
@@ -1065,6 +1192,7 @@ class Host:
         threading.Thread(target=self._refresh_loop, name="io-refresh", daemon=True).start()
         threading.Thread(target=self._recheck_loop, name="io-recheck", daemon=True).start()
         threading.Thread(target=self.describe_all, name="io-describe", daemon=True).start()
+        threading.Thread(target=self._reload_loop, name="io-reload", daemon=True).start()
         # WHY the OS source decides: only a live machine has a udev to listen to (a fixture or a fake machine has none)
         command = getattr(self.os, "udev_command", None)
         if udev and command:
@@ -1125,7 +1253,7 @@ class Host:
             # DRIVER reports (the RealSense SDK serial), which only the plugins' records carry
             setup = expected_module.evaluate(self.setup, merged, layer, now, RUNNER_SOURCE)
             notes = (self._host_notes(merged, now) + self._links_summary(merged, now) + self._console_notes(merged, now)
-                     + roster_module.stopped_answering(merged, now))
+                     + roster_module.stopped_answering(merged, now) + self._describe_notes(now))
             # WHY here: the rig rows and the host's own lines are judged per view, never stored; their changes are
             # what the history keeps
             self.history.sync("view", setup.statuses + notes, now)
@@ -1143,6 +1271,7 @@ class Host:
             events += self.faults.events
             events += self.runs.events()  # RunStarted / RunEnded (docs/runs-v1.md section 5)
             events += self.config_editor.events  # every configuration write, accepted or not (config_edit.py)
+            events += self.plugin_events  # PluginReloaded: a driver's code changed and describe was read again
             events += activity_module.level_events(self.history.transitions(now))
             for job in self.jobs.values():
                 device_path = self.layer.device_paths.get(str(job.device.get("id")))
@@ -1871,6 +2000,7 @@ class Host:
         if found is not None:
             return found, "entity"
         if self.describes.get(job.spec.name) is None:
+            self._source_stamps[job.spec.name] = source_stamp(job.spec)
             self.describes[job.spec.name] = describe(job.spec, extra_env=self._job_env())
         for item in (self.describes.get(job.spec.name) or {}).get("actions") or []:
             if isinstance(item, dict) and item.get("name") == name:
@@ -1963,6 +2093,7 @@ class Host:
 
     def _describe_for(self, job: Job) -> dict | None:
         if self.describes.get(job.spec.name) is None:
+            self._source_stamps[job.spec.name] = source_stamp(job.spec)
             self.describes[job.spec.name] = describe(job.spec, extra_env=self._job_env())
         return self.describes[job.spec.name]
 
