@@ -352,6 +352,9 @@ def test_a_write_goes_through_at_once_while_the_watch_runs_and_the_watch_resumes
         # the page still beats: the watch is back, a new process
         resumed = wait_for(lambda: (rig.host.watch_heartbeat(rig.board), rig.host.watch_json(*rig.host._watch_target(rig.board)))[1]
                            if rig.host.watch_json(*rig.host._watch_target(rig.board))["state"] == "running" else None, what="the watch resuming")
+        # WHY wait for the plugin's own log line: "running" is set when the host spawns the watch, a moment before the new
+        # process writes its verb (the same race fixed in test_state_config, 2026-10-24)
+        wait_for(lambda: len(rig.verbs("watch")) >= 2, what="the second watch process starting")
         assert resumed["pid"] != first and len(rig.verbs("watch")) == 2
         # a save is a write too
         assert rig.editor.persist(rig.board, token)["ok"] and rig.acts("persist_config")[-1]["watchers"] == []
