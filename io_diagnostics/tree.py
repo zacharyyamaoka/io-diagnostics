@@ -11,6 +11,12 @@ Two sources build it (docs/converged-design-2026-10-22.md §4):
 - **Plugin children** hang under their device: fdcanusb -> CAN bus (``via``) -> node (``via``) -> driver / motor
   (``part_of``); D405 -> streams (``part_of``).
 
+This module is the PHYSICAL view's composition on the host side (computer -> bus -> port -> device -> function node, plus
+the plugins' children): ``build_os_layer`` + ``merge`` are the only places that know about computers and ports, and the
+API's ``parent`` / ``edge`` carry the result. The page draws it through a structure (``web/view/structure/p1.js``,
+``view: 'physical'``); a System view (areas -> functions -> components) or a Software view (computer -> processes) is
+another composition over the same entities and records, not a change to them.
+
 The rules are ``contract.record``'s, never re-implemented here (this replaces V6's worst-child-headline rule):
 
 - ``summarize``: an entity with records of its own is a black box and its row shows its OWN level (Zach,
@@ -660,7 +666,70 @@ def last_seen(own: list[DiagnosticStatus]) -> float | None:
     return max(received) if received else None
 
 
-def node_json(path: str, rows: Rows, layer: OsLayer, faults_by_path: dict[str, int], *, nested: bool) -> dict:
+# Kinds that are structure, not something to hear from: no presence dot (docs/api-v1.md "presence").
+NO_PRESENCE_KINDS = ("group", "port", "rig")
+
+
+def heard_text(seconds: float) -> str:
+    if seconds < 90:
+        return f"{seconds:.0f} s ago"
+    if seconds < 5400:
+        return f"{seconds / 60:.0f} min ago"
+    if seconds < 172800:
+        return f"{seconds / 3600:.0f} h ago"
+    return f"{seconds / 86400:.0f} days ago"
+
+
+def presence_of(path: str, entity: Entity, summary: Summary, own: list[DiagnosticStatus], seen: float | None, now: float,
+                memory: dict[str, float], live: frozenset | set) -> dict | None:
+    """One row's presence, the Claude-sidebar dot (Zach, 2026-10-24): ``heard`` (filled: heard within its expected
+    period), ``stale`` (hollow ring: known but not heard lately, with when) or ``live`` (pulsing: data arriving now).
+    None for structure with nothing to hear from. WHY never a level: presence is neutral; warning colours are
+    reserved for real WARN / ERROR / UNKNOWN."""
+
+    if entity.kind in NO_PRESENCE_KINDS or (not own and path not in memory):
+        return None
+    if path in memory and not own:  # restored from the last run, no fresh report yet
+        stamp = memory[path]
+        age = round(now - stamp, 3) if stamp else None
+        return {"state": "stale", "age_s": age, "restored": True,
+                "text": f"last heard {heard_text(age)} (before this session)" if age is not None else "not heard yet this session"}
+    if summary.own == STALE:
+        age = round(now - seen, 3) if seen is not None else None
+        return {"state": "stale", "age_s": age, "restored": False,
+                "text": f"last heard {heard_text(age)}" if age is not None else "not heard lately"}
+    return {"state": "live" if path in live else "heard", "age_s": round(now - seen, 3) if seen is not None else None,
+            "restored": False, "text": "data arriving now" if path in live else ""}
+
+
+def usb_json(path: str, layer: OsLayer) -> dict | None:
+    """A USB device row's own version and its link, for the page to say "USB 2.1" (web/usb.js): ``version`` is the
+    device's bcdUSB as sysfs shows it ("2.10"), ``speed_mbps`` the link it runs at. None for anything else."""
+
+    device = layer.devices.get(layer.device_of_path.get(path, ""))
+    if not device or device.get("bus") != "usb":
+        return None
+    attrs = device.get("attrs") or {}
+    version, speed = str(attrs.get("usb_version") or "").strip(), attrs.get("speed_mbps")
+    if not version and not speed:
+        return None
+    return {"version": version or None, "speed_mbps": speed or None}
+
+
+def is_claimed(path: str, entity: Entity, merged: Merged, layer: OsLayer) -> bool:
+    """Whether some driver plugin claims this row. An OS device nobody claims (a keyboard, a mouse, a webcam, a NIC) is
+    "likely not needed" (Zach, 2026-10-24) and the page hides it by default; anything a plugin reported, and all
+    structure, is claimed."""
+
+    device_id = layer.device_of_path.get(path)
+    if device_id is None or device_id not in layer.physical:
+        return True
+    return device_id in merged.plugin_devices
+
+
+def node_json(path: str, rows: Rows, layer: OsLayer, faults_by_path: dict[str, int], *, nested: bool,
+              memory: dict[str, float] | None = None, live: frozenset | set = frozenset(),
+              expected_paths: frozenset | set = frozenset()) -> dict:
     merged, summary = rows.merged, rows.summaries[path]
     entity = merged.entities[path]
     own = rows.own.get(path, [])
@@ -692,9 +761,13 @@ def node_json(path: str, rows: Rows, layer: OsLayer, faults_by_path: dict[str, i
         "stale_after_s": max(STALE_FACTOR * min(periods), STALE_FLOOR_S) if periods else None,
         "checks": len(own), "actions": len(entity.actions), "faults": faults_by_path.get(path, 0),
         "collapsed": path in COLLAPSED,
+        "presence": presence_of(path, entity, summary, own, seen, rows.now, memory or {}, live),
+        "claimed": is_claimed(path, entity, merged, layer) or path in expected_paths,
+        "usb": usb_json(path, layer),
     }
     children = merged.children.get(path, [])
-    node["children"] = ([node_json(child, rows, layer, faults_by_path, nested=True) for child in children]
+    node["children"] = ([node_json(child, rows, layer, faults_by_path, nested=True, memory=memory, live=live,
+                                   expected_paths=expected_paths) for child in children]
                         if nested else list(children))
     return node
 
@@ -713,7 +786,7 @@ def nearest_device(path: str, merged: Merged, layer: OsLayer | None = None) -> s
     return None
 
 
-__all__ = ["HOST_PATH", "GROUP_NAMES", "ICONS", "STRUCTURE_KINDS", "PortHistory", "OsLayer", "Merged", "Rows", "slug",
+__all__ = ["presence_of", "is_claimed", "heard_text", "HOST_PATH", "GROUP_NAMES", "ICONS", "STRUCTURE_KINDS", "PortHistory", "OsLayer", "Merged", "Rows", "slug",
            "speed_text", "usb_hardware_id", "usb_device_dict", "live_usb_skeleton", "load_skeleton", "build_os_layer",
            "os_statuses", "merge", "build_rows", "node_json", "nearest_device", "worse", "device_icon", "physical_count",
            "last_seen"]

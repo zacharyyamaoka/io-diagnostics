@@ -5,6 +5,7 @@
 // net interface, a plugin's CAN bus) are not rows; their physical path becomes a quiet attribute — the Table's
 // "Connection" column and a line of the row tooltip (`USB 1-3 · 12 Mb/s · ttyACM0`, `PCIe 0000:01:00.0 · x1 of x4`).
 // The "Ports" toggle (off by default) brings the layers back as rows: the physical tree, one click away.
+// The root row is the computer itself (bam-GPU), the host entity: its detail is the Computer page.
 //
 // WHY a hidden layer's problem is folded into the entity it serves (Zach, 2026-10-22: "see at a glance at the
 // entities BUT also provide the detailed information"): hiding a layer must never hide its report. A layer with an
@@ -81,7 +82,10 @@
     if (port) {
       const name = String(port.name || '');
       bits.push(viaUsb && name.startsWith('Port ') ? `USB ${name.slice(5)}` : name);
-      if (SPEED.test(String(port.id_text || ''))) bits.push(port.id_text);
+      // the USB generation, not the link speed; the device's own bcdUSB wins where it says more (its row's `usb`)
+      const own = viaUsb && root.IOUsb && node.usb ? root.IOUsb.describe(node.usb) : null;
+      if (own && own.text) bits.push(own.text);
+      else if (SPEED.test(String(port.id_text || ''))) bits.push(root.IOUsb ? root.IOUsb.relabel(port.id_text) : port.id_text);
     } else if (pci) {
       bits.push(`PCIe ${pci[1]}`);
       const width = PCI_WIDTH.exec(String(node.message || ''));
@@ -162,51 +166,32 @@
     return entity ? withConnection(row, connectionOf(node, trail)) : row;
   }
 
-  // ---------------------------------------------------------------------- built into the computer ----
-  // WHY: on the live PC 16 built-in PCI functions (IOMMU, SMBus, GPU, audio, NVMe, USB controllers) sat beside the
-  // fdcanusb at the top level (2026-10-22). Zach's view is "the things I plugged in": a PCI function with no capture /
-  // network interface, no plugin owning it and no problem of its own goes into one quiet, closed "Computer" row.
-  const CAPTURE = /frame ?grabber|capture/i;
-  function builtIn(node) {
-    if (!String(node.hardware_id || '').startsWith('pci:') || V.ownProblem(node)) return false;
-    if (node.owner && !String(node.owner).startsWith('io_facts')) return false;
-    if (CAPTURE.test(`${node.name || ''} ${node.message || ''}`)) return false;
-    return !(node.children || []).some((child) => isInterface(child) && (child.icon === 'net' || child.icon === 'video'));
+  // ------------------------------------------------------------------------ the computer is the root ----
+  // Zach, 2026-10-24: "the computer should be the BAM-GPU … as its own row". The root row IS the host entity, named as
+  // the machine is (bam-GPU); selecting it opens the Computer page (CPU, memory, temperatures, its checks), and
+  // everything plugged in hangs under it. The built-in PCI functions are ordinary children beside the RealSense and the
+  // fdcanusbs: no driver claims them, so the page hides them by default (the Visibility control), not a second
+  // "Computer" row or a "Built-in" group.
+  function computerRow(host, children, key) {
+    const row = V.entityRow(seen({ ...host, children: [] }, []), {}, { key, node: host, children, defaultOpen: true });
+    // its own problem shows beside its name like any entity's ("CPU Tctl 92 °C: High Temperature"); its hint is the worst
+    // anywhere below, rolled up with the same shape as every collapsed row
+    if (V.ownProblem(host)) row.lead = String(host.message || '');
+    return row;
   }
 
-  // With one host (elided), the Computer row IS the host entity (Zach, 2026-10-23: "in our entity chart we kinda have
-  // the Computer as an entity"): selecting it opens the host's detail (the computer plugin's CPU, memory, disk,
-  // temperature, GPU, clock and USB/PCIe links checks), and its own problem shows on it like any entity's ("CPU Tctl
-  // 92 °C: High Temperature" beside the label). Its hint is only about the built-in devices it holds: the host's API
-  // hint is the worst anywhere, which the rows above already show. With several hosts each host is its own row, so
-  // its Computer stays a plain group (the host must not show twice).
-  function computerRow(host, inside, key) {
-    const message = `${inside.length} built-in PCI device${inside.length === 1 ? '' : 's'}`;
-    const group = V.groupRow({ key, label: 'Computer', icon: 'host', children: inside, defaultOpen: false, message });
-    if (!host) return group;
-    const row = V.entityRow(seen({ ...host, children: [] }, []), {}, { key, children: inside, defaultOpen: false });
-    const own = V.ownProblem(host);
-    return Object.assign(row, {
-      label: 'Computer', icon: 'host', idText: '', lead: own ? String(host.message || '') : '',
-      message: own ? host.message : message,
-      hint: null, rollup: group.rollup,
-      status: { ...row.status, hint: group.status.hint },
-      title: ['Computer', host.name, own ? host.message : message, group.status.hint ? `below: ${group.status.hint.level} · ${group.status.hint.message}` : '']
-        .filter(Boolean).join('\n'),
-    });
-  }
-
-  function withComputer(rows, key, host = null) {
-    const inside = rows.filter((row) => row.node && builtIn(row.node));
-    const reports = host && !V.isGrouping(host); // the host has checks of its own (the computer plugin)
-    if (!inside.length && !reports) return rows;
-    return [...rows.filter((row) => !inside.includes(row)), computerRow(host, inside, key)];
-  }
-
+  // THE SEAM (orchestrator, 2026-10-24: "one entity interface for hardware and software, the hierarchy is a choice of view"):
+  // a structure is a hierarchy builder, registered by id and picked in View options' Group by; `view` names which view of
+  // the entities it draws. This one is the PHYSICAL view (computer -> ports -> devices): the only place that knows the
+  // computer is the root row and that a port is a layer, so a System view (areas -> functions -> components, SOVD) or a
+  // Software view (computer -> processes / nodes) plugs in beside it as another structure over the same entity rows,
+  // the same detail tabs and the same health marks. Ports exist only here.
   root.IOStructures = root.IOStructures || {};
   root.IOStructures.p1 = {
+    view: 'physical',
     name: 'Devices, transport as columns',
-    description: 'Only entities: an adapter holds its boards, cameras / capture cards / NICs are siblings. The physical path (USB 1-3 · 12 Mb/s · ttyACM0, PCIe 0000:01:00.0) is the Connection column and the row tooltip; a hidden layer\'s problem shows on the entity it serves. "Ports" brings the layers back as rows.',
+    rootRow: true,
+    description: 'The computer is the root row; below it only entities: an adapter holds its boards, cameras / capture cards / NICs are siblings. The physical path (USB 1-3 · 12 Mb/s · ttyACM0, PCIe 0000:01:00.0) is the Connection column and the row tooltip; a hidden layer\'s problem shows on the entity it serves. "Ports" brings the layers back as rows.',
     order: 1,
     toggles: [
       { key: 'showTransport', label: 'Ports', default: false, title: 'Show the transport layers (USB bus, port, hub, tty / video, CAN bus) as rows' },
@@ -215,17 +200,13 @@
       { key: 'connection', title: 'Connection', width: '240px', mono: true },
     ],
     rows(state, options) {
-      const top = V.topLevel(state, options);
+      const top = V.topLevel(state, { ...options, elideSingleHost: false });
       let rows;
       if (options.showTransport) {
         rows = top.nodes.filter((node) => options.showEmpty || !V.isEmpty(node)).map((node) => physicalRow(node, options, []));
-      } else if (top.elided) {
-        // one host: its children are the top level, walked as the host's own children would be
-        rows = withComputer(lift({ children: top.nodes }, options, [], []), 'p1:computer', top.hosts[0]);
       } else {
-        // several hosts: one row each (no connection of its own), its entities below
-        rows = top.nodes.map((host) => V.entityRow(seen(host, []), options,
-          { node: host, children: withComputer(lift(host, options, [], []), `p1:${host.path}:computer`), defaultOpen: true }));
+        // each host is a root row (usually exactly one: the machine itself), its entities below
+        rows = top.nodes.map((host) => computerRow(host, lift(host, options, [], []), `p1:${host.path}`));
       }
       return rows; // core's search reads the Connection column too (row.columns), so "ttyACM0" finds the adapter
     },

@@ -4,9 +4,9 @@
 //   /usr/bin/node /home/bam/io-diagnostics/tests/test_p1_computer.js
 //
 // The live 17:41 frame's host gets a self-report (what the computer plugin adds: a hot CPU) while its rollup still points
-// at the dead CAN bus. P1's closed Computer row must BE the host entity (selecting it opens the host's detail; the
-// v6 header's elided host name resolves to the same row), show its own problem beside the label, never borrow the
-// host's worst-anywhere hint, and every structure must show the host at most once. Exits 1 on a failure.
+// at the dead CAN bus. P1's root row must BE the host entity (selecting it opens the Computer page), show its own problem
+// beside the label, carry the worst-below roll-up, hold every plugged thing as an ordinary child (the built-in PCI
+// devices included, no second Computer row), and every structure must show the host at most once. Exits 1 on a failure.
 'use strict';
 
 const fs = require('fs');
@@ -38,32 +38,33 @@ function hotState() {
 const plain = JSON.parse(fs.readFileSync(LIVE, 'utf8'));
 const hot = hotState();
 
-// ---- P1: the Computer row is the host
+// ---- P1: the root row IS the host (Zach, 2026-10-24: "the computer should be the BAM-GPU … as its own row")
 const built = V.build(hot, 'p1', {});
-const computer = built.rows[built.rows.length - 1];
-check('p1: the last row is the Computer and it is the host entity', computer.label === 'Computer' && computer.entity === 'host'
-  && computer.key === 'p1:computer' && computer.kind === 'host', { label: computer.label, entity: computer.entity, key: computer.key });
-check('p1: the Computer shows its own problem beside its label', computer.status.own === 'warn' && computer.lead === HOT
-  && computer.title.includes(HOT) && computer.title.includes(hot.tree.name), { own: computer.status.own, lead: computer.lead });
-check('p1: no borrowed hint (the CAN bus error is drawn on its own rows, not on the Computer)', computer.status.hint === null
-  && computer.hint === null, computer.status.hint);
-check('p1: the built-in PCI devices stay its children, closed', computer.children.some((row) => /IOMMU/.test(row.label))
-  && computer.defaultOpen === false, computer.children.map((row) => row.label));
-check('p1: selecting the elided host (v6 header) lands on the Computer row', built.host && built.host.entity === 'host' && built.host.elided
-  && built.byEntity.get('host') === 'p1:computer', built.host);
-check('p1: the Computer row is searchable by the host name', V.build(hot, 'p1', { query: hot.tree.name }).flat.some((row) => row.entity === 'host'));
+const [root] = built.rows;
+check('p1: the one top-level row is the host entity, named as the machine is; no second Computer row, no Built-in group',
+  built.rows.length === 1 && root.label === hot.tree.name && root.entity === 'host' && root.kind === 'host' && root.key === `p1:${hot.tree.path}`
+  && !built.flat.some((row) => /^(Computer|Built-in)$/.test(row.label)), { rows: built.rows.map((row) => row.label), key: root.key });
+check('p1: the host shows its own problem beside its label', root.status.own === 'warn' && root.lead === HOT
+  && root.title.includes(HOT) && root.title.includes(hot.tree.name), { own: root.status.own, lead: root.lead });
+check('p1: its roll-up is the worst thing below it (the dead CAN bus), the same hint every row carries',
+  root.status.hint && root.status.hint.level === 'error' && /CAN bus/.test(root.status.hint.origin_name || root.status.hint.message), root.status.hint);
+check('p1: the built-in PCI devices are ordinary children, level with the adapters and cameras',
+  root.children.some((row) => /IOMMU/.test(row.label)) && root.children.some((row) => /fdcanusb/.test(row.label))
+  && root.children.every((row) => row.depth === 1) && root.defaultOpen === true, root.children.map((row) => row.label).slice(0, 8));
+check('p1: selecting the host (the header, a link) lands on the root row', built.host && built.host.entity === 'host' && built.host.elided === false
+  && built.byEntity.get('host') === root.key, built.host);
+check('p1: the host row is searchable by the host name', V.build(hot, 'p1', { query: hot.tree.name }).flat.some((row) => row.entity === 'host'));
 
-// without a self-report the Computer is still the host row, quiet
-const quiet = V.build(plain, 'p1', {}).rows.at(-1);
-check('p1: a host without checks keeps a quiet Computer row (the built-ins message)', quiet.entity === 'host' && quiet.status.own === null
-  && /built-in PCI device/.test(quiet.message) && quiet.lead === '', { own: quiet.status.own, message: quiet.message });
+// without a self-report the host is still the root row, quiet
+const quiet = V.build(plain, 'p1', {}).rows[0];
+check('p1: a host without checks is still the root row, with no problem of its own and no lead', quiet.entity === 'host' && quiet.status.own === null
+  && quiet.lead === '', { own: quiet.status.own, lead: quiet.lead });
 
-// ---- P1 open by default: every entity row with children, in both modes; only the Computer stays closed
+// ---- P1 open by default: the root and every entity row with children, in both modes
 for (const showTransport of [false, true]) {
   const rows = V.build(hot, 'p1', { showTransport }).flat;
   const closed = rows.filter((row) => row.children.length && !row.defaultOpen).map((row) => row.label);
-  check(`p1 (Ports ${showTransport ? 'on' : 'off'}): every row with children opens, only the Computer stays closed`,
-    closed.every((label) => label === 'Computer'), closed);
+  check(`p1 (Ports ${showTransport ? 'on' : 'off'}): every row with children opens`, closed.length === 0, closed);
 }
 
 // ---- every structure: the host at most once, and the structures still build

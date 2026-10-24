@@ -143,7 +143,9 @@ def rack(tmp_path):
 def test_the_host_keeps_each_plugin_status_and_each_os_check(rack):
     device = rack.layer.device_paths["usb:9-1"]
     bus = rack.history_json(f"{device}/can")
-    [status] = bus["statuses"]
+    # the host adds one more on the bus once its remembered boards go silent (roster.stopped_answering)
+    assert {status["name"] for status in bus["statuses"]} == {"DEAD CAN bus: bus", "DEAD CAN bus: boards stopped answering"}
+    [status] = [status for status in bus["statuses"] if status["name"] == "DEAD CAN bus: bus"]
     assert (status["name"], status["expected_period_s"], status["stale_after_s"]) == ("DEAD CAN bus: bus", 2, 6.0)
     assert [(piece["from"], piece["level"], piece["code"]) for piece in status["levels"]] == [
         (130.0, None, ""), (1000.0, OK, ""), (1010.0, STALE, ""), (1012.0, ERROR, "NoAck"), (1022.0, STALE, "")]

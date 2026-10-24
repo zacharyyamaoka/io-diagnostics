@@ -101,8 +101,8 @@ reason = "frames never reached the bus (2026-10-22); replaced by 0607623A; suspe
 | `date`, `reason` | retired | shown on its row when it is plugged in again |
 
 At least one of `hardware_id` / `serial` per device. A device known only by a driver's serial is matched from its
-driver's first report on (so its plugin gets `IO_DIAGNOSTICS_EXPECTED` from its second run); when it is missing, its row
-under "Expected, not connected" says "no connected device reports serial …" instead of the kernel's evidence.
+driver's first report on (so its plugin gets `IO_DIAGNOSTICS_EXPECTED` from its second run); when it is missing, the
+Computer's `<name>: presence` check says "no connected device reports serial …" instead of the kernel's evidence.
 
 ## What the page shows
 
@@ -113,18 +113,14 @@ under "Expected, not connected" says "no connected device reports serial …" in
   fdcanusb 272813EF"), with a numbered what-to-check; **unknown** (`ExpectedNotChecked`) when a node's check could not
   run (port busy, passive run, stale); else **ok** ("everything expected is here").
 - **Counted once** (record v0.1 `caused_by`, 2026-10-23): the rig row's check names, per missing item, the row that
-  reports it (the board's own `BoardNotAnswering` row, or the absent device's row under "Expected, not connected").
-  So the chip counts the missing board once, as the board, and the rig row reads as its knock-on while keeping its
-  own warn and words. When some item has no row that says it (a node its driver never mentions), the rig names
-  nothing and counts as a cause of its own.
-- **A wrong ratio** is the board's own warning, not the rig row's: `<node>: expected ratio` (`RatioMismatch`),
-  "config ratio 0.1667, expected 0.1 (10:1 gearbox)", judged on the driver's latest fresh config reading.
-- Notes that never change its level: an extra node that answers but is not listed ("also here, not expected: CAN 2 on
-  fdcanusb 0607623A"), a node reporting another model, and an absent adapter whose boards answer on another one
-  ("fdcanusb 28B3A25D's boards answer on fdcanusb 0607623A now": by the nodes' own ids when the file has them, else
-  when one other adapter of the same model answers every one of its node paths).
-- **Expected, not connected**: an expected device that is not here gets a row with the kernel's evidence (its USB id),
-  beside the devices this host remembers seeing (`seen.json`) and those a driver lists (moteus: the rack inventory).
+  reports it: the bus that says "2 of 3 expected boards answer · CAN 15 silent" (a board that never answered has no
+  row), a board's own stale row, or the Computer for an absent device. So the chip counts the missing thing once, where
+  it is reported, and the rig row reads as its knock-on while keeping its own warn and words. A knock-on row draws no
+  health mark; its words stay in its tooltip and its detail.
+- **Expected, not connected** (Zach, 2026-10-24: a missing thing is a diagnostic on its parent, never a ghost row): an
+  expected device that is not on USB is a `warn` `ExpectedAbsent` check **on the Computer**, with the kernel's evidence
+  (its USB id), beside an `ok` "Recently seen" check for the devices this host remembers seeing (`seen.json`) and those
+  a driver lists (moteus: the rack inventory). There is no group and no row.
 - **Retired**: plugged in again, a retired device's own row is a warning, "retired 2026-10-23: frames never reached
   the bus …", so a known-bad adapter is recognised at once. It is never "expected, not connected".
 
@@ -149,7 +145,9 @@ and no token):
 |---|---|
 | a device (adapter, camera, ...) | **Expect what's here**: add it (or update it) with the nodes answering below it now; takes a retired one back into service · **Retire…**: with a reason |
 | a rig row | **Expect what's here**: every present device's nodes as they answer now (the confirm lists what changes) |
-| a row under Expected, not connected | **Forget**: out of the file and out of `seen.json`, and kept out of a driver's own list until it is seen again · **Retire…** |
+| a board (a node a plugin reported) | **Remove from bus**: the host forgets the row, and it comes back if the board answers again · **Expect / Don't expect**: add it to, or take it out of, its adapter's nodes |
+| a device that is expected | also **Don't expect**: out of the file; it stays on the bus as an ordinary device |
+| an expected device that is not on USB | no row to click; `io-diagnostics forget --hardware-id usb:…` takes it out of the file and `seen.json`, and keeps a driver's own list from bringing it back until it is seen again |
 
 The same from a terminal (a person or the orchestrator; `--path` needs the host to see the row, so `expect --path` runs
 every plugin once):

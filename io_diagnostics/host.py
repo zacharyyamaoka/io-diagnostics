@@ -28,6 +28,7 @@ from io_diagnostics import expected as expected_module
 from io_diagnostics import history as history_module
 from io_diagnostics import logview as logview_module
 from io_diagnostics import probe as probe_module
+from io_diagnostics import roster as roster_module
 from io_diagnostics import settings as settings_module
 from io_diagnostics import tree
 from io_diagnostics.faults import Faults
@@ -276,13 +277,12 @@ class FixtureOs:
 # ----- devices the host has seen (expected-but-absent) ------------------------------------------------------------
 SEEN_FILE = "seen.json"
 SEEN_WRITE_S = 300.0  # refresh a known device's last_seen on disk at most this often; a new device is written at once
-EXPECTED_PATH = f"{tree.HOST_PATH}/expected"
 EXPECTED_SOURCE = "io_diagnostics.expected"
-# WHY a group of its own, collapsed and never above OK: a device only SEEN (a plugin diagnosed it once) is not expected.
-# FDA81D29 was plugged for 15 s on 2026-10-23 and its unplug confirmed an ExpectedAbsent WARN from seen.json alone
-# (Zach: a seen-only device must not warn when it goes absent). Its unplug is an activity event; this row is a memory.
-RECENT_PATH = tree.RECENT_PATH
-RECENTLY_SEEN_S = 86400.0  # a seen-only device gets its info row for a day after it was last seen, then none
+# WHY one OK status on the Computer, never a row or a warning: a device only SEEN (a plugin diagnosed it once) is not
+# expected. FDA81D29 was plugged for 15 s on 2026-10-23 and its unplug confirmed an ExpectedAbsent WARN from seen.json
+# alone (Zach: a seen-only device must not warn when it goes absent). And a missing thing is a diagnostic on its parent,
+# never a ghost row (Zach, 2026-10-24), so the memory is a list in the Computer's detail.
+RECENTLY_SEEN_S = 86400.0  # a seen-only device is listed for a day after it was last seen, then not
 
 
 def _pid_alive(pid: int) -> bool:
@@ -385,6 +385,9 @@ class View:
     faults_by_path: dict[str, int]
     setup: expected_module.SetupView | None = None
     checks: list[DiagnosticStatus] = dataclasses.field(default_factory=list)  # the checks' results, attached
+    memory: dict[str, float] = dataclasses.field(default_factory=dict)  # path -> last heard: restored, no fresh report yet
+    live: frozenset = frozenset()  # paths whose data is arriving now (a follower is running)
+    expected_paths: frozenset = frozenset()  # device rows the expected setup (or its retired list) names
 
 
 class _Blank(dict):
@@ -415,7 +418,8 @@ class Host:
                  run_ring_bytes: int | None = None, run_budget_bytes: int | None = None, run_bus_wait_s: float | None = None,
                  run_bus_poll_s: float | None = None, run_bus_settle_s: float | None = None,
                  event_log_dir: Path | None = None, boot_id: str = "", boot_start: float | None = None,
-                 event_log_cap_bytes: int | None = None, event_log_segment_bytes: int | None = None):
+                 event_log_cap_bytes: int | None = None, event_log_segment_bytes: int | None = None,
+                 ledger_file: Path | None = None):
         self.plugins_dir = Path(plugins_dir)
         # WHY settable: the defaults are the product (probe.py: holders' pids every 1 s, 0.5 s settle, 10 s first
         # backoff); a test of the backoff alone shortens the last
@@ -442,6 +446,9 @@ class Host:
         self.check_results: dict[str, DiagnosticStatus] = {}
         self.gates = Gates()  # one per host: `once`, the scheduler and act all take turns per `exclusive` group
         self.seen = SeenDevices(state_file)  # USB devices a plugin diagnosed, remembered across runs (None: memory)
+        # the last-known entities of every (plugin, device), so a restarted host shows the same rows, hollow, until fresh
+        # data replaces them (roster.py; None: memory only)
+        self.roster = roster_module.Roster(ledger_file)
         # the person's rig manifest (docs/expected-setup.md); None = nothing expected and no edits (fixture / machine)
         self.setup = expected_module.ExpectedSetup(expected_file)
         # the app-wide settings (settings.toml; None: memory only) and the rolling history they size (history.py)
@@ -570,11 +577,17 @@ class Host:
             sources = [*sources, {"name": "seen devices", "state": "skipped", "note": note}]
         if self.setup.note:
             sources = [*sources, {"name": "expected setup", "state": "skipped", "note": self.setup.note}]
+        if self.roster.note or self.roster.write_note:
+            sources = [*sources, {"name": "last-known tree", "state": "skipped",
+                                  "note": " · ".join(text for text in (self.roster.note, self.roster.write_note) if text)}]
         with self.lock:
             wanted = {}
             for spec, device in pairs:
                 key = (spec.name, str(device.get("id")))
-                job = self.jobs.get(key) or Job(spec, device, layer.device_paths[str(device.get("id"))])
+                job = self.jobs.get(key)
+                if job is None:
+                    job = Job(spec, device, layer.device_paths[str(device.get("id"))])
+                    self.roster.restore(job, layer.entities[job.device_path].hardware_id)
                 job.device, job.device_path = device, layer.device_paths[str(device.get("id"))]
                 devnum = (device.get("attrs") or {}).get("devnum")
                 if job.connection is not None and devnum is not None and devnum != job.connection:
@@ -697,61 +710,43 @@ class Host:
         return (ids[2],) if ids else ()
 
     def _absent_rows(self, layer: tree.OsLayer, boots: list, now: float) -> list[DiagnosticStatus]:
-        """One row (entity + WARN status) per expected USB device that is not on USB now, under ``host/expected``,
-        saying in plain words what the kernel saw. WHY warn, not error: absent is not broken. A device that was only
-        seen gets an OK row under the collapsed ``host/recently-seen`` instead, for ``RECENTLY_SEEN_S``."""
+        """One WARN status on the Computer per expected USB device that is not on USB now, saying in plain words what the
+        kernel saw (Zach, 2026-10-24: a missing thing is a diagnostic on its parent, not a ghost row). WHY warn, not
+        error: absent is not broken. Devices that were only seen are one OK status, "Recently seen", for ``RECENTLY_SEEN_S``."""
 
         present = {ids for entity in layer.entities.values() if (ids := activity_module.usb_id(entity.hardware_id))}
         note = str(getattr(getattr(self.os, "kernel_log", None), "note", "") or "")
         unreadable = note if note.startswith("journalctl unavailable") else ""
-        statuses = []
+        statuses, recent = [], []
         for hardware_id, expected in sorted(self.expected_devices().items()):
             ids = activity_module.usb_id(hardware_id)
             if ids is None or ids in present:  # v0.1: only USB ids (usb:<vid>:<pid>:<serial>) are checked here
                 continue
             if not expected["expected"]:
-                statuses += self._recent_row(layer, hardware_id, expected, boots, now, unreadable)
+                last = expected["last_seen"]
+                if isinstance(last, (int, float)) and not isinstance(last, bool) and now - float(last) <= RECENTLY_SEEN_S:
+                    recent.append((hardware_id, expected, activity_module.kernel_evidence(boots, hardware_id, now, self.utc_offset_s, unreadable)))
                 continue
-            if EXPECTED_PATH not in layer.entities:
-                layer.entities[EXPECTED_PATH] = Entity(EXPECTED_PATH, "Expected, not connected", "group",
-                                                       via=tree.HOST_PATH, owner="io_diagnostics")
-                layer.icons[EXPECTED_PATH] = "group"
-            path = f"{EXPECTED_PATH}/{tree.slug(hardware_id)}"
-            layer.entities[path] = Entity(path, expected["name"], "device", via=EXPECTED_PATH, hardware_id=hardware_id,
-                                          owner=expected["owner"])
-            layer.icons[path] = "usb"
             evidence = activity_module.kernel_evidence(boots, hardware_id, now, self.utc_offset_s, unreadable)
             seen = _seen_text(expected["last_seen"], self.utc_offset_s)
-            said = f"expected (last seen {seen}, {expected['source']})" if seen else f"expected ({expected['source']})"
-            message = f"{said} · not on USB · {evidence['text']}"
+            who = str(expected["source"]).removeprefix("expected setup: ")
+            message = f"{expected['name']} expected ({who}), not on USB" + (f" · last seen {seen}" if seen else "") + f" · {evidence['text']}"
             if evidence["kind"] == "never":
                 message += ": try a data cable or another port"
             values = (KeyValue("what_to_check", activity_module.WHAT_TO_CHECK[evidence["kind"]]),
                       KeyValue("kernel_evidence", evidence["kind"]), KeyValue("expected_by", expected["source"]),
-                      KeyValue("last_seen", seen or "unknown"))
+                      KeyValue("last_seen", seen or "unknown"), KeyValue("hardware_id", hardware_id))
             statuses.append(DiagnosticStatus(level=WARN, name=f"{expected['name']}: presence", message=message,
-                                             hardware_id=hardware_id, values=values, path=path, code="ExpectedAbsent",
+                                             hardware_id=hardware_id, values=values, path=tree.HOST_PATH, code="ExpectedAbsent",
                                              stamp=now, received=now, source=EXPECTED_SOURCE))
+        if recent:
+            lines = [f"{seen['name']} (seen {_seen_text(seen['last_seen'], self.utc_offset_s)}) · {evidence['text']}" for _id, seen, evidence in recent]
+            statuses.append(DiagnosticStatus(
+                level=OK, name="Recently seen", path=tree.HOST_PATH, stamp=now, received=now, source=EXPECTED_SOURCE,
+                message=f"{len(recent)} device{'s' if len(recent) != 1 else ''} seen in the last day, not on USB now, not in the expected setup: "
+                        + ", ".join(seen["name"] for _id, seen, _evidence in recent),
+                values=(KeyValue("recently_seen", "\n".join(lines)),)))
         return statuses
-
-    def _recent_row(self, layer: tree.OsLayer, hardware_id: str, seen: dict, boots: list, now: float,
-                    unreadable: str) -> list[DiagnosticStatus]:
-        last = seen["last_seen"]
-        if not isinstance(last, (int, float)) or isinstance(last, bool) or now - float(last) > RECENTLY_SEEN_S:
-            return []
-        if RECENT_PATH not in layer.entities:
-            layer.entities[RECENT_PATH] = Entity(RECENT_PATH, "Recently seen", "group", via=tree.HOST_PATH, owner="io_diagnostics")
-            layer.icons[RECENT_PATH] = "group"
-        path = f"{RECENT_PATH}/{tree.slug(hardware_id)}"
-        layer.entities[path] = Entity(path, seen["name"], "device", via=RECENT_PATH, hardware_id=hardware_id, owner=seen["owner"])
-        layer.icons[path] = "usb"
-        evidence = activity_module.kernel_evidence(boots, hardware_id, now, self.utc_offset_s, unreadable)
-        when = _seen_text(last, self.utc_offset_s)
-        return [DiagnosticStatus(level=OK, name=f"{seen['name']}: presence", hardware_id=hardware_id, path=path,
-                                 message=f"seen {when} · not on USB now · {evidence['text']} (not in the expected setup)",
-                                 values=(KeyValue("kernel_evidence", evidence["kind"]), KeyValue("last_seen", when),
-                                         KeyValue("expected_by", "nothing: only seen by this host")),
-                                 stamp=now, received=now, source=EXPECTED_SOURCE)]
 
     # --- plugin runs -----------------------------------------------------------------------------------------------
     def _job_env(self, job: Job | None = None) -> dict[str, str]:
@@ -801,6 +796,9 @@ class Host:
         with self.lock:
             fresh_statuses, fresh_events = job.cache.apply(outcome, received=now)
             hardware_id = self.layer.entities.get(job.device_path).hardware_id if job.device_path in self.layer.entities else ""
+            # WHY a follower's line is only a touch: it reports some paths, so "not reported" says nothing; only a whole
+            # run that really looked (not blocked, not failed) marks what it did not report as not heard
+            self.roster.observe(job, hardware_id, outcome if follower is None else None, now)
             previous = job.cache.host_status
             if follower is None:
                 job.cache.host_status = self._probe_status(job, outcome, blocked, hardware_id, now) if outcome.verb == "probe" \
@@ -1052,7 +1050,8 @@ class Host:
             # WHY judged on the merged tree, every view: a rig counts boards and matches cameras by the serial their
             # DRIVER reports (the RealSense SDK serial), which only the plugins' records carry
             setup = expected_module.evaluate(self.setup, merged, layer, now, RUNNER_SOURCE)
-            notes = self._host_notes(merged, now) + self._links_summary(merged, now) + self._console_notes(merged, now)
+            notes = (self._host_notes(merged, now) + self._links_summary(merged, now) + self._console_notes(merged, now)
+                     + roster_module.stopped_answering(merged, now))
             # WHY here: the rig rows and the host's own lines are judged per view, never stored; their changes are
             # what the history keeps
             self.history.sync("view", setup.statuses + notes, now)
@@ -1061,6 +1060,10 @@ class Host:
                 layer = self._layer_with(setup.entities)
                 merged = tree.merge(layer, jobs, self.os_records + setup.statuses + notes + checks)
             rows = tree.build_rows(merged, now)
+            memory = self.roster.pending([(roster_module.memory_key(job.spec.name, self._device_hardware_id(job)),
+                                           self.layer.device_paths.get(str(job.device.get("id")), job.device_path)) for job in jobs])
+            streaming = self._live_paths(jobs)
+            claimed = frozenset(setup.by_path) | frozenset(setup.retired)
             live = [self._placed(event, self.layer) for event in self.live.events()]
             events, self.pending = activity_module.merge(self.usb.events, self.usb.consumed, live)
             events += self.faults.events
@@ -1079,7 +1082,32 @@ class Host:
         # it is final and gives back the ones this process no longer produces (docs/activity-log-v1.md decision 4)
         self.eventlog.record(events, now)
         events = [event for event in self.eventlog.overlay(events, now) if event.stamp is None or event.stamp <= now]
-        return View(now, layer, merged, rows, events, self.faults.open_by_path(), setup, checks)
+        return View(now, layer, merged, rows, events, self.faults.open_by_path(), setup, checks, memory, streaming, claimed)
+
+    def _device_hardware_id(self, job: Job) -> str:
+        entity = self.layer.entities.get(self.layer.device_paths.get(str(job.device.get("id")), job.device_path))
+        return entity.hardware_id if entity else ""
+
+    def _live_paths(self, jobs: list[Job]) -> frozenset:
+        """The device row and everything its plugin reported, for a job whose follower is running and heard from lately:
+        data is arriving now (the presence dot pulses)."""
+
+        out = set()
+        for key, follower in self.followers.items():
+            process = follower.process
+            if process is None or process.poll() is not None or follower.last_line is None:
+                continue
+            if time.monotonic() - follower.last_line > max(3 * follower.period_s, STALE_FLOOR_S):
+                continue
+            job = self.jobs.get(key)
+            if job is None:
+                continue
+            base = self.layer.device_paths.get(str(job.device.get("id")), job.device_path)
+            out.add(base)
+            out.update(absolute(rel, base) for rel in job.cache.entities if rel)
+        return frozenset(out)
+ 
+ 
 
     def _layer_with(self, extra: list[tuple[Entity, str]]) -> tree.OsLayer:
         """The OS layer plus the expected setup's rows: rig rows first under the host (the at-a-glance answer), the
@@ -1095,10 +1123,6 @@ class Host:
         for row, icon in extra:
             if row.kind == expected_module.RIG_KIND:
                 continue
-            if row.via == EXPECTED_PATH and EXPECTED_PATH not in entities:
-                entities[EXPECTED_PATH] = Entity(EXPECTED_PATH, "Expected, not connected", "group", via=tree.HOST_PATH,
-                                                 owner="io_diagnostics")
-                icons[EXPECTED_PATH] = "group"
             entities[row.path], icons[row.path] = row, icon
         return dataclasses.replace(self.layer, entities=entities, icons=icons)
 
@@ -1268,7 +1292,8 @@ class Host:
         return {"api": API, "schema": SCHEMA, "record_version": RECORD_VERSION, "clock": self.clock_json(view.now), "fixture": self.fixture,
                 "host": {"name": self.os.hostname, "sources": list(self.sources)}, "summary": summary,
                 "chip": chip_model(summary, recent, self.url),
-                "tree": tree.node_json(tree.HOST_PATH, view.rows, view.layer, view.faults_by_path, nested=True),
+                "tree": tree.node_json(tree.HOST_PATH, view.rows, view.layer, view.faults_by_path, nested=True,
+                                       memory=view.memory, live=view.live, expected_paths=view.expected_paths),
                 "recent": recent, "expected_setup": self.setup_summary(view), "runs": self.runs.json(RUNS_IN_STATE)}
 
     def setup_summary(self, view: View) -> dict:
@@ -1290,7 +1315,8 @@ class Host:
         while current is not None:
             ancestors.insert(0, {"path": current, "name": merged.entities[current].name, "edge": merged.edge.get(current)})
             current = merged.parent.get(current)
-        return {"node": tree.node_json(path, rows, view.layer, view.faults_by_path, nested=False), "ancestors": ancestors,
+        return {"node": tree.node_json(path, rows, view.layer, view.faults_by_path, nested=False, memory=view.memory,
+                                       live=view.live, expected_paths=view.expected_paths), "ancestors": ancestors,
                 "checks": [self.check_json(status, view.now) for status in rows.own.get(path, [])],
                 "actions": self.actions_json(path, view),
                 "faults": [self.fault_json(fault, view) for fault in self.faults.all() if fault.path == path],
@@ -1300,8 +1326,9 @@ class Host:
 
     # --- the expected setup: what a row offers, and the edits (host-side file writes; never a device) -----------------
     def _setup_target(self, path: str, view: View) -> tuple[str, dict] | None:
-        """``(role, ids)`` for a row the Expected setup card is about: ``rig`` (a rig row), ``absent`` (a row under
-        Expected, not connected) or ``device`` (a physical device row itself); None for anything else."""
+        """``(role, ids)`` for a row the Expected setup card is about: ``rig`` (a rig row), ``device`` (a physical device
+        row itself) or ``board`` (a node a plugin reported under one); None for anything else. There is no ``absent``
+        row any more (a missing device is a status on the Computer, Zach 2026-10-24)."""
 
         merged, layer = view.merged, view.layer
         entity = merged.entities.get(path)
@@ -1309,13 +1336,28 @@ class Host:
             return None
         if view.setup and path in view.setup.rigs:
             return "rig", {"rig": view.setup.rigs[path]}
-        if path.startswith((EXPECTED_PATH + "/", RECENT_PATH + "/")):  # a recently seen row is absent too: Forget drops it
-            serials = tuple(serial for serial in ((entity.identity or {}).get("serial_number", ""),) + self._usb_serial(entity.hardware_id) if serial)
-            return "absent", {"hardware_id": entity.hardware_id, "serials": serials, "name": entity.name}
         if layer.device_of_path.get(path) in layer.physical:
             return "device", {"hardware_id": entity.hardware_id, "serials": expected_module.device_serials(entity, layer, path),
                               "name": entity.name}
-        return None
+        board = self._board_of(path, view)
+        return ("board", board) if board else None
+
+    def _board_of(self, path: str, view: View) -> dict | None:
+        """A node row a plugin reported (a CAN board): its job, its path relative to the device, its ids."""
+
+        merged, layer = view.merged, view.layer
+        entity = merged.entities.get(path)
+        if entity is None or entity.kind != expected_module.NODE_KIND:
+            return None
+        device = tree.nearest_device(path, merged, layer)
+        job = next((job for job in self.jobs.values()
+                    if layer.device_paths.get(str(job.device.get("id")), job.device_path) == device), None) if device else None
+        if job is None:
+            return None
+        return {"job": job, "device": device, "rel": expected_module.relative(path, device), "name": entity.name,
+                "hardware_id": layer.entities[device].hardware_id, "node_id": entity.hardware_id,
+                "device_name": merged.entities[device].name, "model_id": str(entity.identity.get("model_id", "")),
+                "serials": expected_module.device_serials(merged.entities[device], layer, device)}
 
     def _device_entry(self, path: str, view: View) -> expected_module.ExpectedDevice:
         """What "Expect what's here" records for a device row: its ids, the word the rig row counts it as, and the
@@ -1348,6 +1390,10 @@ class Host:
         if target is None:
             return {"refused": "NotADevice", "error": f"{path!r} is not a device row, a rig row or an absent row"}
         role, ids = target
+        if role == "board" and op == "forget":
+            # WHY needs no manifest: a removed row is the host's memory, not the rig file (Zach, 2026-10-24: "remove from bus")
+            return {"board": ids, "text": f"Remove {ids['name']} from the bus? RobotDx forgets the row; if {ids['name']} answers "
+                                          "again, it comes back."}
         try:
             manifest = self.setup.editable()
         except expected_module.ManifestError as error:
@@ -1355,6 +1401,8 @@ class Host:
         if op == "expect":
             if role == "rig":
                 return self._plan_expect_rig(ids["rig"], manifest, view)
+            if role == "board":
+                return self._plan_toggle_node(ids, manifest)
             if role != "device":
                 return {"refused": "NotHere", "error": f"{ids['name']} is not connected: Expect what's here needs it plugged in"}
             entry = self._device_entry(path, view)
@@ -1391,15 +1439,16 @@ class Host:
                 text += " · takes it back into service (it was retired)"
             return {"manifest": manifest, "text": text + "?", "unforget": entry.hardware_id}
         if op == "forget":
-            if role != "absent":
-                return {"refused": "NotAbsent", "error": "Forget is for a device that is not connected (a row under Expected, not connected)"}
+            if role != "device":
+                return {"refused": "NotADevice", "error": "Don't expect is for a device row; Remove from bus is for a board"}
             rigs = expected_module.remove_device(manifest, ids["hardware_id"], ids["serials"])
-            where = f"the expected setup ({', '.join(rigs)}) and " if rigs else ""
-            return {"manifest": manifest, "forget": ids["hardware_id"],
-                    "text": f"Forget {ids['name']}? It leaves {where}the devices this host remembers; plugged in again, it is "
-                            "simply a device again."}
+            if not rigs:
+                return {"refused": "NotExpected", "error": f"{ids['name']} is not in the expected setup"}
+            return {"manifest": manifest,
+                    "text": f"Stop expecting {ids['name']}? It leaves the expected setup ({', '.join(rigs)}); it stays on the bus "
+                            "as an ordinary device."}
         if op == "retire":
-            if role not in ("device", "absent"):
+            if role != "device":
                 return {"refused": "NotADevice", "error": "Retire… is for a device row"}
             reason = " ".join(str(reason or "").split())
             rigs = expected_module.remove_device(manifest, ids["hardware_id"], ids["serials"])
@@ -1416,6 +1465,23 @@ class Host:
                 plan.update(refused="ReasonRequired", error="say why it is retired (the reason shows when it is plugged in again)")
             return plan
         return {"refused": "UnknownEdit", "error": f"no edit {op!r}: expect, forget or retire"}
+
+    def _plan_toggle_node(self, ids: dict, manifest: expected_module.Manifest) -> dict:
+        """Expect / Don't expect one board: add its node to, or take it out of, its adapter's entry in the rig file."""
+
+        found = next(((rig, device) for rig in manifest.rigs for device in rig.devices
+                      if (device.hardware_id and expected_module.same_id(device.hardware_id, ids["hardware_id"]))
+                      or (device.serial and device.serial in ids["serials"])), None)
+        if found is None:
+            return {"refused": "NotExpected", "error": f"{ids['device_name']} is not in the expected setup: use Expect what's here on it first"}
+        rig, device = found
+        existing = next((node for node in device.nodes if node.path == ids["rel"]), None)
+        if existing is not None:
+            device.nodes.remove(existing)
+            return {"manifest": manifest, "text": f"Stop expecting {ids['name']} on {ids['device_name']}? {rig.name} no longer counts it, "
+                                                   "and its bus stops saying it is silent."}
+        device.nodes.append(expected_module.ExpectedNode(ids["rel"], ids["model_id"], ids["node_id"]))
+        return {"manifest": manifest, "text": f"Expect {ids['name']} on {ids['device_name']} in {rig.name}? Its bus then says when it is silent."}
 
     def _plan_expect_rig(self, rig: expected_module.Rig, manifest: expected_module.Manifest, view: View) -> dict:
         target = next((found for found in manifest.rigs if found.name == rig.name), None)
@@ -1454,7 +1520,7 @@ class Host:
         if role == "rig":
             out.update(rig=ids["rig"].name, expected=True, can={"expect": True, "forget": False, "retire": False})
         else:
-            found = self.setup.entry_for(ids["hardware_id"], ids["serials"])
+            found = self.setup.entry_for(ids["hardware_id"], ids["serials"]) if role != "board" else None
             if found:
                 out.update(rig=found[0].name, expected=True, nodes_expected=[node.path for node in found[1].nodes],
                            node_notes={node.path: node.note for node in found[1].nodes if node.note})
@@ -1465,16 +1531,22 @@ class Host:
                 own = expected_module.latest_statuses(merged.statuses)
                 out["nodes_here"] = [expected_module.relative(node, path) for node in
                                      expected_module.answering_nodes(path, merged, own, view.now, RUNNER_SOURCE)]
-                out["can"] = {"expect": True, "forget": False, "retire": True}
+                out["can"] = {"expect": True, "forget": bool(found), "retire": True}
                 out["needs_rig"] = not found and len(out["rigs"]) > 1
-            else:
-                out["can"] = {"expect": False, "forget": True, "retire": True}
+            else:  # a board
+                device_found = self.setup.entry_for(ids["hardware_id"], ids["serials"])
+                expected = bool(device_found) and any(node.path == ids["rel"] for node in device_found[1].nodes)
+                out.update(rig=device_found[0].name if device_found else None, expected=expected,
+                           nodes_expected=[node.path for node in device_found[1].nodes] if device_found else [])
+                # WHY expect only when its adapter is in the file: a board is expected as part of an adapter's entry
+                out["can"] = {"expect": bool(device_found), "forget": True, "retire": False}
         for op, allowed in out["can"].items():
             if allowed:
                 plan = self._plan(op, path, view, rig=out["rigs"][0] if out["needs_rig"] else None, reason="")
                 out["confirm"][op] = plan.get("text") or plan.get("error", "")
         if not out["editable"]:
-            out["can"] = {op: False for op in out["can"]}
+            # Remove from bus is the host's memory, not the rig file: it needs no file
+            out["can"] = {op: bool(allowed and role == "board" and op == "forget") for op, allowed in out["can"].items()}
         return out
 
     def setup_edit(self, op: str, path: str, *, rig: str | None = None, reason: str = "") -> dict:
@@ -1494,6 +1566,12 @@ class Host:
         return {**out, **result}
 
     def _apply(self, plan: dict, now: float) -> dict:
+        if plan.get("board"):
+            board = plan["board"]
+            with self.lock:
+                self.roster.forget(board["job"], self._device_hardware_id(board["job"]), board["rel"], now)
+            self.notify("forget")
+            return {"ok": True, "message": f"done: {plan['text'].split('?', 1)[0]}"}
         try:
             self.setup.save(plan["manifest"])
         except (OSError, expected_module.ManifestError) as error:
@@ -1991,11 +2069,14 @@ class Host:
         return self.settings.json()
 
     def set_settings(self, body: dict) -> dict:
-        """The page's View options: ``{"history_window_s": 600}`` (seconds, or "10m"). Raises SettingsError."""
+        """The page's View options: ``{"history_window_s": 600}`` (seconds, or "10m"), and its Visibility choices:
+        ``{"visibility": {"<row id>": "hide" | "show" | "ack" | null}}``. Raises SettingsError."""
 
-        unknown = sorted(set(body) - {"history_window_s"})
+        unknown = sorted(set(body) - {"history_window_s", "visibility"})
         if unknown:
-            raise settings_module.SettingsError(f"no setting {', '.join(map(repr, unknown))}: only history_window_s")
+            raise settings_module.SettingsError(f"no setting {', '.join(map(repr, unknown))}: only history_window_s and visibility")
+        if "visibility" in body:
+            self.settings.set_visibility(body["visibility"])
         if "history_window_s" in body:
             self.settings.set_history_window(body["history_window_s"])
             self.history.window_s = self.settings.history_window_s
@@ -2038,6 +2119,7 @@ def make_host(*, fixture: str | None = None, plugins_dir: Path | None = None, on
         return Host(plugins_dir=plugins_dir or PLUGINS_DIR, clock=clock, os_source=LiveOs(), enable=enable,
                     state_file=default_state_dir() / SEEN_FILE, runs_dir=default_state_dir() / "runs",
                     event_log_dir=None if once else default_state_dir() / "log",
+                    ledger_file=default_state_dir() / roster_module.LEDGER_FILE,
                     expected_file=expected or expected_module.default_config_dir() / expected_module.EXPECTED_FILE,
                     **settings)
     document, frame = load_fixture(fixture)

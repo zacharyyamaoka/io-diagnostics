@@ -68,10 +68,6 @@ def diagnose(state: dict) -> str:
     port_holders, lock_holders = state.get("port_holders") or [], state.get("lock_holders") or []
     line("entity", path="", name=name, kind="device", hardware_id=state.get("hardware_id", ""))
     line("entity", path="can", name="CAN bus", kind="bus", part_of="")
-    for can_id, board in sorted(state.get("boards", {}).items(), key=lambda item: int(item[0])):
-        identity = {key: board[key] for key in ("model", "sw_version") if key in board}
-        line("entity", path=f"can/{can_id}", name=f"CAN {can_id}", kind="node", via="can", identity=identity,
-             hardware_id=f"moteus:{can_id}")
     status("ok", f"{name}: usb", "", "on USB 9-3 as /dev/ttyACM0")
     if port_holders or lock_holders:
         code = "PortBusy" if port_holders else "BusLockHeld"
@@ -79,16 +75,28 @@ def diagnose(state: dict) -> str:
         reason = f"blocked: {'port' if port_holders else 'rack bus lock'} held by {', '.join(held)}"
         values = [{"key": "port_holders", "value": ", ".join(port_holders) or "none"}] if port_holders else []
         status("unknown", f"{name}: CAN bus", "can", reason, code, values=values + [{"key": "what_to_check", "value": "1. close it"}])
-        for can_id in state.get("boards", {}):
-            status("unknown", f"CAN {can_id}: servo", f"can/{can_id}", reason, code)
-        return code
-    status("ok", f"{name}: CAN bus", "can", "error-active")
+        return code  # blocked: nothing was heard, so no board is reported (the host keeps the rows it has)
+    # the moteus_servo contract (Zach, 2026-10-24: a row exists only for something heard from): a board that does not
+    # answer has no entity; the bus names it
+    for can_id, board in sorted(state.get("boards", {}).items(), key=lambda item: int(item[0])):
+        if not board.get("answers", True):
+            continue
+        identity = {key: board[key] for key in ("model", "sw_version") if key in board}
+        line("entity", path=f"can/{can_id}", name=f"CAN {can_id}", kind="node", via="can", identity=identity,
+             hardware_id=f"moteus:{can_id}")
+    silent = [can_id for can_id, board in sorted(state.get("boards", {}).items(), key=lambda item: int(item[0]))
+              if not board.get("answers", True)]
+    if silent:
+        total = len(state.get("boards", {}))
+        status("warn", f"{name}: CAN bus", "can", f"{total - len(silent)} of {total} expected boards answer · "
+               + ", ".join(f"CAN {can_id}" for can_id in silent) + " silent", "ExpectedBoardsSilent",
+               caused_by=[f"can/{can_id}" for can_id in silent])
+    else:
+        status("ok", f"{name}: CAN bus", "can", "error-active")
     for can_id, board in sorted(state.get("boards", {}).items(), key=lambda item: int(item[0])):
         if board.get("answers", True):
             status("warn" if board.get("fault") else "ok", f"CAN {can_id}: servo", f"can/{can_id}",
                    "fault 33" if board.get("fault") else "ok", f"MoteusFault.{board['fault']}" if board.get("fault") else "")
-        else:
-            status("error", f"CAN {can_id}: servo", f"can/{can_id}", f"CAN {can_id} did not answer the id scan", "BoardNotAnswering")
     return ""
 
 

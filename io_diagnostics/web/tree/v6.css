@@ -1,22 +1,36 @@
 /* Tree style v6 — "IDE × Notion" (io_diagnostics/web/tree/v6.js). Every class is t6-*; every colour, font,
-   radius and row height is a web/tokens.css token, so every skin works with it. */
+   radius and row height is a web/tokens.css token, so every skin works with it. Also carries the header counts
+   (web/summary.js) and the Visibility status-bar entry (web/visibility.js), which draw with the same classes. */
 .t6 {
+  position: relative;
   font: var(--io-font-size)/1.4 var(--io-font-ui);
   color: var(--io-text);
   user-select: none;
   padding-bottom: 14px;
 }
 
-/* ---- head: the (elided) host, then independent causes as the same shapes -------------------------------- */
+/* ---- head: the title, then the header counts (stale · unknown · warn · error, increasing severity) ---------------- */
 .t6-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; height: 36px; padding: 0 14px 0 12px; color: var(--io-faint); font-size: 11px; }
 .t6-title { text-transform: uppercase; letter-spacing: .6px; padding-left: 2px; }
-.t6-host { display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; color: var(--io-muted); font: inherit; font-size: 12px; padding: 3px 6px; margin-left: -2px; border-radius: var(--io-radius-sm); cursor: pointer; }
+.t6-host { display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; color: var(--io-muted); font: inherit; font-size: 12px; text-transform: none; letter-spacing: 0; padding: 3px 6px; margin-left: -2px; border-radius: var(--io-radius-sm); cursor: pointer; }
 .t6-host:hover { background: var(--io-hover); color: var(--io-text); }
 .t6-host .t6-ic { width: 14px; height: 14px; }
-.t6-counts { display: inline-flex; gap: 12px; align-items: center; font-size: 12px; color: var(--io-text); }
-.t6-count { display: inline-flex; gap: 5px; align-items: center; font-variant-numeric: tabular-nums; }
+.t6-counts { position: relative; display: inline-flex; gap: 12px; align-items: center; font-size: 12px; color: var(--io-text); }
+.t6-sum { position: relative; display: inline-flex; gap: 6px; align-items: center; }
+.t6-count { display: inline-flex; gap: 5px; align-items: center; font: inherit; font-variant-numeric: tabular-nums; color: inherit; background: transparent; border: 0;
+  padding: 2px 6px; border-radius: var(--io-radius-sm); cursor: pointer; }
+.t6-count:hover { background: var(--io-hover); }
+.t6-count.t6-on { background: var(--io-selected); box-shadow: inset 0 0 0 1px var(--io-selected-line); }
 .t6-count .t6-shape { width: 13px; height: 13px; }
 .t6-quiet { color: var(--io-faint); }
+/* the legend on hover: each mark and what it means, in plain words */
+.t6-legend { display: none; position: absolute; right: 0; top: calc(100% + 6px); z-index: 5; width: 300px; padding: 8px 10px; border: 1px solid var(--io-border);
+  border-radius: var(--io-radius); background: var(--io-popover); color: var(--io-text); box-shadow: 0 6px 20px color-mix(in srgb, var(--io-shadow) 18%, transparent);
+  font-size: 12px; line-height: 1.35; text-align: left; }
+.t6-sum:hover .t6-legend, .t6-sum:focus-within .t6-legend { display: block; }
+.t6-leg-row { display: flex; gap: 8px; align-items: flex-start; padding: 3px 0; }
+.t6-leg-row .t6-shape { width: 13px; height: 13px; margin-top: 2px; }
+.t6-leg-row b { font-weight: 600; text-transform: none; }
 
 /* ---- rows (Notion: inset, rounded, no guides) ---------------------------------------------------------- */
 .t6-rows { outline: none; }
@@ -26,7 +40,7 @@
 .t6-row.t6-sel { background: var(--io-selected); }
 .t6-rows:focus-visible .t6-row.t6-sel { box-shadow: inset 0 0 0 1px var(--io-selected-line); }
 
-/* IDE: a folder's chevron is always there, quiet; a leaf keeps the empty slot so the icons line up.
+/* IDE: a folder's chevron is always there, quiet; a leaf keeps the empty slot so icons line up.
    Notion: the chevron brightens on hover and is a target of its own. */
 .t6-chev { width: 16px; height: 16px; flex: none; display: inline-flex; align-items: center; justify-content: center; color: var(--io-icon);
   opacity: .5; transition: opacity .12s; cursor: pointer; border-radius: var(--io-radius-sm); }
@@ -36,6 +50,18 @@
 .t6-row:hover .t6-chev, .t6-row.t6-sel .t6-chev { opacity: 1; }
 .t6-chev:not(.t6-leaf):hover { background: var(--io-control-hover); color: var(--io-text-strong); }
 
+/* ---- presence: the neutral dot before the icon (Claude's sidebar). Filled = heard within its expected period; hollow
+   ring = known, not heard lately; pulsing = data arriving now. Never a warning colour: a slot of its own, so icons line up. */
+.t6-pres { width: 7px; height: 7px; flex: none; border-radius: 50%; box-sizing: border-box; margin: 0 1px 0 -1px; }
+.t6-pres-none { visibility: hidden; }
+.t6-pres-heard { background: var(--io-muted); }
+.t6-pres-live { background: var(--io-muted); animation: t6-pulse 1.6s ease-in-out infinite; }
+.t6-pres-stale { background: transparent; box-shadow: inset 0 0 0 1.4px var(--io-faint); }
+@keyframes t6-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.8); } }
+@media (prefers-reduced-motion: reduce) { .t6-pres-live { animation: none; } }
+/* a row not heard from lately: its name stays readable, its age is a muted word beside it */
+.t6-heard { min-width: 0; flex: 0 20 auto; overflow: hidden; text-overflow: ellipsis; color: var(--io-faint); font-size: 11.5px; margin-left: 4px; }
+
 /* type icon + name together */
 .t6-ic { width: 16px; height: 16px; flex: none; fill: none; stroke: var(--io-icon); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .t6-name { min-width: 0; max-width: 72%; overflow: hidden; text-overflow: ellipsis; color: var(--io-text); flex: 0 0 auto; }
@@ -43,7 +69,7 @@
    "CAN …"; the part words shrink next, the id first */
 .t6-row.t6-sel .t6-name, .t6-row.t6-hit .t6-name { color: var(--io-text-strong); }
 .t6-name mark { background: var(--io-mark); color: inherit; border-radius: 2px; }
-/* a folded part's own report, on its owner ("driver: fault 33 …"): quiet words, the shape carries the level */
+/* a folded part's own report on its owner ("driver: fault 33 …"): quiet words, the shape carries the level */
 .t6-note { min-width: 0; flex: 0 20 auto; overflow: hidden; text-overflow: ellipsis; color: var(--io-muted); font-size: 12px; margin-left: 4px; }
 .t6-note.t6-subdued { color: var(--io-faint); }
 .t6-fill { flex: 1 0 8px; }
@@ -67,8 +93,9 @@
 /* ids muted on the right; the full value is in the row's tooltip (the ellipsis is explicit) */
 .t6-id { color: var(--io-faint); font: 11.5px/1 var(--io-font-mono); flex: 0 100 auto; max-width: 40%; overflow: hidden; text-overflow: ellipsis; min-width: 2ch; }
 
-/* ---- status slot at the far right: fixed width so ids line up; empty on OK rows ---------------------------- */
-.t6-st { width: 18px; flex: none; display: inline-flex; align-items: center; justify-content: center; margin-left: 4px; }
+/* ---- health slot at the far right: fixed width so ids line up; empty on OK rows. Only the diagnostics levels draw a
+   shape here; a collapsed row's roll-up is the same shape, drawn a little quieter and to the left of its own. ------- */
+.t6-st { width: 34px; flex: none; display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px; margin-left: 4px; }
 .t6-mark { position: relative; display: inline-flex; }
 .t6-shape { width: 14px; height: 14px; flex: none; display: block; }
 .t6-shape .t6-fill { fill: currentColor; stroke: currentColor; stroke-width: .6; stroke-linejoin: round; }
@@ -77,31 +104,65 @@
 .t6-shape .t6-line { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .t6-shape.t6-warn { color: var(--io-warn); }
 .t6-shape.t6-error { color: var(--io-error); }
-.t6-shape.t6-stale { color: var(--io-stale); }
+.t6-shape.t6-stale { color: var(--io-faint); }
 .t6-shape.t6-unknown { color: var(--io-unknown); }
-.t6-mark.t6-subdued .t6-shape { color: var(--io-knock); }
+/* the roll-up of a collapsed row (same logo as the rows below it); on an open row it is revealed on hover / selection */
+.t6-mark.t6-roll .t6-shape { opacity: .8; }
+.t6-mark.t6-roll.t6-open { opacity: 0; transition: opacity .12s; }
+.t6-row:hover .t6-mark.t6-roll.t6-open, .t6-row.t6-sel .t6-mark.t6-roll.t6-open { opacity: 1; }
 
-/* the quiet hint: a small dot on a collapsed branch; an open branch's ring is revealed on hover / selection */
-.t6-hint { width: 6px; height: 6px; border-radius: 50%; display: block; background: currentColor; opacity: .85; }
-.t6-hint.t6-open { background: transparent; box-shadow: inset 0 0 0 1.3px currentColor; width: 7px; height: 7px; opacity: 0; transition: opacity .12s; }
-.t6-row:hover .t6-hint.t6-open, .t6-row.t6-sel .t6-hint.t6-open { opacity: .6; }
-.t6-hint.t6-warn, .t6-badge.t6-warn { color: var(--io-warn); }
-.t6-hint.t6-error, .t6-badge.t6-error { color: var(--io-error); }
-.t6-hint.t6-stale, .t6-badge.t6-stale { color: var(--io-stale); }
-.t6-hint.t6-unknown, .t6-badge.t6-unknown { color: var(--io-unknown); }
-.t6-badge { position: absolute; right: -3px; top: -3px; width: 6px; height: 6px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 1.5px var(--io-surface); }
-.t6-row:hover .t6-badge { box-shadow: 0 0 0 1.5px var(--io-hover); }
-.t6-row.t6-sel .t6-badge { box-shadow: 0 0 0 1.5px var(--io-selected); }
-.t6-badge.t6-open { opacity: 0; transition: opacity .12s; }
-.t6-row:hover .t6-badge.t6-open, .t6-row.t6-sel .t6-badge.t6-open { opacity: 1; }
-
-/* knock-on (explained by a failed ancestor, counted once there): subdued name and shape */
-.t6-row.t6-knock .t6-name { color: var(--io-muted); }
-
-/* not connected: icon, name and id fully greyed; a real problem on it keeps its shape's colour */
+/* nothing plugged in there (an empty port that flaps): icon, name and id fully greyed; a real problem keeps its shape's colour */
 .t6-row.t6-off .t6-name, .t6-row.t6-off .t6-id { color: var(--io-off); }
 .t6-row.t6-off .t6-ic { stroke: var(--io-off); }
+
+/* knock-on (explained by a failed ancestor, counted once there): no mark; the name recedes a little */
+.t6-row.t6-knock .t6-name { color: var(--io-muted); }
+.t6-row.t6-dim .t6-name, .t6-row.t6-dim .t6-id { color: var(--io-faint); }
+.t6-row.t6-dim .t6-ic { opacity: .6; }
+
+/* the row's own controls: ⋮ on hover (Claude's menu), the eye while the status bar's Visibility is on */
+.t6-act { display: inline-flex; align-items: center; gap: 2px; flex: none; width: 22px; justify-content: flex-end; }
+.t6-more, .t6-eye { width: 20px; height: 20px; padding: 0; border: 0; border-radius: var(--io-radius-sm); background: transparent; color: var(--io-icon); cursor: pointer;
+  display: none; align-items: center; justify-content: center; }
+.t6-more svg { width: 14px; height: 14px; fill: currentColor; }
+.t6-eye svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.t6-row:hover .t6-more, .t6-row.t6-sel .t6-more, .t6-more:focus-visible { display: inline-flex; }
+.t6-more:hover, .t6-eye:hover { background: var(--io-control-hover); color: var(--io-text-strong); }
+.io-vis-mode .t6-eye { display: inline-flex; }
+.io-vis-mode .t6-act { width: 44px; }
+.io-vis-mode .t6-row:hover .t6-more, .io-vis-mode .t6-row.t6-sel .t6-more { display: inline-flex; }
+
+/* "Show 5 hidden" / "Hide 5 hidden": one quiet row at the end of a group (Zach's Claude transcript app) */
+.t6-row.t6-bundle { color: var(--io-faint); cursor: pointer; }
+.t6-row.t6-bundle .t6-name { color: var(--io-faint); font-size: 12px; }
+.t6-row.t6-bundle:hover .t6-name { color: var(--io-text); }
+.t6-row.t6-bundle .t6-ic { width: 14px; height: 14px; stroke: var(--io-faint); }
+
+/* the row menu */
+.t6-menu { position: absolute; z-index: 20; min-width: 240px; max-width: 320px; padding: 4px; border: 1px solid var(--io-border); border-radius: var(--io-radius);
+  background: var(--io-popover); color: var(--io-text); box-shadow: 0 8px 24px color-mix(in srgb, var(--io-shadow) 20%, transparent); font-size: 12.5px; }
+.t6-menu[hidden] { display: none; }
+.t6-mi { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; padding: 5px 8px; border: 0; border-radius: var(--io-radius-sm);
+  background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.t6-mi:hover:not([disabled]) { background: var(--io-hover); }
+.t6-mi[disabled] { color: var(--io-faint); cursor: default; }
+.t6-mi-h { color: var(--io-faint); font-size: 11.5px; white-space: normal; overflow-wrap: anywhere; }
+.t6-mi-sep { height: 1px; margin: 4px 2px; background: var(--io-border-soft); }
+.t6-mi-note { padding: 6px 8px; color: var(--io-muted); }
+.t6-mi-confirm { padding: 6px 8px; color: var(--io-text); line-height: 1.4; white-space: normal; }
+.t6-mi-foot { display: flex; justify-content: flex-end; gap: 6px; padding: 4px 6px 6px; }
+.t6-btn { padding: 3px 10px; border: 1px solid var(--io-border); border-radius: var(--io-radius-sm); background: transparent; color: var(--io-text); font: inherit; cursor: pointer; }
+.t6-btn:hover:not([disabled]) { background: var(--io-hover); }
+.t6-btn.t6-primary { background: var(--io-accent); border-color: var(--io-accent); color: var(--io-on-status); }
+.t6-btn[disabled] { opacity: .5; cursor: default; }
 
 .t6-empty { padding: 14px 18px; color: var(--io-faint); }
 /* box mode: a leaf needs no empty chevron slot, the glyphs already line it up */
 .t6.t6-box .t6-chev.t6-leaf { display: none; }
+
+/* ---- the Visibility entry in the bottom status bar (web/visibility.js) ------------------------------------------ */
+.statusbar .sb-btn { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border: 0; border-radius: var(--io-radius-sm); background: transparent;
+  color: var(--io-muted); font: inherit; cursor: pointer; }
+.statusbar .sb-btn svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.statusbar .sb-btn:hover { background: var(--io-hover); color: var(--io-text); }
+.statusbar .sb-btn[aria-pressed="true"] { background: var(--io-selected); color: var(--io-text-strong); }

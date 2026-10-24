@@ -91,24 +91,31 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
 - `host.sources`: which OS skeleton sources were used and which were skipped (with the reason), so a page can say
   "PCI discovery not available" instead of implying there is no PCI. A `"seen devices"` entry appears only when
   the remembered-devices file could not be read or written.
-- **Expected, not connected** (record v0.1): a device a plugin's `describe` lists in `expected`
-  (`[{hardware_id, name, last_seen, source}]`), or one the expected setup lists (retired ones excepted), that is not
-  on USB now. Each one is a tree row under
-  the group `host/expected` (`kind` `"group"`, name `"Expected, not connected"`). The row's `kind` is `"device"`,
-  its `owner` the plugin (or `io_diagnostics` for a remembered one), and its one check is `<name>: presence`.
-  That check is `warn` with `code` `"ExpectedAbsent"`, and its `message` says what the kernel saw this boot:
-  `"expected (last seen 2026-10-21 18:24, rack_inventory) · not on USB · the kernel saw no plug event since boot
-  (2026-10-22 07:00): try a data cable or another port"`, or `"… plugged in at 09:00:01 on 1-5, gone at 09:30:00"`,
-  or that the kernel log could not be read. Its values are `what_to_check`, `kernel_evidence`
-  (`never | left | unknown`), `expected_by` and `last_seen`. Only `usb:<vid>:<pid>:<serial>` ids are judged.
+- **Expected, not connected** (record v0.1; Zach, 2026-10-24: a missing thing is a diagnostic on its parent, never a
+  ghost row): a device a plugin's `describe` lists in `expected` (`[{hardware_id, name, last_seen, source}]`), or one
+  the expected setup lists (retired ones excepted), that is not on USB now. Each one is a `warn` check
+  `<name>: presence` with `code` `"ExpectedAbsent"` **on the Computer** (the `host` row), which makes the Computer's own
+  level `warn`. Its `message` says what the kernel saw this boot:
+  `"fdcanusb 28B3A25D expected (rack_inventory), not on USB · last seen 2026-10-21 18:24 · the kernel saw no plug
+  event since boot (2026-10-22 07:00): try a data cable or another port"`, or `"… plugged in at 09:00:01 on 1-5,
+  gone at 09:30:00"`, or that the kernel log could not be read. Its values are `what_to_check`, `kernel_evidence`
+  (`never | left | unknown`), `expected_by`, `last_seen` and `hardware_id`. Only `usb:<vid>:<pid>:<serial>` ids are
+  judged. There is no `host/expected` group and no row; to stop expecting one, `io-diagnostics forget --hardware-id`.
 - **Recently seen** (2026-10-23): a USB device this host has only SEEN a plugin diagnose (kept in
   `~/.local/state/io-diagnostics/seen.json`, live mode only), expected by nothing above, that is not on USB now and
-  was last seen within a day. It is a row under the group `host/recently-seen` (name `"Recently seen"`,
-  `collapsed: true`) whose one check `<name>: presence` is `ok` with no code: `"seen 2026-10-23 14:26 · not on USB
-  now · plugged in at 14:25:53 on 1-1, gone at 14:26:08 (not in the expected setup)"`. Never a warning and never a
-  fault: its unplug is an `Unplugged` activity event. WHY (Zach, 2026-10-23): fdcanusb FDA81D29, plugged for 15 s,
-  confirmed an `ExpectedAbsent` WARN from the memory alone. Its Expected setup card is an absent row's (`forget`
-  drops it from the memory); to make it expected, plug it in and Expect what's here.
+  was last seen within a day. One `ok` check named `Recently seen` on the Computer, whose `recently_seen` value lists
+  them: `"fdcanusb FDA81D29 (seen 2026-10-23 14:26) · plugged in at 14:25:53 on 1-1, gone at 14:26:08"`. Never a
+  warning and never a fault: its unplug is an `Unplugged` activity event. WHY (Zach, 2026-10-23): fdcanusb FDA81D29,
+  plugged for 15 s, confirmed an `ExpectedAbsent` WARN from the memory alone.
+- **A row exists for what was heard from** (2026-10-24): a plugin reports an entity for a board that answered; one that
+  never answered has no row, and its bus says so (moteus: `2 of 3 expected boards answer · CAN 15 silent`, `warn`
+  `ExpectedBoardsSilent`, `caused_by` the silent boards). A board that answered and then went quiet keeps its row until a
+  person removes it (`POST /api/v1/forget` on the row, "Remove from bus"); the row is `presence.state` `"stale"`, and its
+  bus gains the host's `<bus>: boards stopped answering` (`BoardsStoppedAnswering`, `caused_by` those boards, so the
+  boards count once). A removed board that answers again comes back. The host keeps the last-known entities of every
+  (plugin, device) in `~/.local/state/io-diagnostics/tree.json` (live mode only) and restores them at start with no
+  health: `presence.restored` is true until a run that really looked reports them (a blocked, failed or timed-out run
+  never removes a row and never marks one dead). `docs/roster` is `io_diagnostics/roster.py`.
 - `summary` is the **root's advisory rollup** (the chip's question: "does anything need me?"):
   - `level`: the worst independent cause anywhere (`null` = nothing reports). It is `rollup.level` of the root, not
     the host row's `level`: with the computer plugin the host has records of its own and its row shows them, while
@@ -138,8 +145,8 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
   model that differs and "its boards answer on fdcanusb 0607623A now" (an absent adapter's boards on another one)
   are notes in its message and values, never a level. A retired device that is plugged in again carries a `warn`
   check `<name>: retired` (`RetiredDevice`, "retired 2026-10-23: <reason>"). An expected device matched only by a
-  driver's serial (the RealSense SDK serial) that is not here gets a row under `host/expected` (`ExpectedAbsent`,
-  "no connected device reports serial …"); one with a USB `hardware_id` gets the kernel-evidence row above. A node
+  driver's serial (the RealSense SDK serial) that is not here gets a Computer check `<name>: presence` (`ExpectedAbsent`,
+  "no connected device reports serial …"); one with a USB `hardware_id` gets the kernel-evidence check above. A node
   the file gives a `rotor_to_output_ratio` whose fresh config reading differs carries one `warn` check
   `<node>: expected ratio` (`RatioMismatch`, "config ratio 0.1667, expected 0.1 (10:1 gearbox)").
 - **Another adapter works**: when a device's check says `FramesNotSent` (its frames never reached the wire) while
@@ -175,6 +182,8 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
   "id_text": "272813EF",
   "last_received": 1761095510.0, "age_s": 0.0, "expected_period_s": null, "stale_after_s": null,
   "checks": 2, "actions": 1, "faults": 0, "collapsed": false,
+  "presence": {"state": "heard", "age_s": 0.0, "restored": false, "text": ""}, "claimed": true,
+  "usb": {"version": "2.10", "speed_mbps": 480},
   "children": []
 }
 ```
@@ -199,7 +208,10 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
 | `last_received`, `age_s` | When the row was last heard from: the newest `received` among its PERIODIC own records (the ones STALE is judged on), else among all its own records (`null` = no records); age on the host clock. |
 | `expected_period_s`, `stale_after_s` | Shortest declared period among the row's own periodic records and its STALE threshold (`null` = event-driven: never stale). |
 | `checks`, `actions`, `faults` | Counts of own status records, registered actions, and the host's open faults (pending or confirmed) on this row; details via `/api/v1/node`. |
-| `collapsed` | `true` for a group a page starts closed: `host/recently-seen` ("Recently seen": USB devices this host saw a plugin diagnose that are neither in the expected setup nor in a plugin's `describe.expected`, unplugged within the last day; each an OK `presence` row, never a warning or a fault). `false` everywhere else. |
+| `collapsed` | `true` for a group a page starts closed. Always `false` today (the `host/recently-seen` group is gone: those devices are a check on the Computer). |
+| `presence` | The Claude-sidebar dot (2026-10-24), neutral, never a level: `{state, age_s, restored, text}` with `state` `"heard"` (filled: heard within its expected period), `"stale"` (hollow ring: known, not heard lately; `text` "last heard 6 min ago", `restored` true while it is only the last session's row) or `"live"` (pulsing: a follower is streaming its data). `null` for structure with nothing to hear from (ports, groups, rig rows) and for a row with no records. |
+| `usb` | A USB device row's own `version` (its bcdUSB as sysfs shows it, `"2.10"`) and the `speed_mbps` of the link it runs at, so a page can say "USB 2.1" instead of "480 Mb/s" (`web/usb.js`; the raw speed stays in the tooltip). `null` for any other row. |
+| `claimed` | Whether some driver plugin claims the row. An OS device nobody claims (a keyboard, a mouse, a webcam, a NIC) is `false`; the page hides those by default (the Visibility control). Plugin rows, the expected setup's devices and all structure are `true`. |
 | `children` | Child nodes, ordered: ports and groups by name, plugin entities in the order the plugin sent them. |
 
 ## `GET /api/v1/node?path=<entity path>`
@@ -246,8 +258,8 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
   `installed_version` / `latest_version` is the update-available convention; a check whose name ends in `config`
   holds a read-only config view.
 - `caused_by` (record v0.1 addendum, 2026-10-23): the entity paths whose own reports caused this check's verdict,
-  set by a composite or rollup check: a rig row's `<rig>: expected setup` names the missing boards' rows (or an
-  absent device's row under `host/expected`), the Computer's `USB/PCIe links` line names the port / PCIe / camera
+  set by a composite or rollup check: a rig row's `<rig>: expected setup` names the rows that report what is missing
+  (a board's bus, or the Computer for an absent device), the Computer's `USB/PCIe links` line names the port / PCIe / camera
   rows that report each unhappy link, a plugin's composite (a spider) names its failed legs. `[]` = it judges on its
   own. When every named row reports a problem, the row is their consequence: `knock_on_of` names the cause and
   `summary` does not count it; the check's own `level` and `message` are unchanged.
@@ -654,10 +666,16 @@ them (the CLI has `io-diagnostics expect | forget | retire`).
 - `expect` (Expect what's here): on a device row, adds it (or updates it) with the nodes answering below it now, into
   its rig, else `rig`, else the only rig (several rigs and none named: `RigRequired` with `rigs`); it also takes a
   retired device back into service. On a rig row: every present device's nodes as they answer now.
-- `forget`: on a row under "Expected, not connected" only (`NotAbsent` otherwise): removes it from the file and from
-  the devices this host remembers (`seen.json`), and keeps a plugin's own list from bringing it back until it is
-  seen again.
-- `retire` (Retire…): on a device or absent row, with a non-empty `reason` (`ReasonRequired`): removes it from every
+- `expect` on a **board** row (a node a plugin reported under an adapter; the row menu's Expect / Don't expect) toggles
+  it in its adapter's entry of the rig file: expected -> "Stop expecting CAN 14 …", not expected -> "Expect CAN 14 …"
+  (`NotExpected` when its adapter is not in the file yet: Expect what's here on the adapter first).
+- `forget` on a **board** row is **Remove from bus** (Zach, 2026-10-24): the host forgets the row and everything under
+  it (`io_diagnostics/roster.py`; it is not restored at the next start). It writes no file, so it works without an
+  expected setup. A removed board that answers again comes back. On a **device** row, `forget` is Don't expect: it
+  leaves the expected setup and stays on the bus as an ordinary device (`NotExpected` when it was not in the file).
+- A device that is expected and not on USB has no row to click any more (it is a check on the Computer); to stop
+  expecting one, `io-diagnostics forget --hardware-id usb:...`.
+- `retire` (Retire…): on a device row, with a non-empty `reason` (`ReasonRequired`): removes it from every
   rig and lists it under `[[retired]]` with today's date; plugged in again, its row says "retired <date>: <reason>".
 
 The answer is **200** `{"ok": true, "op", "path", "refused": null, "message": "done: ...", "file"}`, or **400**
@@ -751,7 +769,7 @@ The health bar (rqt_robot_monitor's timeline) of one entity and of each of its c
 ## Settings: `GET /api/v1/settings`, `POST /api/v1/settings`
 
 ```json
-{"history_window_s": 900.0, "source": "default", "file": "/home/bam/.config/io-diagnostics/settings.toml", "note": "",
+{"history_window_s": 900.0, "visibility": {"usb:046d:c34b:KB1": "show"}, "source": "default", "file": "/home/bam/.config/io-diagnostics/settings.toml", "note": "",
  "limits": {"history_window_s": {"min": 60.0, "max": 86400.0, "default": 900.0}}}
 ```
 
@@ -759,6 +777,12 @@ The health bar (rqt_robot_monitor's timeline) of one entity and of each of its c
   first that applies: `serve --history-window 15m` (`"flag"`: this run only, never written), the file
   (`"file"`: `~/.config/io-diagnostics/settings.toml`, `$IO_DIAGNOSTICS_CONFIG_DIR` / `$XDG_CONFIG_HOME` honoured),
   the default (`"default"`); after a page change, `"page"`. `note` says why the file could not be read or written.
+- `visibility` (2026-10-24): the Visibility choices, `{row id: "hide" | "show" | "ack"}`; a row id is its hardware id,
+  else its path. `POST /api/v1/settings` with `{"visibility": {"<id>": "show", "<other id>": null}}` merges them (`null`
+  forgets one) and writes a `[visibility]` table to the file. `hide` / `show` are the person's choice; `ack` is a hidden
+  row whose ERROR was acknowledged (the page ends it when the error ends). The default is no choice: a row no driver
+  claims (`claimed` false) is hidden, everything else shown, and a hidden row that reports a WARN or ERROR of its own shows itself again until acknowledged. It only
+  filters what the tree draws: the counts, the chip and every parent's roll-up still count a hidden row's problems.
 - `POST /api/v1/settings` with `{"history_window_s": 600}` (seconds, or `"10m"`) sets it now AND writes the file
   (atomically; the file holds `history_window_s = 600`). The same page-only rule as `POST /api/v1/act`: the page's
   `X-IO-Diagnostics: ui` header, `Sec-Fetch-Site: same-origin`, a JSON body, else **403** (`NotFromPage`,

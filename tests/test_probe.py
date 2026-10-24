@@ -162,7 +162,9 @@ def test_the_periodic_diagnose_starts_a_period_after_the_probe_and_the_host_adds
     assert rig_.runs("diagnose")[0]["start"] - rig_.runs("probe")[0]["end"] >= 1.2, "the period starts after the probe"
     assert rig_.verbs()[0] == "probe" and rig_.verbs().count("probe") == 1, "the probe never runs on the period"
     assert rig_.events() == events, "no Lost, no Found, no summary from the host"
-    assert rig_.job().cache.statuses[("can/12", "CAN 12: servo")].code == "BoardNotAnswering"
+    # the driver's status says so on the bus; the board that answered once keeps its row, hollow (docs/api-v1.md)
+    wait_for(lambda: rig_.job().cache.statuses[("can", "fdcanusb 0607623A: CAN bus")].code == "ExpectedBoardsSilent")
+    assert "can/12" in rig_.job().cache.entities
 
 
 def test_a_plugin_without_probe_keeps_diagnose_on_connect(rig):

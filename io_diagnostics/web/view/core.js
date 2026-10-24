@@ -44,9 +44,13 @@
   // "moteus-c1 · CAN 15", "RealSense D405 · 6036". Everything else keeps its API name verbatim.
   // WHY the model is not prettified ("moteus-c1", not "Moteus c1"): stored text renders as authored
   // (feedback_truthful_property_rendering); the full API name stays in the tooltip and the detail panel.
+  // WHY the USB generation, not the link speed (Zach, 2026-10-24: "say 2.1 or 3.2"): "USB bus 1 · 480 Mb/s" reads
+  // "USB bus 1 · USB 2.0"; the API name, with the raw speed, stays in the tooltip (tooltip() lists node.name).
+  const usbWords = (text) => (root.IOUsb ? root.IOUsb.relabel(text) : text);
+
   function labelOf(node) {
     const identity = node.identity || {};
-    const name = String(node.name || '');
+    const name = usbWords(String(node.name || ''));
     const model = String(identity.model || '').trim();
     const serial = String(identity.serial_number || '').trim();
     if (!model || !(serial || node.kind === 'node')) return { label: name, model: '', ident: '' };
@@ -159,7 +163,7 @@
   // The API fields a row carries unchanged (so a renderer can read the same names it read from the API node).
   const API_FIELDS = ['kind', 'icon', 'edge', 'level', 'message', 'own', 'rollup', 'knock_on_of', 'stale', 'connected',
     'hardware_id', 'identity', 'owner', 'id_text', 'last_received', 'age_s', 'expected_period_s', 'stale_after_s',
-    'checks', 'actions', 'faults'];
+    'checks', 'actions', 'faults', 'presence', 'claimed', 'usb'];
 
   // A row for one API entity. `extra` may set key, children, defaultOpen, columns (and anything a structure adds).
   function entityRow(node, options = {}, extra = {}) {
@@ -179,7 +183,7 @@
       ident,
       apiName: node.name,
       apiDepth: node.depth,
-      idText: node.id_text && label.includes(node.id_text) ? '' : (node.id_text || ''),
+      idText: node.id_text && label.includes(node.id_text) ? '' : usbWords(node.id_text || ''),
       parts,
       // note: the part's words beside the label, only when the part is what the row's mark is about (no own problem,
       // or a worse part); otherwise the part waits in the detail panel
@@ -413,7 +417,8 @@
       rows,
       ...indexRows(rows),
       summary: (state && state.summary) || null,
-      host: host ? { entity: host.path, name: host.name, id_text: host.id_text, elided: top.elided } : null,
+      // WHY a structure that draws the host as its own root row (p1) is never "elided": the head then has no host button
+      host: host ? { entity: host.path, name: host.name, id_text: host.id_text, elided: top.elided && !(structure && structure.rootRow) } : null,
     };
   }
 

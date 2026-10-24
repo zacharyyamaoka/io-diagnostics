@@ -13,7 +13,6 @@ from test_host_support import host_dict, make_host, standard_skeleton, usb_bus, 
 
 from contract.record import ERROR, OK, WARN, DiagnosticStatus, Entity
 from io_diagnostics import tree
-from io_diagnostics.host import EXPECTED_PATH
 from io_diagnostics.tree import HOST_PATH, PortHistory, os_statuses
 
 
@@ -31,15 +30,15 @@ def test_a_plugin_composite_names_its_leg_relative_to_its_device(tmp_path):
     assert host.node(f"{spider}/leg3")["node"]["knock_on_of"] is None  # no longer swallowed by the spider's ERROR
 
 
-def test_a_rig_missing_an_adapter_names_its_absent_row(tmp_path):
+def test_a_rig_missing_an_adapter_names_the_computer(tmp_path):
     rack = Rack(tmp_path, devices=tuple(device for device in PRESENT if device["serial"] != A))
     rig = rack.rig_row()
     check = rack.check(rig["path"])
-    absent = f"{EXPECTED_PATH}/{tree.slug(f'usb:0483:5740:{A}')}"
-    assert (check["code"], check["caused_by"]) == ("ExpectedMissing", [absent])
-    assert rack.check(absent)["code"] == "ExpectedAbsent"
+    # WHY the Computer: a missing device is its status, not a row (Zach, 2026-10-24)
+    assert (check["code"], check["caused_by"]) == ("ExpectedMissing", [HOST_PATH])
+    assert rack.check(HOST_PATH, f"fdcanusb {A}: presence")["code"] == "ExpectedAbsent"
     attention = [item["path"] for item in rack.state()["summary"]["attention"]]
-    assert absent in attention and rig["path"] not in attention and rig["knock_on_of"] == absent
+    assert HOST_PATH in attention and rig["path"] not in attention and rig["knock_on_of"] == HOST_PATH
 
 
 def test_a_rig_whose_problem_no_row_reports_stays_its_own_cause(tmp_path):

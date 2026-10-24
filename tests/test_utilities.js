@@ -570,7 +570,7 @@ async function main() {
     await pick(page, '#skin', 'terminal');
     await page.waitForTimeout(1300);
     const guides = await page.evaluate((key) => (document.querySelector(`.t6-row[data-t6-path="${key}"] .t6-guide`) || {}).textContent, CAN15);
-    check('seams: Terminal draws box guides', /^[├└]─ $/.test(guides || ''), guides);
+    check('seams: Terminal draws box guides', /^(?:[│ ]  )*[├└]─ $/.test(guides || ''), guides);
     await page.screenshot({ path: path.join(SHOTS, 'integration-terminal-guides.png'), clip: { x: 0, y: 300, width: 470, height: 420 } });
     await pick(page, '#skin', 'contrast');
     const focus = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--io-focus-width').trim());
@@ -1013,7 +1013,7 @@ async function round3Shots(browser, base, scheme) {
 // F1: 272813EF answers CAN 1, 14, 15 (the file also expects 16), 28B3A25D is plugged in on 1-5 (the file retires it),
 // fdcanusb 99990000 is expected and never there.
 const RIG = 'host/rig-1-dof-test-rack';
-const LOST = 'host/expected/usb-0483-5740-99990000';
+const LOST_NAME = 'fdcanusb 99990000: presence'; // an absent expected device is a check on the Computer, never a row (Zach, 2026-10-24)
 const RIG_FILE = `version = 1
 
 [[rig]]
@@ -1064,7 +1064,8 @@ async function expectedSetup(browser) {
   page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
   const rigRow = () => page.evaluate((key) => {
     const row = document.querySelector(`.t6-row[data-t6-path="${key}"]`);
-    return row ? { name: row.querySelector('.t6-name').textContent, shape: Boolean(row.querySelector('.t6-st .t6-shape')), first: row === document.querySelector('.t6-row') } : null;
+    // "first": the first row under the computer's root row (the root, bam-GPU, is the very first row)
+    return row ? { name: row.querySelector('.t6-name').textContent, shape: Boolean(row.querySelector('.t6-st .t6-shape')), first: row === document.querySelectorAll('.t6-row')[1] } : null;
   }, RIG);
   try {
     const plugins = await (await fetch(`${base}/api/v1/plugins`)).json();
@@ -1076,7 +1077,7 @@ async function expectedSetup(browser) {
     const rig = await rigRow();
     const rigCard = await page.evaluate(() => ({ buttons: [...document.querySelectorAll('.sec.setup [data-setup]')].map((b) => b.dataset.setup), why: (document.querySelector('.sec.why') || {}).textContent || '' }));
     check('expected: the rig row counts at a glance', rig && rig.name === '1-DOF test rack · 1/2 adapters · 3/4 boards · 2/2 cameras' && rig.shape && rig.first, rig);
-    check('expected: the rig row names what is missing', /can\/16 on fdcanusb 272813EF/.test(rigCard.why) && /fdcanusb 99990000: not on this PC/.test(rigCard.why)
+    check('expected: the rig row names what is missing', /CAN 16 on fdcanusb 272813EF/.test(rigCard.why) && /fdcanusb 99990000: not on this PC/.test(rigCard.why)
       && rigCard.buttons.join() === 'expect', rigCard);
     await page.screenshot({ path: path.join(SHOTS, 'expected-rig-row.png'), clip: { x: 0, y: 0, width: VIEWPORT.width, height: 560 } });
 
@@ -1121,21 +1122,13 @@ async function expectedSetup(browser) {
     check('expected: Expect what\'s here rewrote the file and the rig row', /"can\/15"/.test(written) && !/can\/16/.test(written)
       && (await rigRow()).name === '1-DOF test rack · 1/2 adapters · 3/3 boards · 2/2 cameras', (await rigRow()).name);
 
-    // Forget on the adapter that is never there
-    await open(page, base, LOST);
-    await page.waitForSelector('.sec.setup [data-setup="forget"]', { timeout: 15000 });
-    const lostButtons = await page.evaluate(() => [...document.querySelectorAll('.sec.setup [data-setup]')].map((b) => b.dataset.setup));
-    await page.click('.sec.setup [data-setup="forget"]');
-    const forgetText = await page.textContent('.s-panel .confirm');
-    await page.locator('.sec.setup').screenshot({ path: path.join(SHOTS, 'expected-controls-forget.png') });
-    await page.click('[data-setup-confirm]');
-    await page.waitForSelector('.s-panel .u-result.ok', { timeout: 15000 });
-    await page.waitForFunction((key) => /1\/1 adapter /.test((document.querySelector(`.t6-row[data-t6-path="${key}"] .t6-name`) || {}).textContent || ''), RIG, { timeout: 15000 });
-    const lostRowGone = await page.evaluate(({ entity, rig }) => !S.built.byEntity.has(entity) && !S.data.summary.attention.some((item) => item.path === entity)
-      && S.sel === rig && /Saved/.test(document.querySelector('.sec.setup .u-result.ok').textContent), { entity: LOST, rig: RIG });
-    await page.locator('.sec.setup').screenshot({ path: path.join(SHOTS, 'expected-controls-forget-done.png') });
-    check('expected: Forget on an absent row drops it from the file and the page', lostButtons.join() === 'forget,retire' && lostRowGone
-      && forgetText.startsWith('Forget fdcanusb 99990000? It leaves the expected setup (1-DOF test rack)') && !/99990000/.test(fs.readFileSync(file, 'utf8')), { lostButtons, forgetText });
+    // the adapter that is never there: no row (a missing thing is a diagnostic on its parent); the Computer says it
+    await open(page, base, 'host');
+    const computer = await (await fetch(`${base}/api/v1/node?path=host`)).json();
+    const lostCheck = computer.checks.find((each) => each.name === LOST_NAME) || {};
+    const lostRow = await page.evaluate(() => [...S.built.byKey.values()].some((row) => /99990000/.test(`${row.key} ${row.label}`) && row.kind !== 'rig'));
+    check('expected: an absent expected device is a warning on the Computer and has no row', !lostRow && computer.node.own.level === 'warn'
+      && lostCheck.code === 'ExpectedAbsent' && /fdcanusb 99990000 expected \(1-DOF test rack\)/.test(lostCheck.message || ''), { lostRow, own: computer.node.own.level, lostCheck });
     await open(page, base, RIG);
     await page.screenshot({ path: path.join(SHOTS, 'expected-rig-row-after.png'), clip: { x: 0, y: 0, width: VIEWPORT.width, height: 560 } });
     check('expected: no page errors', errors.length === 0, errors.slice(0, 3).join(' | ') || 'none');

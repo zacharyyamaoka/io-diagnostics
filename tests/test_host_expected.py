@@ -1,5 +1,6 @@
-"""Expected but absent (record v0.1): a device a plugin's ``describe`` lists as ``expected``, or one this host has seen a
-plugin diagnose, that is not on USB now gets its own WARN row saying in plain words what the kernel saw.
+"""Expected but absent (record v0.1): a device a plugin's ``describe`` lists as ``expected`` that is not on USB now is a
+WARN status on the Computer saying in plain words what the kernel saw (Zach, 2026-10-24: a missing thing is a diagnostic
+on its parent, never a ghost row); one only seen by this host is a single OK "Recently seen" status.
 
 The live case (2026-10-22): fdcanusb 28B3A25D was never on USB today (no 0483:5740, no by-id link, no plug event in
 ``journalctl -k``): a charge-only cable, a bad port, or the adapter. The journal and the state file are faked here.
@@ -13,7 +14,8 @@ import json
 from test_host_support import FakeOs, SetClock, standard_skeleton, usb_device, write_fake_plugin
 
 from io_diagnostics import activity
-from io_diagnostics.host import EXPECTED_PATH, RECENT_PATH, SEEN_FILE, Host, make_host
+from io_diagnostics.host import SEEN_FILE, Host, make_host
+from io_diagnostics.tree import HOST_PATH
 
 PDT = -7 * 3600
 BOOT = dt.datetime(2026, 10, 22, 7, 0, tzinfo=dt.timezone(dt.timedelta(seconds=PDT))).timestamp()
@@ -63,22 +65,19 @@ def host_with(tmp_path, lines, *, expected=INVENTORY, skeleton=(PRESENT,), note=
 
 
 def absent_checks(host: Host) -> dict[str, dict]:
+    """The Computer's ExpectedAbsent statuses by hardware_id; and no row anywhere for a missing device."""
+
+    assert not [path for path in host.view().merged.entities if path.endswith("/expected") or "/expected/" in path
+                or "recently-seen" in path]
     out = {}
-    for path, entity in host.view().merged.entities.items():
-        if path.startswith(EXPECTED_PATH + "/"):
-            [check] = host.node(path)["checks"]
-            out[entity.hardware_id] = {**check, "owner": entity.owner, "name": entity.name, "values": dict(
-                (pair["key"], pair["value"]) for pair in check["values"])}
+    for check in host.node(HOST_PATH)["checks"]:
+        if check["code"] == "ExpectedAbsent":
+            out[check["hardware_id"]] = {**check, "values": dict((pair["key"], pair["value"]) for pair in check["values"])}
     return out
 
 
-def recent_checks(host: Host) -> dict[str, dict]:
-    out = {}
-    for path, entity in host.view().merged.entities.items():
-        if path.startswith(RECENT_PATH + "/"):
-            [check] = host.node(path)["checks"]
-            out[entity.hardware_id] = {**check, "owner": entity.owner, "name": entity.name}
-    return out
+def recent_check(host: Host) -> dict | None:
+    return next((check for check in host.node(HOST_PATH)["checks"] if check["name"] == "Recently seen"), None)
 
 
 def test_never_enumerated_says_so_in_plain_words(tmp_path):
@@ -86,18 +85,18 @@ def test_never_enumerated_says_so_in_plain_words(tmp_path):
     checks = absent_checks(host)
     assert list(checks) == [ABSENT]  # the present adapter and the non-USB board get no row
     check = checks[ABSENT]
-    assert (check["level"], check["code"], check["owner"], check["name"]) == ("warn", "ExpectedAbsent", "moteus", "fdcanusb 28B3A25D")
-    assert check["message"] == ("expected (last seen 2026-10-21 18:24, rack_inventory) · not on USB · the kernel saw no plug"
-                                " event since boot (2026-10-22 07:00): try a data cable or another port")
+    assert (check["level"], check["code"], check["name"]) == ("warn", "ExpectedAbsent", "fdcanusb 28B3A25D: presence")
+    assert check["message"] == ("fdcanusb 28B3A25D expected (rack_inventory), not on USB · last seen 2026-10-21 18:24 · the kernel"
+                                " saw no plug event since boot (2026-10-22 07:00): try a data cable or another port")
     assert check["values"]["kernel_evidence"] == "never" and "charge-only" in check["values"]["what_to_check"]
-    group = next(node for node in host.state()["tree"]["children"] if node["path"] == EXPECTED_PATH)
-    assert (group["name"], group["kind"], group["level"]) == ("Expected, not connected", "group", "warn")  # worst below
+    computer = host.state()["tree"]  # the Computer carries it: its own level is the warning
+    assert (computer["kind"], computer["own"]["level"]) == ("host", "warn")
 
 
 def test_plugged_in_then_gone_says_when(tmp_path):
     check = absent_checks(host_with(tmp_path, PLUGGED_THEN_GONE))[ABSENT]
-    assert check["message"] == ("expected (last seen 2026-10-21 18:24, rack_inventory) · not on USB · plugged in at 09:00:01"
-                                " on 1-5, gone at 09:30:00")
+    assert check["message"] == ("fdcanusb 28B3A25D expected (rack_inventory), not on USB · last seen 2026-10-21 18:24 · plugged in"
+                                " at 09:00:01 on 1-5, gone at 09:30:00")
     assert check["values"]["kernel_evidence"] == "left" and "connectors" in check["values"]["what_to_check"]
 
 
@@ -113,7 +112,7 @@ def test_an_unreadable_journal_is_said_not_guessed(tmp_path):
 def test_a_present_device_has_no_row(tmp_path):
     plugged = usb_device("1-5", "0483", "5740", "28B3A25D", label="fdcanusb 28B3A25D")
     assert absent_checks(host_with(tmp_path, PLUGGED_THEN_GONE, skeleton=(PRESENT, plugged))) == {}
-    assert EXPECTED_PATH not in host_with(tmp_path / "none", [], expected=[]).view().merged.entities
+    assert host_with(tmp_path / "none", [], expected=[]).state()["tree"]["own"]["level"] is None  # no warning on the Computer
 
 
 def test_the_host_remembers_what_a_plugin_diagnosed_and_writes_it_atomically(tmp_path):
@@ -128,9 +127,10 @@ def test_the_host_remembers_what_a_plugin_diagnosed_and_writes_it_atomically(tmp
 
     later = host_with(tmp_path / "later", [], expected=[], skeleton=(), state_file=state)  # the adapter is gone now
     assert absent_checks(later) == {}  # only seen, never expected: no warning (Zach, 2026-10-23, FDA81D29)
-    check = recent_checks(later)["usb:0483:5740:272813EF"]
-    assert check["owner"] == "io_diagnostics" and check["level"] == "ok" and check["code"] == ""
-    assert check["message"].startswith("seen 2026-10-22 18:00 · not on USB now · ")
+    check = recent_check(later)  # one OK status on the Computer, never a row
+    assert check["level"] == "ok" and check["code"] == "" and check["source"] == "io_diagnostics.expected"
+    assert check["message"] == "1 device seen in the last day, not on USB now, not in the expected setup: fdcanusb 272813EF"
+    assert dict((pair["key"], pair["value"]) for pair in check["values"])["recently_seen"].startswith("fdcanusb 272813EF (seen 2026-10-22 18:00) · ")
 
 
 def test_a_broken_state_file_is_named_and_the_host_starts_empty(tmp_path):
@@ -169,14 +169,11 @@ def test_a_device_only_seen_gives_no_warning_and_no_fault_when_it_is_unplugged(t
         host.clock.at += 2
         host.refresh()
     assert absent_checks(host) == {} and host.faults.all() == []
-    [row] = recent_checks(host).values()
-    assert (row["level"], row["code"], row["name"]) == ("ok", "", "fdcanusb FDA81D29")
-    group = next(node for node in host.state()["tree"]["children"] if node["path"] == RECENT_PATH)
-    assert (group["name"], group["kind"], group["level"], group["collapsed"]) == ("Recently seen", "group", "ok", True)
+    row = recent_check(host)
+    assert (row["level"], row["code"], row["name"]) == ("ok", "", "Recently seen")
+    assert "fdcanusb FDA81D29" in row["message"] and host.state()["tree"]["own"]["level"] == "ok"
     assert not [event for event in host.activity()["events"] if event["code"].startswith("Fault")]
     assert [event["code"] for event in host.activity(types=("usb",))["events"] if event["hardware_id"] == "usb:0483:5740:FDA81D29"] == ["Unplugged", "Plugged"]
-    [path] = [path for path in host.view().merged.entities if path.startswith(RECENT_PATH + "/")]
-    assert host._setup_target(path, host.view())[0] == "absent"  # its card is an absent row's: Forget drops it
 
 
 def test_a_device_declared_expected_still_warns_and_confirms_a_fault_when_unplugged(tmp_path):
@@ -186,4 +183,4 @@ def test_a_device_declared_expected_still_warns_and_confirms_a_fault_when_unplug
         host.refresh()
     assert absent_checks(host)[ABSENT]["level"] == "warn"
     assert [fault.code for fault in host.faults.all() if fault.hardware_id == ABSENT] == ["ExpectedAbsent"]
-    assert RECENT_PATH not in host.view().merged.entities
+    assert recent_check(host) is None

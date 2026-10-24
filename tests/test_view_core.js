@@ -198,12 +198,14 @@ function rigUnit() {
   for (const id of STRUCTURES) {
     const built = V.build(state, id, {});
     const row = built.flat.find((each) => each.entity === RIG);
-    seen.push({ id, label: row && row.label, own: row && row.status.own, top: built.rows.indexOf(row), leaf: row && row.children.length === 0 });
+    // p1 draws the computer as its root row (Zach, 2026-10-24): "top" is the position among that root's children
+    const level = id === 'p1' ? built.rows[0].children : built.rows;
+    seen.push({ id, label: row && row.label, own: row && row.status.own, top: level.indexOf(row), leaf: row && row.children.length === 0 });
   }
   check('rig row: in every structure, its counts verbatim, a warn of its own, a leaf', seen.every((item) => item.label === RIG_NAME && item.own === 'warn' && item.leaf), seen);
   check('rig row: first at the top level of p0 and p1 (the at-a-glance answer)', seen.filter((item) => ['p0', 'p1'].includes(item.id)).every((item) => item.top === 0), seen);
   const ok = V.build(withRig(liveRackState()), 'p1', {}).flat.find((each) => each.entity === RIG);
-  check('rig row: searchable by its name', V.applyQuery(V.build(state, 'p1', {}).rows, '6/7 boards').some((each) => each.entity === RIG) && Boolean(ok));
+  check('rig row: searchable by its name', V.build(state, 'p1', { query: '6/7 boards' }).flat.some((each) => each.entity === RIG) && Boolean(ok));
 }
 
 function liveShapeUnit() {
@@ -319,7 +321,7 @@ function invariants(frame, state) {
       if ((row.status.hint ? row.status.hint.level : null) !== expected) bad.push(`${row.label}: hint ${row.status.hint && row.status.hint.level} vs api ${expected}`);
     }
     check(`${tag}: black box passed through on every row`, bad.length === 0 && built.flat.length > 0, bad.slice(0, 4).join(' · ') || `${built.flat.length} rows`);
-    const counted = built.flat.length + built.flat.reduce((n, row) => n + row.parts.length, 0) + 1; // + the elided host
+    const counted = built.flat.length + built.flat.reduce((n, row) => n + row.parts.length, 0) + (built.host && built.host.elided ? 1 : 0); // + the elided host (p1 draws it as its root row)
     check(`${tag}: every entity is a row or a folded part`, counted === nodes.size, `${counted} of ${nodes.size}`);
     if (!showParts) check(`${tag}: no part_of rows`, built.flat.every((row) => row.edge !== 'part_of'));
   }
@@ -385,13 +387,16 @@ function liveFrame() {
     && Boolean(adapter.status.part) && /error-passive/.test(adapter.status.part.text), adapter && { kids: adapter.children.map((row) => row.label), part: adapter.status.part });
   const cameras = p1.flat.filter((row) => row.model === 'RealSense D405').map((row) => row.label);
   check('live 17:41: RealSense labels', cameras.join(' | ') === 'RealSense D405 · USB 219323070276 | RealSense D405 · USB 130523071221', cameras);
-  // the built-in PCI functions (IOMMU, SMBus, GPU, NVMe, USB controllers ...) fold into one closed Computer row last;
-  // the NICs (they carry a net interface) stay at the top level
-  const top = p1.rows.map((row) => row.label);
-  const computer = p1.rows[p1.rows.length - 1];
-  check('live 17:41 p1: built-in PCI devices in one closed Computer row, NICs stay', computer.label === 'Computer' && !computer.defaultOpen
-    && computer.children.some((row) => /IOMMU/.test(row.label)) && !top.some((label) => /IOMMU|SMBus|NVMe/.test(label))
-    && top.some((label) => /Ethernet|RTL8111/.test(label)) && top.indexOf('fdcanusb · 272813EF') < top.indexOf('Computer'), top);
+  // Zach, 2026-10-24: "the computer should be the BAM-GPU … as its own row": the root row IS the host, there is no second
+  // "Computer" row and no "Built-in" group; the built-in PCI functions (IOMMU, SMBus, GPU, NVMe …) are ordinary children
+  // beside the fdcanusb, the RealSense and the NICs (no driver claims them, so the page hides them by default)
+  const [root] = p1.rows;
+  const top = root.children.map((row) => row.label);
+  check('live 17:41 p1: the root row is the computer, built-in PCI devices are ordinary children, no Computer or Built-in row',
+    p1.rows.length === 1 && root.kind === 'host' && root.label === 'bam-GPU' && root.depth === 0 && p1.host.elided === false
+    && !p1.flat.some((row) => /^(Computer|Built-in)$/.test(row.label)) && top.some((label) => /IOMMU/.test(label))
+    && top.some((label) => /Ethernet|RTL8111/.test(label)) && top.includes('fdcanusb · 272813EF')
+    && root.children.every((row) => row.depth === 1 && row.parent === root.key), top);
 }
 
 // ------------------------------------------------------------------- round 3: sort + P1 opened ----
@@ -399,49 +404,97 @@ function liveFrame() {
 function sortUnit() {
   const state = JSON.parse(fs.readFileSync(LIVE, 'utf8')); // the live rack frame: 10 top-level rows, a Computer row
   const plain = V.build(state, 'p1', {});
+  const under = (built) => built.rows[0].children; // the computer is the root row; its entities are one level below
   const worst = (row) => Math.max(V.RANK[row.status.own] ?? -1, V.RANK[row.status.part && row.status.part.level] ?? -1, V.RANK[row.status.hint && row.status.hint.level] ?? -1);
-  // a container row (a structure's grouping row or the host's own row: P1's "Computer") ends its level under Name / Last change
-  const container = (row) => !row.entity || row.kind === 'host';
-  const containersLast = (built) => { const n = built.rows.filter(container).length; return n > 0 && built.rows.slice(built.rows.length - n).every(container); };
-  const devices = (built) => built.rows.filter((row) => !container(row));
+  const devices = (built) => under(built);
   const status = V.build(state, 'p1', { sort: 'status' });
-  const levels = status.rows.map(worst);
-  const okKeys = (built) => built.rows.filter((row) => worst(row) < 0).map((row) => row.key);
+  const levels = under(status).map(worst);
+  const okKeys = (built) => under(built).filter((row) => worst(row) < 0).map((row) => row.key);
   check('sort status: problems first, worst first, the rest in the structure\'s order', levels.every((level, at) => at === 0 || levels[at - 1] >= level)
-    && levels[0] > 0 && okKeys(status).join() === okKeys(plain).join(), status.rows.map((row) => `${row.label}:${worst(row)}`));
-  check('sort: none asked keeps the structure\'s order', labels(V.build(state, 'p1', { sort: '' }).rows).join() === labels(plain.rows).join(), labels(plain.rows));
+    && levels[0] > 0 && okKeys(status).join() === okKeys(plain).join(), under(status).map((row) => `${row.label}:${worst(row)}`));
+  check('sort: none asked keeps the structure\'s order', labels(under(V.build(state, 'p1', { sort: '' }))).join() === labels(under(plain)).join(), labels(under(plain)));
   const named = V.build(state, 'p1', { sort: 'name' });
   const names = devices(named).map((row) => row.label);
   const sortedNames = [...names].sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
   const boards = named.flat.find((row) => row.label === 'fdcanusb · 272813EF').children.map((row) => row.label);
-  check('sort name: labels in order, numbers as numbers, the Computer last', names.join() === sortedNames.join() && containersLast(named)
+  check('sort name: labels in order, numbers as numbers', names.join() === sortedNames.join()
     && boards.join() === 'CAN 1,CAN 14,CAN 15', { top: named.rows.map((row) => row.label), boards });
   // newest event first: a camera at 300, a board below the adapter at 200 (the adapter takes its board's time), nothing else
-  const camera = plain.rows.find((row) => /RealSense/.test(row.label));
-  const adapter = plain.rows.find((row) => row.label === 'fdcanusb · 272813EF');
+  const camera = under(plain).find((row) => /RealSense/.test(row.label));
+  const adapter = under(plain).find((row) => row.label === 'fdcanusb · 272813EF');
   const board = adapter.children.find((row) => row.label === 'CAN 14');
   const changed = V.build(state, 'p1', { sort: 'change', changes: { [camera.entity]: 300, [board.entity]: 200, 'host/nowhere': 999 } });
   const rest = devices(changed).slice(2).map((row) => row.key);
   const restPlain = devices(plain).filter((row) => row.key !== camera.key && row.key !== adapter.key).map((row) => row.key);
-  check('sort change: newest event first (a row takes its children\'s), the rest kept, the Computer last', changed.rows[0].key === camera.key
-    && changed.rows[1].key === adapter.key && changed.rows[1].children[0].label === 'CAN 14' && rest.join() === restPlain.join()
-    && containersLast(changed), changed.rows.map((row) => row.label));
+  check('sort change: newest event first (a row takes its children\'s), the rest kept', under(changed)[0].key === camera.key
+    && under(changed)[1].key === adapter.key && under(changed)[1].children[0].label === 'CAN 14' && rest.join() === restPlain.join(), under(changed).map((row) => row.label));
   const rigged = withRig(withExpected(state));
-  const rigFirst = V.SORTS.map((by) => `${by}:${V.build(rigged, 'p1', { sort: by, changes: { [camera.entity]: 300 } }).rows[0].kind}`);
+  const rigFirst = V.SORTS.map((by) => `${by}:${under(V.build(rigged, 'p1', { sort: by, changes: { [camera.entity]: 300 } }))[0].kind}`);
   check('sort: the rig row leads under every sort (the expected setup\'s summary)', rigFirst.every((text) => text.endsWith(':rig')), rigFirst);
   const folders = plain.flat.filter((row) => row.children.length);
-  const computer = plain.flat.filter((row) => row.label === 'Computer');
-  check('p1 opens every device row with children, the Computer row stays closed', folders.some((row) => !container(row))
-    && folders.filter((row) => !container(row)).every((row) => row.defaultOpen) && computer.length === 1 && !computer[0].defaultOpen,
-  folders.map((row) => `${row.label}:${row.defaultOpen}`));
+  check('p1 opens the computer root and every device row with children', folders.some((row) => row.kind !== 'host')
+    && folders.every((row) => row.defaultOpen) && plain.rows[0].defaultOpen, folders.map((row) => `${row.label}:${row.defaultOpen}`));
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'io_diagnostics', 'web', 'view', 'structure', 'index.json'), 'utf8'));
   const picker = manifest.structures.filter((entry) => entry.picker !== false).sort((a, b) => a.pick - b.pick).map((entry) => `${entry.id}:${entry.group}`);
   check('Group by: Devices · Type · Port · Bus · Physical; P3 off the picker, its file kept', picker.join() === 'p1:Devices,p2:Type,p4:Port,p5:Bus,p0:Physical'
     && manifest.structures.some((entry) => entry.id === 'p3' && entry.ready && entry.picker === false), picker);
 }
 
+// ------------------------------------------------------------- 2026-10-24: Visibility, header counts, USB words ----
+function visibilityUnit() {
+  const Vis = require(path.join(ROOT, 'io_diagnostics', 'web', 'visibility.js'));
+  const Sum = require(path.join(ROOT, 'io_diagnostics', 'web', 'summary.js'));
+  const Usb = require(path.join(ROOT, 'io_diagnostics', 'web', 'usb.js'));
+  const row = (key, extra = {}) => ({ key, entity: key, label: key, hardware_id: '', depth: 0, parent: null, children: [], claimed: true, status: { own: null, hint: null, part: null, note: '' }, ...extra });
+  const keyboard = row('kb', { claimed: false, hardware_id: 'usb:046d:c34b:KB1' });
+  const mouse = row('mouse', { claimed: false });
+  const adapter = row('adapter', { hardware_id: 'usb:0483:5740:A' });
+  const list = [adapter, keyboard, mouse];
+  const arranged = Vis.arrange(list, { revealed: new Set(), choices: {} });
+  check('visibility: a device no driver claims is hidden by default, behind one "Show N hidden" row at the end of its group',
+    arranged.map((each) => each.key).join() === 'adapter,root#hidden' && arranged[1].label === 'Show 2 hidden' && arranged[1].bundle === true, arranged.map((each) => each.label));
+  const open = Vis.arrange(list, { revealed: new Set(['']), choices: {} });
+  check('visibility: open, the hidden rows stay (dimmed) above a "Hide 2 hidden" row', open.map((each) => each.label).join() === 'adapter,kb,mouse,Hide 2 hidden' && open.filter((each) => each.dimmed).length === 2, open.map((each) => each.label));
+  check('visibility: a choice of "show" brings a hidden row back; "hide" hides a claimed one',
+    Vis.arrange(list, { revealed: new Set(), choices: { 'usb:046d:c34b:KB1': 'show' } }).map((each) => each.key).join() === 'adapter,kb,root#hidden'
+    && Vis.arrange(list, { revealed: new Set(), choices: { 'usb:0483:5740:A': 'hide' } }).map((each) => each.label).join() === 'Show 3 hidden');
+  // a hidden row never hides a fault: ERROR surfaces it until it is acknowledged
+  const broken = row('broken', { claimed: false, status: { own: 'error', hint: null, part: null, note: '' } });
+  const surfaced = Vis.arrange([adapter, broken], { revealed: new Set(), choices: {} });
+  check('visibility: a hidden device that goes ERROR shows itself again', surfaced.map((each) => each.key).join() === 'adapter,broken' && surfaced[1].surfaced === true, surfaced.map((each) => each.label));
+  check('visibility: a WARN of its own surfaces it too; until it is acknowledged ("ack"), when it hides again',
+    Vis.arrange([adapter, broken], { revealed: new Set(), choices: { broken: 'ack' } }).map((each) => each.label).join() === 'adapter,Show 1 hidden'
+    && Vis.arrange([adapter, row('warned', { claimed: false, status: { own: 'warn', hint: null, part: null, note: '' } })], { revealed: new Set(), choices: {} }).map((each) => each.key).join() === 'adapter,warned'
+    && Vis.arrange([adapter, row('warned', { claimed: false, status: { own: 'warn', hint: null, part: null, note: '' } })], { revealed: new Set(), choices: { warned: 'ack' } }).length === 2
+    && Vis.arrange([adapter, row('stale', { claimed: false, status: { own: 'stale', hint: null, part: null, note: '' } })], { revealed: new Set(), choices: {} }).length === 2);
+  const bundleWorst = Vis.arrange([adapter, row('u', { claimed: false, status: { own: 'unknown', hint: null, part: null, note: '' } }), row('s', { claimed: false, status: { own: 'stale', hint: null, part: null, note: '' } })], { revealed: new Set(), choices: {} }).pop();
+  check('visibility: the "Show N hidden" row carries the worst hidden level, so a hidden problem still shows somewhere', bundleWorst.worst === 'unknown', bundleWorst.worst);
+  check('visibility: a search shows everything', Vis.arrange(list, { revealed: new Set(), choices: {}, querying: true }).length === 3);
+  const group = row('group', { claimed: true, children: [row('g1', { claimed: false, depth: 1, parent: 'group' }), row('g2', { depth: 1, parent: 'group' })] });
+  const nested = Vis.arrange([group], { revealed: new Set(), choices: {} })[0];
+  check('visibility: each group ends in its own bundle, keyed by the group', nested.children.map((each) => each.key).join() === 'g2,group#hidden' && nested.children[1].bundleOf === 'group' && nested.children[1].depth === 1, nested.children.map((each) => each.label));
+  check('visibility: the input rows are never changed', list.length === 3 && !('dimmed' in keyboard));
+
+  // the header: increasing severity, left to right, zeros hidden
+  const order = (counts) => [...Sum.html({ counts }).matchAll(/data-t6-count="(\w+)"/g)].map((found) => found[1]).join();
+  check('header: stale, unknown, warn, error, in that order; zeros hidden', order({ error: 1, warn: 3, unknown: 2, stale: 4 }) === 'stale,unknown,warn,error' && order({ error: 2, stale: 1 }) === 'stale,error' && order({ warn: 1 }) === 'warn');
+  check('header: nothing to count says so', /nothing needs you/.test(Sum.html({ counts: {} })) && /nothing needs you/.test(Sum.html(null)));
+  check('header: the legend says each mark in plain words, UNKNOWN as "plugged in, but RobotDx couldn\'t check it"',
+    Sum.LEVELS.join() === 'stale,unknown,warn,error' && /couldn't check it \(for example tview has the port\)/.test(Sum.html({ counts: { unknown: 1 } }).replace(/&#39;/g, "'")));
+
+  // USB words (Zach: "say 2.1 or 3.2")
+  const words = [[1.5, 'USB 1.1'], [12, 'USB 1.1'], [480, 'USB 2.0'], [5000, 'USB 3.2 Gen 1'], [10000, 'USB 3.2 Gen 2'], [20000, 'USB 3.2 Gen 2x2'], [40000, 'USB4']];
+  check('usb: link speeds name the USB generation', words.every(([mbps, name]) => Usb.versionName(mbps) === name) && Usb.versionName(123) === null, words.map(([mbps]) => Usb.versionName(mbps)));
+  check('usb: a bus label reads the generation, the speed text parses', Usb.relabel('USB bus 1 · 480 Mb/s') === 'USB bus 1 · USB 2.0' && Usb.relabel('USB bus 2 · 10 Gb/s') === 'USB bus 2 · USB 3.2 Gen 2'
+    && Usb.relabel('12 Mb/s') === 'USB 1.1' && Usb.relabel('ITE Device') === 'ITE Device' && Usb.parseSpeed('5 Gb/s') === 5000);
+  check('usb: a device\'s own bcdUSB wins where it says more; the raw speed stays in the tip',
+    Usb.fromBcd('2.10') === 'USB 2.1' && Usb.describe({ version: '2.10', speed_mbps: 480 }).text === 'USB 2.1' && /480 Mb\/s/.test(Usb.describe({ version: '2.10', speed_mbps: 480 }).tip)
+    && Usb.describe({ version: '3.20', speed_mbps: 480 }).text === 'USB 3.2 · on a USB 2.0 link' && Usb.describe({ speed_mbps: 12 }).text === 'USB 1.1');
+}
+
 (async () => {
   unit();
+  visibilityUnit();
   sortUnit();
   liveFrame();
   if (!process.argv.includes('--unit')) await frames();

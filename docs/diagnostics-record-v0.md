@@ -461,12 +461,12 @@ how a reader tells.
     `source` says who knows (`"rack_inventory"`). The moteus lane fills it from its rack inventory.
   - The host adds the USB devices it has itself seen a plugin diagnose. It keeps them, with first and last seen,
     in `~/.local/state/io-diagnostics/seen.json` (`$IO_DIAGNOSTICS_STATE_DIR`; live mode only, written atomically).
-  - Each expected or remembered device that is not on USB now gets an entity under `host/expected` ("Expected, not
-    connected") and one status, `<name>: presence`. It is `warn` (absent, not broken) with code `ExpectedAbsent`.
+  - Each expected device that is not on USB now gets one status on the Computer (the `host` entity, never a row of
+    its own; Zach, 2026-10-24), `<name>: presence`. It is `warn` (absent, not broken) with code `ExpectedAbsent`.
     The message says what the kernel saw this boot (`journalctl -k`, passive):
-    - never enumerated: `expected (last seen 2026-10-21 18:24, rack_inventory) · not on USB · the kernel saw no plug
-      event since boot (2026-10-22 07:00): try a data cable or another port`;
-    - came and went: `… · not on USB · plugged in at 09:00:01 on 1-5, gone at 09:30:00`;
+    - never enumerated: `fdcanusb 28B3A25D expected (rack_inventory), not on USB · last seen 2026-10-21 18:24 · the
+      kernel saw no plug event since boot (2026-10-22 07:00): try a data cable or another port`;
+    - came and went: `… · plugged in at 09:00:01 on 1-5, gone at 09:30:00`;
     - the log is unreadable: `… · the kernel log could not be read (<why>): no evidence whether it ever enumerated`.
   - Its values: `what_to_check`, `kernel_evidence` (`never | left | unknown`), `expected_by`, `last_seen`.
   - In v0.1 only USB ids are judged. A non-USB expected id (a CAN board) stays the plugin's own diagnose to report.
@@ -505,9 +505,9 @@ symptom; the Computer's checks written on the host swallowed the rack below.
   - **The composite's row keeps its own level and message** (the black-box rule). Only the counts, the attention
     list and `knock_on` change.
 - **Where the host sets it** (`io_diagnostics`):
-  - the rig row's `<rig>: expected setup` names, per missing item, the row that reports it: a board's own row
-    (`BoardNotAnswering`), or an absent device's row under `host/expected` (`ExpectedAbsent`); for
-    `ExpectedNotChecked`, the unchecked boards' rows. If any item has no row that says it, it names nothing;
+  - the rig row's `<rig>: expected setup` names, per missing item, the row that reports it: a board's bus
+    (a board that never answered has no row; its driver says `ExpectedBoardsSilent` on the bus), or the Computer for an
+    absent device (`ExpectedAbsent`); for `ExpectedNotChecked`, the unchecked boards' rows. If any item has no row that says it, it names nothing;
   - the Computer's `USB/PCIe links` line names the port, PCIe and camera rows whose problems it repeats (only when
     it repeats them all);
   - the Computer's own checks stay a leaf beside the tree (`tree.HOST_SELF`); a `caused_by` naming `host` follows

@@ -3,20 +3,29 @@
 //
 // Consumes display rows from the active structure (web/view/core.js), never the raw API tree. Registers
 //   window.IOTreeRenderers.v6 = {name, consumes: 'rows', render(container, rows, {onSelect, onSelectEntity,
-//                                 selectedPath, query, summary, host})}
+//                                 selectedPath, query, summary, host, onRowAction})}
 //
 // Between Quiet IDE (v1) and Notion (v2), as Zach asked (2026-10-22 14:46):
 //   - IDE: every expandable row shows its chevron at rest, quiet, so you see at a glance which rows are folders;
 //     leaves keep the empty slot so icons line up
-//   - Notion: no indent guides, rounded rows, affordances revealed on hover (the chevron brightens, an open
-//     branch's hint ring appears)
-// The tree rules (2026-10-22) still hold: type icon + name together, status SHAPE at the far right, quiet when OK,
-// not connected = fully grey, black box (own level shown; worst below is a quiet dot only on a collapsed branch).
+//   - Notion: no indent guides, rounded rows, affordances revealed on hover (the chevron brightens, the row's ⋮ appears)
+//
+// Two marks, never mixed (Zach, 2026-10-24: "I am a bit confused right now with the icons and colors"):
+//   - PRESENCE, a small neutral dot before the icon, like the Claude app's sidebar: filled = heard within its expected
+//     period, hollow ring = known but not heard lately ("last heard 6 min ago"), gently pulsing = data arriving now. It is
+//     never amber or red: warning colours are for real WARN / ERROR only.
+//   - HEALTH, a shape at the far right, ONLY for the diagnostics levels (contract/record.py): ▲ amber warn, ✖ red error,
+//     ? unknown. Stale is the hollow dot, not a second mark. A collapsed row rolls up the worst level below it with the
+//     SAME shape (never a smaller dot). A row explained by a failed cause above (knock-on) shows no mark: its words
+//     stay in its tooltip and its detail. OK rows show nothing.
+// Not connected rows are absent (a missing thing is a status on its parent); the header counts come from web/summary.js.
+// Rows that no driver claims are hidden by default (web/visibility.js); the status bar's Visibility shows an eye per row.
 'use strict';
 (function () {
   const RANK = { ok: 0, warn: 1, unknown: 2, stale: 3, error: 4 };
-  const WORST_FIRST = ['error', 'stale', 'unknown', 'warn'];
+  const MARKS = new Set(['warn', 'unknown', 'error']); // the levels a row draws a shape for; stale is the hollow dot
   const WORD = { error: 'error', stale: 'stale', unknown: 'unknown', warn: 'warning' };
+  const OPEN_KEY = 'io-diagnostics.tree.open';
   const KNOWN_ICONS = new Set(['host', 'group', 'usb', 'pci', 'net', 'tty', 'video', 'port', 'hub', 'adapter', 'bus', 'servo',
     'chip', 'motor', 'camera', 'stream', 'webcam', 'hid', 'device']);
 
@@ -44,24 +53,46 @@
     device: '<rect x="4" y="4" width="16" height="16" rx="3"/><circle cx="12" cy="12" r="2"/>',
   };
   const CHEVRON = '<path d="m6 4 4 4-4 4"/>';
-  // Status SHAPES (16-unit): the shape alone must read without colour; the glyph is knocked out in --io-on-status.
-  const SHAPES = {
-    warn: '<path class="t6-fill" d="M7.13 2.2a1 1 0 0 1 1.74 0l6.03 10.6a1 1 0 0 1-.87 1.5H1.97a1 1 0 0 1-.87-1.5Z"/>'
-      + '<path class="t6-ink" d="M8 6.1v3.4"/><circle class="t6-ink-dot" cx="8" cy="11.7" r=".95"/>',
-    error: '<path class="t6-fill" d="M5.3 1.2h5.4l4.1 4.1v5.4l-4.1 4.1H5.3l-4.1-4.1V5.3Z"/>'
-      + '<path class="t6-ink" d="m5.7 5.7 4.6 4.6m0-4.6-4.6 4.6"/>',
-    stale: '<circle class="t6-line" cx="8" cy="8" r="6.2"/><path class="t6-line" d="M8 4.6V8l2.3 1.5"/>',
-    unknown: '<circle class="t6-fill" cx="8" cy="8" r="6.8"/>'
-      + '<path class="t6-ink" d="M6.25 6.3a1.85 1.85 0 0 1 3.6.6c0 1.25-1.85 1.5-1.85 2.75"/><circle class="t6-ink-dot" cx="8" cy="11.6" r=".9"/>',
-  };
+  const DOTS = '<circle cx="8" cy="3" r="1.3"/><circle cx="8" cy="8" r="1.3"/><circle cx="8" cy="13" r="1.3"/>';
+  const EYE = '<path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8Z"/><circle cx="8" cy="8" r="2"/>';
+  const EYE_OFF = '<path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8Z"/><circle cx="8" cy="8" r="2"/><path d="m2.5 13.5 11-11"/>';
 
   const esc = (text) => String(text ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const typeIcon = (name) => `<svg class="t6-ic" viewBox="0 0 24 24" aria-hidden="true">${TYPE_ICONS[KNOWN_ICONS.has(name) ? name : 'device']}</svg>`;
-  const shape = (level, label) => `<svg class="t6-shape t6-${level}" viewBox="0 0 16 16" role="img" aria-label="${esc(label)}">${SHAPES[level]}</svg>`;
+  const small = (path) => `<svg viewBox="0 0 16 16" aria-hidden="true">${path}</svg>`;
+  const summaryLib = () => window.IOSummary;
+  const visibility = () => window.IOVisibility;
+  const shape = (level, label) => summaryLib().shape(level, label);
   const worse = (a, b) => (a in RANK ? RANK[a] : -1) > (b in RANK ? RANK[b] : -1);
 
+  // plain words for the tooltips (docs/api-v1.md; Zach: "I don't know what the grey question mark means")
+  const MEANING = {
+    unknown: "Unknown: plugged in, but RobotDx couldn't check it (for example tview has the port).",
+    warn: 'Warning: something is off, and it still works.',
+    error: 'Error: broken.',
+    stale: 'Stale: known, but not heard from lately.',
+  };
+
   // ------------------------------------------------------------------------------ state ----
-  const STATES = new WeakMap(); // container -> {root, head, list, open, ...}; expansion survives the 1 s re-render
+  const STATES = new WeakMap(); // container -> {root, head, list, open, ...}; expansion survives every re-render
+
+  // WHY keyed by the hardware id when a row has one (Zach, 2026-10-24: "I cannot even drop down and then all of a sudden
+  // they appear"): a path changes when a cable moves to another port or a host restarts, an id does not. Two rows with one
+  // id fall back to their paths. Remembered in the browser too, so a reload keeps the tree as it was.
+  function rowId(row, dupes) {
+    return row.hardware_id && !(dupes && dupes.has(row.hardware_id)) ? `hw:${row.hardware_id}` : `path:${row.key}`;
+  }
+
+  function loadOpen() {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(OPEN_KEY) || '{}');
+      return new Map(Object.entries(saved).filter(([, value]) => typeof value === 'boolean'));
+    } catch (error) { return new Map(); }
+  }
+
+  function saveOpen(st) {
+    try { window.localStorage.setItem(OPEN_KEY, JSON.stringify(Object.fromEntries(st.open))); } catch (error) { /* private window */ }
+  }
 
   function stateFor(container) {
     let st = STATES.get(container);
@@ -69,31 +100,58 @@
       container.innerHTML = '';
       const root = document.createElement('div');
       root.className = 't6';
-      root.innerHTML = '<div class="t6-head"></div><div class="t6-rows" role="tree" tabindex="0" aria-label="IO entities"></div>';
+      root.innerHTML = '<div class="t6-head"><span class="t6-title"></span><span class="t6-counts"></span></div>'
+        + '<div class="t6-rows" role="tree" tabindex="0" aria-label="IO entities"></div><div class="t6-menu" role="menu" hidden></div>';
       container.appendChild(root);
-      st = { root, head: root.querySelector('.t6-head'), list: root.querySelector('.t6-rows'), open: new Map(), rows: [],
-        byKey: new Map(), visible: [], selected: null, revealedFor: null, opts: {}, lastHtml: '', lastHead: '', scrollToSelected: false };
+      st = { root, head: root.querySelector('.t6-head'), counts: root.querySelector('.t6-counts'), title: root.querySelector('.t6-title'),
+        list: root.querySelector('.t6-rows'), menuEl: root.querySelector('.t6-menu'), open: loadOpen(), rows: [], shown: [], byKey: new Map(),
+        visible: [], selected: null, revealedFor: null, opts: {}, lastHtml: '', lastTitle: '', scrollToSelected: false, filter: null,
+        menu: null, dupes: new Set() };
       STATES.set(container, st);
       // WHY data-t6-* attributes: the host page delegates [data-path] / [data-toggle] clicks at the document level
       st.list.addEventListener('click', (event) => onClick(st, event));
       st.list.addEventListener('dblclick', (event) => onDoubleClick(st, event));
       st.list.addEventListener('keydown', (event) => onKey(st, event));
-      st.head.addEventListener('click', (event) => {
+      st.menuEl.addEventListener('click', (event) => onMenuClick(st, event));
+      st.title.addEventListener('click', (event) => {
         const host = event.target.closest('[data-t6-host]');
         if (host && typeof st.opts.onSelectEntity === 'function') st.opts.onSelectEntity(host.getAttribute('data-t6-host'));
       });
+      document.addEventListener('click', (event) => {
+        if (st.menu && !event.target.closest('.t6-menu') && !event.target.closest('[data-t6-more]')) closeMenu(st);
+      }, true);
+      document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && st.menu) { closeMenu(st); } });
+      if (visibility()) {
+        const off = visibility().subscribe(() => {
+          if (!container.isConnected) { off(); return; }
+          paint(st);
+        });
+      }
     }
     return st;
   }
 
   const querying = (st) => Boolean(String(st.opts.query || '').trim());
   // a search shows every kept branch open (view/core.js keeps the hits and their ancestors only)
-  const isOpen = (st, row) => row.children.length > 0 && (querying(st) ? true : st.open.has(row.key) ? st.open.get(row.key) : row.defaultOpen);
+  const isOpen = (st, row) => {
+    if (!row.children.length) return false;
+    if (querying(st) || st.filter) return true;
+    const id = rowId(row, st.dupes);
+    return st.open.has(id) ? st.open.get(id) : row.defaultOpen;
+  };
 
   function index(rows) {
     const byKey = new Map();
-    (function walk(list) { for (const row of list) { byKey.set(row.key, row); walk(row.children); } })(rows);
-    return byKey;
+    const seen = new Map();
+    const dupes = new Set();
+    (function walk(list) {
+      for (const row of list) {
+        byKey.set(row.key, row);
+        if (row.hardware_id) { if (seen.has(row.hardware_id)) dupes.add(row.hardware_id); seen.set(row.hardware_id, row.key); }
+        walk(row.children);
+      }
+    })(rows);
+    return { byKey, dupes };
   }
 
   // `lasts`: for each level above the row and the row itself, whether it is the last of its siblings (box guides)
@@ -106,7 +164,7 @@
         out.push({ row, open, lasts: mine });
         if (open) walk(row.children, mine);
       });
-    })(st.rows, []);
+    })(st.shown, []);
     return out;
   }
 
@@ -130,28 +188,53 @@
     return text;
   }
 
+  // ------------------------------------------------------------------------------ filter ----
+  // The header's count filters the tree (Zach: clicking a count shows those rows): rows whose own report, folded part or
+  // presence is that level, plus their ancestors.
+  function levelOf(row, level) {
+    const status = row.status || {};
+    if (level === 'stale') return Boolean(row.presence && row.presence.state === 'stale') || status.own === 'stale';
+    return status.own === level || Boolean(status.part && status.part.level === level);
+  }
+
+  function filterRows(rows, level) {
+    return rows.reduce((out, row) => {
+      const children = filterRows(row.children, level);
+      const hit = levelOf(row, level) && !row.knock_on_of;
+      if (hit || children.length) out.push({ ...row, children, hit: false, defaultOpen: true });
+      return out;
+    }, []);
+  }
+
   // ------------------------------------------------------------------------------ drawing ----
+  // The presence dot: neutral by construction (docs/api-v1.md "presence").
+  function presenceHtml(row) {
+    const presence = row.presence;
+    if (!presence) return '<span class="t6-pres t6-pres-none" aria-hidden="true"></span>';
+    const title = presence.state === 'stale' ? presence.text || 'Not heard from lately'
+      : presence.state === 'live' ? 'Data arriving now' : 'Heard from within its expected period';
+    return `<span class="t6-pres t6-pres-${presence.state}" role="img" aria-label="${esc(title)}" title="${esc(title)}"></span>`;
+  }
+
   function statusHtml(row, open) {
     const status = row.status || {};
-    const own = status.own;
-    const part = status.part;
-    const hint = status.hint;
-    if (own) {
-      // its own report; a worse part or a worse hidden cause below adds a badge dot on the shape's corner
-      const extra = part && worse(part.level, own) ? part.level : hint && worse(hint.level, own) ? hint.level : null;
-      const badge = extra ? `<i class="t6-badge t6-${extra}${open && !(part && part.level === extra) ? ' t6-open' : ''}" aria-label="${esc(`below: ${extra}`)}"></i>` : '';
-      return `<span class="t6-st"><span class="t6-mark t6-own${row.knock_on_of ? ' t6-subdued' : ''}">${shape(own, `${WORD[own]}${row.knock_on_of ? ' (knock-on)' : ''}`)}${badge}</span></span>`;
+    const knock = Boolean(row.knock_on_of);
+    const own = MARKS.has(status.own) && !knock ? status.own : null;
+    const part = status.part && MARKS.has(status.part.level) && !status.part.knock_on_of ? status.part : null;
+    const hint = status.hint && status.hint.level in RANK && RANK[status.hint.level] > 0 && !knock ? status.hint : null;
+    const marks = [];
+    // a folded part's own report (driver: fault 33), drawn on its owner because the part is not a row
+    if (own) marks.push(`<span class="t6-mark t6-own" title="${esc(`${MEANING[own]}${row.message ? `\n${row.message}` : ''}`)}">${shape(own, WORD[own])}</span>`);
+    else if (part) marks.push(`<span class="t6-mark t6-part" title="${esc(`${part.label}: ${MEANING[part.level]}`)}">${shape(part.level, `${part.label}: ${WORD[part.level]}`)}</span>`);
+    // the roll-up: the worst level below, with the SAME shape (Zach, 2026-10-24: "not just a small dot"). WHY only on a
+    // collapsed branch, and on hover for an open one: an open branch shows its cause a few rows down.
+    const shown = own || (part && part.level);
+    // WHY not stale: that is the hollow dot, not a second mark (Zach: warn, error and unknown are the marks)
+    if (hint && MARKS.has(hint.level) && (!shown || worse(hint.level, shown)) && row.children.length) {
+      const levelName = WORD[hint.level] || hint.level;
+      marks.unshift(`<span class="t6-mark t6-roll${open ? ' t6-open' : ''}" title="${esc(`below: ${levelName}${hint.message ? ` · ${hint.message}` : ''}`)}">${shape(hint.level, `below: ${levelName}`)}</span>`);
     }
-    if (part) {
-      // a folded part's own report (driver: fault 33), drawn on its owner because the part is not a row
-      return `<span class="t6-st"><span class="t6-mark t6-part${part.knock_on_of ? ' t6-subdued' : ''}">${shape(part.level, `${part.label}: ${WORD[part.level]}`)}</span></span>`;
-    }
-    if (hint) {
-      // WHY only a dot, and only on a collapsed branch: an open branch shows its cause a few rows down; repeating a
-      // mark on every ancestor rebuilds the red chain Zach rejected. Open rows keep a ring one step away (hover).
-      return `<span class="t6-st"><i class="t6-hint t6-${hint.level}${open ? ' t6-open' : ''}" aria-label="${esc(`below: ${hint.level}`)}"></i></span>`;
-    }
-    return '<span class="t6-st"></span>';
+    return `<span class="t6-st">${marks.join('')}</span>`;
   }
 
   function highlight(text, q) {
@@ -161,23 +244,40 @@
     return `${esc(text.slice(0, at))}<mark>${esc(text.slice(at, at + q.length))}</mark>${esc(text.slice(at + q.length))}`;
   }
 
+  function bundleHtml({ row, lasts }, st, glyphs) {
+    const classes = ['t6-row', 't6-bundle'];
+    if (row.key === st.selected) classes.push('t6-sel');
+    const worst = row.worst ? `<span class="t6-mark t6-roll" title="${esc(`hidden, but ${WORD[row.worst] || row.worst} below`)}">${shape(row.worst, `hidden: ${WORD[row.worst]}`)}</span>` : '';
+    const guide = glyphs ? `<span class="t6-guide" aria-hidden="true">${esc(guideText(lasts, glyphs))}</span>` : '';
+    return `<div class="${classes.join(' ')}" role="treeitem" aria-level="${(row.depth || 0) + 1}" aria-selected="false" data-t6-path="${esc(row.key)}" data-t6-bundle="${esc(row.bundleOf)}"`
+      + ` style="--t6-d:${row.depth || 0}" title="${row.open ? 'Hide the hidden rows again' : 'Rows no driver claims, or that you hid. A hidden row never hides a fault.'}">`
+      + `${guide}<span class="t6-chev t6-leaf"></span><span class="t6-pres t6-pres-none" aria-hidden="true"></span>`
+      + `<svg class="t6-ic" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">${row.open ? EYE : EYE_OFF}</svg>`
+      + `<span class="t6-name">${esc(row.label)}</span><span class="t6-fill"></span><span class="t6-st">${worst}</span><span class="t6-act"></span></div>`;
+  }
+
   function rowHtml({ row, open, lasts }, st, q, glyphs) {
+    if (row.bundle) return bundleHtml({ row, lasts }, st, glyphs);
     const hasKids = row.children.length > 0;
-    const status = row.status || {};
+    const presence = row.presence;
     const classes = ['t6-row'];
     if (hasKids) classes.push('t6-parent');
     if (open) classes.push('t6-open');
-    if (row.connected === false) classes.push('t6-off');
+    if (row.connected === false) classes.push('t6-off'); // an empty port that flaps is the one row still drawn when nothing is there
+    if (row.dimmed) classes.push('t6-dim');
+    if (presence && presence.state === 'stale') classes.push('t6-stalerow');
     if (row.knock_on_of) classes.push('t6-knock');
-    if (status.own && !row.knock_on_of) classes.push(`t6-lv-${status.own}`);
     if (row.key === st.selected) classes.push('t6-sel');
     if (row.hit) classes.push('t6-hit');
     const chevron = hasKids
       ? `<span class="t6-chev${open ? ' t6-open' : ''}" data-t6-toggle="${esc(row.key)}" title="${open ? 'Collapse' : 'Expand'}"><svg viewBox="0 0 16 16" aria-hidden="true">${CHEVRON}</svg></span>`
       : '<span class="t6-chev t6-leaf"></span>';
-    const note = status.note ? `<span class="t6-note${status.part.knock_on_of ? ' t6-subdued' : ''}">${esc(status.note)}</span>` : '';
+    const status = row.status || {};
+    const note = status.note ? `<span class="t6-note${status.part && status.part.knock_on_of ? ' t6-subdued' : ''}">${esc(status.note)}</span>` : '';
     // the seams (docs/round2-seams.md §3): lead = an inline note, attrs / suffix = muted text that is not the id
     const shownAttrs = (row.attrs || []).filter(Boolean);
+    // a row not heard from lately says when, in its own second line of text (Zach: "last heard 6 min ago")
+    const heard = presence && presence.state === 'stale' && presence.text ? `<span class="t6-heard">${esc(presence.text)}</span>` : '';
     const lead = row.lead ? `<span class="t6-lead">${esc(row.lead)}</span>` : '';
     const attrs = shownAttrs.length ? `<span class="t6-attrs">${esc(shownAttrs.join(' · '))}</span>` : '';
     const suffix = row.suffix ? `<span class="t6-suffix">${esc(row.suffix)}</span>` : '';
@@ -186,46 +286,67 @@
     // subtitle: an in-flow second line under the selected row; on any other row it appears on hover, over the next
     const sub = row.subtitle && !selected ? `<span class="t6-sub" aria-hidden="true">${esc(row.subtitle)}</span>` : '';
     const guide = glyphs ? `<span class="t6-guide" aria-hidden="true">${esc(guideText(lasts, glyphs))}</span>` : '';
+    const vis = visibility();
+    const verdict = vis && row.entity ? vis.isHidden(row) : { hidden: false, surfaced: false };
+    const hiddenNow = Boolean(row.dimmed) || verdict.hidden;
+    const eye = row.entity && vis
+      ? `<button type="button" class="t6-eye" data-t6-eye="${esc(row.key)}" aria-label="${hiddenNow ? 'Show this row' : verdict.surfaced ? 'Acknowledge the error and hide this row' : 'Hide this row'}"`
+        + ` title="${hiddenNow ? 'Hidden: click to show it' : verdict.surfaced ? 'Shown because it is in error: click to acknowledge and hide it' : 'Click to hide this row'}">`
+        + `${small(hiddenNow ? EYE_OFF : EYE)}</button>` : '';
+    const more = row.entity ? `<button type="button" class="t6-more" data-t6-more="${esc(row.key)}" aria-label="Row menu" aria-haspopup="menu" title="Row menu">${small(DOTS)}</button>` : '';
     const html = `<div class="${classes.join(' ')}" role="treeitem" aria-level="${row.depth + 1}"${hasKids ? ` aria-expanded="${open}"` : ''}`
       + ` aria-selected="${selected}" data-t6-path="${esc(row.key)}" style="--t6-d:${row.depth}" title="${esc(row.title || row.label)}">`
-      + `${guide}${chevron}${typeIcon(row.icon)}<span class="t6-name">${highlight(row.label, row.hit ? q : '')}</span>${lead}${note}${attrs}${suffix}`
-      + `<span class="t6-fill"></span>${id}${statusHtml(row, open)}${sub}</div>`;
+      + `${guide}${chevron}${presenceHtml(row)}${typeIcon(row.icon)}<span class="t6-name">${highlight(row.label, row.hit ? q : '')}</span>${heard}${lead}${note}${attrs}${suffix}`
+      + `<span class="t6-fill"></span>${id}${statusHtml(row, open)}<span class="t6-act">${eye}${more}</span>${sub}</div>`;
     return selected && row.subtitle
       ? `${html}<div class="t6-subline" style="--t6-d:${row.depth}" title="${esc(row.subtitle)}">${esc(row.subtitle)}</div>` : html;
   }
 
-  function headHtml(st) {
-    const summary = st.opts.summary || {};
-    const counts = summary.counts || {};
+  function paintHead(st) {
     const host = st.opts.host;
-    const parts = WORST_FIRST.filter((level) => counts[level])
-      .map((level) => `<span class="t6-count" title="${counts[level]} independent ${WORD[level]}${counts[level] > 1 ? 's' : ''}">${shape(level, WORD[level])}${counts[level]}</span>`);
-    // the elided host keeps one quiet, clickable place: the head (its detail is one click away)
+    // the elided host keeps one quiet, clickable place: the title (its detail is one click away). With the computer as
+    // the root row (p1) there is nothing elided: the head only says what the list is.
     const title = host && host.elided
       ? `<button class="t6-host" data-t6-host="${esc(host.entity)}" title="${esc(`${host.name} · ${host.id_text || ''} — the only computer, so its children are the top level`)}">${typeIcon('host')}<span>${esc(host.name)}</span></button>`
-      : '<span class="t6-title">Entities</span>';
-    return `${title}<span class="t6-counts">${parts.join('') || '<span class="t6-quiet">nothing needs you</span>'}</span>`;
+      : 'Entities';
+    if (title !== st.lastTitle) { st.title.innerHTML = title; st.lastTitle = title; }
+    summaryLib().render(st.counts, st.opts.summary, {
+      filter: st.filter,
+      onFilter: (level) => { st.filter = level; paint(st); },
+    });
   }
 
   function paint(st) {
-    st.byKey = index(st.rows);
+    const base = st.rows;
+    const indexed = index(base);
+    st.dupes = indexed.dupes;
+    const vis = visibility();
+    if (vis) vis.expireAcks(base);
+    let rows = vis ? vis.arrange(base, { querying: querying(st) || Boolean(st.filter) }) : base;
+    if (st.filter) rows = filterRows(rows, st.filter);
+    st.shown = rows;
+    st.byKey = index(rows).byKey;
+    for (const [key, row] of indexed.byKey) if (!st.byKey.has(key)) st.byKey.set(key, row); // a selected row that is hidden stays addressable
     // reveal a new selection once (picked from the chip, the activity log, a link); later collapses stay collapsed
     if (st.selected && st.selected !== st.revealedFor && st.byKey.has(st.selected)) {
-      for (let key = st.byKey.get(st.selected).parent; key; key = (st.byKey.get(key) || {}).parent) st.open.set(key, true);
+      for (let key = st.byKey.get(st.selected).parent; key; key = (st.byKey.get(key) || {}).parent) {
+        const parent = st.byKey.get(key);
+        if (parent) st.open.set(rowId(parent, st.dupes), true);
+      }
       st.revealedFor = st.selected;
       st.scrollToSelected = true;
     }
     const q = String(st.opts.query || '').trim().toLowerCase();
-    const rows = visibleRows(st);
-    st.visible = rows.map(({ row }) => row.key);
-    const head = headHtml(st);
-    if (head !== st.lastHead) { st.head.innerHTML = head; st.lastHead = head; }
+    const list = visibleRows(st);
+    st.visible = list.map(({ row }) => row.key);
+    paintHead(st);
     const glyphs = guideStyle();
     st.root.classList.toggle('t6-box', Boolean(glyphs));
-    const html = rows.map((entry) => rowHtml(entry, st, q, glyphs)).join('') || '<div class="t6-empty">Nothing matches.</div>';
+    const html = list.map((entry) => rowHtml(entry, st, q, glyphs)).join('') || '<div class="t6-empty">Nothing matches.</div>';
     // WHY compare before writing: the page re-renders every second; an unchanged tree must not touch the DOM
     // (hover, focus and scroll stay exactly where they were)
     if (html !== st.lastHtml) { st.list.innerHTML = html; st.lastHtml = html; }
+    if (st.menu) paintMenu(st);
     if (st.scrollToSelected) {
       st.scrollToSelected = false;
       const element = st.list.querySelector('.t6-sel');
@@ -236,20 +357,33 @@
   // ------------------------------------------------------------------------------ input ----
   function select(st, key) {
     if (!key || !st.byKey.has(key)) return;
+    const row = st.byKey.get(key);
+    if (row.bundle) return;
     st.selected = key;
     st.revealedFor = key; // picked in the tree: already visible
     paint(st);
-    if (typeof st.opts.onSelect === 'function') st.opts.onSelect(key, st.byKey.get(key));
+    if (typeof st.opts.onSelect === 'function') st.opts.onSelect(key, row);
   }
 
   function toggle(st, key, wantOpen) {
     const row = st.byKey.get(key);
     if (!row || !row.children.length) return;
-    st.open.set(key, wantOpen === undefined ? !isOpen(st, row) : wantOpen);
+    st.open.set(rowId(row, st.dupes), wantOpen === undefined ? !isOpen(st, row) : wantOpen);
+    saveOpen(st);
     paint(st);
   }
 
   function onClick(st, event) {
+    const eye = event.target.closest('[data-t6-eye]');
+    if (eye) {
+      const row = st.byKey.get(eye.getAttribute('data-t6-eye'));
+      if (row && visibility()) visibility().toggleRow(row);
+      return;
+    }
+    const more = event.target.closest('[data-t6-more]');
+    if (more) { openMenu(st, more.getAttribute('data-t6-more'), more); return; }
+    const bundle = event.target.closest('[data-t6-bundle]');
+    if (bundle) { visibility().toggleReveal(bundle.getAttribute('data-t6-bundle')); return; }
     const chevron = event.target.closest('[data-t6-toggle]');
     if (chevron) { toggle(st, chevron.getAttribute('data-t6-toggle')); return; }
     const row = event.target.closest('[data-t6-path]');
@@ -257,7 +391,7 @@
   }
 
   function onDoubleClick(st, event) {
-    if (event.target.closest('[data-t6-toggle]')) return; // the single clicks already toggled it
+    if (event.target.closest('[data-t6-toggle], [data-t6-more], [data-t6-eye], [data-t6-bundle]')) return; // the single clicks already acted
     const row = event.target.closest('[data-t6-path]');
     if (row) toggle(st, row.getAttribute('data-t6-path'));
   }
@@ -283,10 +417,132 @@
         if (hasKids && isOpen(st, row)) toggle(st, row.key, false);
         else if (row.parent) go(row.parent);
         break;
-      case 'Enter': case ' ': if (hasKids) toggle(st, row.key); break;
+      case 'Enter': case ' ':
+        if (row && row.bundle) visibility().toggleReveal(row.bundleOf);
+        else if (hasKids) toggle(st, row.key);
+        break;
       default: return;
     }
     event.preventDefault();
+  }
+
+  // ----------------------------------------------------------------------------- the row menu ----
+  // Claude's ⋮ on hover. Items: Copy id; for a board, Remove from bus and Expect / Don't expect; for an adapter, Expect
+  // what's here / Don't expect; the row's Utilities shortcuts (Identify, Open console (tview) …); Hide / Show. Writes go
+  // through the same page-only endpoints as the Expected setup card (POST /api/v1/expect | forget), after a confirm that
+  // is the host's own sentence for the exact edit.
+  const POST = (path, body) => fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-IO-Diagnostics': 'ui' }, body: JSON.stringify(body) })
+    .then((response) => response.json());
+
+  function openMenu(st, key, anchor) {
+    if (st.menu && st.menu.key === key) { closeMenu(st); return; }
+    const row = st.byKey.get(key);
+    if (!row || !row.entity) return;
+    const rect = anchor.getBoundingClientRect();
+    st.menu = { key, row, entity: row.entity, info: null, confirm: null, result: null, busy: false, x: rect.right, y: rect.bottom };
+    paintMenu(st);
+    fetch(`/api/v1/node?path=${encodeURIComponent(row.entity)}`).then((response) => response.json()).then((info) => {
+      if (st.menu && st.menu.key === key) { st.menu.info = info; paintMenu(st); }
+    }).catch(() => { if (st.menu && st.menu.key === key) { st.menu.info = { error: true }; paintMenu(st); } });
+  }
+
+  function closeMenu(st) {
+    st.menu = null;
+    st.menuEl.hidden = true;
+    st.menuEl.innerHTML = '';
+  }
+
+  const item = (id, label, hint, disabled) => `<button type="button" class="t6-mi" role="menuitem" data-t6-mi="${esc(id)}"${disabled ? ' disabled' : ''}>`
+    + `<span class="t6-mi-l">${esc(label)}</span>${hint ? `<span class="t6-mi-h">${esc(hint)}</span>` : ''}</button>`;
+
+  function menuItems(menu) {
+    const row = menu.row;
+    const setup = menu.info && menu.info.setup;
+    const items = [];
+    const copy = row.hardware_id || row.entity;
+    items.push(item('copy', 'Copy id', copy));
+    if (setup && setup.role === 'board') {
+      items.push(item('setup:forget', 'Remove from bus', 'A removed board that answers again comes back.', !setup.can.forget));
+      items.push(item('setup:expect', setup.expected ? "Don't expect" : 'Expect', setup.rig ? `in ${setup.rig}` : "its adapter isn't in the expected setup", !setup.can.expect));
+    } else if (setup && setup.role === 'device') {
+      items.push(item('setup:expect', "Expect what's here", setup.rig ? `updates ${setup.rig}` : 'adds it to the expected setup', !setup.can.expect));
+      if (setup.expected) items.push(item('setup:forget', "Don't expect", `leaves ${setup.rig}`, !setup.can.forget));
+    }
+    const actions = (menu.info && menu.info.actions) || [];
+    if (actions.length) items.push('<div class="t6-mi-sep"></div>');
+    for (const action of actions) items.push(item(`util:${action.name}`, action.title, action.state === 'ready' ? '' : action.reason || action.state, false));
+    if (!menu.info) items.push('<div class="t6-mi-note">Loading…</div>');
+    else if (menu.info.error) items.push('<div class="t6-mi-note">The host did not answer.</div>');
+    if (visibility()) {
+      const verdict = visibility().isHidden(row);
+      items.push('<div class="t6-mi-sep"></div>');
+      items.push(item('vis', verdict.hidden || row.dimmed ? 'Show' : verdict.surfaced ? 'Acknowledge and hide' : 'Hide', 'Visibility, kept with the app settings'));
+    }
+    return items.join('');
+  }
+
+  function paintMenu(st) {
+    const menu = st.menu;
+    if (!menu) return;
+    let body;
+    if (menu.result) {
+      body = `<div class="t6-mi-note">${esc(menu.result.ok ? menu.result.message || 'Done' : `Not done: ${menu.result.message || menu.result.error || menu.result.refused || 'refused'}`)}</div>`;
+    } else if (menu.confirm) {
+      body = `<div class="t6-mi-confirm">${esc(menu.confirm.text)}</div><div class="t6-mi-foot">`
+        + `<button type="button" class="t6-btn" data-t6-mi="cancel">Cancel</button>`
+        + `<button type="button" class="t6-btn t6-primary" data-t6-mi="confirm"${menu.busy ? ' disabled' : ''}>${esc(menu.confirm.verb)}</button></div>`;
+    } else {
+      body = menuItems(menu);
+    }
+    st.menuEl.innerHTML = body;
+    st.menuEl.hidden = false;
+    const rootRect = st.root.getBoundingClientRect();
+    const width = st.menuEl.offsetWidth || 260;
+    st.menuEl.style.left = `${Math.max(4, Math.min(menu.x - rootRect.left - width, rootRect.width - width - 4))}px`;
+    st.menuEl.style.top = `${Math.max(4, menu.y - rootRect.top + 2)}px`;
+  }
+
+  const VERBS = { expect: 'Confirm', forget: 'Confirm' };
+
+  function onMenuClick(st, event) {
+    const target = event.target.closest('[data-t6-mi]');
+    const menu = st.menu;
+    if (!target || !menu) return;
+    const id = target.getAttribute('data-t6-mi');
+    if (id === 'cancel') { menu.confirm = null; paintMenu(st); return; }
+    if (id === 'copy') {
+      const text = menu.row.hardware_id || menu.row.entity;
+      try { navigator.clipboard.writeText(text); } catch (error) { /* not allowed here */ }
+      closeMenu(st);
+      return;
+    }
+    if (id === 'vis') { visibility().toggleRow(menu.row); closeMenu(st); return; }
+    if (id.startsWith('util:')) {
+      const name = id.slice(5);
+      closeMenu(st);
+      if (typeof st.opts.onRowAction === 'function') st.opts.onRowAction(name, menu.row);
+      else if (typeof st.opts.onSelectEntity === 'function') st.opts.onSelectEntity(menu.row.entity); // the detail's Utilities has it
+      return;
+    }
+    if (id.startsWith('setup:')) {
+      const op = id.slice(6);
+      const setup = menu.info && menu.info.setup;
+      menu.confirm = { op, text: (setup && setup.confirm && setup.confirm[op]) || `${op}?`, verb: VERBS[op] };
+      paintMenu(st);
+      return;
+    }
+    if (id === 'confirm' && menu.confirm && !menu.busy) {
+      menu.busy = true;
+      paintMenu(st);
+      POST(`/api/v1/${menu.confirm.op}`, { path: menu.entity, rig: null, reason: '' })
+        .then((result) => {
+          menu.result = result; menu.busy = false; paintMenu(st);
+          // a removed row that was selected would leave the detail asking for an entity that is gone: select its parent
+          if (result.ok && menu.confirm.op === 'forget' && menu.info && menu.info.setup && menu.info.setup.role === 'board' && st.selected === menu.key && menu.row.parent && st.byKey.has(menu.row.parent)) select(st, menu.row.parent);
+          setTimeout(() => { if (st.menu === menu) closeMenu(st); }, 1800);
+        })
+        .catch((error) => { menu.result = { ok: false, message: `the host did not answer: ${error}` }; menu.busy = false; paintMenu(st); });
+    }
   }
 
   // ----------------------------------------------------------------------------- export ----
@@ -302,7 +558,7 @@
   window.IOTreeRenderers = window.IOTreeRenderers || {};
   window.IOTreeRenderers.v6 = {
     name: 'IDE × Notion',
-    description: 'Quiet chevrons always visible on folders (IDE), no guides, rounded rows and hover-revealed affordances (Notion); status shape at the far right, quiet when OK.',
+    description: 'Quiet chevrons always visible on folders (IDE), no guides, rounded rows and hover-revealed affordances (Notion); a neutral presence dot per row, the diagnostics level as a shape at the far right, quiet when OK.',
     consumes: 'rows',
     order: 0,
     render,

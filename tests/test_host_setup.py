@@ -20,7 +20,8 @@ import pytest
 from test_host_support import ROOT, FakeOs, SetClock, standard_skeleton, usb_device
 
 from io_diagnostics import expected as expected_module
-from io_diagnostics.host import EXPECTED_PATH, SEEN_FILE, Host, make_host
+from io_diagnostics.host import SEEN_FILE, Host, make_host
+from io_diagnostics.tree import HOST_PATH
 from io_diagnostics.server import make_server, serve_in_thread
 
 NOW = 1792800000.0  # 2026-10-23
@@ -40,7 +41,7 @@ if verb == "describe":
     raise SystemExit
 device = json.loads(os.environ["IO_DIAGNOSTICS_DEVICE"])
 serial = device.get("serial") or ""
-spec = json.loads(os.environ["RIG"]).get(serial, {})
+spec = json.load(open(os.environ["RIG_FILE"])).get(serial, {})  # re-read on every run: a test changes the rack between runs
 with open(os.environ["RIG_LOG"], "a") as log:
     log.write(json.dumps({"serial": serial, "expected": os.environ.get("IO_DIAGNOSTICS_EXPECTED")}) + "\n")
 def emit(record):
@@ -51,23 +52,31 @@ emit({"record": "status", "level": "ok", "name": "ran", "path": ""})
 if spec.get("camera"):
     raise SystemExit
 emit({"record": "entity", "path": "can", "name": "CAN bus", "kind": "bus", "part_of": ""})
+silent = spec.get("silent", [])
+if spec.get("hold"):  # tview has the port: nothing is opened, so nothing is reported about any board
+    emit({"record": "status", "level": "unknown", "name": "CAN bus", "path": "can", "code": "PortBusy",
+          "message": "blocked: port held by 640623 tview"})
+    raise SystemExit
 if spec.get("frames_not_sent"):
     emit({"record": "status", "level": "error", "name": "CAN bus", "path": "can", "code": "FramesNotSent",
           "message": "no board answered, and this adapter's frames never reached the bus"})
+elif silent:
+    # the moteus_servo contract: a board that did not answer has no row; its bus names it
+    emit({"record": "status", "level": "warn", "name": "CAN bus", "path": "can", "code": "ExpectedBoardsSilent",
+          "message": f"{len(spec.get('answer', []))} of {len(spec.get('answer', [])) + len(silent)} expected boards answer"
+                     f" · {', '.join('CAN %s' % can_id for can_id in silent)} silent",
+          "caused_by": [f"can/{can_id}" for can_id in silent], "expected_period_s": 30})
 else:
     emit({"record": "status", "level": "ok", "name": "CAN bus", "path": "can"})
-for can_id in spec.get("answer", []) + spec.get("silent", []):
+for can_id in spec.get("answer", []):
     emit({"record": "entity", "path": f"can/{can_id}", "name": f"CAN {can_id}", "kind": "node", "via": "can",
-          "hardware_id": f"moteus:{serial}-{can_id}", "identity": {"model_id": spec.get("node_model", "mjbots-moteus-c1")}})
-    if can_id in spec.get("answer", []):
-        emit({"record": "status", "level": "ok", "name": f"CAN {can_id}: servo", "path": f"can/{can_id}", "message": "stopped",
-              "expected_period_s": 30})
-        if str(can_id) in spec.get("ratios", {}):
-            emit({"record": "status", "level": "ok", "name": f"CAN {can_id}: config", "path": f"can/{can_id}", "message": "read-only",
-                  "expected_period_s": 30, "measurements": [{"key": "rotor_to_output_ratio", "value": spec["ratios"][str(can_id)], "unit": "1"}]})
-    else:
-        emit({"record": "status", "level": "error", "name": f"CAN {can_id}: servo", "path": f"can/{can_id}",
-              "code": "BoardNotAnswering", "message": f"CAN {can_id} did not answer", "expected_period_s": 30})
+          "hardware_id": "moteus:" + spec.get("uuids", {}).get(str(can_id), f"{serial}-{can_id}"),
+          "identity": {"model_id": spec.get("node_model", "mjbots-moteus-c1")}})
+    emit({"record": "status", "level": "ok", "name": f"CAN {can_id}: servo", "path": f"can/{can_id}", "message": "stopped",
+          "expected_period_s": 30})
+    if str(can_id) in spec.get("ratios", {}):
+        emit({"record": "status", "level": "ok", "name": f"CAN {can_id}: config", "path": f"can/{can_id}", "message": "read-only",
+              "expected_period_s": 30, "measurements": [{"key": "rotor_to_output_ratio", "value": spec["ratios"][str(can_id)], "unit": "1"}]})
 '''
 
 RACK = {A: {"name": f"fdcanusb {A}", "model_id": "mjbots-fdcanusb", "answer": [1, 14], "silent": [15]},
@@ -132,7 +141,7 @@ class Rack:
     """A host over a fake rack: ``rack`` says what each adapter's plugin reports, ``devices`` what is on USB."""
 
     def __init__(self, tmp_path, *, manifest: str | None = SEED, rack=None, devices=PRESENT, describe_expected=(),
-                 state_file=None):
+                 state_file=None, ledger_file=None, at=NOW, run=True):
         self.tmp = tmp_path
         self.log = tmp_path / "rig.log"
         self.file = tmp_path / "config" / "expected.toml"
@@ -143,14 +152,21 @@ class Rack:
         plugins.mkdir(parents=True, exist_ok=True)
         script = plugins / "rig_plugin.py"
         script.write_text(RIG_PLUGIN)
-        env = {"RIG": json.dumps(rack or RACK), "RIG_LOG": str(self.log), "RIG_EXPECTED": json.dumps(list(describe_expected))}
+        self.rack_file = tmp_path / "rack.json"
+        self.rack_file.write_text(json.dumps(rack or RACK))
+        env = {"RIG_FILE": str(self.rack_file), "RIG_LOG": str(self.log), "RIG_EXPECTED": json.dumps(list(describe_expected))}
         (plugins / "rig.toml").write_text(
             f'name = "rig"\ncommand = ["{{python}}", "{script}"]\ntimeout_s = 20\nperiod_s = 30\n'
             'matches = ["usb:0483:5740", "usb:8086:0b5b"]\n'
             "env = { " + ", ".join(f"{key} = '{value}'" for key, value in env.items()) + " }\n")
-        self.host = Host(plugins_dir=plugins, clock=SetClock(NOW), os_source=FakeOs(standard_skeleton(*devices)),
-                         expected_file=self.file, state_file=state_file)
-        self.host.run_all_once()
+        self.host = Host(plugins_dir=plugins, clock=SetClock(at), os_source=FakeOs(standard_skeleton(*devices)),
+                         expected_file=self.file, state_file=state_file, ledger_file=ledger_file)
+        self.host.run_all_once() if run else self.host.refresh()
+
+    def set_rack(self, rack: dict) -> None:
+        """What the plugin reports from its next run on."""
+
+        self.rack_file.write_text(json.dumps(rack))
 
     def state(self) -> dict:
         return self.host.state()
@@ -183,14 +199,17 @@ def test_the_rig_row_counts_at_a_glance_and_names_what_is_missing(tmp_path):
     check = rack.check(rig["path"])
     assert (rig["level"], check["code"]) == ("warn", "ExpectedMissing")
     assert check["message"] == f"missing: CAN 15 on fdcanusb {A}"
-    assert values(check)["what_to_check"].startswith(f"1. CAN 15 on fdcanusb {A} does not answer: see its row")
-    # record v0.1 caused_by (2026-10-23): the rig names CAN 15's row, so one missing board is one cause, CAN 15's own
-    # report; the rig row keeps its WARN and its words (above) and reads as CAN 15's knock-on
-    can15 = f"{rack.path_of(A)}/can/15"
-    assert check["caused_by"] == [can15] and rig["knock_on_of"] == can15
+    assert values(check)["what_to_check"].startswith(f"1. CAN 15 on fdcanusb {A} does not answer: see its bus's status")
+    # record v0.1 caused_by (2026-10-23): a board that never answered has no row (Zach, 2026-10-24), so the rig names the
+    # row that says it, the adapter's CAN bus ("2 of 3 expected boards answer · CAN 15 silent"); one missing board is one
+    # cause, the bus's report; the rig row keeps its WARN and its words (above) and reads as the bus's knock-on
+    bus = f"{rack.path_of(A)}/can"
+    assert f"{rack.path_of(A)}/can/15" not in rack.host.view().merged.entities
+    assert rack.check(bus)["message"] == "2 of 3 expected boards answer · CAN 15 silent"
+    assert check["caused_by"] == [bus] and rig["knock_on_of"] == bus
     attention = rack.state()["summary"]["attention"]
-    assert [item["path"] for item in attention if item["path"] in (rig["path"], can15)] == [can15]
-    assert rack.state()["summary"]["counts"] == {"error": 1}
+    assert [item["path"] for item in attention if item["path"] in (rig["path"], bus)] == [bus]
+    assert rack.state()["summary"]["counts"] == {"warn": 1}
 
 
 def test_everything_here_is_ok_and_an_extra_node_is_a_note_not_a_problem(tmp_path):
@@ -211,18 +230,19 @@ def test_a_node_whose_check_could_not_run_is_not_checked_not_missing(tmp_path):
     rig = rack.rig_row()
     check = rack.check(rig["path"])
     assert (rig["level"], check["code"]) == ("unknown", "ExpectedNotChecked")
-    assert rig["name"] == "1-DOF test rack · 2/2 adapters · 0/7 boards · 2/2 cameras"
+    assert rig["name"] == "1-DOF test rack · 2/2 adapters · ?/7 boards · 2/2 cameras"
 
 
 def test_a_node_its_driver_never_reports_is_missing_once_the_driver_ran(tmp_path):
     seed = SEED.replace('{ path = "can/15", model_id = "mjbots-moteus-c1" },', '{ path = "can/15", model_id = "mjbots-moteus-c1" },\n  "can/16",')
     rack = Rack(tmp_path, manifest=seed)
-    assert rack.check(rack.rig_row()["path"])["message"] == f"missing: CAN 15 on fdcanusb {A} · can/16 on fdcanusb {A}"
+    assert rack.check(rack.rig_row()["path"])["message"] == f"missing: CAN 15 on fdcanusb {A} · CAN 16 on fdcanusb {A}"
     before = Host(plugins_dir=tmp_path / "plugins.d", clock=SetClock(NOW), os_source=FakeOs(standard_skeleton(*PRESENT)),
                   expected_file=rack.file)
     before.refresh()  # no plugin has run yet: nobody looked, so nothing is missing, it is not checked
     rig = next(node for node in before.state()["tree"]["children"] if node["kind"] == "rig")
-    assert (rig["level"], rig["name"]) == ("unknown", "1-DOF test rack · 2/2 adapters · 0/8 boards · 0/2 cameras")
+    # WHY no count: a count taken before any driver has looked is not a count (a restarted host said "0/7 boards" and "?")
+    assert (rig["level"], rig["name"]) == (None, "1-DOF test rack · checking…")
 
 
 def test_a_ratio_that_differs_from_the_file_is_one_warning_on_that_board(tmp_path):
@@ -254,10 +274,11 @@ def test_cameras_are_matched_by_the_serial_their_driver_reports(tmp_path):
     rig = rack.rig_row()
     assert rig["name"] == "1-DOF test rack · 2/2 adapters · 6/7 boards · 1/2 cameras"
     assert f"RealSense D405 {CAM2_SDK} (not here)" in rack.check(rig["path"])["message"]
-    absent = f"{EXPECTED_PATH}/serial-{CAM2_SDK}"
-    check = rack.check(absent)
+    # a missing thing is a status on the Computer, never a row (Zach, 2026-10-24)
+    check = rack.check(HOST_PATH, f"RealSense D405 {CAM2_SDK}: presence")
     assert (check["level"], check["code"]) == ("warn", "ExpectedAbsent")
-    assert check["message"] == f"expected (1-DOF test rack) · no connected device reports serial {CAM2_SDK}"
+    assert check["message"] == f"RealSense D405 {CAM2_SDK} expected (1-DOF test rack), no connected device reports serial {CAM2_SDK}"
+    assert not [path for path in rack.host.view().merged.entities if "serial-" in path or path.endswith("/expected")]
 
 
 def test_an_absent_adapter_with_a_usb_id_gets_the_kernel_evidence_row(tmp_path):
@@ -265,8 +286,9 @@ def test_an_absent_adapter_with_a_usb_id_gets_the_kernel_evidence_row(tmp_path):
     rig = rack.rig_row()
     assert rig["name"] == "1-DOF test rack · 1/2 adapters · 4/7 boards · 2/2 cameras"
     assert rack.check(rig["path"])["message"] == f"missing: fdcanusb {A} (not here)"
-    check = rack.check(f"{EXPECTED_PATH}/usb-0483-5740-{A}")
-    assert check["code"] == "ExpectedAbsent" and "expected setup: 1-DOF test rack" in check["message"]
+    check = rack.check(HOST_PATH, f"fdcanusb {A}: presence")
+    assert check["code"] == "ExpectedAbsent" and f"fdcanusb {A} expected (1-DOF test rack), not on USB" in check["message"]
+    assert rack.host.node(HOST_PATH)["node"]["level"] == "warn"  # the Computer carries it
 
 
 def test_the_rig_row_says_which_adapter_the_boards_moved_to(tmp_path):
@@ -317,10 +339,10 @@ def test_a_retired_adapter_plugged_in_again_says_so_at_once(tmp_path):
 def test_a_retired_adapter_unplugged_is_never_expected_even_if_its_driver_lists_it(tmp_path):
     listed = [{"hardware_id": f"usb:0483:5740:{DEAD}", "name": f"fdcanusb {DEAD}", "source": "rack inventory"}]
     rack = Rack(tmp_path, describe_expected=listed)
-    assert not [path for path in rack.host.view().merged.entities if path.startswith(EXPECTED_PATH + "/")]
+    assert not [check for check in rack.host.node(HOST_PATH)["checks"] if check["name"] == f"fdcanusb {DEAD}: presence"]
     rack.file.write_text(SEED.split("[[retired]]")[0])  # un-retire by hand: the host re-reads the file
     rack.host.refresh()
-    assert f"{EXPECTED_PATH}/usb-0483-5740-{DEAD}" in rack.host.view().merged.entities
+    assert [check for check in rack.host.node(HOST_PATH)["checks"] if check["name"] == f"fdcanusb {DEAD}: presence"]
 
 
 # ----- the dead adapter: another one works on this PC -------------------------------------------------------------
@@ -378,24 +400,67 @@ def test_expect_needs_a_rig_when_there_are_several(tmp_path):
     assert [device.name for device in expected_module.parse(rack.file.read_text()).rigs[1].devices] == [f"fdcanusb {C}"]
 
 
-def test_forget_drops_an_absent_device_from_the_file_and_the_memory(tmp_path):
+def test_forget_by_id_drops_an_absent_device_from_the_file_and_the_memory(tmp_path):
+    """No row to click any more (Zach, 2026-10-24): an absent expected device is forgotten by its id (the CLI)."""
+
     state = tmp_path / "state" / SEEN_FILE
     listed = [{"hardware_id": f"usb:0483:5740:{A}", "name": f"fdcanusb {A}", "source": "rack inventory"}]
     Rack(tmp_path / "before", state_file=state)  # A was seen and remembered
     rack = Rack(tmp_path, devices=(PRESENT[0], *PRESENT[2:]), describe_expected=listed, state_file=state)
-    absent = f"{EXPECTED_PATH}/usb-0483-5740-{A}"
-    setup = rack.host.node(absent)["setup"]
-    assert setup["can"] == {"expect": False, "forget": True, "retire": True}
-    assert setup["confirm"]["forget"].startswith(f"Forget fdcanusb {A}? It leaves the expected setup (1-DOF test rack) and")
-    assert rack.host.setup_edit("forget", rack.path_of(B))["refused"] == "NotAbsent"
-    assert rack.host.setup_edit("forget", absent)["ok"]
-    assert absent not in rack.host.view().merged.entities  # at once, and the driver still lists it: forgotten wins
+    name = f"fdcanusb {A}: presence"
+    assert [check for check in rack.host.node(HOST_PATH)["checks"] if check["name"] == name]
+    assert rack.host.setup_edit_ids("forget", hardware_id=f"usb:0483:5740:{A}", name=f"fdcanusb {A}")["ok"]
+    rack.host.refresh()
+    assert not [check for check in rack.host.node(HOST_PATH)["checks"] if check["name"] == name]  # the driver still lists it: forgotten wins
     assert f"usb:0483:5740:{A}" not in rack.file.read_text()
     saved = json.loads(state.read_text())
     assert f"usb:0483:5740:{A}" not in saved["devices"] and f"usb:0483:5740:{A}" in saved["forgotten"]
     rack.host.refresh()
-    assert absent not in rack.host.view().merged.entities
+    assert not [check for check in rack.host.node(HOST_PATH)["checks"] if check["name"] == name]
     assert rack.rig_row()["name"] == "1-DOF test rack · 1/1 adapter · 4/4 boards · 2/2 cameras"
+
+
+def test_dont_expect_on_a_device_row_takes_it_out_of_the_file_and_leaves_it_on_the_bus(tmp_path):
+    rack = Rack(tmp_path)
+    path = rack.path_of(A)
+    setup = rack.host.node(path)["setup"]
+    assert setup["can"] == {"expect": True, "forget": True, "retire": True}
+    assert setup["confirm"]["forget"] == f"Stop expecting fdcanusb {A}? It leaves the expected setup (1-DOF test rack); it stays on the bus as an ordinary device."
+    assert rack.host.setup_edit("forget", path)["ok"]
+    assert f"usb:0483:5740:{A}" not in rack.file.read_text()
+    assert path in rack.host.view().merged.entities
+    assert rack.host.setup_edit("forget", path)["refused"] == "NotExpected"
+
+
+def test_a_board_can_be_removed_from_the_bus_and_comes_back_when_it_answers(tmp_path):
+    """Zach, 2026-10-24: "a button there to say remove from the bus". The row is the host's memory; the plugin still
+    reports the board, so it comes back on the next run."""
+
+    rack = Rack(tmp_path)
+    can14 = f"{rack.path_of(A)}/can/14"
+    setup = rack.host.node(can14)["setup"]
+    assert (setup["role"], setup["expected"], setup["can"]) == ("board", True, {"expect": True, "forget": True, "retire": False})
+    assert setup["confirm"]["forget"] == "Remove CAN 14 from the bus? RobotDx forgets the row; if CAN 14 answers again, it comes back."
+    assert setup["confirm"]["expect"] == f"Stop expecting CAN 14 on fdcanusb {A}? 1-DOF test rack no longer counts it, and its bus stops saying it is silent."
+    assert rack.host.setup_edit("forget", can14)["ok"]
+    assert can14 not in rack.host.view().merged.entities and f"{can14}/x" not in rack.host.view().merged.entities
+    assert "CAN 14" in rack.file.read_text() or "can/14" in rack.file.read_text()  # still expected: Remove from bus is not Don't expect
+    rack.host.run_all_once()
+    assert can14 in rack.host.view().merged.entities
+
+
+def test_expect_on_a_board_toggles_whether_its_adapter_expects_it(tmp_path):
+    rack = Rack(tmp_path)
+    can14 = f"{rack.path_of(A)}/can/14"
+    assert rack.host.setup_edit("expect", can14)["ok"]  # it was expected: Don't expect
+    assert "can/14" not in rack.file.read_text()
+    assert rack.rig_row()["name"] == "1-DOF test rack · 2/2 adapters · 5/6 boards · 2/2 cameras"
+    setup = rack.host.node(can14)["setup"]
+    assert setup["expected"] is False and setup["confirm"]["expect"] == f"Expect CAN 14 on fdcanusb {A} in 1-DOF test rack? Its bus then says when it is silent."
+    assert rack.host.setup_edit("expect", can14)["ok"]
+    assert "can/14" in rack.file.read_text()
+    stranger = Rack(tmp_path / "other", manifest=None)
+    assert stranger.host.setup_edit("expect", f"{stranger.path_of(A)}/can/14")["refused"] == "NotExpected"  # its adapter is not in the file
 
 
 def test_retire_needs_a_reason_then_the_row_says_it_when_plugged_in(tmp_path):

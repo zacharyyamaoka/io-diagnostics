@@ -12,8 +12,9 @@ What the host does with it (docs/api-v1.md "Expected setup"):
 - each expected device's node paths go to its plugin on diagnose as ``IO_DIAGNOSTICS_EXPECTED``
   (``{"nodes": ["can/1", ...], "rig": "<name>"}``), so the driver's own plain-words reasons cover an expected board
   that does not answer;
-- an expected device that is not here gets a row under "Expected, not connected" (with the kernel's evidence when it
-  has a USB id);
+- an expected device that is not here is a WARN ``ExpectedAbsent`` status on the Computer (the host entity), never a
+  row (Zach, 2026-10-24: a missing thing is a diagnostic on its parent, not a ghost row), with the kernel's evidence
+  when it has a USB id;
 - a retired device that is plugged in again gets a WARN on its own row: "retired <date>: <reason>".
 
 Edits (Expect what's here / Forget / Retire...) rewrite the file whole, atomically; they never touch a device.
@@ -40,7 +41,7 @@ MANIFEST_VERSION = 1
 SOURCE = "io_diagnostics.expected"
 RIG_KIND = "rig"
 RIG_PREFIX = f"{tree.HOST_PATH}/rig-"
-EXPECTED_PATH = f"{tree.HOST_PATH}/expected"  # the "Expected, not connected" group (host.py adds the USB rows)
+EXPECTED_PATH = f"{tree.HOST_PATH}/expected"  # retired: absent devices are statuses on the host now; kept for old callers
 NODE_KIND = "node"
 NODE_WORD = "board"  # what a rig row counts a device's nodes as ("6/7 boards")
 # WHY these codes: a node that says it does not answer is missing; one whose check could not run is "not checked"
@@ -342,6 +343,7 @@ class Found:
     nodes: dict[str, str] = field(default_factory=dict)  # node path (relative) -> found | missing | unknown
     moved_to: str | None = None  # the device path whose nodes answer for this absent one
     pending: bool = False  # known only by a driver's serial, and a driver has not reported yet: not checked
+    checking: bool = False  # here, its nodes are expected, and its driver has not finished a run yet
 
 
 @dataclass
@@ -469,6 +471,7 @@ def evaluate(setup: ExpectedSetup, merged: tree.Merged, layer: tree.OsLayer, now
                 claimed.add(found.path)
                 view.by_path.setdefault(found.path, found)
                 ran = _plugin_ran(own.get(found.path, []), now, host_source)
+                found.checking = bool(device.nodes) and not any(status.source == host_source for status in own.get(found.path, []))
                 for node in device.nodes:
                     node_path = f"{found.path}/{node.path}"
                     if node_path in merged.entities:
@@ -498,7 +501,8 @@ def evaluate(setup: ExpectedSetup, merged: tree.Merged, layer: tree.OsLayer, now
         members = [found for found in view.found if found.rig is rig]
         entity, status = _rig_row(rig, path, members, merged, own, now, host_source, setup)
         view.entities.append((entity, "group"))
-        view.statuses.append(status)
+        if status is not None:
+            view.statuses.append(status)
     for path in physical_rows(merged, layer):
         entity = merged.entities[path]
         retired = setup.retired_entry(entity.hardware_id, device_serials(entity, layer, path))
@@ -517,18 +521,15 @@ def evaluate(setup: ExpectedSetup, merged: tree.Merged, layer: tree.OsLayer, now
     for found in view.found:
         if found.path or found.pending or found.device.hardware_id or not found.device.serial:
             continue  # a USB id's absence is judged by the host with the kernel's evidence (host.py)
-        path = f"{EXPECTED_PATH}/{tree.slug('serial-' + found.device.serial)}"
-        view.absent[path] = found
-        view.entities.append((Entity(path, found.device.label(), "device", via=EXPECTED_PATH, owner="io_diagnostics",
-                                     identity={"serial_number": found.device.serial}), "usb"))
+        # WHY a status on the Computer, not a row: a missing thing is a diagnostic on its parent (Zach, 2026-10-24)
         view.statuses.append(DiagnosticStatus(
-            level=WARN, name=f"{found.device.label()}: presence", code="ExpectedAbsent", path=path,
-            message=f"expected ({found.rig.name}) · no connected device reports serial {found.device.serial}",
+            level=WARN, name=f"{found.device.label()}: presence", code="ExpectedAbsent", path=tree.HOST_PATH,
+            message=f"{found.device.label()} expected ({found.rig.name}), no connected device reports serial {found.device.serial}",
             stamp=now, received=now, source=SOURCE,
             values=(KeyValue("what_to_check", _numbered([
                 "Is it plugged in? Its cable and both connectors", "Another USB port, not through a hub",
                 "Its driver's row: a device is matched by this serial only after its driver has run"])),
-                KeyValue("expected_by", f"expected setup: {found.rig.name}"))))
+                KeyValue("expected_by", f"expected setup: {found.rig.name}"), KeyValue("serial", found.device.serial))))
     return view
 
 
@@ -597,7 +598,11 @@ def _moved_to(found: Found, merged: tree.Merged, layer: tree.OsLayer, own: dict,
 
 
 def _rig_row(rig: Rig, path: str, members: list[Found], merged: tree.Merged, own: dict, now: float, host_source: str,
-             setup: ExpectedSetup) -> tuple[Entity, DiagnosticStatus]:
+             setup: ExpectedSetup) -> tuple[Entity, DiagnosticStatus | None]:
+    if any(found.checking for found in members):
+        # WHY no verdict yet (Zach, 2026-10-24: a restarted host showed "0/7 boards" and "?" until the first probes
+        # finished): a count taken before any driver has looked is not a count. The row waits, without a mark.
+        return Entity(path, f"{rig.name} · checking…", RIG_KIND, via=tree.HOST_PATH, owner="io_diagnostics"), None
     kinds: dict[str, list[int]] = {}  # kind word -> [here, expected]
     boards = [0, 0]
     missing, unknown, extras, moved, mismatched, checks = [], [], [], [], [], []
@@ -629,13 +634,13 @@ def _rig_row(rig: Rig, path: str, members: list[Found], merged: tree.Merged, own
                               f"if {target} replaced it, use Expect what's here on {target}, then Retire… on "
                               f"{found.device.label()}")
             else:
-                checks.append(f"{found.device.label()}: not on this PC: see its row under Expected, not connected "
-                              "(Forget or Retire… it if it is gone for good)")
+                checks.append(f"{found.device.label()}: not on this PC: see the Computer's status "
+                              "(Don't expect or Retire… it if it is gone for good)")
         base = found.path or found.moved_to
         for node in found.device.nodes:
             boards[1] += 1
             state = found.nodes.get(node.path, "missing")
-            label = merged.entities[f"{base}/{node.path}"].name if base and f"{base}/{node.path}" in merged.entities else node.path
+            label = _node_label(base, node.path, merged)
             if state == "found":
                 boards[0] += 1
                 actual = merged.entities[f"{base}/{node.path}"].identity.get("model_id", "")
@@ -646,8 +651,8 @@ def _rig_row(rig: Rig, path: str, members: list[Found], merged: tree.Merged, own
                 unknown_rows.append(f"{base}/{node.path}" if f"{base}/{node.path}" in merged.entities else None)
             elif found.path:
                 missing.append(f"{label} on {device_name}")
-                missing_rows.append(f"{base}/{node.path}" if f"{base}/{node.path}" in merged.entities else None)
-                checks.append(f"{label} on {device_name} does not answer: see its row for what to check (or Expect "
+                missing_rows.append(_reporting_row(base, node.path, merged, own))
+                checks.append(f"{label} on {device_name} does not answer: see its bus's status for what to check (or Expect "
                               f"what's here on {device_name} if it was taken off on purpose)")
         if found.path:
             expected_paths = {node.path for node in found.device.nodes}
@@ -656,7 +661,10 @@ def _rig_row(rig: Rig, path: str, members: list[Found], merged: tree.Merged, own
                     extras.append(f"{merged.entities[node].name} on {device_name}")
     counts = []
     for word, (here, total) in kinds.items():
-        counts.append(f"{here}/{total} {_plural(total, NODE_WORD if word == '_boards' else word)}")
+        # WHY "?" when nothing is known: a count of 0 taken before (or while nobody can) look is not a count (Zach,
+        # 2026-10-24: a restarted host said "0/7 boards"); the boards' rows say what is known
+        shown = "?" if word == "_boards" and here == 0 and unknown else here
+        counts.append(f"{shown}/{total} {_plural(total, NODE_WORD if word == '_boards' else word)}")
     name = f"{rig.name} · {' · '.join(counts)}" if counts else f"{rig.name} · nothing expected yet"
     values = [KeyValue(_plural(2, NODE_WORD if word == "_boards" else word), f"{here}/{total}") for word, (here, total) in kinds.items()]
     if missing:
@@ -690,14 +698,40 @@ def _rig_row(rig: Rig, path: str, members: list[Found], merged: tree.Merged, own
     return entity, status
 
 
-def _absent_row(device: ExpectedDevice, merged: tree.Merged) -> str | None:
-    """The "Expected, not connected" row that reports an absent device: the host's kernel-evidence row for a USB id,
-    else the serial-only row ``evaluate`` adds; None when no row will say it."""
+def _node_label(base: str | None, node_path: str, merged: tree.Merged) -> str:
+    """A node's name for the rig row: its row's name, else (a board that never answered has no row) "CAN 15" from its
+    path when its parent is a CAN bus, else the path as the file wrote it."""
 
-    if device.hardware_id:
-        return next((path for path, entity in merged.entities.items()
-                     if path.startswith(EXPECTED_PATH + "/") and same_id(entity.hardware_id, device.hardware_id)), None)
-    return f"{EXPECTED_PATH}/{tree.slug('serial-' + device.serial)}" if device.serial else None
+    row = f"{base}/{node_path}" if base else ""
+    if row in merged.entities:
+        return merged.entities[row].name
+    parent = f"{base}/{node_path.rsplit('/', 1)[0]}" if base and "/" in node_path else None
+    if parent in merged.entities and re.search(r"\bcan\b", merged.entities[parent].name + " " + merged.entities[parent].kind, re.I):
+        return f"CAN {node_path.rsplit('/', 1)[-1]}"
+    return node_path
+
+
+def _absent_row(device: ExpectedDevice, merged: tree.Merged) -> str | None:
+    """The row that reports an absent device: the Computer, whose ``ExpectedAbsent`` status says it (host.py for a USB
+    id, ``evaluate`` for a serial). None when nothing will say it (a device with neither id)."""
+
+    return tree.HOST_PATH if (device.hardware_id or device.serial) else None
+
+
+def _reporting_row(base: str | None, node_path: str, merged: tree.Merged, own: dict) -> str | None:
+    """The row that says an expected node is silent when it has no row of its own: its bus (the node's parent), if the
+    bus reports a problem. A board that never answered has no row (Zach, 2026-10-24); its driver says so on the bus
+    ("2 of 3 expected boards answer · CAN 15 silent"). None: nothing says it, the rig is then its own cause."""
+
+    if base is None:
+        return None
+    own_row = f"{base}/{node_path}"
+    if own_row in merged.entities:
+        return own_row
+    parent = f"{base}/{node_path.rsplit('/', 1)[0]}" if "/" in node_path else base
+    if parent in merged.entities and any(status.level != OK for status in own.get(parent, [])):
+        return parent
+    return None
 
 
 # ----- the panel's edits: Expect what's here / Forget / Retire... --------------------------------------------------
