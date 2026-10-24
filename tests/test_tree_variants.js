@@ -878,7 +878,10 @@ async function main() {
   fs.mkdirSync(ROUND2, { recursive: true });
   staticChecks();
   const { chromium } = require(PLAYWRIGHT);
-  const browser = require('./pin_layout').pinDetailLayout(await chromium.launch({ executablePath: CHROME, headless: true }));
+  const { pinDetailLayout, pinPageLayout } = require('./pin_layout');
+  // WHY L0: this suite measures the page's classic arrangement (the toolbar over the tree | detail panes); the page layouts
+  // (web/layouts/, tests/test_layouts.js) re-arrange it, so every context here starts on L0 "Today". No assertion changed.
+  const browser = pinPageLayout(pinDetailLayout(await chromium.launch({ executablePath: CHROME, headless: true })));
   const servers = [];
   const stopAll = () => servers.forEach((server) => stopServer(server.child));
   process.on('SIGINT', () => { stopAll(); process.exit(130); });

@@ -14,4 +14,17 @@ function pinDetailLayout(browser, id = 'd0') {
   return browser;
 }
 
-module.exports = { pinDetailLayout };
+// The page layout's default is L1 (Obsidian: a ribbon, the tree beside the page); the same suites measure the classic arrangement
+// (the toolbar over the tree | detail panes), which is L0 "Today". Pinned the same way: every context starts with L0 remembered.
+function pinPageLayout(browser, id = 'l0') {
+  const original = browser.newContext.bind(browser);
+  browser.newContextRaw = browser.newContextRaw || original;
+  browser.newContext = async (...args) => {
+    const context = await original(...args);
+    await context.addInitScript((layout) => { try { if (!localStorage.getItem('io-diagnostics.page-layout')) localStorage.setItem('io-diagnostics.page-layout', layout); } catch (_) { /* private mode */ } }, id);
+    return context;
+  };
+  return browser;
+}
+
+module.exports = { pinDetailLayout, pinPageLayout };

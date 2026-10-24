@@ -1807,14 +1807,16 @@ function render() {
   $('structure-switch').classList.toggle('dim', legacy);
   $('structure-switch').title = legacy ? `${S.variant} is a legacy style: it always draws the physical API tree` : 'Structure: what the rows are';
   const activityView = S.view === 'activity';
-  $('tree-host').hidden = !treeView;
+  // WHY keepTree: a layout (layouts/*.js) that holds the tree in a sidebar keeps it drawn beside the Table and Activity
+  const keepTree = Boolean(window.IOLayoutHost && window.IOLayoutHost.keepsTree());
+  $('tree-host').hidden = !treeView && !keepTree;
   $('left-other').hidden = treeView || activityView;
   $('activity-host').hidden = !activityView;
   if (!activityView && window.IOActivityLog) window.IOActivityLog.setVisible(false);
-  if (treeView) renderTreePane();
-  else if (activityView) renderActivityView();
-  else $('left-other').innerHTML = renderTable();
-  const noSearch = treeView && NO_QUERY.has(S.variant);
+  if (treeView || keepTree) renderTreePane();
+  if (activityView) renderActivityView();
+  else if (!treeView) $('left-other').innerHTML = renderTable();
+  const noSearch = (treeView || keepTree) && NO_QUERY.has(S.variant);
   $('search').disabled = noSearch;
   $('search').placeholder = noSearch ? `No search in ${S.variant} · try Table` : 'Search entities, ids, ports…';
   $('search').closest('.search').classList.toggle('off', noSearch);
@@ -1824,6 +1826,7 @@ function render() {
   renderModal();
   renderStatusbar();
   updateRunView();
+  if (window.IOLayoutHost) window.IOLayoutHost.update();
 }
 
 // A new selection: its node loads, the drill below the old one closes. A utility belongs to the entity it was opened
@@ -1998,6 +2001,12 @@ async function boot() {
   setupSwitcher();
   setupPrototype(detailLayouts.default, utilityMenus.default, runEntries.default, chartEntries.default);
   S.inspPinned = readPref(PREFS.inspectorPinned) === '1';
+  // the page layout (layouts/host.js): moves the page's parts into one of five arrangements; everything it draws is ours
+  if (window.IOLayoutHost) {
+    await window.IOLayoutHost.start({ S, $, esc, render, entityLabel, renderActivity: typeof renderActivity === 'function' ? renderActivity : null, eventRow, setViewOptions, setToggle, structureOptions,
+      toggleShown: (toggle) => IOView.toggleShown(toggle, structureOptions()), startDryRun, select: onSelectEntity,
+      setView(view) { S.view = view; pushNav(); render(); } });
+  }
   if (S.view === 'table' && (S.sel || S.selKey) && (S.drill.diag || S.drill.page)) S.inspOpen = true;
   setupPanes();
   loadSettings();
