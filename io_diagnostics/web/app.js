@@ -1143,7 +1143,10 @@ const plainTitle = (title) => String(title || '').replace(/…$/, '');
 // WHY Tools: a vendor's own console (tview, realsense-viewer) is something a person looks for by name (Zach, 2026-10-24: he
 // did not find "Open console"); it sits right after Checks, outside Maintenance and never in Motion.
 const TOOLS = new Set(['open_console']);
-function utilityGroups(actions) {
+// the Configuration tab's three writes are driven by its edit session (docs/state-config-v1.md section 9), never from a menu
+const CONFIG_WRITES = new Set(['set_config', 'persist_config', 'reset_config']);
+function utilityGroups(allActions) {
+  const actions = allActions.filter((action) => !CONFIG_WRITES.has(action.name));
   const order = (action) => (STANDARD.has(action.name) ? STANDARD_ORDER.indexOf(action.name) : STANDARD_ORDER.length);
   const sorted = [...actions].sort((a, b) => order(a) - order(b));
   const standard = sorted.filter((action) => STANDARD.has(action.name));

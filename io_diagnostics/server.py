@@ -456,8 +456,10 @@ class Handler(BaseHTTPRequestHandler):
             if key is not None and not isinstance(key, str):
                 return self._json({"refused": "BadRequest", "error": "key is a string (or absent: every setting)"}, 400)
             result = editor.reset(path, token, str(body.get("to") or ""), key, body.get("confirm_safety") is True)
-        status = 200 if result.get("ok") or result.get("state") in ("refused", "rejected") else 403 if result.get("refused") == "NoEditSession" else 400
-        return self._json(result, status)
+        # WHY 200 for a refusal: the host answered the question ("not without the second confirm", "the board is not stopped"); only a
+        # missing or dead session (403) and a malformed request (400) are errors of the request itself
+        refused = result.get("refused")
+        return self._json(result, 403 if refused == "NoEditSession" else 400 if refused == "BadRequest" else 200)
 
     # --- history and settings ------------------------------------------------------------------------------------
     def _history(self, endpoint: str, query: dict):

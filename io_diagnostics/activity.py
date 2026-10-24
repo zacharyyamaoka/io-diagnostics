@@ -43,16 +43,19 @@ KIND_LABEL = {"Booted": "boot", "ShutDown": "shutdown", "Plugged": "plugged", "U
               "LinkSpeed": "link speed", "LinkDowngraded": "link downgraded", "DriverBound": "driver bound",
               "DriverUnbound": "driver unbound", "NetCarrierUp": "link up", "NetCarrierDown": "link down",
               "PcieAerError": "PCIe AER error", "LevelChanged": "level changed", "RunStarted": "run started",
-              "RunEnded": "run ended", "Run": "run", "FoundAtStart": "found at start"}
+              "RunEnded": "run ended", "Run": "run", "FoundAtStart": "found at start", "ConfigSet": "setting changed",
+              "ConfigRejected": "setting rejected", "ConfigPersisted": "settings saved", "ConfigReset": "settings reverted",
+              "ConfigEditStarted": "editing started", "ConfigEditEnded": "editing ended"}
 # Every event's ``type`` (docs/api-v1.md "Activity"): what ``?types=`` filters on. Any code not listed is a plugin's.
-TYPES = ("usb", "link", "usb_error", "driver", "network", "pcie", "level", "fault", "boot", "run", "plugin")
+TYPES = ("usb", "link", "usb_error", "driver", "network", "pcie", "level", "fault", "boot", "run", "config", "plugin")
 EVENT_TYPES = {"Booted": "boot", "ShutDown": "boot",
                **{code: "usb" for code in ("Plugged", "Unplugged", "ReEnumerated", "Flapped", "Plugging", "Unplugging")},
                "LinkSpeed": "link", "LinkDowngraded": "link",
                **{code: "usb_error" for _pattern, code, _severity in kernel_log.USB_ERRORS},
                "DriverBound": "driver", "DriverUnbound": "driver", "NetCarrierUp": "network", "NetCarrierDown": "network",
                "PcieAerError": "pcie", "FaultConfirmed": "fault", "FaultHealed": "fault", "FaultCleared": "fault",
-               "LevelChanged": "level", "RunStarted": "run", "RunEnded": "run", "Run": "run", "FoundAtStart": "fault"}
+               "LevelChanged": "level", "RunStarted": "run",
+               **{code: "config" for code in ("ConfigSet", "ConfigRejected", "ConfigPersisted", "ConfigReset", "ConfigEditStarted", "ConfigEditEnded")}, "RunEnded": "run", "Run": "run", "FoundAtStart": "fault"}
 DRIVER_CODES = ("DriverBound", "DriverUnbound")
 SUPERSPEED_MBPS = 5000.0
 MAX_LIVE_EVENTS = 500

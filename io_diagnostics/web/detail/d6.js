@@ -10,6 +10,9 @@
 // GET /api/v1/values (250 ms while the watch runs); leaving the tab, the entity or the page stops both, and the host stops the
 // plugin's watch about 10 s later. Images are <img> elements of the MJPEG stream (/api/v1/frames/stream).
 // The tab is the page's `page` drill (?page=<id>: back / forward work), remembered per entity kind.
+// The rows of Diagnostics, State and Configuration share ONE row model (d6-rows.js, window.IOEntityRows): dot-notation names are
+// folders, A-Z or manual order, starred rows first, all saved per entity kind; the Configuration tab edits live (section 9).
+// The Log tab embeds the Activity log (activity/log.js, IOActivityLog.create({scope, compact})) scoped to the entity.
 // WHY the Diagnostics rendering is d1's, copied: a parallel lane designs five variants of that section and owns the history
 // bar; diagnosticsPanel() is the one function to replace when its winner lands.
 'use strict';
@@ -54,6 +57,8 @@
   const Heard = { base: null, at: 0, source: null };
   let last = null;
   const wired = new WeakSet();
+  const ER = () => root.IOEntityRows;
+  const CONFIG_ACTIONS = new Set(['set_config', 'persist_config', 'reset_config']); // driven by the Configuration tab's edit session
 
   // ---------------------------------------------------------------------------------- formatting ----
   const num = (v) => (typeof v === 'boolean' ? String(v) : Number.isInteger(v) ? String(v) : String(+Number(v).toPrecision(4)));
@@ -299,7 +304,7 @@
     const h = ctx.h;
     if (!checks.length) return '';
     const sets = PROBLEM.has(node.level) && !isGrouping(node) ? node.level : null;
-    const rows = checks.map((check) => {
+    const rowOf = (check, d) => {
       const level = check.effective_level;
       const bad = PROBLEM.has(level);
       const key = `${node.path}\u0001${check.name}`;
@@ -319,12 +324,19 @@
         body = `<div class="d6-x">${bad ? checklist(check, h) : ''}${h.kv(values.map((v) => [v.key, `<span class="d6-v">${h.esc(v.value)}</span>`]))}`
           + `<div class="d6-meta">received ${h.esc((check.received_iso || '').slice(11, 19) || '—')} · ${h.ago(check.age_s)} ago · ${h.esc(timing)}${check.level !== check.effective_level ? ` · reported ${h.esc(check.level)}` : ''}${check.code ? ` · code <span class="mono">${h.esc(check.code)}</span>` : ''}${caused ? `<br>caused by ${caused}` : ''}<br>${h.esc(check.source || '')}</div></div>`;
       }
-      return `<div class="d6-r${bad ? ' bad' : ''}${open ? ' open' : ''}${flash}"${bad ? ' data-diagnostic' : ''} data-code="${h.esc(check.code || '')}">`
+      const er = ER();
+      return `<div class="d6-r${bad ? ' bad' : ''}${open ? ' open' : ''}${flash}"${bad ? ' data-diagnostic' : ''} data-code="${h.esc(check.code || '')}" ${er.rowAttrs(d.parent, d.id === null ? check.name : d.id, 'diagnostics')} style="--er-depth:${d.depth}">`
         + `<div class="d6-rl" data-d6-expand="${h.esc(check.name)}" role="button" tabindex="0" aria-expanded="${open}"><svg class="ic d6-chev"><use href="#i-chev"/></svg>`
-        + `<span class="d6-lv">${h.shape(level, level)}${word}</span><span class="d6-rn">${nameHtml(check.name, h)}</span>`
+        + `<span class="d6-lv">${h.shape(level, level)}${word}</span><span class="d6-rn"><span class="er-ctl">${er.star(check.name, d.pinned)}${er.handle(d.parent, d.id === null ? check.name : d.id)}</span>${nameHtml(d.label === null ? check.name : d.label, h)}</span>`
         + `<span class="d6-rm">${h.esc(check.message || '—')}${explain ? ` ${explain}` : ''}${check.code && bad ? ` <span class="mono d6-code">${h.esc(check.code)}</span>` : ''}${tag}${log}</span></div>${body}</div>`;
-    }).join('');
-    return `<div class="d6-tab-t"><div class="d6-hd"><span></span><span>Level</span><span>Name</span><span>Message</span></div>${rows}</div>`;
+    };
+    const er = ER();
+    const kind = node.kind || 'device';
+    const sp = er.spec(kind, 'diagnostics');
+    const mode = sp.sort || 'severity';
+    const tree = er.build(checks, { idOf: (c) => c.name, nameOf: (c) => c.name, sp, mode, severityOf: (c) => rankOf(c.effective_level) });
+    const rows = er.renderTree(tree, { section: 'diagnostics', sp, leaf: rowOf });
+    return `<div class="d6-tab-t"><div class="d6-hd"><span></span><span>Level</span><span>Name</span><span class="er-sortc">${er.sortControl('diagnostics', sp, ['severity', 'name', 'manual'], 'severity')}</span></div>${rows}</div>`;
   }
   function childrenList(node, ctx) {
     const h = ctx.h;
@@ -352,10 +364,10 @@
   // The one function the variants lane replaces: the Diagnostics tab's body.
   function diagnosticsPanel(node, detail, ctx) {
     const p = ctx.parts;
-    const checks = detail.checks.map((check, at) => ({ check, at })).sort((a, b) => (rankOf(b.check.effective_level) - rankOf(a.check.effective_level)) || (a.at - b.at)).map(({ check }) => check);
+    const checks = detail.checks;
     const problems = checks.filter((c) => PROBLEM.has(c.effective_level)).length;
     const kids = (node.children || []).length;
-    return rollsUp(node, checks, ctx) + healthBar(node.path, ctx)
+    return rollsUp(node, [...checks].sort((a, b) => rankOf(b.effective_level) - rankOf(a.effective_level)), ctx) + healthBar(node.path, ctx)
       + plain('d6-diag', `Diagnostics · ${checks.length}`, statusTable(node, checks, detail, ctx) || '<div class="muted">No diagnostics of its own.</div>',
         problems ? `${problems} problem${problems === 1 ? '' : 's'} first · click a row for its detail` : 'click a row for its detail')
       + plain('d6-children', `Below · ${kids}`, childrenList(node, ctx), 'each row\'s own health over the same window')
@@ -389,16 +401,20 @@
       + `<span class="d6-dim" title="${stream.colormap ? `colormap ${h.esc(stream.colormap)}` : ''}">${h.esc(size)} · ${h.esc(rate)}</span></figcaption>`
       + `<button class="d6-pic" data-d6-enlarge="${h.esc(stream.name)}" aria-label="Enlarge ${h.esc(stream.title)}"${on && stream.seq !== null ? '' : ' disabled'}>${picture}</button></figure>`;
   }
-  function stateRows(group, h) {
-    return group.rows.map((row) => {
+  // one State row, as a leaf of the shared row model: name (with its star and handle), value, sparkline
+  function stateLeaf(group, h) {
+    const er = ER();
+    return (row, d) => {
       const ring = Live.rings.get(`${group.name}\u0001${row.key}`) || [];
       const bad = PROBLEM.has(row.level);
       const value = row.meaning ? `${h.esc(typeof row.value === 'number' ? num(row.value) : row.text)} · ${h.esc(row.meaning)}` : h.esc(row.text);
-      return `<div class="d6-sr${bad ? ' bad' : ''}"${bad ? ' data-diagnostic' : ''}><span class="d6-sn" title="${h.esc(row.key)}">${h.esc(row.key)}</span>`
+      const id = d.id === null ? row.key : d.id;
+      return `<div class="d6-sr${bad ? ' bad' : ''}"${bad ? ' data-diagnostic' : ''} ${er.rowAttrs(d.parent, id, 'state')} style="--er-depth:${d.depth}"><span class="d6-sn" title="${h.esc(row.key)}"><span class="er-ctl">${er.star(stateId(group, row), d.pinned)}${er.handle(d.parent, id)}</span>${h.esc(d.label === null ? row.key : d.label)}</span>`
         + `<span class="d6-sv${row.meaning ? ' txt' : ''}">${bad ? h.shape(row.level, `${row.key}: ${row.level}`) : ''}${value}</span>`
         + `<span class="d6-ss">${spark(ring, Live.now, SPARK_WINDOW_S, row)}</span></div>`;
-    }).join('');
+    };
   }
+  const stateId = (group, row) => (group.name ? `${group.name}::${row.key}` : row.key);
   function statePanel(node, detail, ctx) {
     const h = ctx.h;
     const note = watchNote(detail);
@@ -412,88 +428,64 @@
       + (open ? `<div class="d6-tiles">${images.map((s) => tile(s, node.path, h)).join('')}${grip('tile', 'Resize the image tiles')}</div>` : '') + '</section>' : '';
     const groups = (Live.groups || []).filter((g) => g.rows.length);
     const multi = groups.length > 1 || groups.some((g) => g.name);
-    const numbers = groups.length ? `<section class="d6-block"><div class="d6-sh"><span>Name${grip('name', 'Resize the name column')}</span><span>Value</span><span>Recent · up to ${SPARK_WINDOW_S} s</span></div>`
+    const er = ER();
+    const kind = node.kind || 'device';
+    const sp = er.spec(kind, 'state');
+    const mode = sp.sort || 'name';
+    const pinnedRows = sp.pins.map((id) => { for (const g of groups) { const r = g.rows.find((row) => stateId(g, row) === id); if (r) return { g, r }; } return null; }).filter(Boolean);
+    const pinnedHtml = pinnedRows.length ? `<div class="er-pinned" data-er-pinned="state"><h4 class="er-pinh">★ Pinned</h4>${pinnedRows.map(({ g, r }) => stateLeaf(g, h)(r, { label: multi && g.name ? `${g.name} › ${r.key}` : null, depth: 0, parent: '__pins__', id: null, pinned: true })).join('')}</div>` : '';
+    const numbers = groups.length ? `<section class="d6-block" data-er-section="state"><div class="d6-sh"><span>Name${grip('name', 'Resize the name column')}</span><span>Value</span><span class="er-sortc">${er.sortControl('state', sp, ['name', 'manual'], 'name')}</span></div>${pinnedHtml}`
       + groups.map((group) => {
         const key = `state:${group.name}`;
         const isOpen = !U.folded.has(key);
         const stale = group.stale || (group.age_s !== null && group.age_s > 5 && !(Live.watch && Live.watch.state === 'running'));
         const heading = multi ? `<h3 class="d6-gh"><button class="d6-fold" data-d6-fold="${h.esc(key)}" aria-expanded="${isOpen}"><svg class="ic sec-chev"><use href="#i-chev"/></svg>${h.esc(group.name || 'values')}</button>`
           + `${stale ? `<span class="right d6-staleq">last values ${h.ago(group.age_s)} ago</span>` : ''}</h3>` : (stale ? `<div class="d6-staleq">last values ${h.ago(group.age_s)} ago</div>` : '');
-        return heading + (isOpen ? stateRows(group, h) : '');
+        const rows = group.rows.filter((r) => !sp.pins.includes(stateId(group, r)));
+        const tree = er.build(rows, { idOf: (r) => r.key, nameOf: (r) => r.key, sp: { ...sp, pins: [] }, mode });
+        return heading + (isOpen ? er.renderTree(tree, { section: 'state', sp, leaf: stateLeaf(group, h) }) : '');
       }).join('') + '</section>' : '';
     const empty = !images.length && !groups.length ? '<div class="muted">This entity reports no state of its own.</div>' : '';
     return head + imageBlock + numbers + empty + (Live.error ? `<div class="d6-staleq">the host did not answer: ${h.esc(Live.error)}</div>` : '');
   }
 
   // ------------------------------------------------------------------------------- Configuration ----
-  function configRows(detail) {
-    return (detail.config || []).map((row) => ({ ...row, group: row.group || 'general' }));
-  }
-  const cfgValue = (row) => `${row.value === null || row.value === undefined ? '—' : String(row.value)}${row.unit ? ` ${row.unit}` : ''}`;
-  const cfgExpected = (row) => `${String(row.expected)}${row.unit ? ` ${row.unit}` : ''}`;
-  function configText(rows) {
-    const out = [];
-    let group = null;
-    for (const row of rows) {
-      if (row.group !== group) { group = row.group; out.push(`[${group}]`); }
-      out.push(`${row.key} = ${cfgValue(row)}${row.differs ? `   # expected ${cfgExpected(row)} (${row.expected_source || 'expected'})` : ''}`);
-    }
-    return out.join('\n');
-  }
-  function configPanel(node, detail, ctx) {
-    const h = ctx.h;
-    const all = configRows(detail);
-    if (!all.length) return '<div class="muted">No configuration read from this entity. A driver sends it with its checks.</div>';
-    const query = (U.query.get(node.path) || '').trim().toLowerCase();
-    const rows = query ? all.filter((r) => `${r.key} ${cfgValue(r)} ${r.group} ${r.expected_source}`.toLowerCase().includes(query)) : all;
-    const differs = all.filter((r) => r.differs).length;
-    const groups = [...new Set(rows.map((r) => r.group))];
-    const body = groups.map((group) => `<h3 class="d6-gh plain-h">${h.esc(group)}</h3>` + rows.filter((r) => r.group === group).map((row) => {
-      const mark = row.differs ? `<span class="d6-diff" title="differs from what is expected">≠</span>` : '';
-      const expected = row.differs ? `<div class="d6-exp">expected <b>${h.esc(cfgExpected(row))}</b>${row.expected_source ? ` · ${h.esc(row.expected_source)}` : ''}</div>` : '';
-      return `<div class="d6-cr${row.differs ? ' differs' : ''}"><span class="d6-sn mono" title="${h.esc(row.key)}">${h.esc(row.key)}</span>`
-        + `<span class="d6-cv"><span class="mono">${mark}${h.esc(cfgValue(row))}</span>${expected}</span>`
-        + `<span class="d6-ca" title="read ${row.age_s === null ? '—' : `${h.ago(row.age_s)} ago`}">${row.age_s === null ? '' : `${h.ago(row.age_s)}`}</span></div>`;
-    }).join('')).join('');
-    return `<div class="d6-ctl"><input type="search" class="d6-search" data-d6-search placeholder="Search ${all.length} settings" value="${h.esc(U.query.get(node.path) || '')}" aria-label="Search the configuration">`
-      + `<span class="d6-dim">${rows.length === all.length ? `${all.length} settings` : `${rows.length} of ${all.length}`}${differs ? ` · ${differs} differ${differs === 1 ? 's' : ''} from what is expected` : ''}</span>`
-      + `<button class="btn d6-copy" data-d6-copy>${U.copied && Date.now() - U.copied < 2000 ? 'Copied' : 'Copy as text'}</button></div>`
-      + `<div class="d6-ch-h"><span>Setting${grip('name', 'Resize the name column')}</span><span>Value</span><span>Read</span></div>` + (body || '<div class="muted">No setting matches.</div>');
-  }
+  const configPanel = (node, detail, ctx) => ER().config.panel(node, detail, ctx);
 
   // ------------------------------------------------------------------------------------------- Log ----
-  const logCache = { path: null, at: 0, loading: false, data: null, error: '' };
-  function logData(path, redraw) {
-    if (logCache.path !== path) Object.assign(logCache, { path, at: 0, data: null, error: '' });
-    if (!logCache.loading && Date.now() - logCache.at > LOG_EVERY_MS) {
-      logCache.loading = true;
-      fetch('/api/v1/activity?limit=3000', { cache: 'no-store' }).then((r) => r.json()).then((data) => { if (logCache.path === path) { logCache.data = data; logCache.error = ''; } })
-        .catch((error) => { logCache.error = String(error); }).finally(() => { logCache.loading = false; logCache.at = Date.now(); redraw(); });
-    }
-    return logCache;
+  // The Activity log's own compact view (activity/log.js, docs/activity-log-v1.md), scoped to the entity and what is below it, with its
+  // Raw channel. WHY the snapshot: the shell's morph() would empty a mount it does not know, so the panel carries the mount's own
+  // current markup back (equal nodes are left alone). A fault's badge in the log opens that fault in Diagnostics, and a Diagnostics
+  // row with a fault opens its line here (found by the code in the badge's own words).
+  const LogView = { inst: null, el: null, path: null };
+  function logPanel(node) {
+    if (!window.IOActivityLog) return '<div class="muted">The Activity log did not load.</div>';
+    const keep = LogView.inst && LogView.el && LogView.el.isConnected && LogView.path === node.path ? LogView.el.innerHTML : '';
+    return `<div class="d6-log" data-d6-log>${keep}</div>`;
   }
-  // WHY isolated: the Activity lane's per-entity view mounts here when it lands on main; this is the same scope (the entity and
-  // below, newest first) filtered from /api/v1/activity until then.
-  function logPanel(node, detail, ctx) {
-    const h = ctx.h;
-    const entry = logData(node.path, ctx.redraw);
-    const events = ((entry.data && entry.data.events) || (ctx.activity && ctx.activity.events) || []).filter((e) => inScope(e, node.path));
-    const shown = U.warnOnly ? events.filter((e) => e.severity === 'warn' || e.severity === 'error') : events;
-    const faultCodes = new Set(detail.faults.map((f) => f.code));
-    const line = (event) => {
-      const diagnostic = PROBLEM.has(event.severity);
-      const code = (event.args || {}).fault;
-      const flash = U.flash && U.flash.tab === 'log' && U.flash.code && String(code) === String(U.flash.code) ? ' d6-flash' : '';
-      const link = code && /^Fault/.test(event.code || '') ? ` <a class="link d6-lg" data-d6-jump="diagnostics" data-path="${h.esc(event.path)}" data-code="${h.esc(code)}" tabindex="0">${faultCodes.has(code) || event.path === node.path ? '' : ''}${h.esc(code)} in Diagnostics →</a>` : '';
-      const where = event.path && event.path !== node.path ? `<span class="d6-evw" title="${h.esc(event.path)}">${h.esc(event.name || event.path.split('/').pop())}</span>` : '';
-      const raw = U.raw ? `<div class="d6-raw mono">${h.esc(event.source || '')} · ${h.esc(event.id)}${event.seq !== null && event.seq !== undefined ? ` · seq ${h.esc(event.seq)}` : ''}${(event.args || {}).kernel ? `\n${h.esc(event.args.kernel)}` : ''}\n${h.esc(JSON.stringify(event.args || {}))}</div>` : '';
-      return `<div class="d6-ev${diagnostic ? ` sev-${h.esc(event.severity)}` : ''}${flash}"${diagnostic ? ' data-diagnostic' : ''} data-code="${h.esc(code || '')}"><span class="d6-evt">${h.esc(event.time)}</span>`
-        + `<span class="d6-evk">${h.esc(event.kind)}</span><span class="d6-evm">${where}${h.esc(event.message)}${link}</span><span class="d6-evs">${h.esc(event.severity === 'info' ? '' : event.severity)}</span></div>${raw}`;
-    };
-    return `<div class="d6-ctl"><label class="d6-sw"><input type="checkbox" role="switch" data-d6-raw${U.raw ? ' checked' : ''}><span class="d6-sw-t">Raw</span></label>`
-      + `<label class="d6-sw"><input type="checkbox" role="switch" data-d6-warn${U.warnOnly ? ' checked' : ''}><span class="d6-sw-t">Warnings and errors only</span></label>`
-      + `<span class="d6-dim">${shown.length} event${shown.length === 1 ? '' : 's'} · this entity and below · newest first</span></div>`
-      + (shown.map(line).join('') || `<div class="muted">${entry.data || entry.error ? 'No events for this entity.' : 'loading…'}</div>`);
+  function bindLog(container, node, active) {
+    const el = active === 'log' ? container.querySelector('[data-d6-log]') : null;
+    if (!el || !window.IOActivityLog) {
+      if (LogView.inst) { LogView.inst.unmount(); Object.assign(LogView, { inst: null, el: null, path: null }); }
+      return;
+    }
+    const scope = { path: node.path, name: node.name, mode: 'children' };
+    if (LogView.inst && LogView.el === el) {
+      if (LogView.path !== node.path) { LogView.path = node.path; LogView.inst.setScope(scope); }
+    } else {
+      if (LogView.inst) LogView.inst.unmount();
+      LogView.inst = window.IOActivityLog.create({ compact: true, scope, raw: true, fixedScope: true, floor: 'info' });
+      LogView.inst.mount(el);
+      Object.assign(LogView, { el, path: node.path });
+    }
+    flashLog(el);
+  }
+  const faultCodeOf = (text) => ((String(text).match(/[A-Z][A-Za-z]+\.[0-9A-Za-z_]+/) || [])[0] || '');
+  function flashLog(el, tries = 6) {
+    if (!U.flash || U.flash.tab !== 'log' || !U.flash.code || U.flash.scrolled) return;
+    const row = [...el.querySelectorAll('.al-row')].find((r) => [...r.querySelectorAll('.al-badge')].some((b) => faultCodeOf(`${b.title} ${b.textContent}`) === U.flash.code) || faultCodeOf(r.textContent) === U.flash.code);
+    if (row) { row.classList.add('d6-flash'); row.scrollIntoView({ block: 'center' }); U.flash.scrolled = true; return; }
+    if (tries > 0) setTimeout(() => { if (LogView.el === el) flashLog(el, tries - 1); }, 400);
   }
 
   // ------------------------------------------------------------------------------------- Utilities ----
@@ -501,7 +493,7 @@
   const DANGER_ORDER = ['query', 'interrupts', 'changes', 'moves'];
   function utilitiesPanel(node, detail, ctx) {
     const h = ctx.h;
-    const actions = [...(detail.actions || [])].sort((a, b) => (DANGER_ORDER.indexOf(a.danger) - DANGER_ORDER.indexOf(b.danger)) || a.title.localeCompare(b.title));
+    const actions = [...(detail.actions || [])].filter((action) => !CONFIG_ACTIONS.has(action.name)).sort((a, b) => (DANGER_ORDER.indexOf(a.danger) - DANGER_ORDER.indexOf(b.danger)) || a.title.localeCompare(b.title));
     if (!actions.length) return '<div class="muted">This entity registers no utilities.</div>';
     const now = ctx.state && ctx.state.clock ? ctx.state.clock.now : null;
     const rows = actions.map((action) => {
@@ -703,6 +695,64 @@
 .d6-nobar { color: var(--io-faint); font-size: 11px; height: auto; text-align: right; }
 .d6-cs { flex: none; width: 34px; display: inline-flex; justify-content: flex-end; gap: 2px; }
 .d6-hint .shape { width: 10px; height: 10px; opacity: .8; }
+/* the shared row model (d6-rows.js): folders, stars, handles, the sort switch, the edit state of a setting */
+.er-ctl { display: inline-flex; align-items: center; gap: 2px; margin-right: 4px; vertical-align: middle; }
+.er-pin { background: transparent; border: 0; padding: 0 2px; color: var(--io-faint); cursor: pointer; font-size: 13px; line-height: 1; opacity: 0; }
+.er-pin.on { opacity: 1; color: var(--io-text-strong); }
+.d6-r:hover .er-pin, .d6-sr:hover .er-pin, .er-cfgrow:hover .er-pin, .er-pin:focus-visible { opacity: 1; }
+.er-drag { color: var(--io-faint); cursor: grab; font-size: 11px; letter-spacing: -2px; opacity: 0; user-select: none; }
+.d6-r:hover .er-drag, .d6-sr:hover .er-drag, .er-cfgrow:hover .er-drag, .er-fold:hover .er-drag { opacity: .8; }
+.er-dragging { opacity: .45; }
+.er-over-top { box-shadow: inset 0 2px 0 var(--io-accent); }
+.er-over-bottom { box-shadow: inset 0 -2px 0 var(--io-accent); }
+.er-fold { display: flex; align-items: center; justify-content: space-between; padding: 2px 4px 2px calc(var(--er-depth, 0) * 16px); }
+.er-fb { display: inline-flex; align-items: center; gap: 4px; background: transparent; border: 0; padding: 3px 6px 3px 0; color: var(--io-muted); font: 600 12px var(--io-font-ui); cursor: pointer; border-radius: var(--io-radius-sm); }
+.er-fb:hover { color: var(--io-text-strong); }
+.er-fb[aria-expanded="true"] .sec-chev { transform: rotate(90deg); }
+.er-fc { margin-left: 4px; color: var(--io-faint); font-weight: 400; font-size: 11px; }
+.er-pinned { margin: 0 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--io-border); }
+.er-pinh { margin: 4px 0 2px; font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--io-muted); font-weight: 600; }
+.d6-sr .d6-sn, .er-cfgrow .er-name { padding-left: calc(var(--er-depth, 0) * 16px); }
+.d6-r { padding-left: calc(var(--er-depth, 0) * 16px); }
+.er-sort { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--io-faint); text-transform: none; letter-spacing: 0; font-weight: 400; }
+.er-sort select { font: inherit; font-size: 11.5px; color: var(--io-text); background: var(--io-field); border: 1px solid var(--io-border); border-radius: var(--io-radius-sm); padding: 1px 4px; }
+.er-sortc { justify-self: end; }
+.er-tools { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.er-tools .d6-copy { margin-left: 0; }
+.er-name { min-width: 0; display: flex; align-items: center; gap: 4px; overflow: hidden; }
+.er-name .d6-sn { flex: 0 1 auto; }
+.er-safe, .er-lock { flex: none; font-size: 10.5px; color: var(--io-faint); border: 1px solid var(--io-border); border-radius: var(--io-radius-pill); padding: 0 6px; }
+.er-lock { border: 0; padding: 0; }
+.er-cfgrow { grid-template-columns: var(--d6-name-w, 190px) minmax(0, 1fr) auto; align-items: start; }
+.er-right { display: inline-flex; align-items: center; gap: 6px; justify-self: end; }
+.er-edit { display: inline-flex; align-items: center; gap: 6px; }
+.er-in { width: 150px; max-width: 100%; padding: 3px 7px; font: 12px var(--io-font-mono); color: var(--io-text-strong); background: var(--io-field); border: 1px solid var(--io-border); border-radius: var(--io-radius-sm); }
+.er-in:focus-visible { outline: var(--io-focus-width) solid var(--io-focus); outline-offset: 1px; }
+.er-unit { color: var(--io-faint); font-size: 11.5px; }
+.er-sw { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; }
+.er-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 3px; }
+.er-chip { display: inline-flex; align-items: center; gap: 4px; padding: 0 8px; border-radius: var(--io-radius-pill); font-size: 11.5px; border: 1px solid var(--io-border); color: var(--io-muted); background: var(--io-control); }
+.er-chip.ok { color: var(--io-text-strong); }
+.er-chip.unsaved { color: var(--io-text-strong); border-style: dashed; }
+.er-chip.pending { font-style: italic; }
+.er-chip.bad { color: var(--io-error-text); border-color: var(--io-error-line); background: var(--io-error-soft); }
+.er-chip .shape { width: 11px; height: 11px; }
+.er-rb { background: transparent; border: 0; color: var(--io-accent-text); cursor: pointer; font-size: 14px; padding: 0 3px; }
+.er-resetrow { padding: 0 4px 6px calc(var(--er-depth, 0) * 16px + 20px); }
+.er-reset { display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; }
+.er-rbtn { padding: 2px 10px; font-size: 12px; }
+.er-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 0 0 8px; padding: 7px 10px; border: 1px solid var(--io-border); border-radius: var(--io-radius); background: var(--io-control); font-size: 12.5px; }
+.er-bar.dirty { border-style: dashed; color: var(--io-text-strong); }
+.er-bar.bad { color: var(--io-error-text); border-color: var(--io-error-line); background: var(--io-error-soft); }
+.er-bar-b { display: inline-flex; gap: 8px; }
+.er-edit-btn.on { background: var(--io-pressed); color: var(--io-text-strong); font-weight: 600; }
+.d6-modal { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; background: var(--io-overlay); }
+.d6-modal-c { width: min(520px, 92vw); padding: 18px 20px; background: var(--io-popover); color: var(--io-text); border: 1px solid var(--io-border); border-radius: var(--io-radius-lg); box-shadow: var(--io-shadow-pop); }
+.d6-modal-c h3 { margin: 0 0 8px; font-size: 15px; color: var(--io-text-strong); }
+.d6-modal-c p { margin: 6px 0; font-size: 12.5px; }
+.d6-modal-b { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.d6-log { min-height: 320px; margin: 0 -18px; }
+.d6-log .al-badge { cursor: pointer; }
 `;
   function injectCss() {
     if (typeof document === 'undefined' || document.querySelector('style[data-layout="d6"]')) return;
@@ -726,7 +776,7 @@
       case 'diagnostics': return diagnosticsPanel(node, detail, ctx);
       case 'state': return statePanel(node, detail, ctx);
       case 'config': return configPanel(node, detail, ctx);
-      case 'log': return logPanel(node, detail, ctx);
+      case 'log': return logPanel(node);
       case 'utilities': return utilitiesPanel(node, detail, ctx);
       default: return driverPanel(node, detail, ctx, tabs.find((tab) => tab.id === active).driver);
     }
@@ -777,11 +827,16 @@
       if (Live.path !== node.path) startLive(node.path, Boolean(detail.watch && detail.watch.supported));
     } else if (Live.path) stopLive();
     const row = ctx.row;
+    const er = ER();
+    if (er && !er.arrangement.started) er.loadArrangements(() => { if (last) last.ctx.redraw(); });
+    if (er && er.config.editing && (active !== 'config' || !er.config.editing(node.path))) er.config.leave(); // editing ends with the tab
     const banners = p.banners();
     const style = `--d6-name-w:${U.nameW}px;--d6-tile-w:${U.tileW}px`;
     ctx.draw(`<div class="d6-top">${headerHtml(node, detail, ctx, row)}${banners ? `<div class="d6-banners">${banners}</div>` : ''}${tabBar(ctx, node, detail, tabs, active)}</div>`
-      + `<div class="d6-panel" role="tabpanel" id="d6-panel" aria-labelledby="d6-tab-${h.esc(active)}" data-d6 data-d6-panel="${h.esc(active)}" style="${style}">${panelHtml(active, tabs, node, detail, ctx)}</div>${lightboxHtml(node, h)}`);
+      + `<div class="d6-panel" role="tabpanel" id="d6-panel" aria-labelledby="d6-tab-${h.esc(active)}" data-d6 data-d6-panel="${h.esc(active)}" style="${style}">${panelHtml(active, tabs, node, detail, ctx)}</div>${lightboxHtml(node, h)}${active === 'config' && er ? er.config.modalHtml(node, ctx) : ''}`);
     afterDraw(container);
+    bindLog(container, node, active);
+    if (er) er.config.afterDraw(container);
   }
 
   // ---------------------------------------------------------------------------------- the clicks ----
@@ -820,6 +875,9 @@
       if (!(target instanceof Element) || target.closest('.ent-tools, .u-panel, [data-util]') || !live()) return;
       const { ctx, detail } = live();
       const node = ctx.node;
+      const er = ER();
+      if (er && er.onClick(target, { kind: node.kind || 'device', redraw: ctx.redraw })) return;
+      if (er && container.querySelector('[data-d6-panel="config"]') && er.config.click(target, ctx, detail)) return;
       const tab = target.closest('[data-d6-tab]');
       if (tab) { chooseTab(ctx, node, tabsFor(detail), tab.dataset.d6Tab); return; }
       if (target.closest('[data-d6-lb]')) { U.lightbox = null; ctx.redraw(); return; }
@@ -854,7 +912,7 @@
         return;
       }
       if (target.closest('[data-d6-copy]')) {
-        const text = configText(configRows(detail));
+        const text = ER().config.copyText(detail);
         const done = () => { U.copied = Date.now(); ctx.redraw(); setTimeout(() => ctx.redraw(), 2100); };
         if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, done);
         else done();
@@ -864,6 +922,9 @@
       const target = event.target;
       if (!live() || !(target instanceof Element)) return;
       const { ctx, detail } = live();
+      const er = ER();
+      if (er && er.onChange(target, { kind: ctx.node.kind || 'device', redraw: ctx.redraw })) return;
+      if (er && container.querySelector('[data-d6-panel="config"]') && er.config.change(target, ctx, detail)) return;
       const stream = target.closest('[data-d6-stream]');
       if (stream) {
         const key = `${ctx.node.path}\u0001${stream.dataset.d6Stream}`;
@@ -876,14 +937,14 @@
     });
     container.addEventListener('input', (event) => {
       const target = event.target;
-      if (!live() || !(target instanceof Element) || !target.matches('[data-d6-search]')) return;
-      U.query.set(live().ctx.node.path, target.value);
-      live().ctx.redraw();
+      if (!live() || !(target instanceof Element)) return;
+      ER().config.input(target, live().ctx);
     });
     container.addEventListener('keydown', (event) => {
       const target = event.target;
       if (!live() || !(target instanceof Element)) return;
       const { ctx, detail } = live();
+      if (ER().config.key(event, ctx, detail)) return;
       if (event.key === 'Escape' && U.lightbox) { U.lightbox = null; ctx.redraw(); event.stopPropagation(); return; }
       const expand = target.closest('[data-d6-expand]');
       if (expand && (event.key === 'Enter' || event.key === ' ')) { expand.click(); event.preventDefault(); return; }
@@ -933,6 +994,11 @@
       if (drag.kind === 'name') write(KEYS.name, String(U.nameW)); else write(KEYS.tile, String(U.tileW));
       drag = null;
     };
+    // dragging a row (by its handle) to reorder it inside its folder: the shared row model's
+    container.addEventListener('dragstart', (event) => { if (live()) ER().onDragStart(event, { kind: live().ctx.node.kind || 'device' }); });
+    container.addEventListener('dragover', (event) => { if (live()) ER().onDragOver(event); });
+    container.addEventListener('drop', (event) => { if (live()) ER().onDrop(event, { kind: live().ctx.node.kind || 'device', redraw: live().ctx.redraw }, container); });
+    container.addEventListener('dragend', () => ER().clearDrag(container));
     container.addEventListener('pointerup', end);
     container.addEventListener('pointercancel', end);
     container.addEventListener('dblclick', (event) => {
