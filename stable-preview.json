@@ -1,6 +1,6 @@
 {
   "app": "robotdiagnostics",
-  "name": "RobotDiagnostics",
+  "name": "RobotDx",
   "icon": "brand/placeholder/robotdiagnostics.svg",
   "stable": {
     "port": 8820,

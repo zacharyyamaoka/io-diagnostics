@@ -83,7 +83,7 @@ class Indicator:
         Notify.init(title)
 
     def show(self, model: dict) -> None:
-        self.indicator.set_icon_full(f"io-diagnostics-{model.get('icon', 'ok')}", model.get("title", "IO diagnostics"))
+        self.indicator.set_icon_full(f"io-diagnostics-{model.get('icon', 'ok')}", model.get("title", "RobotDx"))
         label, guide = model.get("label", ""), model.get("label_guide", "")
         # WHY set the label only after registration: ubuntu-appindicators (GNOME 46) builds its label
         # actor on a label CHANGE; a label set before the item registered never showed (measured).

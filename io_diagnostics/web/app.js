@@ -1615,7 +1615,7 @@ function renderChip() {
     + S.data.summary.attention.map((a) => `<div class="pop-row" data-go="${esc(a.path)}"><span class="pop-st">${shape(a.level)}</span><span class="x"><b>${esc(a.device && a.device.path !== a.path ? `${a.device.name} › ${a.name}` : a.name)}</b> — ${esc(a.message)}</span></div>`).join('')
     + '<h4 style="margin-top:10px">Recent</h4>'
     + S.data.recent.slice(0, 5).map((e) => `<div class="pop-row" data-tab="activity"><span class="t">${esc(e.time.slice(0, 5))}</span><span class="x">${esc(e.message)}</span></div>`).join('')
-    + '<button class="pop-open" data-close="1">Open IO diagnostics</button>'
+    + '<button class="pop-open" data-close="1">Open RobotDx</button>'
     + '<div class="pop-foot">The tray renders this same model (/api/v1/state → chip) through V2\'s AppIndicator.</div>';
 }
 

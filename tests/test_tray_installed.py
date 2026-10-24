@@ -1,4 +1,4 @@
-"""The installed tray opens RobotDiagnostics' own window; without the desktop entry it keeps the browser URL."""
+"""The installed tray opens RobotDx's own window; without the desktop entry it keeps the browser URL."""
 
 from io_diagnostics.tray import as_installed, chip_model, dot_status, top_bar
 
@@ -17,7 +17,7 @@ def test_installed_the_dashboard_opens_the_app_window(tmp_path):
     entry.write_text("[Desktop Entry]\n")
     model = as_installed(_chip(), entry=entry)
     assert {"text": "Open dashboard", "action": "launch:robotdiagnostics"} in model["menu"]
-    assert model["title"] == "RobotDiagnostics"
+    assert model["title"] == "RobotDx"
     assert not any(str(item.get("action", "")).startswith("open:") for item in model["menu"])
 
 

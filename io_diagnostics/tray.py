@@ -51,7 +51,7 @@ def chip_model(summary: dict, recent: list[dict], url: str = "") -> dict:
         menu.append({"text": "Open dashboard", "action": f"open:{url}"})
     menu.append({"text": "Quit", "action": "quit"})
     return {"icon": "attention" if count else "ok", "status": dot_status(attention), "label": f"IO {count} ⚠" if count else "IO ✓",
-            "label_guide": LABEL_GUIDE, "title": "IO diagnostics", "menu": menu}
+            "label_guide": LABEL_GUIDE, "title": "RobotDx", "menu": menu}
 
 
 def dot_status(attention: list[dict]) -> str:
@@ -95,7 +95,7 @@ def as_installed(model: dict, entry: Path = DESKTOP_ENTRY) -> dict:
         return model
     menu = [{**item, "action": f"launch:{DESKTOP_ID}"} if str(item.get("action", "")).startswith("open:") else item
             for item in model.get("menu", [])]
-    return {**model, "menu": menu, "title": "RobotDiagnostics"}
+    return {**model, "menu": menu, "title": "RobotDx"}
 
 
 def run_tray(model_source, *, interval_s: float = 2.0, on_quit=None) -> None:
@@ -104,7 +104,7 @@ def run_tray(model_source, *, interval_s: float = 2.0, on_quit=None) -> None:
     from contract.indicator import Indicator  # pins Gtk 3.0 before Gtk is imported
     from gi.repository import GLib, Gtk
 
-    tray = Indicator("io-diagnostics", "RobotDiagnostics")
+    tray = Indicator("io-diagnostics", "RobotDx")
     state = {"model": None}
 
     def update() -> bool:
@@ -116,7 +116,7 @@ def run_tray(model_source, *, interval_s: float = 2.0, on_quit=None) -> None:
             tray.show(model)  # first time: V2's label-after-registration dance
         elif model != state["model"]:
             # WHY not tray.show() again: it blanks the label for 2 s on every change (it waits for registration)
-            tray.indicator.set_icon_full(f"io-diagnostics-{model.get('icon', 'ok')}", model.get("title", "IO diagnostics"))
+            tray.indicator.set_icon_full(f"io-diagnostics-{model.get('icon', 'ok')}", model.get("title", "RobotDx"))
             tray.indicator.set_label(model.get("label", ""), model.get("label_guide", ""))
             menu = Gtk.Menu()
             for item in model.get("menu", []):
