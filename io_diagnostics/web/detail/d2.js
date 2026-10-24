@@ -10,6 +10,7 @@
 // the diagnostic page is the page's drill (ctx.diagnostic, ctx.openDiagnostic / closeDiagnostic: back / forward work).
 'use strict';
 (function (root) {
+  const usbText = (text) => (root.IOUsb ? root.IOUsb.label(text) : String(text ?? '')); // a USB link is named by web/usb.js, never "480 Mb/s"
   const RANK = { ok: 0, warn: 1, unknown: 2, stale: 3, error: 4 };
   const PROBLEM = new Set(['warn', 'unknown', 'stale', 'error']);
   const TRACK_W = 300;         // a lane's track, in px: the cell count follows it (health.js)
@@ -266,7 +267,7 @@
       return `${h.shape(span.level)}<span class="d2-msg" title="${h.esc(span.message)}">${h.esc(span.message || span.level)}</span><span class="d2-when">${h.esc(when)}</span>`;
     }
     if (!check) return '<span class="d2-msg">no current report</span>';
-    return `${h.shape(check.effective_level)}<span class="d2-msg" title="${h.esc(check.message)}">${h.esc(check.message || '—')}</span><span class="d2-age">${h.esc(h.ago(check.age_s))}</span>`;
+    return `${h.shape(check.effective_level)}<span class="d2-msg" title="${h.esc(check.message)}">${h.esc(usbText(check.message || '—'))}</span><span class="d2-age">${h.esc(h.ago(check.age_s))}</span>`;
   }
 
   // ------------------------------------------------------------------------------- the entity's lanes ----
@@ -299,7 +300,7 @@
     }
     if (node.connected === false) bits.push('<span>· not connected</span>');
     if (node.knock_on_of) bits.push(`<span>· explained by</span><a class="link" data-go="${h.esc(node.knock_on_of)}">${h.esc((ctx.byPath.get(node.knock_on_of) || {}).name || node.knock_on_of)}</a>`);
-    if (node.hint) bits.push(`<span>· below:</span><a class="link" data-go="${h.esc(node.hint.origin)}">${h.esc(node.rollup.origin_name)}</a><span>is ${h.esc(node.hint.level)}</span>`);
+    if (node.hint) bits.push(`<span>· below:</span><a class="link" data-go="${h.esc(node.hint.origin)}">${h.esc(usbText(node.rollup.origin_name))}</a><span>is ${h.esc(node.hint.level)}</span>`);
     return `<div class="d2-rolls" data-diagnostic>${bits.join('')}</div>`;
   }
   function entityTimeline(ctx, detail) {
@@ -314,7 +315,7 @@
     const rows = barData ? barData.rows : [];
     const own = rows.find((row) => row.depth === 0);
     const empty = hist.error ? `no history (${hist.error})` : 'loading history…';
-    const label = ctx.row ? ctx.row.label : node.name;
+    const label = ctx.row ? ctx.row.label : usbText(node.name);
     let html = axisRow(axis, h, { name: '<span class="d2-key">diagnostic</span>', empty });
     // the entity's own rollup: the worst level any of its own statuses held in each bin
     const rollAt = hoverT !== null ? binAt(barData, own, hoverT) : undefined;
@@ -341,7 +342,7 @@
     const children = barData ? rows.filter((row) => row.depth > 0)
       : ((detail.node.children || []).map((child) => ({ path: child, name: (ctx.byPath.get(child) || {}).name || child, bar: null })));
     if (children.length) {
-      const hint = node.hint ? `${h.shape(node.hint.level)}<span class="d2-msg">${h.esc(node.rollup.origin_name)} is ${h.esc(node.hint.level)}</span>` : '<span class="d2-msg">click one to open it</span>';
+      const hint = node.hint ? `${h.shape(node.hint.level)}<span class="d2-msg">${h.esc(usbText(node.rollup.origin_name))} is ${h.esc(node.hint.level)}</span>` : '<span class="d2-msg">click one to open it</span>';
       html += `<div class="d2-lane d2-head" data-diagnostic><div class="d2-name">Children · ${children.length}</div><div class="d2-track">${cursor(axis)}</div><div class="d2-read">${hint}</div></div>`;
       for (const child of children) {
         const childNode = ctx.byPath.get(child.path) || {};
@@ -350,7 +351,7 @@
           ? (at && at.level ? `${h.shape(at.level)}<span class="d2-msg">worst ${h.esc(at.level)}</span>` : '<span class="d2-msg">no data</span>')
           : `<span class="${childNode.knock_on_of ? 'knock' : ''}">${h.shape(childNode.level)}</span><span class="d2-msg" title="${h.esc(childNode.message || '')}">${h.esc(childNode.message || (child.basis === 'none' ? 'nothing reports' : '—'))}</span>`;
         html += `<div class="d2-lane" data-diagnostic data-go="${h.esc(child.path)}">`
-          + `<div class="d2-name"><span class="d2-key">${h.esc(child.name)}</span></div>${barTrack(barData, child.bar ? child : null, axis)}<div class="d2-read">${read}</div></div>`;
+          + `<div class="d2-name"><span class="d2-key">${h.esc(usbText(child.name))}</span></div>${barTrack(barData, child.bar ? child : null, axis)}<div class="d2-read">${read}</div></div>`;
       }
     }
     return `<div class="d2-tl">${html}</div>`;
@@ -366,7 +367,7 @@
     const status = histData ? histData.statuses.find((item) => item.name === name) || null : null;
     const check = detail.checks.find((item) => item.name === name) || null;
     const axis = entityAxis(hist, null);
-    const label = ctx.row ? ctx.row.label : node.name;
+    const label = ctx.row ? ctx.row.label : usbText(node.name);
     const level = check ? check.effective_level : (status && status.levels.length ? status.levels[status.levels.length - 1].level : null);
     const head = `<div class="d-head"><div class="d2-crumb"><a class="link" data-d2-back title="back to ${h.esc(label)}">← ${h.esc(label)}</a></div>`
       + `<div class="d-title" data-diagnostic><span>${h.esc(name)}</span>${h.pill(level)}</div>`
@@ -440,7 +441,7 @@
     for (const lane of lanes) {
       const at = hoverT !== null ? binAt(lane.data, lane.own, hoverT) : undefined;
       const read = hoverT !== null ? (at && at.level ? `${h.shape(at.level)}<span class="d2-msg">worst ${h.esc(at.level)}</span>` : '<span class="d2-msg">no data</span>')
-        : `${h.statusMark(lane.child)}<span class="d2-msg" title="${h.esc(lane.child.message || '')}">${h.esc(lane.child.message || '')}</span>`;
+        : `${h.statusMark(lane.child)}<span class="d2-msg" title="${h.esc(lane.child.message || '')}">${h.esc(usbText(lane.child.message || ''))}</span>`;
       html += `<div class="d2-lane" data-diagnostic data-go="${h.esc(lane.child.entity)}"><div class="d2-name"><span class="d2-key">${h.esc(lane.child.label)}</span></div>`
         + `${barTrack(lane.data, lane.own, axis)}<div class="d2-read">${read}</div></div>`;
     }

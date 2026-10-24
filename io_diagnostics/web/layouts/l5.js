@@ -182,8 +182,8 @@
       const recent = (S.data && S.data.recent) || [];
       const html = `<h2>${need.length ? `${need.length} need${need.length === 1 ? 's' : ''} you` : 'Everything is OK'}</h2>`
         + `<p class="lede">${need.length ? 'Click one to open it in Devices.' : 'Every device answers as expected.'} ${(S.data && S.data.summary.entities) || 0} entities on ${ctx.esc((S.data && S.data.host && S.data.host.name) || 'this computer')}.</p>`
-        + need.map((item) => `<button class="l5-need" data-l5-open="${ctx.esc(item.path)}">${shape(item.level)}<span class="who">${ctx.esc(item.device && item.device.path !== item.path ? item.device.name : item.name)}${item.device && item.device.path !== item.path ? ` <span>› ${ctx.esc(item.name)}</span>` : ''}</span><span class="why">${ctx.esc(item.message)}</span></button>`).join('')
-        + (recent.length ? `<h3>Recent<button data-l5-go="activity">Open the log</button></h3>${recent.slice(0, 5).map((event) => `<div class="l5-recent"><span class="t">${ctx.esc(String(event.time || '').slice(0, 5))}</span><span class="x" title="${ctx.esc(event.message)}">${ctx.esc(event.message)}</span></div>`).join('')}` : '');
+        + need.map((item) => `<button class="l5-need" data-l5-open="${ctx.esc(item.path)}">${shape(item.level)}<span class="who">${ctx.esc(ctx.usb(item.device && item.device.path !== item.path ? item.device.name : item.name))}${item.device && item.device.path !== item.path ? ` <span>› ${ctx.esc(ctx.usb(item.name))}</span>` : ''}</span><span class="why">${ctx.esc(ctx.usb(item.message))}</span></button>`).join('')
+        + (recent.length ? `<h3>Recent<button data-l5-go="activity">Open the log</button></h3>${recent.slice(0, 5).map((event) => `<div class="l5-recent"><span class="t">${ctx.esc(String(event.time || '').slice(0, 5))}</span><span class="x" title="${ctx.esc(event.message)}">${ctx.esc(ctx.usb(event.message))}</span></div>`).join('')}` : '');
       if (s.html.needs !== html) { s.html.needs = html; s.needs.innerHTML = html; }
     },
   };

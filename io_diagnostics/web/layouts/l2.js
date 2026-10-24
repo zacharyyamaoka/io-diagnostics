@@ -267,7 +267,7 @@
       if (active && s.html.active !== active.dataset.l2Tab) { s.html.active = active.dataset.l2Tab; active.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
       // ---- breadcrumbs ----
       const crumbs = ctx.crumbs(S.sel);
-      const crumbHtml = S.view !== 'tree' ? '<a class="last">Devices</a>' : crumbs.map((crumb, at) => `<a${at === crumbs.length - 1 ? ' class="last"' : ` data-go="${ctx.esc(crumb.path)}"`}>${ctx.esc(crumb.name)}</a>`).join('<span class="sep">›</span>');
+      const crumbHtml = S.view !== 'tree' ? '<a class="last">Devices</a>' : crumbs.map((crumb, at) => `<a${at === crumbs.length - 1 ? ' class="last"' : ` data-go="${ctx.esc(crumb.path)}"`} title="${ctx.esc(crumb.raw)}">${ctx.esc(crumb.name)}</a>`).join('<span class="sep">›</span>');
       if (s.html.crumbs !== crumbHtml) { s.html.crumbs = crumbHtml; s.crumbs.innerHTML = crumbHtml; }
       // ---- activity bar state ----
       const lit = { explorer: S.view === 'tree' && !s.sideSash.folded(), search: false, table: S.view === 'table', activity: !s.panelSash.folded() && s.tab === 'activity', terminal: !s.panelSash.folded() && s.tab === 'terminal' };

@@ -178,7 +178,7 @@
       // the view header: the breadcrumb of the selection (Tree), or the view's own name
       const crumbs = S.view === 'tree' ? ctx.crumbs(S.sel) : [];
       const html = S.view === 'table' ? '<a class="last">Table</a>' : S.view === 'activity' ? '<a class="last">Activity</a>'
-        : (crumbs.length ? crumbs.map((crumb, at) => `<a${at === crumbs.length - 1 ? ' class="last"' : ` data-go="${ctx.esc(crumb.path)}"`} title="${ctx.esc(crumb.name)}">${ctx.esc(crumb.name)}</a>`).join('<span class="sep">›</span>')
+        : (crumbs.length ? crumbs.map((crumb, at) => `<a${at === crumbs.length - 1 ? ' class="last"' : ` data-go="${ctx.esc(crumb.path)}"`} title="${ctx.esc(crumb.raw)}">${ctx.esc(crumb.name)}</a>`).join('<span class="sep">›</span>')
           : `<a class="last">${ctx.esc(S.selKey ? 'Group' : 'Devices')}</a>`);
       if (s.crumbsHtml !== html) { s.crumbsHtml = html; s.crumbs.innerHTML = html; }
     },

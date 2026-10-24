@@ -1,7 +1,7 @@
 // USB versions, not link speeds (Zach, 2026-10-24: "instead of saying 480 Mb/s say 2.1 or 3.2 … realsense-viewer shows
 // USB 2.1 upfront"). One small helper so every surface says the same thing:
 //
-//   window.IOUsb = { versionName(mbps), fromBcd(text), parseSpeed(text), relabel(text), describe({version, speed_mbps}) }
+//   window.IOUsb = { versionName(mbps), fromBcd(text), parseSpeed(text), label(text), describe({version, speed_mbps}) }  (relabel = label, the old name)
 //
 //   1.5 / 12 Mb/s -> USB 1.1      480 Mb/s -> USB 2.0      5 Gb/s -> USB 3.2 Gen 1
 //   10 Gb/s -> USB 3.2 Gen 2      20 Gb/s -> USB 3.2 Gen 2x2      40 Gb/s -> USB4
@@ -39,13 +39,25 @@
     return `USB ${major}.${minor}`;
   }
 
-  // "USB bus 1 · 480 Mb/s" -> "USB bus 1 · USB 2.0"; "12 Mb/s" -> "USB 1.1". Anything else is returned as it was.
-  function relabel(text) {
-    const value = String(text ?? '');
+  // THE label of a USB link in the page (Zach, 2026-10-24: "instead of saying 480 Mb/s say 2.1 or 3.2"). Every name and
+  // message the page draws goes through it; the raw text stays in the tooltip, which callers fill from the API's own words.
+  //   "USB bus 1 · 480 Mb/s"                  -> "USB bus 1 · USB 2.0"
+  //   "1 device · 12 Mb/s"                    -> "1 device · USB 1.1"
+  //   "on port 1-3 · USB full-speed · 12 Mb/s" -> "on port 1-3 · USB 1.1"   (the host's own speed names carry the number)
+  //   "12 Mb/s" (a port's whole id)           -> "USB 1.1"
+  // WHY a trailing speed is rewritten only after "USB ..." or "N device(s)", never after any word: a network card's
+  // "10 Gb/s" is not a USB generation. Anything else is returned as it was.
+  const HOST_SPEED_NAME = /USB (?:1\.1 low-speed|full-speed|2 high-speed|3\.2 Gen \d(?:x\d)?) · (\d+(?:\.\d+)?\s*[kMG]b\/s)/g;
+  const LINKS_AT = /\b(links|linked|runs|running) at (\d+(?:\.\d+)?\s*[kMG]b\/s)/g; // "a USB 2 cable links at 480 Mb/s"
+  const USB_PREFIX = /^(?:USB\b.*|.*\b\d+ devices?)$/;
+  function label(text) {
+    let value = String(text ?? '');
+    value = value.replace(HOST_SPEED_NAME, (whole, speed) => versionName(parseSpeed(speed)) || whole);
+    value = value.replace(LINKS_AT, (whole, verb, speed) => { const name = versionName(parseSpeed(speed)); return name ? `${verb} as ${name}` : whole; });
     const standalone = /^\s*(\d+(?:\.\d+)?\s*[kMG]b\/s)\s*$/.exec(value);
     if (standalone) return versionName(parseSpeed(standalone[1])) || value;
     const trailing = /^(.*\S)\s·\s(\d+(?:\.\d+)?\s*[kMG]b\/s)$/.exec(value);
-    if (!trailing) return value;
+    if (!trailing || !USB_PREFIX.test(trailing[1])) return value;
     const name = versionName(parseSpeed(trailing[2]));
     return name ? `${trailing[1]} · ${name}` : value;
   }
@@ -63,7 +75,7 @@
     return { text, tip: [own && `device ${own} (bcdUSB ${String(usb.version).trim()})`, link && `link ${link}${raw ? ` · ${raw}` : ''}`].filter(Boolean).join(' · ') };
   }
 
-  const IOUsb = { versionName, fromBcd, parseSpeed, relabel, describe };
+  const IOUsb = { versionName, fromBcd, parseSpeed, label, relabel: label, describe };
   root.IOUsb = IOUsb;
   if (typeof module !== 'undefined' && module.exports) module.exports = IOUsb;
 })(typeof window !== 'undefined' ? window : globalThis);

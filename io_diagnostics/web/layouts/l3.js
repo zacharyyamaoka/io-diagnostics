@@ -185,7 +185,7 @@
       const here = crumbs.length ? crumbs[crumbs.length - 1] : null;
       const parent = crumbs.length > 1 ? crumbs[crumbs.length - 2] : null;
       const html = S.view === 'table' ? '<span class="here">Table</span>'
-        : (here ? `${parent ? `<span class="parent"><a data-go="${ctx.esc(parent.path)}">${ctx.esc(parent.name)}</a> /</span>` : ''}<span class="here" title="${ctx.esc(here.name)}">${ctx.esc(ctx.api.entityLabel(here.path))}</span>` : '<span class="here">Devices</span>');
+        : (here ? `${parent ? `<span class="parent"><a data-go="${ctx.esc(parent.path)}" title="${ctx.esc(parent.raw)}">${ctx.esc(parent.name)}</a> /</span>` : ''}<span class="here" title="${ctx.esc(here.raw)}">${ctx.esc(ctx.api.entityLabel(here.path))}</span>` : '<span class="here">Devices</span>');
       if (s.html.path !== html) { s.html.path = html; s.path.innerHTML = html; }
       // ---- "Show N hidden": what the grouping's switch would add, counted by the page's own builder ----
       const hidden = ctx.tree.hiddenToggle();

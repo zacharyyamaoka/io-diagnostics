@@ -17,6 +17,7 @@
 // is the one function to replace when its winner lands. Its history is NOT a copy: every health bar here is detail/health.js.
 'use strict';
 (function (root) {
+  const usbText = (text) => (root.IOUsb ? root.IOUsb.label(text) : String(text ?? '')); // a USB link is named by web/usb.js, never "480 Mb/s"
   const RANK = { ok: 0, warn: 1, unknown: 2, stale: 3, error: 4 };
   const PROBLEM = new Set(['warn', 'unknown', 'stale', 'error']);
   const HIDDEN_VALUES = new Set(['what_to_check', 'kernel_evidence', 'fault_code', 'fault_meaning']);
@@ -204,7 +205,7 @@
   }
   function headerHtml(node, detail, ctx, row) {
     const h = ctx.h;
-    const title = row ? row.label : node.name;
+    const title = row ? row.label : usbText(node.name);
     const id = node.identity || {};
     const model = [id.manufacturer, id.model].filter(Boolean).join(' ');
     const showModel = model && !title.toLowerCase().includes(String(id.model || '').toLowerCase());
@@ -218,11 +219,11 @@
     const parent = detail && detail.ancestors && detail.ancestors[detail.ancestors.length - 1];
     const rest = [['hardware version', id.hw_version], ['hardware id', node.hardware_id ? `<span class="mono">${h.esc(node.hardware_id)}</span>` : ''],
       ['path', `<span class="mono">${h.esc(node.path)}</span>`], ['owner', node.owner], ['manufacturer', id.manufacturer],
-      [node.edge === 'part_of' ? 'part of' : 'via', parent ? `<a class="link" data-go="${h.esc(parent.path)}">${h.esc(parent.name)}</a>` : '']]
+      [node.edge === 'part_of' ? 'part of' : 'via', parent ? `<a class="link" data-go="${h.esc(parent.path)}" title="${h.esc(parent.name)}">${h.esc(usbText(parent.name))}</a>` : '']]
       .filter(([, v]) => v).map(([k, v]) => [k, /^<(span|a)/.test(String(v)) ? v : h.esc(v)]);
     return `<div class="d-head d6-head"><div class="d-title">${h.icon(node.icon)}<span class="d6-name">${h.esc(title)}</span>${showModel ? `<span class="d6-model">${h.esc(model)}</span>` : ''}${h.pill(node.level)}</div>`
       + `<div class="d6-line">${badge}<span class="d6-heard" data-d6-heard title="when the host last received anything from this entity">${h.esc(heardText(h))}${stale}</span></div>`
-      + `<div class="d-msg">${h.esc(node.message || '—')}</div>`
+      + `<div class="d-msg">${h.esc(usbText(node.message || '—'))}</div>`
       + `<div class="d6-hw">${hw.map(([k, v]) => `<span><span class="d6-k">${h.esc(k)}</span> <span class="mono">${h.esc(v)}</span></span>`).join('')}`
       + `<button class="d6-more" data-d6-more aria-expanded="${open}">${open ? 'Less' : 'More'} ${open ? '▴' : '▾'}</button></div>`
       + (open ? `<div class="d6-hw-more">${h.kv(rest)}</div>` : '') + '</div>';
@@ -271,7 +272,7 @@
     const h = ctx.h;
     if (isGrouping(node)) {
       const origin = node.rollup.origin && node.rollup.origin !== node.path
-        ? ` — <a class="link" data-go="${h.esc(node.rollup.origin)}">${h.esc(node.rollup.origin_name)}</a> is ${h.esc(node.rollup.level)}` : '';
+        ? ` — <a class="link" data-go="${h.esc(node.rollup.origin)}">${h.esc(usbText(node.rollup.origin_name))}</a> is ${h.esc(node.rollup.level)}` : '';
       return `<div class="d6-why">No diagnostics of its own: it shows the worst below${node.rollup.level ? origin : ' (nothing below reports)'}.</div>`;
     }
     const worst = checks[0];
@@ -296,8 +297,8 @@
     return order.map(({ child }) => {
       const row = bars.get(child.path);
       const hint = child.hint ? `<span class="d6-hint" title="below: ${h.esc(child.hint.level)}">${h.shape(child.hint.level, `below: ${child.hint.level}`)}</span>` : '';
-      return `<div class="d6-ch${child.connected === false ? ' off' : ''}" data-go="${h.esc(child.path)}" title="${h.esc(child.name)}">${h.icon(child.icon)}<span class="d6-cn">${h.esc(child.name)}</span>`
-        + `<span class="d6-cm">${h.esc(child.message || '')}</span>${row && row.basis !== 'none' ? bar(row.bar, data.from, data.bin_s, 'spark', 'd6-mini') : '<span class="d6-mini d6-nobar">no history</span>'}`
+      return `<div class="d6-ch${child.connected === false ? ' off' : ''}" data-go="${h.esc(child.path)}" title="${h.esc(child.name)}">${h.icon(child.icon)}<span class="d6-cn">${h.esc(usbText(child.name))}</span>`
+        + `<span class="d6-cm">${h.esc(usbText(child.message || ''))}</span>${row && row.basis !== 'none' ? bar(row.bar, data.from, data.bin_s, 'spark', 'd6-mini') : '<span class="d6-mini d6-nobar">no history</span>'}`
         + `<span class="d6-cs">${h.shape(child.level, child.message)}${hint}</span></div>`;
     }).join('');
   }

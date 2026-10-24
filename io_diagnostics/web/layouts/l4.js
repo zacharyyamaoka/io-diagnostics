@@ -166,7 +166,7 @@
       const calm = !need.length;
       const homeHtml = `<div class="l4-home-in"><h1>${calm ? 'Everything is OK' : `${need.length} thing${need.length === 1 ? '' : 's'} need${need.length === 1 ? 's' : ''} you`}</h1>`
         + `<p class="lede">${calm ? 'Every device answers as expected.' : 'The rest answers as expected.'} ${summary.entities || 0} entities on ${ctx.esc((S.data && S.data.host && S.data.host.name) || 'this computer')}.</p>`
-        + (calm ? '' : `<div class="l4-need">${need.map((item) => `<button data-go="${ctx.esc(item.path)}">${shape(item.level)}<span class="who">${ctx.esc(item.device && item.device.path !== item.path ? item.device.name : item.name)}${item.device && item.device.path !== item.path ? ` <span>› ${ctx.esc(item.name)}</span>` : ''}</span><span class="why">${ctx.esc(item.message)}</span></button>`).join('')}</div>`)
+        + (calm ? '' : `<div class="l4-need">${need.map((item) => `<button data-go="${ctx.esc(item.path)}">${shape(item.level)}<span class="who">${ctx.esc(ctx.usb(item.device && item.device.path !== item.path ? item.device.name : item.name))}${item.device && item.device.path !== item.path ? ` <span>› ${ctx.esc(ctx.usb(item.name))}</span>` : ''}</span><span class="why">${ctx.esc(ctx.usb(item.message))}</span></button>`).join('')}</div>`)
         + '<p class="l4-foot">Open a device in the sidebar, or press Ctrl K to jump.</p></div>';
       if (s.html.home !== homeHtml) { s.html.home = homeHtml; s.homeEl.innerHTML = homeHtml; }
       const count = ['error', 'stale', 'unknown', 'warn'].filter((level) => (summary.counts || {})[level]).map((level) => `${shape(level)}${summary.counts[level]}`).join('');
@@ -174,7 +174,7 @@
       // ---- the breadcrumb ----
       const crumbs = ctx.crumbs(S.sel);
       const html = home ? '<a class="last">Home</a>' : S.view === 'table' ? '<a class="last">Table</a>' : S.view === 'activity' ? '<a class="last">Activity</a>'
-        : crumbs.map((crumb, at) => `<a${at === crumbs.length - 1 ? ' class="last"' : ` data-go="${ctx.esc(crumb.path)}"`} title="${ctx.esc(crumb.name)}">${ctx.esc(crumb.name)}</a>`).join('<span class="sep">›</span>') || '<a class="last">Devices</a>';
+        : crumbs.map((crumb, at) => `<a${at === crumbs.length - 1 ? ' class="last"' : ` data-go="${ctx.esc(crumb.path)}"`} title="${ctx.esc(crumb.raw)}">${ctx.esc(crumb.name)}</a>`).join('<span class="sep">›</span>') || '<a class="last">Devices</a>';
       if (s.html.crumbs !== html) { s.html.crumbs = html; s.crumbs.innerHTML = html; }
       s.open.style.display = s.sideSash.folded() ? '' : 'none';
       for (const button of s.views) {

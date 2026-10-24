@@ -10,6 +10,7 @@
 // (ctx.diagnostic: back / forward work).
 'use strict';
 (function (root) {
+  const usbText = (text) => (root.IOUsb ? root.IOUsb.label(text) : String(text ?? '')); // a USB link is named by web/usb.js, never "480 Mb/s"
   const ID = 'd4';
   const POLL_MS = 3000;
   const BINS = 52;               // 52 thin bars fill the 260 px health bar (health.js: 3 px wide, 2 px apart)
@@ -502,7 +503,7 @@
       return `<tr ${attr(h, detail.node.path, check.name)}${PROBLEM.has(level) ? ' data-diagnostic' : ''} title="${h.esc(check.name)}">`
         + `<td class="c-lv">${PROBLEM.has(level) ? `${h.shape(level, level)}<span${lvClass(level)}>${h.esc(level)}</span>` : 'ok'}</td>`
         + `<td class="c-name"><span${lvClass(level)}>${h.esc(shortName(check.name, ctx))}</span></td>`
-        + `<td class="c-msg">${h.esc(check.message || '—')}${check.code ? ` <span class="mono">${h.esc(check.code)}</span>` : ''}${causes ? `<span class="cause">caused by ${causes}</span>` : ''}</td>`
+        + `<td class="c-msg">${h.esc(usbText(check.message || '—'))}${check.code ? ` <span class="mono">${h.esc(check.code)}</span>` : ''}${causes ? `<span class="cause">caused by ${causes}</span>` : ''}</td>`
         + `<td class="c-strip">${hs && hist ? strip(hs.levels, hist.from, hist.to) : ''}</td>`
         + `<td class="c-age">${h.esc(h.ago(check.age_s))}</td></tr>`;
     }).join('');
@@ -621,7 +622,7 @@
     const level = check.effective_level;
     const back = `<button class="d4-back" data-d4-back="1">← ${h.esc((ctx.row && ctx.row.label) || node.name)} · all ${detail.checks.length} statuses</button>`;
     const title = `<div class="d4-dh"${PROBLEM.has(level) ? ' data-diagnostic' : ''}><div class="t">${h.shape(level, level)}<span>${h.esc(shortName(check.name, ctx))}</span>${h.pill(level)}</div>`
-      + `<div class="m">${h.esc(check.message || '—')}${check.code ? `<span class="code">${h.esc(check.code)}</span>` : ''}</div></div>`;
+      + `<div class="m">${h.esc(usbText(check.message || '—'))}${check.code ? `<span class="code">${h.esc(check.code)}</span>` : ''}</div></div>`;
 
     let trend = '';
     if (hist && hs) {
@@ -643,7 +644,7 @@
     const msgs = spans.length ? `<table class="d4-msgs">${spans.map((span) => `<tr${PROBLEM.has(span.level) ? ' data-diagnostic' : ''}>`
       + `<td class="tm">${clock(span.from)} – ${span.to >= hist.to - 0.5 ? 'now' : clock(span.to)}<br>${spanText(span.to - span.from)}</td>`
       + `<td class="lv">${span.level ? (PROBLEM.has(span.level) ? `${h.shape(span.level, span.level)}<span${lvClass(span.level)}>${h.esc(span.level)}</span>` : h.esc(span.level)) : ''}</td>`
-      + `<td class="ms${span.level ? '' : ' none'}">${span.level ? h.esc(span.message || '—') : 'no data'}${span.code ? `<span class="code">${h.esc(span.code)}</span>` : ''}</td></tr>`).join('')}</table>` : '';
+      + `<td class="ms${span.level ? '' : ' none'}">${span.level ? h.esc(usbText(span.message || '—')) : 'no data'}${span.code ? `<span class="code">${h.esc(span.code)}</span>` : ''}</td></tr>`).join('')}</table>` : '';
 
     const values = Object.fromEntries((check.values || []).map((v) => [v.key, v.value]));
     // the plugin numbers its own steps ("1. Motor supply on…"): its lines as written, never renumbered

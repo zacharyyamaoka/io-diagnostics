@@ -88,6 +88,9 @@ const RANK = { ok: 0, warn: 1, unknown: 2, stale: 3, error: 4 };
 const PROBLEM = new Set(['warn', 'unknown', 'stale', 'error']);
 const $ = (id) => document.getElementById(id);
 const esc = (text) => String(text ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+// A USB link is named one way on this page: web/usb.js's label ("USB 2.0", "USB 3.2 Gen 1"), never "480 Mb/s". Used for every
+// visible name or message that can carry a link speed; the tooltip keeps the API's own words (Zach, 2026-10-24).
+const usb = (text) => (window.IOUsb ? window.IOUsb.label(text) : String(text ?? ''));
 const icon = (name, cls = 'ic') => `<svg class="${cls}"><use href="#i-${name || 'device'}"/></svg>`;
 const lvl = (level) => level || 'none';
 // a problem pill IS a diagnostic result: tagged so (the warn-colours rule), for every layout that draws one
@@ -964,14 +967,14 @@ function fmtSeen(row) {
 function messageCell(row) {
   const own = row.status && row.status.own;
   const word = own ? `<span class="lvword lv-${own}${row.knock_on_of ? ' knock' : ''}">${esc(own)}</span> ` : '';
-  return `<td title="${esc(row.message)}" class="${own && !row.knock_on_of ? '' : 'quiet'}">${word}${esc(row.message || '')}</td>`;
+  return `<td title="${esc(row.message)}" class="${own && !row.knock_on_of ? '' : 'quiet'}">${word}${esc(usb(row.message || ''))}</td>`;
 }
 
 // Below column: the advisory hint (a worse cause below) as the API sent it; quiet text, small shape.
 function belowCell(row) {
   const hint = row.status && row.status.hint;
   if (!hint) return '<td></td>';
-  return `<td title="${esc(hint.message)}"><span class="belowcell">${shape(hint.level, `below: ${hint.level}`)}<span>${esc(hint.origin_name || hint.message || '')}</span></span></td>`;
+  return `<td title="${esc(hint.message)}"><span class="belowcell">${shape(hint.level, `below: ${hint.level}`)}<span>${esc(usb(hint.origin_name || hint.message || ''))}</span></span></td>`;
 }
 
 // WHY a minimum: the Message column is the one that says what is wrong; with the detail pane open at 1600 px and a
@@ -1016,7 +1019,7 @@ function eventRow(event) {
   const diagnostic = PROBLEM.has(event.severity);
   return `<div class="ev${diagnostic ? ` sev-${esc(event.severity)}` : ''}" data-go="${esc(event.path)}"${diagnostic ? ' data-diagnostic' : ''}><span class="t">${esc(event.time)}</span>`
     + `<span><span class="kind ${esc(event.kind.replace(/ /g, '-'))}">${esc(event.kind)}</span></span><span class="p">${esc(event.port)}</span>`
-    + `<span>${esc(event.message)}</span><span class="src" title="${esc(event.source)}">${esc(event.severity === 'info' ? '' : event.severity)}</span></div>`;
+    + `<span title="${esc(event.message)}">${esc(usb(event.message))}</span><span class="src" title="${esc(event.source)}">${esc(event.severity === 'info' ? '' : event.severity)}</span></div>`;
 }
 
 // The Activity view is activity/log.js (docs/activity-log-v1.md): one calm table of the host's folded events, newest first,
@@ -1063,14 +1066,14 @@ function checkBlock(check) {
   const measurements = check.measurements.map((m) => `<tr><td class="k">${esc(m.key)}</td><td>${shape(m.level)} ${esc(m.text)}</td></tr>`).join('');
   const timing = check.expected_period_s ? `every ${check.expected_period_s} s · STALE after ${check.stale_after_s} s` : 'event-driven (never stale)';
   return `<div class="check"><div class="check-h"><span class="check-name">${esc(check.name)}</span><span class="lvl">${pill(check.effective_level)}</span></div>`
-    + `<div class="msg">${esc(check.message || '—')}${check.code ? ` <span class="mono muted">${esc(check.code)}</span>` : ''}</div>`
+    + `<div class="msg">${esc(usb(check.message || '—'))}${check.code ? ` <span class="mono muted">${esc(check.code)}</span>` : ''}</div>`
     + (values || measurements ? `<table class="vt">${measurements}${values}</table>` : '')
     + `<div class="meta">received ${esc((check.received_iso || '').slice(11, 19) || '—')} · ${ago(check.age_s)} ago · ${esc(timing)}`
     + `${check.level !== check.effective_level ? ` · reported ${esc(check.level)}` : ''}<br>${esc(check.source)}</div></div>`;
 }
 
 const partItem = (part) => `<div class="part-row" data-go="${esc(part.entity)}" title="${esc(part.name)}">${icon(part.icon)}`
-  + `<span class="pname">${esc(part.label)}</span><span class="pmsg">${esc(part.message)}</span>`
+  + `<span class="pname">${esc(part.label)}</span><span class="pmsg">${esc(usb(part.message))}</span>`
   + `<span class="st${part.knock_on_of ? ' knock' : ''}">${shape(part.problem, part.message)}</span></div>`;
 
 // Link health (the computer diagnoses its own wires): the Computer's own section since round 3, on the host entity and
@@ -1085,7 +1088,7 @@ function linkHealthTable() {
     + '</tbody></table>';
 }
 
-const HELPERS = { esc, icon, shape, pill, ago, kv, statusMark, eventRow, checkBlock };
+const HELPERS = { esc, usb, icon, shape, pill, ago, kv, statusMark, eventRow, checkBlock };
 
 // What a detail layout draws from, for the current selection.
 function detailContext(byPath) {
@@ -1100,12 +1103,12 @@ function detailContext(byPath) {
     head() {
       if (group) {
         return `<div class="d-head"><div class="d-title">${icon(group.icon)}<span>${esc(group.label)}</span></div>`
-          + `<div class="d-msg">${group.status.hint ? `${esc(group.status.hint.level)} below · ${esc(group.status.hint.message)}` : esc(group.message || 'grouping row')}</div></div>`;
+          + `<div class="d-msg">${group.status.hint ? `${esc(group.status.hint.level)} below · ${esc(usb(group.status.hint.message))}` : esc(usb(group.message || 'grouping row'))}</div></div>`;
       }
-      const title = row ? row.label : node.name;
+      const title = row ? row.label : usb(node.name);
       const hint = node.hint ? `<span class="muted"> · below: <a class="link" data-go="${esc(node.hint.origin)}">${esc(node.rollup.origin_name)}</a> is ${esc(node.hint.level)}</span>` : '';
       return `<div class="d-head"><div class="d-title">${icon(node.icon)}<span>${esc(title)}</span>${pill(node.level)}</div>`
-        + `<div class="d-msg">${esc(node.message || '—')}${hint}</div>`
+        + `<div class="d-msg" title="${esc(node.message || '')}">${esc(usb(node.message || '—'))}${hint}</div>`
         + `<div class="d-path">${title !== node.name ? `${esc(node.name)} · ` : ''}${esc(node.path)}${node.hardware_id ? ` · ${esc(node.hardware_id)}` : ''}</div></div>`;
     },
     banners() {
@@ -1154,7 +1157,7 @@ function detailContext(byPath) {
     members() {
       if (!group) return '';
       return group.children.map((child) => `<div class="part-row" ${child.entity ? `data-go="${esc(child.entity)}"` : ''}>${icon(child.icon)}`
-        + `<span class="pname">${esc(child.label)}</span><span class="pmsg">${esc(child.message || '')}</span>${statusMark(child)}</div>`).join('') || '<div class="muted">none</div>';
+        + `<span class="pname">${esc(child.label)}</span><span class="pmsg">${esc(usb(child.message || ''))}</span>${statusMark(child)}</div>`).join('') || '<div class="muted">none</div>';
     },
   };
   const counts = {
@@ -1508,7 +1511,7 @@ function entityLabel(path) {
   const row = key && S.built.byKey.get(key);
   if (row && row.entity === path) return row.label;
   const node = S.byPath && S.byPath.get(path);
-  return node ? node.name : path;
+  return node ? usb(node.name) : path;
 }
 
 // A run of another entity is kept with its entity (S.runs) while the viewer looks elsewhere, and comes back with it.
@@ -1916,7 +1919,7 @@ function whatToCheckBody(detail, ownRow) {
   if (!all.length) return '';
   return all.map((why) => `<div class="why-item">`
     + `<div class="why-head">${shape(why.level, why.level)}<b>${why.entity ? `<a class="link" data-go="${esc(why.entity)}">${esc(why.who)}</a> · ` : ''}${esc(why.name)}</b></div>`
-    + `<div class="why-msg">${esc(why.message)}</div>${whyLines(why)}</div>`).join('');
+    + `<div class="why-msg">${esc(usb(why.message))}</div>${whyLines(why)}</div>`).join('');
 }
 
 // --------------------------------------------------------------------------- chip + modal ----
@@ -1929,9 +1932,9 @@ function renderChip() {
   pop.hidden = !S.chip;
   if (!S.chip) return;
   pop.innerHTML = `<div class="pop-head">${esc(chip.menu[0].text)}</div>`
-    + S.data.summary.attention.map((a) => `<div class="pop-row" data-go="${esc(a.path)}"><span class="pop-st">${shape(a.level)}</span><span class="x"><b>${esc(a.device && a.device.path !== a.path ? `${a.device.name} › ${a.name}` : a.name)}</b> — ${esc(a.message)}</span></div>`).join('')
+    + S.data.summary.attention.map((a) => `<div class="pop-row" data-go="${esc(a.path)}"><span class="pop-st">${shape(a.level)}</span><span class="x"><b>${esc(a.device && a.device.path !== a.path ? `${usb(a.device.name)} › ${usb(a.name)}` : usb(a.name))}</b> — ${esc(usb(a.message))}</span></div>`).join('')
     + '<h4 style="margin-top:10px">Recent</h4>'
-    + S.data.recent.slice(0, 5).map((e) => `<div class="pop-row" data-tab="activity"><span class="t">${esc(e.time.slice(0, 5))}</span><span class="x">${esc(e.message)}</span></div>`).join('')
+    + S.data.recent.slice(0, 5).map((e) => `<div class="pop-row" data-tab="activity"><span class="t">${esc(e.time.slice(0, 5))}</span><span class="x">${esc(usb(e.message))}</span></div>`).join('')
     + '<button class="pop-open" data-close="1">Open RobotDx</button>'
     + '<div class="pop-foot">The tray renders this same model (/api/v1/state → chip) through V2\'s AppIndicator.</div>';
 }
@@ -2189,7 +2192,7 @@ async function boot() {
   S.inspPinned = readPref(PREFS.inspectorPinned) === '1';
   // the page layout (layouts/host.js): moves the page's parts into one of five arrangements; everything it draws is ours
   if (window.IOLayoutHost) {
-    await window.IOLayoutHost.start({ S, $, esc, render, entityLabel, renderActivity: typeof renderActivity === 'function' ? renderActivity : null, eventRow, setViewOptions, setToggle, structureOptions,
+    await window.IOLayoutHost.start({ S, $, esc, usb, render, entityLabel, renderActivity: typeof renderActivity === 'function' ? renderActivity : null, eventRow, setViewOptions, setToggle, structureOptions,
       toggleShown: (toggle) => IOView.toggleShown(toggle, structureOptions()), startDryRun, select: onSelectEntity, stepInto, stepUp, addInside, canEnter,
       setView(view) { S.view = view; pushNav(); render(); } });
   }

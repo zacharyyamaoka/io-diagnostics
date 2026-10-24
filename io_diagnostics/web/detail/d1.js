@@ -15,6 +15,7 @@
 // computer → entity → diagnostic.
 'use strict';
 (function (root) {
+  const usbText = (text) => (root.IOUsb ? root.IOUsb.label(text) : String(text ?? '')); // a USB link is named by web/usb.js, never "480 Mb/s"
   const RANK = { ok: 0, warn: 1, unknown: 2, stale: 3, error: 4 };
   const PROBLEM = new Set(['warn', 'unknown', 'stale', 'error']);
   const MINI_W = 120;         // the children's mini bars: their width, so the cell count follows it (health.js)
@@ -104,7 +105,7 @@
     const timing = check.expected_period_s ? `every ${num(check.expected_period_s)} s · STALE after ${num(check.stale_after_s)} s` : 'event-driven (never stale)';
     const caused = (check.caused_by || []).map((path) => {
       const node = ctx.byPath.get(path);
-      return `<a class="link" data-go="${h.esc(path)}">${h.esc(node ? node.name : path)}</a>`;
+      return `<a class="link" data-go="${h.esc(path)}">${h.esc(node ? usbText(node.name) : path)}</a>`;
     }).join(', ');
     return `<div class="d1-meta">received ${h.esc((check.received_iso || '').slice(11, 19) || '—')} · ${h.ago(check.age_s)} ago · ${h.esc(timing)}`
       + `${check.level !== check.effective_level ? ` · reported ${h.esc(check.level)}` : ''}${check.code ? ` · code <span class="mono">${h.esc(check.code)}</span>` : ''}`
@@ -145,7 +146,7 @@
     if (!node) return '';
     if (node.own.level === null || node.own.level === undefined) {
       const origin = node.rollup.origin && node.rollup.origin !== node.path
-        ? ` — <a class="link" data-go="${h.esc(node.rollup.origin)}">${h.esc(node.rollup.origin_name)}</a> is ${h.esc(node.rollup.level)}` : '';
+        ? ` — <a class="link" data-go="${h.esc(node.rollup.origin)}">${h.esc(usbText(node.rollup.origin_name))}</a> is ${h.esc(node.rollup.level)}` : '';
       return `<div class="d1-why">No diagnostics of its own: it shows the worst below${node.rollup.level ? origin : ' (nothing below reports)'}.</div>`;
     }
     const worst = checks[0];
@@ -199,7 +200,7 @@
         + `<div class="d1-line" data-d1-expand="${h.esc(check.name)}" role="button" tabindex="0" aria-expanded="${open}">`
         + `<svg class="ic d1-chev"><use href="#i-chev"/></svg><span class="d1-lv">${h.shape(level, level)}${word}</span>`
         + `<span class="d1-name"><a class="d1-open" data-d1-open="${h.esc(check.name)}" tabindex="0" title="Open ${h.esc(check.name)}">${nameHtml(check.name, h)}</a></span>`
-        + `<span class="d1-msg">${h.esc(check.message || '—')}${check.code && bad ? ` <span class="mono d1-code">${h.esc(check.code)}</span>` : ''}${tag}</span></div>${body}</div>`;
+        + `<span class="d1-msg">${h.esc(usbText(check.message || '—'))}${check.code && bad ? ` <span class="mono d1-code">${h.esc(check.code)}</span>` : ''}${tag}</span></div>${body}</div>`;
     }).join('');
     return `<div class="d1-tab"><div class="d1-hd"><span></span><span>Level</span><span>Name</span><span>Message</span></div>${rows}</div>`;
   }
@@ -221,7 +222,7 @@
       const row = bars.get(child.path);
       const hint = child.hint ? `<span class="d1-hint" title="below: ${h.esc(child.hint.level)}">${h.shape(child.hint.level, `below: ${child.hint.level}`)}</span>` : '';
       return `<div class="d1-ch${child.connected === false ? ' off' : ''}" data-go="${h.esc(child.path)}" title="${h.esc(child.name)}">${h.icon(child.icon)}`
-        + `<span class="d1-cn">${h.esc(child.name)}</span><span class="d1-cm">${h.esc(child.message || '')}</span>`
+        + `<span class="d1-cn">${h.esc(usbText(child.name))}</span><span class="d1-cm">${h.esc(usbText(child.message || ''))}</span>`
         + `${row && row.basis !== 'none' ? bar(row.bar, data.from, data.bin_s, 'spark', 'd1-mini') : '<span class="d1-mini ioh-none">no history</span>'}`
         + `<span class="d1-cs${child.knock_on_of ? ' knock' : ''}">${h.shape(child.level, child.message)}${hint}</span></div>`;
     }).join('');
@@ -254,13 +255,13 @@
   function diagnosticPage(node, detail, check, ctx) {
     const h = ctx.h;
     const name = ctx.diagnostic.name;
-    const back = `<div class="d1-back"><a class="link" data-d1-back tabindex="0">← ${h.esc(ctx.row ? ctx.row.label : node.name)}</a><span class="d1-crumb"> › diagnostic</span></div>`;
+    const back = `<div class="d1-back"><a class="link" data-d1-back tabindex="0">← ${h.esc(ctx.row ? ctx.row.label : usbText(node.name))}</a><span class="d1-crumb"> › diagnostic</span></div>`;
     const history = ctx.history(node.path, { status: name, everyMs: 2000 });
     const data = history.data && history.data.path === node.path ? history.data : null;
     const status = data ? (data.statuses || []).find((s) => s.name === name) || null : null;
     const level = check ? check.effective_level : null;
     const head = `<div class="d-head">${back}<div class="d-title">${h.icon(node.icon)}<span>${h.esc(name)}</span>${h.pill(level)}</div>`
-      + `<div class="d-msg">${check ? h.esc(check.message || '—') : '<span class="muted">This diagnostic is no longer reported; its history stays.</span>'}`
+      + `<div class="d-msg">${check ? h.esc(usbText(check.message || '—')) : '<span class="muted">This diagnostic is no longer reported; its history stays.</span>'}`
       + `${check && check.code ? ` <span class="mono muted">${h.esc(check.code)}</span>` : ''}</div>`
       + `<div class="d-path">${h.esc(node.name)} · ${h.esc(node.path)}</div></div>`;
     let timeline = '<div class="ioh-axis"><span>history loading…</span></div>';
@@ -274,7 +275,7 @@
       const bad = PROBLEM.has(item.level);
       const lv = item.level ? (bad ? `${h.shape(item.level, item.level)}<span class="lvword lv-${h.esc(item.level)}">${h.esc(item.level)}</span>` : '<span class="d1-okw">ok</span>') : '<span class="d1-okw">no data</span>';
       return `<div class="d1-hr${item.level ? '' : ' nodata'}"${bad ? ' data-diagnostic' : ''}><span class="d1-ht">${clock(item.from)}–${clock(item.to)} <span class="d1-hd2">${span(item.to - item.from)}</span></span>`
-        + `<span class="d1-hl">${lv}</span><span class="d1-hm">${h.esc(item.message || '')}${item.code ? ` <span class="mono d1-code">${h.esc(item.code)}</span>` : ''}</span></div>`;
+        + `<span class="d1-hl">${lv}</span><span class="d1-hm">${h.esc(usbText(item.message || ''))}${item.code ? ` <span class="mono d1-code">${h.esc(item.code)}</span>` : ''}</span></div>`;
     }).join('') : '';
     const meta = check ? h.kv([
       ['level now', `${h.pill(check.effective_level)}${check.level !== check.effective_level ? ` <span class="muted">reported ${h.esc(check.level)}</span>` : ''}`],

@@ -109,7 +109,7 @@ body.lx-dragging.lx-y { cursor: row-resize; }
     const undo = [];           // cleanups, newest last
     const found = new Map(Object.entries(PARTS).map(([name, selector]) => [name, document.querySelector(selector)]));
     const ctx = {
-      api, S, $: api.$, esc: api.esc, ico,
+      api, S, $: api.$, esc: api.esc, usb: api.usb, ico,
       root: null,
       // a part of the page, moved out of its place (a comment marks the place; unmount puts it back)
       take(name) {
@@ -219,7 +219,7 @@ body.lx-dragging.lx-y { cursor: row-resize; }
           const parent = S.byPath.get(parts.slice(0, at - 1).join('/'));
           const last = at === parts.length;
           if (!last && (node.kind === 'port' || (node.kind === 'bus' && parent && parent.kind === 'device'))) continue;
-          out.push({ path: prefix, name: node.name, level: node.level || null });
+          out.push({ path: prefix, name: window.IOUsb ? window.IOUsb.label(node.name) : node.name, raw: node.name, level: node.level || null });
         }
         return out;
       },

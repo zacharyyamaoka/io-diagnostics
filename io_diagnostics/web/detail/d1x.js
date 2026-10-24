@@ -13,6 +13,7 @@
 // sections (the entity-page lane).
 'use strict';
 (function (root) {
+  const usbText = (text) => (root.IOUsb ? root.IOUsb.label(text) : String(text ?? '')); // a USB link is named by web/usb.js, never "480 Mb/s"
   const RANK = { ok: 0, warn: 1, unknown: 2, stale: 3, error: 4 };
   const PROBLEM = new Set(['warn', 'unknown', 'stale', 'error']);
   const rankOf = (level) => (level in RANK ? RANK[level] : -1);
@@ -166,7 +167,7 @@
       return `<a class="link" data-go="${esc(path)}">${esc(n ? n.name : path)}</a>`;
     }).join(', ');
     const timing = check.expected_period_s ? `every ${num(check.expected_period_s)} s · STALE after ${num(check.stale_after_s)} s` : 'event-driven (never stale)';
-    const inner = `<div class="dx-full">${esc(row.message || '—')}${row.code ? ` <span class="mono dx-code">${esc(row.code)}</span>` : ''}</div>`
+    const inner = `<div class="dx-full">${esc(usbText(row.message || '—'))}${row.code ? ` <span class="mono dx-code">${esc(row.code)}</span>` : ''}</div>`
       + (row.bad && row.todo.length ? `<div class="dx-todo-h">What to check</div><ol class="dx-todo">${row.todo.map((line) => `<li>${esc(line)}</li>`).join('')}</ol>` : '')
       + (row.bad && row.evidence ? `<div class="dx-ev">kernel evidence: ${esc(row.evidence)}</div>` : '')
       + `<div class="dx-meta">received ${esc((check.received_iso || '').slice(11, 19) || '—')} · ${h.ago(check.age_s)} ago · ${esc(timing)}`
@@ -183,7 +184,7 @@
     const shown = r.flat === false ? esc(r.leaf) : D1().nameHtml(row.name, ctx.h);
     return `<div class="dx-r${row.bad ? ' bad' : ''}${open ? ' open' : ''}${hooks ? hooks.rowClass(row) : ''}" style="--depth:${r.depth}"${r.drag}${row.bad ? ' data-diagnostic' : ''}${hooks ? ` data-code="${esc(row.code)}"` : ''}>`
       + `<div class="dx-line" data-dx-toggle="row:${esc(row.key)}" role="button" tabindex="0" aria-expanded="${open}" title="${esc(row.name)} — ${esc(row.message)}${row.code ? ` · ${esc(row.code)}` : ''}">`
-      + `<span class="dx-n">${r.grip}${r.star}<span class="dx-nt">${shown}</span></span><span class="dx-m"><span class="dx-mt">${esc(row.message || '—')}</span>${hooks ? hooks.extra(row) : ''}</span>`
+      + `<span class="dx-n">${r.grip}${r.star}<span class="dx-nt">${shown}</span></span><span class="dx-m"><span class="dx-mt">${esc(usbText(row.message || '—'))}</span>${hooks ? hooks.extra(row) : ''}</span>`
       + `<span class="dx-s">${pill(ctx, row.level)}</span>${opts.spark === false ? '' : `<span class="dx-h">${cellsOf(row, hist, opts.sparkW || 96, 'spark', ctx)}</span>`}</div>`
       + `${open ? body(row, ctx) : ''}</div>`;
   }

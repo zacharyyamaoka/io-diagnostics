@@ -4,6 +4,7 @@
 // The status line at the top drops down into one timeline lane per diagnostic. Health only. Base: detail/d1x.js.
 'use strict';
 (function (root) {
+  const usbText = (text) => (root.IOUsb ? root.IOUsb.label(text) : String(text ?? '')); // a USB link is named by web/usb.js, never "480 Mb/s"
   const X = () => root.IODiagX;
   const CSS = `
 .db-list { display: grid; gap: 8px; margin: 6px 0 10px; }
@@ -33,7 +34,7 @@
       const problems = shownProblems.map((row) => `<div class="db-p" data-diagnostic>`
         + `<div class="db-top">${ctx.h.shape(row.level, row.level)}<span class="db-name" title="${x.esc(row.name)}">${root.IOD1.nameHtml(row.name, ctx.h)}</span>`
         + `<span>${x.pill(ctx, row.level)}</span>${x.cellsOf(row, hist, 96, 'spark', ctx)}</div>`
-        + `<div class="db-msg">${x.esc(row.message || '—')}${row.code ? ` <span class="mono dx-code">${x.esc(row.code)}</span>` : ''}</div>`
+        + `<div class="db-msg">${x.esc(usbText(row.message || '—'))}${row.code ? ` <span class="mono dx-code">${x.esc(row.code)}</span>` : ''}</div>`
         + (row.todo.length ? `<div class="dx-todo-h">What to check</div><ol class="dx-todo">${row.todo.map((line) => `<li>${x.esc(line)}</li>`).join('')}</ol>` : '')
         + (row.evidence ? `<div class="dx-ev">kernel evidence: ${x.esc(row.evidence)}</div>` : '')
         + `<div class="dx-more"><a class="link" data-dx-open="${x.esc(row.name)}" tabindex="0">Open this diagnostic →</a></div></div>`).join('');

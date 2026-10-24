@@ -6,6 +6,7 @@
 // Base: detail/d1x.js; chart: detail/health.js.
 'use strict';
 (function (root) {
+  const usbText = (text) => (root.IOUsb ? root.IOUsb.label(text) : String(text ?? '')); // a USB link is named by web/usb.js, never "480 Mb/s"
   const X = () => root.IODiagX;
   const CSS = `
 .dd-tree { margin: 6px 0 8px; font-size: 12.5px; }
@@ -40,7 +41,7 @@
       ? H.html(H.fromLevels(status.levels, hist.data.from, hist.data.to, H.count(hist.data.to - hist.data.from, W - 24, 'timeline')), { kind: 'timeline', label: `${row.name}: health over the window` })
         + H.axis({ window_s: hist.data.to - hist.data.from }, 'worst level per cell · hollow = no data') : '';
     const kv = h.kv([
-      ['Message', `<span class="d1-v">${x.esc(row.message || '—')}</span>`],
+      ['Message', `<span class="d1-v">${x.esc(usbText(row.message || '—'))}</span>`],
       row.code ? ['Code', `<span class="mono">${x.esc(row.code)}</span>`] : null,
       ['Level', `${h.pill(row.level)}${check.level !== check.effective_level ? ` <span class="muted">reported ${x.esc(check.level)}</span>` : ''}`],
       check.hardware_id ? ['Hardware ID', `<span class="mono">${x.esc(check.hardware_id)}</span>`] : null,

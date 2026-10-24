@@ -12,6 +12,7 @@
 // trail as the breadcrumb, and the tree keeps showing where you are. The history comes from the page's shared cache.
 'use strict';
 (function (root) {
+  const usbText = (text) => (root.IOUsb ? root.IOUsb.label(text) : String(text ?? '')); // a USB link is named by web/usb.js, never "480 Mb/s"
   const doc = root.document;
   const RANK = { ok: 0, warn: 1, unknown: 2, stale: 3, error: 4 };
   const PROBLEM = new Set(['warn', 'unknown', 'stale', 'error']);
@@ -362,7 +363,7 @@
       const valueText = measured ? measured.text : value !== null ? withUnit(value, headline.unit) : '';
       return `<button class="d5-row${bad ? ' bad' : ''}${knock ? ' knock' : ''}" role="listitem"${bad ? ' data-diagnostic' : ''} data-d5-push="diag" data-d5-path="${esc(item.path)}" data-d5-name="${esc(check.name)}" title="${esc(`${check.name}\n${check.message || ''}`)}">`
         + `<span class="st">${ctx.h.shape(level, check.message)}</span>`
-        + `<span class="d5-tx"><span class="d5-nm">${nameHtml(check.name, item.owner)}</span><span class="d5-ms">${esc(check.message || '—')}${check.code ? ` <span class="d5-code">${esc(check.code)}</span>` : ''}</span></span>`
+        + `<span class="d5-tx"><span class="d5-nm">${nameHtml(check.name, item.owner)}</span><span class="d5-ms">${esc(usbText(check.message || '—'))}${check.code ? ` <span class="d5-code">${esc(check.code)}</span>` : ''}</span></span>`
         + `<span class="d5-side">${spark ? `${spark}` : ''}${valueText ? `<span class="d5-val" title="${esc(headline.key)}">${esc(valueText)}</span>` : ''}${strip}</span>${chev}</button>`;
     }).join('')}</div>`;
   }
@@ -375,7 +376,7 @@
       const attrs = drill ? ` data-go="${esc(child.entity)}" data-d5-child="${esc(child.entity)}"` : ' disabled';
       return `<button class="d5-row${drill ? '' : ' static'}${child.problem && !child.knock ? ' bad' : ''}" role="listitem"${child.problem ? ' data-diagnostic' : ''}${attrs} title="${esc(child.label)}">`
         + `<svg class="ic"><use href="#i-${esc(child.icon || 'device')}"/></svg>`
-        + `<span class="d5-tx"><span class="d5-nm">${esc(child.label)}</span><span class="d5-ms">${esc(child.message || '')}</span></span>`
+        + `<span class="d5-tx"><span class="d5-nm">${esc(child.label)}</span><span class="d5-ms">${esc(usbText(child.message || ''))}</span></span>`
         + `${child.mark}<span class="d5-side">${bar ? binBar(bar.bar, true) : ''}</span>${chev}</button>`;
     }).join('')}</div>`;
   }
@@ -435,7 +436,7 @@
     const bars = barsFor([node.path, ...children.map((child) => child.entity)], node.path);
     const part = ctx.row && ctx.row.status && ctx.row.status.part;
     const head = `<div class="d-head"><div class="d-title"><svg class="ic"><use href="#i-${esc(node.icon || 'device')}"/></svg><span>${esc(title)}</span>${ctx.h.pill(node.level)}</div>`
-      + `<div class="d-msg">${esc(node.message || '—')}${part && part.text && part.text !== node.message ? `<span class="muted"> · ${esc(part.text)}</span>` : ''}</div>`
+      + `<div class="d-msg">${esc(usbText(node.message || '—'))}${part && part.text && part.text !== node.message ? `<span class="muted"> · ${esc(part.text)}</span>` : ''}</div>`
       + rollLine(ctx, rows) + healthBlock(ctx, bars) + '</div>';
     const s = ctx.section;
     const table = detail ? statusTable(ctx, rows) : '<div class="d5-empty">loading…</div>';
@@ -450,7 +451,7 @@
     const children = childrenFor(ctx);
     const bars = barsFor(children.map((child) => child.entity), null);
     const head = `<div class="d-head"><div class="d-title"><svg class="ic"><use href="#i-${esc(group.icon || 'group')}"/></svg><span>${esc(group.label)}</span></div>`
-      + `<div class="d-msg">${group.status.hint ? `${ctx.h.shape(group.status.hint.level)} ${esc(group.status.hint.level)} below · ${esc(group.status.hint.message)}` : esc(group.message || 'grouping row')}</div></div>`;
+      + `<div class="d-msg">${group.status.hint ? `${ctx.h.shape(group.status.hint.level)} ${esc(group.status.hint.level)} below · ${esc(group.status.hint.message)}` : esc(usbText(group.message || 'grouping row'))}</div></div>`;
     return head + '<div class="d-body">'
       + ctx.section('d5-children', `Members · ${children.length}`, childrenTable(ctx, children, bars), { right: 'click to drill in' })
       + ctx.section('links', 'Link health', ctx.parts.links(), { right: 'the computer diagnoses its own wires' }) + '</div>';
@@ -489,7 +490,7 @@
       if (!item.level) return `<div class="d5-h none"><span class="t">${esc(when)}</span><span></span><span class="m">no data</span></div>`;
       const bad = PROBLEM.has(item.level);
       return `<div class="d5-h"${bad ? ' data-diagnostic' : ''}><span class="t">${esc(when)}</span><span>${shapeOf(item.level)}</span>`
-        + `<span class="m">${bad ? `<span class="lvword lv-${esc(item.level)}">${esc(item.level)}</span>` : '<span class="muted">ok · </span>'}${esc(item.message || '')}${item.code ? ` <span class="d5-code">${esc(item.code)}</span>` : ''}</span></div>`;
+        + `<span class="m">${bad ? `<span class="lvword lv-${esc(item.level)}">${esc(item.level)}</span>` : '<span class="muted">ok · </span>'}${esc(usbText(item.message || ''))}${item.code ? ` <span class="d5-code">${esc(item.code)}</span>` : ''}</span></div>`;
     }).join('')}</div>`;
   }
 
@@ -531,7 +532,7 @@
     const onPart = ctx.node && item.path !== ctx.node.path;
     const head = `<div class="d-head"><div class="d5-kicker">${onPart ? `on <a class="link" data-go="${esc(item.path)}">${esc(labelFor(item.path, ctx))}</a> · ` : ''}diagnostic</div>`
       + `<div class="d-title"><span>${nameHtml(item.name, owner)}</span>${ctx.h.pill(level)}</div>`
-      + `<div class="d5-msg">${check ? `${esc(check.message || '—')}${check.code ? ` <span class="d5-code">${esc(check.code)}</span>` : ''}` : '<span class="muted">not reported now: its source stopped computing it (the history below keeps what it said)</span>'}</div>`
+      + `<div class="d5-msg">${check ? `${esc(usbText(check.message || '—'))}${check.code ? ` <span class="d5-code">${esc(check.code)}</span>` : ''}` : '<span class="muted">not reported now: its source stopped computing it (the history below keeps what it said)</span>'}</div>`
       + (answer ? `<div class="d5-health"><span class="hl">health</span>${spanBar(status ? status.levels : [], answer.from, answer.to)}${axis(answer.from, answer.to)}</div>` : '')
       + '</div>';
     if (!check && !answer) return `${head}<div class="d-body"><div class="d5-empty">loading…</div></div>`;

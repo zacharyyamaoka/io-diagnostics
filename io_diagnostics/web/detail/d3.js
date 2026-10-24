@@ -13,6 +13,7 @@
 // reads only a folded part's /api/v1/node itself (cached, refreshed every few seconds; the page redraws every second).
 'use strict';
 (function (root) {
+  const usbText = (text) => (root.IOUsb ? root.IOUsb.label(text) : String(text ?? '')); // a USB link is named by web/usb.js, never "480 Mb/s"
   const PROBLEM = new Set(['warn', 'unknown', 'stale', 'error']);
   const RANK = { ok: 0, warn: 1, unknown: 2, stale: 3, error: 4 };
   const rank = (level) => (level in RANK ? RANK[level] : -1);
@@ -73,7 +74,7 @@
   // driver and motor, an adapter's CAN bus), worst first. A part's checks come from its own /api/v1/node.
   function diagnostics(ctx) {
     const detail = ctx.detail;
-    const label = ctx.row ? ctx.row.label : detail.node.name;
+    const label = ctx.row ? ctx.row.label : usbText(detail.node.name);
     const list = detail.checks.map((check) => ({ check, entity: detail.node.path, owner: detail.node.name, part: null, label: shortName(check.name, detail.node.name) }));
     const parts = ((ctx.row && ctx.row.parts) || []).filter((part) => part.node && part.node.checks > 0);
     let loading = false;
@@ -352,7 +353,7 @@
   function changeSentence(event, ctx) {
     const h = ctx.h;
     const name = `<b>${h.esc(event.name)}</b>`;
-    const msg = event.message ? `: ${h.esc(event.message)}` : '';
+    const msg = event.message ? `: ${h.esc(usbText(event.message))}` : '';
     const word = (level) => `<span class="lvword lv-${h.esc(level)}">${h.esc(level)}</span>`;
     if (event.start) {
       const names = event.names.map((n) => `<b>${h.esc(n)}</b>`);
@@ -410,8 +411,8 @@
       const child = ctx.byPath.get(path) || { name: path, icon: 'device', level: null, message: '' };
       const barRow = bars.get(path);
       const problem = PROBLEM.has(child.level) || (child.hint && PROBLEM.has(child.hint.level));
-      return `<div class="d3-child" data-go="${h.esc(path)}" title="${h.esc(child.name)}">${h.icon(child.icon)}<span class="d3-cn">${h.esc(child.name)}</span>`
-        + `<span class="d3-cm">${h.esc(child.message || '')}</span><span class="d3-cb">${barRow && barRow.bar.some(Boolean) ? healthBar(barRow.bar, '', true) : ''}</span>`
+      return `<div class="d3-child" data-go="${h.esc(path)}" title="${h.esc(child.name)}">${h.icon(child.icon)}<span class="d3-cn">${h.esc(usbText(child.name))}</span>`
+        + `<span class="d3-cm">${h.esc(usbText(child.message || ''))}</span><span class="d3-cb">${barRow && barRow.bar.some(Boolean) ? healthBar(barRow.bar, '', true) : ''}</span>`
         + `<span class="d3-st${child.knock_on_of ? ' knock' : ''}">${problem ? h.shape(PROBLEM.has(child.level) ? child.level : child.hint.level, child.message) : ''}</span></div>`;
     }).join('');
     return { count: children.length, html };
@@ -437,7 +438,7 @@
     const allSpans = status ? status.levels.slice().reverse() : [];
     const spans = D3.allChanges ? allSpans : allSpans.slice(0, 12);
     const historyRows = spans.map((span) => `<div class="d3-ev"${PROBLEM.has(span.level) ? ' data-diagnostic' : ''}><span class="d3-t">${clock(span.from)}</span><span class="d3-evs">${h.shape(span.level, span.level || 'no data')}</span>`
-      + `<span class="d3-evx">${span.level ? `${PROBLEM.has(span.level) ? `<span class="lvword lv-${h.esc(span.level)}">${h.esc(span.level)}</span> ` : 'OK · '}${h.esc(span.message || '')}${span.code ? ` <span class="d3-code">${h.esc(span.code)}</span>` : ''}` : '<span class="d3-quiet">no data</span>'}</span>`
+      + `<span class="d3-evx">${span.level ? `${PROBLEM.has(span.level) ? `<span class="lvword lv-${h.esc(span.level)}">${h.esc(span.level)}</span> ` : 'OK · '}${h.esc(usbText(span.message || ''))}${span.code ? ` <span class="d3-code">${h.esc(span.code)}</span>` : ''}` : '<span class="d3-quiet">no data</span>'}</span>`
       + `<span class="d3-age">${h.ago(span.to - span.from)}</span></div>`).join('');
     const caused = (check.caused_by || []).map((path) => `<a class="link" data-go="${h.esc(path)}">${h.esc((ctx.byPath.get(path) || {}).name || path)}</a>`);
     const meta = h.kv([
@@ -450,7 +451,7 @@
       ['entity', item.entity === ctx.node.path ? h.esc(item.owner) : `<a class="link" data-go="${h.esc(item.entity)}">${h.esc(item.owner)}</a>`],
       caused.length ? ['caused by', listWords(caused)] : null,
     ]);
-    const lead = `<p class="d3-lead"${PROBLEM.has(level) ? ' data-diagnostic' : ''}>${h.shape(level, level)}${PROBLEM.has(level) ? `<span class="lvword lv-${h.esc(level)}">${h.esc(level)}</span> ` : 'OK · '}${h.esc(check.message || '—')}</p>`;
+    const lead = `<p class="d3-lead"${PROBLEM.has(level) ? ' data-diagnostic' : ''}>${h.shape(level, level)}${PROBLEM.has(level) ? `<span class="lvword lv-${h.esc(level)}">${h.esc(level)}</span> ` : 'OK · '}${h.esc(usbText(check.message || '—'))}</p>`;
     const heading = (text) => `<h4 class="d3-h">${text}</h4>`;
     const windowS = hist && hist.data ? hist.data.window_s : 900;
     return `<div class="d-head d3-head">${crumbs}<div class="d-title"><span>${h.esc(item.label)}</span></div></div><div class="d-body d3-page">`
@@ -474,7 +475,7 @@
     const ancestors = (ctx.detail && ctx.detail.ancestors) || [];
     const parent = ancestors[ancestors.length - 1];
     const crumb = node.path === top ? '' : `<nav class="d3-crumb"><a class="link" data-go="${h.esc(top)}">Computer</a>`
-      + (parent && parent.path !== top ? `<span>›</span><a class="link" data-go="${h.esc(parent.path)}">${h.esc(parent.name)}</a>` : '') + '</nav>';
+      + (parent && parent.path !== top ? `<span>›</span><a class="link" data-go="${h.esc(parent.path)}">${h.esc(usbText(parent.name))}</a>` : '') + '</nav>';
     const mark = PROBLEM.has(node.level) ? h.shape(node.level, node.level) : (node.hint ? h.shape(node.hint.level, `below: ${node.hint.level}`) : '');
     return `<div class="d-head d3-head">${crumb}<div class="d-title">${h.icon(node.icon)}<span>${h.esc(info.label)}</span>${mark ? `<span class="d3-st${node.knock_on_of || (!PROBLEM.has(node.level) && node.hint) ? ' knock' : ''}">${mark}</span>` : ''}</div></div>`;
   }
