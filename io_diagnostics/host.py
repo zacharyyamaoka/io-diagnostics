@@ -11,6 +11,7 @@ import dataclasses
 import datetime as dt
 import json
 import os
+import re
 import socket
 import string
 import sys
@@ -281,6 +282,16 @@ RECENT_PATH = tree.RECENT_PATH
 RECENTLY_SEEN_S = 86400.0  # a seen-only device gets its info row for a day after it was last seen, then none
 
 
+def _pid_alive(pid: int) -> bool:
+    """A process that exists and is not a zombie (/proc, no signal sent)."""
+
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except OSError:
+        return False
+    return stat.rsplit(")", 1)[-1].split()[:1] != ["Z"]
+
+
 def default_state_dir() -> Path:
     """``$IO_DIAGNOSTICS_STATE_DIR``, else ``~/.local/state/io-diagnostics`` (the XDG state home)."""
 
@@ -398,7 +409,8 @@ class Host:
                  history_window_s: float | None = None, follow_backoff_s: tuple[float, float] | None = None,
                  recheck_poll_s: float | None = None, recheck_settle_s: float | None = None,
                  recheck_backoff_s: float | None = None, runs_dir: Path | None = None, run_grace_s: float | None = None,
-                 run_ring_bytes: int | None = None, run_budget_bytes: int | None = None):
+                 run_ring_bytes: int | None = None, run_budget_bytes: int | None = None, run_bus_wait_s: float | None = None,
+                 run_bus_poll_s: float | None = None, run_bus_settle_s: float | None = None):
         self.plugins_dir = Path(plugins_dir)
         # WHY settable: the defaults are the product (probe.py: holders' pids every 1 s, 0.5 s settle, 10 s first
         # backoff); a test of the backoff alone shortens the last
@@ -452,7 +464,14 @@ class Host:
             runs_dir, self.clock.now, lambda stamp: activity_module.iso(stamp, self.utc_offset_s), self.notify,
             ring_bytes=run_ring_bytes or terminal_module.RING_BYTES,
             budget_bytes=run_budget_bytes or terminal_module.CAST_BUDGET_BYTES,
-            grace_s=run_grace_s if run_grace_s is not None else terminal_module.GRACE_S)
+            grace_s=run_grace_s if run_grace_s is not None else terminal_module.GRACE_S,
+            bus_wait_s=run_bus_wait_s if run_bus_wait_s is not None else terminal_module.BUS_WAIT_S,
+            bus_poll_s=run_bus_poll_s if run_bus_poll_s is not None else terminal_module.BUS_POLL_S,
+            bus_settle_s=run_bus_settle_s if run_bus_settle_s is not None else terminal_module.BUS_SETTLE_S)
+        # consoles a run launched (tview, realsense-viewer) that are still open: device id -> {pid, program, ...}; the
+        # device's row says so while the process lives (docs/actions-vocabulary-v0.1.md, open_console)
+        self.consoles: dict[str, dict] = {}
+        self.runs.on_end = self._on_run_end
         self.started = time.monotonic()
         self._last_os_level: dict[tuple[str, str], tuple[str, str]] = {}
         self._described: set[str] = set()
@@ -996,7 +1015,7 @@ class Host:
             # WHY judged on the merged tree, every view: a rig counts boards and matches cameras by the serial their
             # DRIVER reports (the RealSense SDK serial), which only the plugins' records carry
             setup = expected_module.evaluate(self.setup, merged, layer, now, RUNNER_SOURCE)
-            notes = self._host_notes(merged, now) + self._links_summary(merged, now)
+            notes = self._host_notes(merged, now) + self._links_summary(merged, now) + self._console_notes(merged, now)
             # WHY here: the rig rows and the host's own lines are judged per view, never stored; their changes are
             # what the history keeps
             self.history.sync("view", setup.statuses + notes, now)
@@ -1072,6 +1091,43 @@ class Host:
                                                   " boards answer, this adapter is dead; if they do not, the bus or a board"
                                                   " holds it"),
                         KeyValue("working_adapter", other))))
+        return notes
+
+    def _on_run_end(self, run) -> None:
+        """A finished ``open_console`` run that says it launched a process (``ActionCompleted`` ``args.pid``): remember it."""
+
+        if run.spec.action != "open_console" or run.state != "done":
+            return
+        for record in (run.result or {}).get("records") or []:
+            pid = (record.get("args") or {}).get("pid") if isinstance(record, dict) else None
+            if record.get("code") == "ActionCompleted" and isinstance(pid, int) and pid > 1:
+                found = re.search(r"\(([a-z][a-z0-9 -]*)\)\s*$", run.spec.title)
+                with self.lock:
+                    self.consoles[run.spec.device_id] = {"pid": pid, "program": found[1] if found else "console",
+                                                         "device_path": run.spec.device_path, "since": self.clock.now()}
+                self.wake()
+                return
+
+    def _console_notes(self, merged: tree.Merged, now: float) -> list[DiagnosticStatus]:
+        """While a console RobotDx launched is open, the device's row says so, instead of leaving a bare "port held"
+        (Zach, 2026-10-24). The plugin's own probe / diagnose keep reporting PortBusy; the host's probe-again on holder
+        exit (probe.py) brings the boards back when the console closes."""
+
+        notes = []
+        for device_id, info in list(self.consoles.items()):
+            if not _pid_alive(info["pid"]):
+                self.consoles.pop(device_id, None)
+                continue
+            path = self.layer.device_paths.get(device_id, info["device_path"])
+            entity = merged.entities.get(path)
+            if entity is None:
+                continue
+            notes.append(DiagnosticStatus(
+                level=UNKNOWN, name=f"{entity.name}: console", code="ConsoleOpen", path=path, hardware_id=entity.hardware_id,
+                message=f"{info['program']} open (launched from RobotDx, pid {info['pid']})", stamp=now, received=now,
+                source=HOST_SOURCE, values=(KeyValue("what_to_check", f"1. Close {info['program']} when you are done: RobotDx "
+                                                     "checks the boards again by itself once it is closed"),
+                                            KeyValue("pid", str(info["pid"])))))
         return notes
 
     def _links_summary(self, merged: tree.Merged, now: float) -> list[DiagnosticStatus]:
@@ -1629,7 +1685,7 @@ class Host:
                 # WHY refuse and not wait: a run can last minutes at a prompt, and the page's dry run would hang for it
                 return {**out, "refused": "Busy", "message": f"{busy.spec.label} is running on the same bus ({group}): "
                         "wait for it, or stop it, before asking for another dry run"}
-            with self.gates.hold(group):
+            with self.gates.hold(group, person=True):
                 result = run_act(plan.job.spec, plan.job.device, plan.device_path, plan.argv, self.clock.now,
                                  self._job_env(plan.job))
             return {**out, **result}
@@ -1704,7 +1760,7 @@ class Host:
             title=plan.registered.title, label=label, danger=plan.registered.danger, argv=plan.argv,
             env=plugin_env(spec, job.device, plan.device_path, started, self._job_env(job)), cwd=spec.cwd,
             timeout_s=spec.act_timeout_s, node=plan.node, new_id=plan.new_id, hardware_id=plan.entity.hardware_id,
-            stop_argv=stop_argv, group=spec.exclusive, hold=lambda: self.gates.hold(spec.exclusive))
+            stop_argv=stop_argv, group=spec.exclusive, hold=lambda: self.gates.hold(spec.exclusive, person=True))
         run = self.runs.create(run_spec, interactive=interactive)
         run.launch()
         return run

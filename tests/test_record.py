@@ -427,6 +427,14 @@ def test_identify_may_carry_its_way_in_brackets_and_no_other_standard_name_may()
     assert "title must be its label 'Reboot…'" in problem
 
 
+def test_open_console_names_its_console_in_brackets_and_nothing_else_may():
+    for title in ("Open console", "Open console (tview)", "Open console (realsense-viewer)"):
+        assert validate(Action("open_console", title, "", "interrupts", "device", "")) == [], title
+    for title in ("Open console (TView)", "Open console tview", "Open console ()", "Open console (tview) now", "tview"):
+        [problem] = validate(Action("open_console", title, "", "interrupts", "device", ""))
+        assert "title must be its label 'Open console'" in problem and "(tview)" in problem, title
+
+
 def test_stock_round_trip_is_still_the_identity_beside_v0_1_records():
     # model_id lives on Entity and moves on Action: neither can reach the stock five
     for message in REAL_WORLD:

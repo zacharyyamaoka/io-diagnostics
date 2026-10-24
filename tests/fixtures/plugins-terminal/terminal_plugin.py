@@ -37,6 +37,8 @@ ACTIONS = [
     {"name": "calibrate", "title": "Run calibration…", "description": "spins the rotor", "danger": "moves",
      "scope": "node", "confirm": "Calibrate CAN {id} on {name}? The rotor spins.", "kind": "changes",
      "preconditions": [["joint_free", "CAN {id}'s joint is free to spin"]]},
+    {"name": "open_console", "title": "Open console (tview)", "description": "launches a harmless detached process", "danger": "interrupts",
+     "scope": "device", "confirm": "Open the console on {name}?", "kind": "changes"},
     {"name": "hang", "title": "Hang (ignores Stop)", "description": "ignores SIGINT and SIGTERM", "danger": "changes",
      "scope": "device", "confirm": "Hang on {name}?", "kind": "changes"},
     {"name": "old", "title": "Old plugin", "description": "prints its records on stdout", "danger": "query",
@@ -127,6 +129,31 @@ def main() -> int:
     if action not in ("check_comms", "old") and arg("--confirm") != token:
         emit(records(), {"record": "event", "code": "ConfirmationRequired", "severity": "info", "message": "pass the token"})
         return 0
+    # the rack bus lock, like moteus_servo's bus_gate: taken with LOCK_NB for the length of the act; held = ActionBlocked
+    # BusLockHeld naming the holder ("<pid> <program>", read from <lock>.holder, which a test writes)
+    lock_path = os.environ.get("TERMINAL_BUS_LOCK")
+    if lock_path and action != "old":
+        import fcntl
+
+        handle = open(lock_path, "a")
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            holder = open(lock_path + ".holder").read().strip() if os.path.exists(lock_path + ".holder") else "another process"
+            log(blocked=True)
+            emit(records(), {"record": "event", "code": "ActionBlocked", "severity": "warn",
+                             "message": f"blocked: rack bus lock held by {holder}", "args": {"reason": "BusLockHeld", "action": action}})
+            return 0
+    if action == "open_console":
+        import subprocess
+
+        # stands in for tview: a detached process that outlives this one and holds nothing
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(float(__import__('os').environ.get('TERMINAL_CONSOLE_S', '30')))"],
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        print(f"tview opened on CAN 1 (pid {child.pid}); it holds the port until you close it", flush=True)
+        emit(records(), {"record": "event", "code": "ActionCompleted", "severity": "info", "message": f"tview opened (pid {child.pid})",
+                         "args": {"pid": child.pid}})
+        return 0
     if action == "old":
         # an old plugin knows nothing of the record fd: its records are stdout lines
         print("old plugin: asking every id ...")
@@ -134,7 +161,12 @@ def main() -> int:
         return 0
     out = records()
     if action == "calibrate":
-        return calibrate(out)
+        try:
+            return calibrate(out)
+        except KeyboardInterrupt:  # a Stop from the page: a record and exit 130, like moteus_servo, not a traceback
+            print("\ninterrupted: the tool was stopped", flush=True)
+            emit(out, {"record": "event", "code": "ActionInterrupted", "severity": "warn", "message": "calibrate was interrupted"})
+            return 130
     if action == "check_comms":
         for number in range(int(os.environ.get("TERMINAL_LINES", "5"))):
             print(f"line {number} t={time.time():.6f}", flush=True)

@@ -53,7 +53,10 @@ DEFAULT_COLS, DEFAULT_ROWS = 120, 30
 STREAM_EVENT_BYTES = 64 * 1024
 KEEPALIVE_S = 15.0
 MAX_EVENTS = 500
-ACTIVE = ("queued", "running")
+ACTIVE = ("queued", "waiting", "running")
+BUS_WAIT_S = 60.0  # a real act waits this long for the rack bus lock held by someone else
+BUS_POLL_S = 0.5
+BUS_SETTLE_S = 4.0  # an attempt still going this long after a wait got through the gate
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][A-Za-z0-9]|\x1b[=>]")
 
 
@@ -151,6 +154,7 @@ class Run:
         self.exited = threading.Event()
         self.finished = threading.Event()
         self.timed_out = False
+        self._attempt_offset = 0
         self.from_disk = False
         self._buffer_loaded = True
         self._cast = None
@@ -325,7 +329,7 @@ class Run:
             raise RunError("BadRequest", f"input is at most {INPUT_MAX} bytes", 400)
         with self.cond:
             master = self.master
-            if self.state != "running" or master is None:
+            if self.state not in ("running", "waiting") or master is None:
                 raise RunError("NotRunning", "the run is not running", 409)
             try:
                 return os.write(master, data)
@@ -337,7 +341,7 @@ class Run:
     def resize(self, cols: int, rows: int) -> None:
         self.check_writable()
         with self.cond:
-            if self.state != "running" or self.master is None:
+            if self.state not in ("running", "waiting") or self.master is None:
                 raise RunError("NotRunning", "the run is not running", 409)
             _winsize(self.master, rows, cols)
             self.cols, self.rows = cols, rows
@@ -352,7 +356,7 @@ class Run:
                 self.stage = "cancelled"
                 self._end_queued()
                 return "cancelled"
-            if self.state != "running" or self.process is None:
+            if self.state not in ("running", "waiting"):
                 raise RunError("NotRunning", "the run is not running", 409)
             if self.stop_requested:
                 return self.stage or "SIGINT"
@@ -416,13 +420,58 @@ class Run:
         try:
             with self.spec.hold():
                 with self.cond:
-                    if self.state != "queued":
+                    if self.state != "queued":  # stopped in the queue: it never starts
                         return
+                    self.state = "running"  # decided under the lock, so a Stop can no longer cancel it as queued
                 self._run()
         except Exception as error:  # noqa: BLE001 - a run never takes the host down
             self._conclude("failed", None, f"{type(error).__name__}: {error}", [], [], "not_started")
 
+    def _set_state(self, state: str) -> None:
+        with self.cond:
+            if self.state == state:
+                return
+            self.state = state
+            self.cond.notify_all()
+        self.persist()
+        self.registry.notify("run")
+
     def _run(self) -> None:
+        """Start the plugin's act and, while the rack bus lock is held by someone else (a routine diagnose of this host
+        or of the other channel's), start it again until it gets through: a person's press never bounces off a routine
+        check (docs/runs-v1.md section 6). Bounded by ``bus_wait_s``; then the refusal, with the holder named."""
+
+        began = time.monotonic()
+        first, announced, last_note, blocked, returncode = True, None, 0.0, None, None
+        while True:
+            if not self._attempt(first):
+                return
+            first = False
+            returncode = self.process.returncode
+            records, _rejected, _text = self._attempt_records()
+            blocked = None if self.timed_out else bus_block(records)
+            waited = time.monotonic() - began
+            if blocked is None or self.stop_requested or waited >= self.registry.bus_wait_s:
+                break
+            self._set_state("waiting")
+            holder = f"{blocked['program']} (pid {blocked['pid']})" if blocked["pid"] else blocked["program"]
+            if holder != announced or time.monotonic() - last_note >= 10.0:
+                where = self.spec.device_id
+                self.note(f"waiting for the bus: held by {holder} · checking {where} ..."
+                          + (f" ({waited:.0f} s of {self.registry.bus_wait_s:g} s)" if announced else ""))
+                announced, last_note = holder, time.monotonic()
+            until = time.monotonic() + self.registry.bus_poll_s
+            while time.monotonic() < until and not self.stop_requested:
+                time.sleep(0.05)
+            if self.stop_requested:
+                break
+        if announced and blocked is None and not self.stop_requested and self.state == "waiting":
+            self.note("the bus is free: it ran")
+        self._after_exit(returncode, blocked, time.monotonic() - began)
+
+    def _attempt(self, first: bool) -> bool:
+        """One start of the plugin's act on a fresh PTY and record pipe, to its end. False: it could not start."""
+
         spec = self.spec
         master, slave = pty.openpty()
         record_read, record_write = os.pipe()
@@ -431,7 +480,8 @@ class Run:
             env = dict(spec.env)
             env.update({RECORD_FD_ENV: str(record_write), RUN_ID_ENV: self.id, "TERM": "xterm-256color",
                         "COLUMNS": str(self.cols), "LINES": str(self.rows)})
-            self._open_cast()
+            if first:
+                self._open_cast()
             # WHY login_tty in the child: setsid + the PTY as its controlling terminal + stdio on it, so a typed
             # Ctrl-C is a real SIGINT to the plugin's foreground process group
             process = subprocess.Popen(spec.argv, cwd=spec.cwd, env=env, pass_fds=(record_write,),
@@ -442,28 +492,45 @@ class Run:
                     os.close(fd)
             self.note(f"could not start: {type(error).__name__}: {error}")
             self._conclude("failed", None, f"could not start: {type(error).__name__}: {error}", [], [], "not_started")
-            return
+            return False
         finally:
             os.close(slave)
             os.close(record_write)
         os.set_blocking(master, False)
+        self._record_buffer = bytearray()
+        self._attempt_offset = self.end_offset
+        self.exited = threading.Event()
         with self.cond:
-            self.process, self.master, self.state = process, master, "running"
-        self.persist()
-        self.registry.started(self)
-        self.note("$ " + " ".join(redact(spec.argv)))
+            self.process, self.master = process, master
+        if self.stop_requested:  # a Stop that came before the process existed
+            self._signal(signal.SIGINT)
+        if first:
+            self.persist()
+            self.registry.started(self)
+            self.note("$ " + " ".join(redact(spec.argv)))
         reader = threading.Thread(target=self._read_records, args=(record_read,), daemon=True)
         reader.start()
-        pump = threading.Thread(target=self._pump, args=(master,), daemon=True)
+        pump = threading.Thread(target=self._pump, args=(master, self.exited), daemon=True)
         pump.start()
+        began = time.monotonic()
         with RUNNING.run(process, f"{spec.plugin} {spec.action} {spec.device_id}"):
-            try:
-                process.wait(timeout=spec.timeout_s)
-            except subprocess.TimeoutExpired:
-                self.timed_out = True
-                self.note(f"no answer within {spec.timeout_s:g} s (act_timeout_s): killing it")
-                _kill_group(process)
-                process.wait()
+            while True:
+                try:
+                    process.wait(timeout=0.1)
+                    break
+                except subprocess.TimeoutExpired:
+                    pass
+                alive = time.monotonic() - began
+                if self.state == "waiting" and alive >= self.registry.bus_settle_s:
+                    # a blocked start ends within a moment: one that is still going got through the gate
+                    self._set_state("running")
+                    self.note("the bus is free: running now")
+                if alive >= spec.timeout_s:
+                    self.timed_out = True
+                    self.note(f"no answer within {spec.timeout_s:g} s (act_timeout_s): killing it")
+                    _kill_group(process)
+                    process.wait()
+                    break
         self.exited.set()
         pump.join(5)
         reader.join(2)
@@ -472,7 +539,19 @@ class Run:
         for fd in (master, record_read):
             with contextlib.suppress(OSError):
                 os.close(fd)
-        self._after_exit(process.returncode)
+        return True
+
+    def _attempt_records(self) -> tuple[list, list, str]:
+        """The last attempt's records: the record fd's lines, else (an old plugin) the terminal's record lines."""
+
+        text = self._record_buffer.decode("utf-8", "replace")
+        records, rejected = parse_action_lines(text)
+        if not text.strip():
+            with self.cond:
+                held = b"".join(data for _o, _t, data in self.chunks)
+                offset = max(0, self._attempt_offset - self.first_offset)
+            records, rejected = list(_terminal_records(plain_text(held[offset:]))), []
+        return records, rejected, text
 
     def _read_records(self, fd: int) -> None:
         while True:
@@ -484,7 +563,7 @@ class Run:
                 return
             self._record_buffer.extend(data)
 
-    def _pump(self, master: int) -> None:
+    def _pump(self, master: int, exited: threading.Event) -> None:
         """Terminal bytes -> ring + recording, as they arrive; after the process is gone, what is left, then done."""
 
         while True:
@@ -500,14 +579,18 @@ class Run:
                     return
                 self.append(data)
                 continue
-            if self.exited.is_set():
+            if exited.is_set():
                 return
 
-    def _after_exit(self, returncode: int | None) -> None:
+    def _after_exit(self, returncode: int | None, blocked: dict | None = None, waited: float = 0.0) -> None:
         spec = self.spec
         duration = self.elapsed()
         if self.timed_out:
             state, outcome = "timed_out", "timeout"
+        elif blocked is not None and self.stop_requested:
+            state, outcome = "stopped", "stopped"
+        elif blocked is not None:
+            state, outcome = "failed", "blocked"
         elif returncode == 0:
             state, outcome = "done", "ok"
         elif self.stop_requested:
@@ -516,17 +599,16 @@ class Run:
             state, outcome = "failed", "crashed"
         terminal = plain_text(self.output_bytes())
         tail = terminal.strip()[-STDERR_TAIL:]
-        records_text = self._record_buffer.decode("utf-8", "replace")
-        records, rejected = parse_action_lines(records_text)
-        if not records_text.strip():
-            # an old plugin ignores the record fd and prints its records on stdout, which is the terminal now
-            records, rejected = [r for r in _terminal_records(terminal)], []
-        if spec.danger == "moves" and state != "done":
+        # an old plugin ignores the record fd and prints its records on stdout, which is the terminal now
+        records, rejected, _text = self._attempt_records()
+        if spec.danger == "moves" and state != "done" and blocked is None:  # a blocked start never touched the board
             self._plugin_stop(state)
         if state == "done":
             result = next((r for r in records if r.get("record") == "action-result"), None)
             message = (str(result["message"]) if result and result.get("message")
                        else f"ran in {duration:.2g} s · {len(records)} lines")
+        elif blocked is not None and state == "failed":
+            message = f"{blocked['message']} (waited {waited:.0f} s for it)"
         elif state == "timed_out":
             message = f"no answer within {spec.timeout_s:g} s (act_timeout_s): killed"
         elif state == "stopped":
@@ -582,7 +664,8 @@ class Run:
         action_result = next((r for r in records if r.get("record") == "action-result"), None)
         if self.stop_requested and self.stop_info is None:
             self.stop_info = {"requested": True, "signals": self._signals_sent(),
-                              "plugin_stop": {"ran": False, "reason": "not a moves-class action"}}
+                              "plugin_stop": {"ran": False, "reason": "not a moves-class action" if self.spec.danger != "moves"
+                                              else "it never got the bus: nothing was started on the board"}}
         elif self.stop_info is not None:
             self.stop_info["signals"] = self._signals_sent()
         self._close_cast()
@@ -623,10 +706,13 @@ class RunRegistry:
 
     def __init__(self, directory: Path | None, now: Callable[[], float], iso: Callable[[float | None], str | None],
                  notify: Callable[[str], None] = lambda _reason: None, *, ring_bytes: int = RING_BYTES,
-                 budget_bytes: int = CAST_BUDGET_BYTES, grace_s: float = GRACE_S):
+                 budget_bytes: int = CAST_BUDGET_BYTES, grace_s: float = GRACE_S, bus_wait_s: float = BUS_WAIT_S,
+                 bus_poll_s: float = BUS_POLL_S, bus_settle_s: float = BUS_SETTLE_S):
         self.directory = Path(directory) if directory else None
         self.now, self.iso, self.notify = now, iso, notify
+        self.on_end: Callable[["Run"], None] = lambda _run: None  # the host's hook: a run is over (consoles it launched)
         self.ring_bytes, self.budget_bytes, self.grace_s = ring_bytes, budget_bytes, grace_s
+        self.bus_wait_s, self.bus_poll_s, self.bus_settle_s = bus_wait_s, bus_poll_s, bus_settle_s
         self.runs: dict[str, Run] = {}
         self._events: list[Event] = []
         self._seq = 0
@@ -702,6 +788,10 @@ class RunRegistry:
                                     "exit_code": run.exit_code, "duration_s": result.get("duration_s"),
                                     "stop": run.stop_info}, source=SOURCE))
         self.prune()
+        try:
+            self.on_end(run)
+        except Exception:  # noqa: BLE001 - a hook never breaks a run's end
+            pass
         self.notify("run")
 
     # --- disk -----------------------------------------------------------------------------------------------------
@@ -776,7 +866,12 @@ class RunRegistry:
         """The host is stopping: ask every active run to stop, wait a moment for them."""
 
         for run in self.active():
-            if run.state == "running":
+            if run.state == "queued":
+                with run.cond:
+                    if run.state == "queued":
+                        run.stop_requested, run.stage = True, "cancelled"
+                        run._end_queued()
+            elif run.state in ("running", "waiting"):
                 run.stop_requested = True
                 run.stage = "SIGINT"
                 run._signal(signal.SIGINT)
@@ -785,9 +880,25 @@ class RunRegistry:
             run.wait(self.grace_s * 2 + 1)
 
 
+_HELD_BY = re.compile(r"held by (\d+) (\S+)")
+
+
+def bus_block(records: list) -> dict | None:
+    """The plugin's own refusal ``ActionBlocked`` / ``BusLockHeld`` (the rack bus lock is held by another process: a
+    routine diagnose, an experiment), with the holder as the plugin named it ("356724 moteus_servo.diagnostics")."""
+
+    for record in reversed(records):
+        args = record.get("args") if isinstance(record.get("args"), dict) else {}
+        if record.get("code") == "ActionBlocked" and args.get("reason") == "BusLockHeld":
+            found = _HELD_BY.search(str(record.get("message") or ""))
+            return {"message": str(record.get("message") or ""), "pid": found[1] if found else "",
+                    "program": found[2] if found else "another process"}
+    return None
+
+
 def plain_title(title: str) -> str:
     return str(title or "").removesuffix("…").strip()
 
 
 __all__ = ["Run", "RunRegistry", "RunSpec", "RunError", "RECORD_FD_ENV", "RUN_ID_ENV", "plain_text", "plain_title", "redact",
-           "INPUT_MAX", "RING_BYTES", "CAST_BUDGET_BYTES", "GRACE_S", "ACTIVE"]
+           "INPUT_MAX", "RING_BYTES", "CAST_BUDGET_BYTES", "GRACE_S", "ACTIVE", "BUS_WAIT_S", "bus_block"]

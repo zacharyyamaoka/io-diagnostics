@@ -41,10 +41,11 @@ nothing recorded as a run). The run's process is the plugin's own `act` command;
 
   | `state` | Meaning | `active` |
   |---|---|---|
-  | `queued` | waiting for the plugin's `exclusive` group (a diagnose holds the rack bus); no process yet | yes |
+  | `queued` | waiting for the plugin's `exclusive` group inside this host (another run, a routine check of this host); no process yet | yes |
+  | `waiting` | started, but the rack bus lock is held by another process (a routine diagnose of this or the other channel's host, an experiment): the host asks again until it gets the lock, at most `bus_wait_s` (60 s); §6 | yes |
   | `running` | the process is alive (and, for a moves run being stopped, until the plugin's stop has run: `stopping`) | yes |
   | `done` | exited 0 | no |
-  | `failed` | exited non-zero, died on a signal nobody asked for, or could not start | no |
+  | `failed` | exited non-zero, died on a signal nobody asked for, could not start, or the bus lock stayed held past `bus_wait_s` (`result.outcome` `blocked`, exit code as the plugin's, normally 0) | no |
   | `stopped` | a person pressed Stop (`signal`) and the process then ended non-zero | no |
   | `timed_out` | still alive at the plugin's `act_timeout_s`: the host killed its process group | no |
 
@@ -90,6 +91,7 @@ All JSON, `Cache-Control: no-store`. Reads are GET like everything else; the thr
 | `POST /api/v1/act` | a dry run asked while a run holds the same `exclusive` group is refused at once, `{"dry_run": true, "result": {"refused": "Busy", ...}, "token": null}` (a run can sit at a prompt for minutes; nothing waits for it). A real run (token present) accepts `"detach": true`: answers **202** `{"dry_run": false, "run": <run>}` at once, the process keeps going. Without it the call blocks until the run ends and answers `{"dry_run": false, "result": {..., "run_id": "<id>"}}` as before (existing callers and tests keep working). A refused run (`ConfirmRequired`, `NoPlugin`...) answers `{"dry_run": false, "result": {"refused": ...}}`, no `run` |
 
 `limits`: `{"ring_bytes": 2097152, "input_max": 4096, "cast_budget_bytes": 67108864, "grace_s": 3.0}`.
+`result.outcome` is also `blocked` (see `waiting`).
 
 **The three writes** (`input`, `signal`, `resize`) are refused with **403** `{"refused": "<Code>", "error": "<plain
 reason>"}` unless the request is the page's own: `NotFromPage` (no `X-IO-Diagnostics: ui`), `NotSameOrigin`
@@ -179,6 +181,25 @@ queued run says `RunStarted` when its process starts, not when it is queued.
   that stayed in it die with it. Repeating the call is a no-op (`stage` says where it is). On a `queued` run it cancels
   the wait (`stopped`, nothing ever ran). The final state is `stopped` when the process ended non-zero after a Stop,
   `done` if it still exited 0.
+- **A person's press waits its turn for the rack bus lock (2026-10-24; Zach pressed Calibrate and got `ActionBlocked: rack
+  bus lock held by 356724 moteus_servo.diagnostics`, a routine diagnose having the lock at that moment).** A plugin refuses an
+  act whose bus lock is held with the event `ActionBlocked` whose `args.reason` is `BusLockHeld` and whose message says
+  `held by <pid> <program>`. The host does not pass that on to the person: the run goes `waiting`, its terminal prints
+  `waiting for the bus: held by <program> (pid N) · checking <device> ...` (again when the holder changes, and every
+  10 s with how long it has waited), and the host starts the act again every `bus_poll_s` (0.5 s) until it gets through the
+  plugin's normal gates (port-holder check, bus lock, token), then `the bus is free: running now` and state `running` (an
+  attempt still alive `bus_settle_s`, 4 s, after a wait got through the gate). Past `bus_wait_s` (60 s) the last refusal
+  stands: state `failed`, `result.outcome` `blocked`, the plugin's message with the holder named, `(waited 60 s for it)`.
+  Stop while waiting cancels it (`stopped`). A start that never got the bus never touches the board, so the plugin's stop
+  (below) is NOT sent for it. Only `BusLockHeld` is waited for: `PortBusy` (a person has tview open) is refused at once as
+  today. WHY the host asks again, not a blocking flock in the plugin: it works for every plugin that refuses this way
+  (moteus_servo today), a plugin keeps LOCK_NB for `diagnose` and `probe` so routine checks yield to people and experiments
+  and never the reverse, and the retry is only ever of a start that did nothing.
+- **A person's run is not starved by routine checks.** `Gates.hold(group, person=True)` is what a real act and a dry run
+  take: while one is waiting or holding the plugin's `exclusive` group, no scheduled diagnose or probe of the group starts
+  (`try_take` is False, a blocking routine hold waits), and one that queued behind it goes after it. A check already running
+  finishes first (bounded by its own timeout); a check of the other channel's host is not under this host's gates and is
+  met by the retry above.
 - **The plugin's own stop (moves-class runs only).** A plugin that can leave a device energised declares in `describe`
   `"stop": true` and implements the verb `<command> stop --device <id> [--node N]`: it puts the device in its quiet
   state (moteus: mode 0, the real path of `stop_all`), needs **no `--confirm`** (stopping is the safe direction),

@@ -906,23 +906,65 @@ class Gates:
     def __init__(self):
         self._locks: dict[str, threading.Lock] = {}
         self._guard = threading.Lock()
+        self._wanted: dict[str, int] = {}  # group -> people (a real act, a dry run) waiting for or holding it
 
     def _lock(self, group: str) -> threading.Lock:
         with self._guard:
             return self._locks.setdefault(group, threading.Lock())
 
+    def person_waiting(self, group: str) -> bool:
+        with self._guard:
+            return self._wanted.get(group, 0) > 0
+
     @contextlib.contextmanager
-    def hold(self, group: str):
-        """Wait for the group, run, release. ``""`` = no group: never waits."""
+    def hold(self, group: str, *, person: bool = False):
+        """Wait for the group, run, release. ``""`` = no group: never waits.
+
+        ``person``: a real act or a dry run a person asked for. WHY it goes first: while one is waiting or running,
+        no scheduled diagnose or probe of the group starts (``try_take`` is False, a blocking routine ``hold`` waits),
+        so a person's press is never starved by routine checks (docs/runs-v1.md section 6); a check already running
+        finishes first (it is bounded by its own timeout)."""
 
         if not group:
             yield
             return
-        with self._lock(group):
+        lock = self._lock(group)
+        if person:
+            with self._guard:
+                self._wanted[group] = self._wanted.get(group, 0) + 1
+            try:
+                with lock:
+                    yield
+            finally:
+                with self._guard:
+                    self._wanted[group] -= 1
+            return
+        while True:
+            if self.person_waiting(group):
+                time.sleep(0.05)
+                continue
+            if lock.acquire(timeout=0.2):
+                if self.person_waiting(group):  # one arrived while this one was taking it: it goes first
+                    lock.release()
+                    continue
+                break
+        try:
             yield
+        finally:
+            lock.release()
 
     def try_take(self, group: str) -> bool:
-        return True if not group else self._lock(group).acquire(blocking=False)
+        if not group:
+            return True
+        if self.person_waiting(group):
+            return False
+        lock = self._lock(group)
+        if not lock.acquire(blocking=False):
+            return False
+        if self.person_waiting(group):
+            lock.release()
+            return False
+        return True
 
     def release(self, group: str) -> None:
         if group:

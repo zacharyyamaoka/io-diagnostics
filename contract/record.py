@@ -104,8 +104,11 @@ STANDARD_ACTIONS = {
 # shows itself is the driver's, and the person should read it before pressing: a motor wiggles, a camera takes a
 # snapshot. So these names keep their label and may add the way in brackets: "Identify (wiggle)". Every other
 # standard name must carry its label exactly.
-QUALIFIED_ACTIONS = frozenset({"identify"})
-_QUALIFIER = re.compile(r"^ \([a-z][a-z ]*\)$")
+# open_console (2026-10-24, Zach: "a utility on the fdcanusb to launch tview ... you need to specify which one" - it existed as
+# "Open console" and he did not recognise it): the title names the vendor's console, "Open console (tview)".
+QUALIFIED_ACTIONS = frozenset({"identify", "open_console"})
+QUALIFIER_EXAMPLE = {"identify": "wiggle", "open_console": "tview"}
+_QUALIFIER = re.compile(r"^ \([a-z][a-z0-9 -]*\)$")
 
 # The standard event codes (docs/probe-on-connect.md): a driver's probe writes these itself, one meaning on every
 # driver, and the host logs them as they are (it derives no device-specific events). Code -> when it is written.
@@ -520,7 +523,7 @@ def validate(record) -> list[str]:
                 and _QUALIFIER.match(record.title[len(label):]) is not None
             )
             if not qualified:
-                how = f" (or the label plus the way in brackets, like '{label} (wiggle)')" if record.name in QUALIFIED_ACTIONS else ""
+                how = f" (or the label plus the way in brackets, like '{label} ({QUALIFIER_EXAMPLE[record.name]})')" if record.name in QUALIFIED_ACTIONS else ""
                 problems.append(f"{where}: a standard action's title must be its label {label!r}{how}, got {record.title!r}")
         if record.kind not in (PASSIVE, TOUCHES, CHANGES):
             problems.append(f"{where}: kind {record.kind!r} must be passive, touches or changes")

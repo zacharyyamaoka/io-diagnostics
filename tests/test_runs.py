@@ -291,7 +291,7 @@ def test_stop_on_a_moves_run_runs_the_plugins_own_stop_for_that_board(rig):
     watcher.wait_for("Continue? [y/N]")
     rig.write(run["id"], "signal", {"signal": "interrupt"})
     final = watcher.wait_end()
-    assert final["state"] == "stopped" and final["exit_code"] < 0
+    assert final["state"] == "stopped" and final["exit_code"] in (130, -2)  # the fixture catches SIGINT like moteus_servo
     plugin_stop = final["stop"]["plugin_stop"]
     assert (plugin_stop["ran"], plugin_stop["outcome"]) == (True, "ok")
     assert plugin_stop["records"][0]["code"] == "StopSent" and "CAN 1 mode 0" in plugin_stop["message"]
@@ -374,7 +374,7 @@ def test_refusals_come_in_the_contracts_order(rig):
     assert rig.write(run.id, "signal", {"signal": "interrupt"})[1]["refused"] == "NotInteractive"
     assert rig.run(run.id)["interactive"] is False
     rig.host.runs.shutdown()  # ending it is the host's to do: it is not the page's run
-    run.wait(10)
+    assert run.wait(15) and not run.active
     status, answer = rig.write(run.id, "input", {"text": "y\n"})
     assert (status, answer["refused"]) == (403, "NotInteractive")  # not interactive outranks ended
     # a page run that has ended: 409
@@ -593,3 +593,158 @@ def test_a_dry_run_on_a_busy_bus_is_refused_at_once_not_left_waiting(rig):
     assert time.monotonic() - began < 2.0  # it did not wait for the run
     rig.write(run["id"], "input", {"text": "y\n"})
     watcher.wait_end()
+
+
+# ----- a real act waits its turn for the rack bus lock ----------------------------------------------------------------
+class HeldLock:
+    """Another process's hold on the rack bus lock (a routine diagnose, an experiment): flock on the file the fixture
+    plugin's bus gate takes, with the holder named in <lock>.holder."""
+
+    def __init__(self, path: Path, holder: str = "356724 moteus_servo.diagnostics"):
+        import fcntl
+
+        self.fcntl, self.path = fcntl, path
+        path.with_name(path.name + ".holder").write_text(holder)
+        self.handle = open(path, "a")
+        self.fcntl.flock(self.handle, self.fcntl.LOCK_EX | self.fcntl.LOCK_NB)
+
+    def release(self):
+        if self.handle:
+            self.fcntl.flock(self.handle, self.fcntl.LOCK_UN)
+            self.handle.close()
+            self.handle = None
+
+
+def bus_rig(tmp_path, **options) -> tuple[Rig, Path]:
+    lock = tmp_path / "bus.lock"
+    rig = make_rig(tmp_path, env={"TERMINAL_BUS_LOCK": str(lock), "TERMINAL_STEP_S": "0.05"}, run_bus_poll_s=0.2, **options)
+    return rig, lock
+
+
+def test_a_real_act_waits_for_a_held_bus_lock_and_then_runs(tmp_path):
+    rig, lock = bus_rig(tmp_path)
+    held = HeldLock(lock)
+    try:
+        began = time.monotonic()
+        threading.Timer(2.0, held.release).start()
+        run = rig.start("calibrate")
+        watcher = Watcher(rig, run["id"])
+        watcher.wait_for("waiting for the bus: held by moteus_servo.diagnostics (pid 356724) · checking usb:9-1")
+        assert rig.run(run["id"])["state"] == "waiting" and rig.run(run["id"])["active"] is True
+        watcher.wait_for("Continue? [y/N]", timeout=15)  # the lock was released after 2 s: the act went through the gates
+        assert time.monotonic() - began >= 1.8
+        rig.write(run["id"], "input", {"text": "y\n"})
+        final = watcher.wait_end()
+        assert (final["state"], final["exit_code"]) == ("done", 0) and final["result"]["records"][0]["code"] == "ActionCompleted"
+        assert "the bus is free" in watcher.text
+        blocked_starts = [entry for entry in rig.log_lines(blocked=True)]
+        assert len(blocked_starts) >= 2  # it asked again while the lock was held
+        assert not rig.log_lines(stopped=True)  # nothing was stopped: it ran to the end
+        assert [e["args"]["state"] for e in rig.call("GET", "/api/v1/activity?types=run")[1]["events"] if e["code"] == "RunEnded"] == ["done"]
+    finally:
+        held.release()
+        rig.close()
+
+
+def test_a_lock_held_past_the_bound_refuses_with_the_holder_named_and_never_stops_the_board(tmp_path):
+    rig, lock = bus_rig(tmp_path, run_bus_wait_s=1.5)
+    held = HeldLock(lock)
+    try:
+        run = rig.start("calibrate")
+        watcher = Watcher(rig, run["id"])
+        final = watcher.wait_end(timeout=20)
+        assert (final["state"], final["result"]["outcome"]) == ("failed", "blocked")
+        assert "rack bus lock held by 356724 moteus_servo.diagnostics" in final["result"]["message"]
+        assert "waited" in final["result"]["message"]
+        assert "waiting for the bus: held by moteus_servo.diagnostics (pid 356724)" in watcher.text
+        assert not rig.log_lines(stopped=True)  # a calibration that never started needs no stop, even a moves one
+        assert final["stop"] is None
+        ended = next(e for e in rig.call("GET", "/api/v1/activity?types=run")[1]["events"] if e["code"] == "RunEnded")
+        assert ended["severity"] == "error" and ended["args"]["state"] == "failed"
+    finally:
+        held.release()
+        rig.close()
+
+
+def test_stop_cancels_the_wait_for_the_bus(tmp_path):
+    rig, lock = bus_rig(tmp_path)
+    held = HeldLock(lock)
+    try:
+        run = rig.start("calibrate")
+        watcher = Watcher(rig, run["id"])
+        watcher.wait_for("waiting for the bus")
+        status, answer = rig.write(run["id"], "signal", {"signal": "interrupt"})
+        assert status == 200
+        final = watcher.wait_end(timeout=10)
+        assert final["state"] == "stopped" and final["result"]["outcome"] == "stopped"
+        assert not rig.log_lines(stopped=True) and "never got the bus" in final["stop"]["plugin_stop"]["reason"]
+    finally:
+        held.release()
+        rig.close()
+
+
+def test_a_waiting_act_keeps_scheduled_checks_of_its_group_from_starting():
+    from io_diagnostics.runner import Gates
+
+    gates = Gates()
+    order, release_routine = [], threading.Event()
+
+    def routine_running():
+        with gates.hold("bus"):  # a diagnose already going
+            order.append("routine start")
+            release_routine.wait(5)
+
+    def person():
+        with gates.hold("bus", person=True):
+            order.append("person")
+
+    def later_routine():
+        with gates.hold("bus"):
+            order.append("later routine")
+
+    first = threading.Thread(target=routine_running)
+    first.start()
+    time.sleep(0.2)
+    waiting = threading.Thread(target=person)
+    waiting.start()
+    time.sleep(0.2)
+    queued = threading.Thread(target=later_routine)
+    queued.start()
+    time.sleep(0.2)
+    assert gates.person_waiting("bus") and gates.try_take("bus") is False  # the scheduler's non-blocking take holds back
+    release_routine.set()
+    for thread in (first, waiting, queued):
+        thread.join(10)
+    assert order == ["routine start", "person", "later routine"]  # the person went before the routine that queued after it
+    assert not gates.person_waiting("bus") and gates.try_take("bus") is True
+    gates.release("bus")
+
+
+# ----- Open console (tview): the row says so while the console RobotDx launched is open -------------------------------
+def test_while_the_launched_console_is_open_the_adapters_row_says_so(tmp_path):
+    import os
+    import signal
+
+    rig = make_rig(tmp_path, env={"TERMINAL_CONSOLE_S": "60"})
+    try:
+        run = rig.start("open_console", node=None)
+        assert run["label"] == "fdcanusb fixture · Open console (tview)" and run["danger"] == "interrupts"
+        final = rig.wait_ended(run["id"])
+        assert final["state"] == "done"
+        pid = final["result"]["records"][0]["args"]["pid"]  # the process the run launched (a stand-in for tview)
+        assert pid in {record["args"]["pid"] for record in final["result"]["records"]}
+
+        def console_check():
+            checks = rig.call("GET", f"/api/v1/node?path={rig.device}")[1]["checks"]
+            return next((check for check in checks if check["code"] == "ConsoleOpen"), None)
+
+        check = console_check()
+        assert check and check["message"] == f"tview open (launched from RobotDx, pid {pid})" and check["level"] == "unknown"
+        assert check["name"] == "fdcanusb fixture: console"
+        os.kill(pid, signal.SIGKILL)  # the person closes it
+        deadline = time.monotonic() + 10
+        while console_check() and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert console_check() is None  # and the row stops saying it
+    finally:
+        rig.close()

@@ -91,6 +91,11 @@ implements `<command> stop --device <id> [--node N]`: the device's quiet state (
 bus-lock gate as every bus action. The host runs it itself, after the process has exited, when a `moves` run ends stopped,
 timed out or failed, and records what it said in the run. The page never calls it.
 
+**A person's act waits for the rack bus lock.** When an `act` is refused with the event `ActionBlocked` and `args.reason`
+`"BusLockHeld"` (message `... held by <pid> <program>`), the run is `waiting`: the host asks again every 0.5 s for up to
+60 s (its terminal says who holds the lock), and only then refuses with the holder named. Keep `LOCK_NB` for `diagnose`
+and `probe`: routine checks yield to people and experiments, never the reverse (docs/runs-v1.md section 6).
+
 **`probe` (optional).** A driver that declares `"probe": {"timeout_s": 30}` (or `true`) in `describe` is probed ONCE per
 connection, in place of that connection's first `diagnose`: when it is plugged in (or present at host start) and on every
 re-enumeration. The periodic `diagnose` (or `follow`) starts `period_s` after the probe; a probe never runs on the period.
