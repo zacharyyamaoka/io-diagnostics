@@ -281,11 +281,8 @@
       this.paintPanel(ctx);
       const going = ctx.runs.count();
       for (const badge of [s.act.get('terminal').querySelector('.badge'), s.panel.querySelector('[data-ptab="terminal"] .badge')]) { badge.hidden = !going; badge.textContent = String(going); }
-      // ---- the panel's Activity: the page's own log (renderActivity), drawn only when it changed ----
-      if (S.act && !s.panelSash.folded() && s.tab === 'activity') {
-        const log = ctx.activityHtml();
-        if (s.html.log !== log) { s.html.log = log; s.pact.innerHTML = log; }
-      }
+      // ---- the panel's Activity: the page's own log, drawn only when it changed ----
+      if (!s.panelSash.folded() && s.tab === 'activity') ctx.activity.draw(s.pact);
       // ---- status bar counts ----
       const counts = ctx.counts();
       const shape = (lv) => `<svg class="shape lv-${lv}" role="img" aria-label="${lv}"><use href="#s-${lv}"/></svg>`;

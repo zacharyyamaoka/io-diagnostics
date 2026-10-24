@@ -233,6 +233,12 @@ const BEHAVIOURS = {
     await page.locator('.l5-needs .l5-need').first().click();
     await page.waitForTimeout(700);
     check(`${tag} a "needs you" row opens that device in Devices`, await page.evaluate(() => document.getElementById('lx-root').dataset.l5on === 'devices') && await visible(page, '[data-lx-tree]') && await visible(page, '.d-title'));
+    await page.click('.l5-fold');
+    await page.waitForTimeout(250);
+    const treeFolded = !(await visible(page, '[data-lx-tree]'));
+    await page.click('.l5-fold');
+    await page.waitForTimeout(250);
+    check(`${tag} the side pane of the tab has a fold button`, treeFolded && await visible(page, '[data-lx-tree]'));
     await page.click('.l5-tabs [data-l5-tab="activity"]');
     await page.waitForTimeout(400);
     check(`${tag} Activity is a tab of its own, the tree is not drawn twice`, await visible(page, '.act .ev') && !(await visible(page, '[data-lx-tree]')));
@@ -295,6 +301,14 @@ async function main() {
       check(`${tag} the search sits inside the tree pane, above its first row`, inside && firstRow && search.bottom <= firstRow.y + 0.5, { pane, search, firstRow: firstRow && firstRow.y });
       check(`${tag} the search is the page's own input (one #search, one #tree-host)`, await page.evaluate(() => document.querySelectorAll('#search').length === 1
         && document.querySelector('[data-lx-tree]').contains(document.getElementById('search')) && document.querySelector('[data-lx-tree]').contains(document.getElementById('tree-host'))));
+
+      // View options stays reachable, out of the way: its button is on screen and its popover opens inside the window
+      await page.click('#vo-btn');
+      await page.waitForTimeout(250);
+      const popover = await rectOf(page, '#view-options');
+      check(`${tag} View options is reachable and opens on screen`, Boolean(popover) && popover.x >= 0 && popover.right <= 1400 && popover.y >= 0 && popover.bottom <= 900, popover);
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(150);
 
       // filter + open a board
       const rowsBefore = await page.locator('#tree-host .t6-row').count();

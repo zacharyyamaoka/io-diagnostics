@@ -151,10 +151,11 @@ const FLOWS = {
     await page.keyboard.type('272813', { delay: 140 });
     await page.waitForTimeout(900);
     await glide(page, page.locator('#tree-host .t6-row', { hasText: 'fdcanusb' }));
+    await page.locator('#tree-host .t6-row', { hasText: 'fdcanusb' }).first().dblclick(); // a double-click keeps the tab
     await page.waitForTimeout(1300);
     await glide(page, page.locator('.l2-act [data-l2="activity"]'));
     await page.waitForTimeout(900);
-    await glide(page, page.locator('.l2-pact .ev', { hasText: 'CAN 14' }));
+    await glide(page, page.locator('.l2-pact .ev').first());
     await page.waitForTimeout(1800);
     await glide(page, page.locator('.l2-tab', { hasText: 'fdcanusb' }).first());
     await page.waitForTimeout(1400);
@@ -233,7 +234,11 @@ async function hero(browser, id, server, manifest) {
   fs.mkdirSync(OUT, { recursive: true });
   const { chromium } = require(PLAYWRIGHT);
   const browser = await chromium.launch({ executablePath: CHROME, headless: true });
-  const manifest = { recorded: new Date().toISOString(), shots: [], heroes: [] };
+  // a run with --only keeps what the earlier runs recorded for the other layouts
+  let manifest = { recorded: new Date().toISOString(), shots: [], heroes: [] };
+  try { manifest = { ...JSON.parse(fs.readFileSync(path.join(OUT, 'manifest.json'), 'utf8')), recorded: manifest.recorded }; } catch (_) { /* first run */ }
+  manifest.shots = manifest.shots.filter((shot) => !ONLY.includes(shot.layout));
+  manifest.heroes = manifest.heroes.filter((film) => !ONLY.includes(film.layout));
   const started = [];
   let failed = false;
   try {

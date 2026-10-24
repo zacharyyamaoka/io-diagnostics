@@ -186,7 +186,23 @@ body.lx-dragging.lx-y { cursor: row-resize; }
         toggle() { ctx.runs.set(!ctx.runs.open()); },
         count: () => (S.data && S.data.runs ? S.data.runs.active || 0 : 0),
       },
-      activityHtml() { return api.renderActivity(); },
+      // The Activity log inside a layout's own panel or pane. WHY one seam: today it is the page's own log (S.act, eventRow,
+      // renderActivity); the Activity view lane (activity/log.js) draws it with its own DOM, and only this function changes.
+      //   draw(container)                 the whole log, as the Activity view shows it (its All events | Faults filter)
+      //   draw(container, {scope, head})  one entity's events and below (scope: its path; null: every device) under `head`
+      activity: {
+        draw(container, opts) {
+          if (!S.act) return;
+          let html;
+          if (!opts) html = api.renderActivity();
+          else {
+            const events = (S.act.events || []).filter((event) => !opts.scope || event.path === opts.scope || String(event.path || '').startsWith(`${opts.scope}/`));
+            html = `<div class="act"><section><h2>${opts.title} <span class="act-count">· ${events.length} event${events.length === 1 ? '' : 's'}</span>${opts.controls || ''}</h2>`
+              + `${events.map((event) => api.eventRow(event)).join('') || `<div class="muted">${opts.empty || 'Nothing logged yet.'}</div>`}</section></div>`;
+          }
+          if (container.dataset.lxLog !== html) { container.dataset.lxLog = html; container.innerHTML = html; }
+        },
+      },
       // the breadcrumb of the selection, root first, in the API's own names; a USB port and a CAN bus under its
       // adapter are plumbing, not places (Zach's example: bam-GPU › USB bus 1 › fdcanusb 272813EF › CAN 1)
       crumbs(path) {

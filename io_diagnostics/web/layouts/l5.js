@@ -81,7 +81,10 @@
       right.className = 'right';
       const seg = ctx.el('<div class="seg l5-seg" role="group" aria-label="Devices view"><button data-l5-view="tree">Tree</button><button data-l5-view="table">Table</button></div>');
       seg.addEventListener('click', (event) => { const button = event.target.closest('[data-l5-view]'); if (button) ctx.go(button.dataset.l5View); });
-      right.append(seg, ctx.take('inspToggle'), ctx.take('mode'), ctx.take('vo'));
+      // the side pane of the tab (what needs you in Overview, the device tree in Devices) folds away
+      s.fold = ctx.iconButton({ icon: 'sidebar', title: 'Fold the side pane', pressed: true, click: () => { this.sidePane().toggle(); this.paint(ctx); } });
+      s.fold.classList.add('l5-fold');
+      right.append(s.fold, seg, ctx.take('inspToggle'), ctx.take('mode'), ctx.take('vo'));
       root.appendChild(ctx.take('voPop'));
       head.append(tabs, right);
       root.appendChild(head);
@@ -139,8 +142,13 @@
       this.paint(ctx);
       this.update(ctx);
     },
+    // the boundary of the pane this tab has: Overview's list, Devices' tree
+    sidePane() { const s = this.s; return s.tab === 'overview' ? s.needsSash : s.sideSash; },
     paint(ctx) {
       const s = this.s;
+      const side = s.tab === 'overview' || s.tab === 'devices' ? this.sidePane() : null;
+      s.fold.style.display = side ? '' : 'none';
+      if (side) { s.fold.classList.toggle('on', !side.folded()); s.fold.setAttribute('aria-pressed', String(!side.folded())); }
       ctx.root.dataset.l5on = s.tab;
       s.tabs.querySelectorAll('[data-l5-tab]').forEach((button) => { const on = button.dataset.l5Tab === s.tab; button.classList.toggle('on', on); button.setAttribute('aria-selected', String(on)); });
     },

@@ -123,7 +123,7 @@
       s.right = right;
       ctx.on(s.pact, 'click', (event) => {
         const scope = event.target.closest('[data-l3-scope]');
-        if (scope) { s.scope = scope.dataset.l3Scope; ctx.setPref('l3.scope', s.scope); s.html.log = null; this.update(ctx); event.stopPropagation(); }
+        if (scope) { s.scope = scope.dataset.l3Scope; ctx.setPref('l3.scope', s.scope); this.update(ctx); event.stopPropagation(); }
       });
       root.append(s.rightSash.el, right);
       s.rightSash.apply();
@@ -203,14 +203,10 @@
       if (s.html.more !== more) { s.html.more = more; s.more.innerHTML = more; }
       ctx.$('search').closest('.search').classList.toggle('has-query', Boolean(S.query));
       // ---- the pane's Activity: this device's events (the page's own event rows), or every device's ----
-      if (paneOpen && s.tab === 'activity' && S.act) {
+      if (paneOpen && s.tab === 'activity') {
         const mine = S.sel && s.scope === 'selection';
-        const events = (S.act.events || []).filter((event) => !mine || event.path === S.sel || String(event.path || '').startsWith(`${S.sel}/`));
-        const label = mine ? ctx.api.entityLabel(S.sel) : 'all devices';
         const scope = `<div class="seg small scope" role="radiogroup" aria-label="Scope"><button data-l3-scope="selection" role="radio" class="${mine ? 'on' : ''}">This device</button><button data-l3-scope="all" role="radio" class="${mine ? '' : 'on'}">All</button></div>`;
-        const log = `<div class="act"><section><h2>Activity · ${ctx.esc(label)} <span class="act-count">· ${events.length} event${events.length === 1 ? '' : 's'}</span>${scope}</h2>`
-          + `${events.map(ctx.api.eventRow).join('') || '<div class="muted">Nothing logged for this device yet.</div>'}</section></div>`;
-        if (s.html.log !== log) { s.html.log = log; s.pact.innerHTML = log; }
+        ctx.activity.draw(s.pact, { scope: mine ? S.sel : null, title: `Activity · ${mine ? ctx.api.entityLabel(S.sel) : 'all devices'}`, controls: scope, empty: 'Nothing logged for this device yet.' });
       }
     },
   };
