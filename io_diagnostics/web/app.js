@@ -405,6 +405,19 @@ function paneFor(id) {
   return pane;
 }
 
+// The tree's row menu (web/tree/v6.js): a utility of one row. Select the row, then start that utility's dry run as soon as
+// its node (and so its actions) has loaded, exactly as a click in the Utilities menu would.
+function onRowAction(name, row) {
+  if (!row || !row.entity) return;
+  onSelectEntity(row.entity);
+  const began = performance.now();
+  const go = () => {
+    if (S.node && S.node.node && S.node.node.path === row.entity) { startDryRun(name); return; }
+    if (performance.now() - began < 5000) setTimeout(go, 100);
+  };
+  go();
+}
+
 // a rows renderer reports a row key; legacy renderers report an entity path
 function onTreeSelect(key) {
   const row = S.built && S.built.byKey.get(key);
@@ -442,7 +455,7 @@ function renderTreePane() {
   try {
     if (isLegacy(id)) renderer.render(pane, S.data.tree, { onSelect: onTreeSelect, selectedPath: S.sel, query: NO_QUERY.has(id) ? '' : S.query });
     else {
-      renderer.render(pane, S.built.rows, { onSelect: onTreeSelect, onSelectEntity, selectedPath: selectedKey(), query: S.query,
+      renderer.render(pane, S.built.rows, { onSelect: onTreeSelect, onSelectEntity, onRowAction, selectedPath: selectedKey(), query: S.query,
         summary: S.data.summary, host: S.built.host, structure: S.structure });
     }
   } catch (error) {
@@ -776,9 +789,8 @@ function rowHtml(row, selectable) {
 
 // Fallback only: drawn when no tree style registered (e.g. a tree/*.js failed to load).
 function renderTree() {
-  const counts = S.data.summary.counts;
-  const text = ['error', 'stale', 'unknown', 'warn'].filter((l) => counts[l]).map((l) => `${counts[l]} ${l}`).join(' · ') || 'nothing needs you';
-  return `<div class="tree-head"><span>Entities · ${S.data.summary.entities}</span><span>${text}</span></div>`
+  // the header counts are web/summary.js's: stale, unknown, warn, error, increasing severity, one meaning per mark
+  return `<div class="tree-head"><span>Entities · ${S.data.summary.entities}</span><span>${IOSummary.html(S.data.summary)}</span></div>`
     + visibleRows(S.built.rows).map((row) => rowHtml(row, true)).join('');
 }
 
