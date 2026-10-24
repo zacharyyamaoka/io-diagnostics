@@ -27,6 +27,8 @@ from io_diagnostics import API, FIXTURE_PLUGINS_DIR, PLUGINS_DIR
 from io_diagnostics import activity as activity_module
 from io_diagnostics import eventlog as eventlog_module
 from io_diagnostics import entity_state
+from io_diagnostics.arrangements import ARRANGEMENTS_FILE, Arrangements
+from io_diagnostics.config_edit import ConfigEditor
 from io_diagnostics import expected as expected_module
 from io_diagnostics import history as history_module
 from io_diagnostics import logview as logview_module
@@ -38,7 +40,7 @@ from io_diagnostics.faults import Faults
 from io_diagnostics import terminal as terminal_module
 from io_diagnostics.plugins import load_plugins, match_devices
 from io_diagnostics.runner import (RUNNER_SOURCE, RUNNING, Follower, Gates, Job, RunOutcome, Scheduler, Watcher, absolute,
-                                   act_argv, describe, follow_period, follow_status, host_status, plugin_env, rebase,
+                                   _outcome, _records, act_argv, describe, follow_period, follow_status, host_status, plugin_env, rebase,
                                    relative, run_act, run_check, run_plugin)
 
 from contract.record import (OK, RANK, RECORD_VERSION, SCHEMA, STALE, STALE_FACTOR, STALE_FLOOR_S, UNKNOWN, WARN, Action,
@@ -502,6 +504,10 @@ class Host:
         self._frames_dir = Path(frames_dir) if frames_dir else None
         self._frames_owned = False
         self._frame_times: dict[tuple, collections.deque] = {}
+        # the Configuration tab: edit sessions, each setting's edit state, every write's Activity event (config_edit.py), and the
+        # person's pins / order / folded folders (arrangements.py: beside settings.toml; memory only without one)
+        self.config_editor = ConfigEditor(self, self.watch_grace_s)
+        self.arrangements = Arrangements(Path(settings_file).parent / ARRANGEMENTS_FILE if settings_file else None)
         # every change a page could see (a refresh, a udev event, a plugin's records): /api/v1/events waits on it
         self.changes = threading.Condition()
         self.revision = 0
@@ -1114,6 +1120,7 @@ class Host:
             events, self.pending = activity_module.merge(self.usb.events, self.usb.consumed, live)
             events += self.faults.events
             events += self.runs.events()  # RunStarted / RunEnded (docs/runs-v1.md section 5)
+            events += self.config_editor.events  # every configuration write, accepted or not (config_edit.py)
             events += activity_module.level_events(self.history.transitions(now))
             for job in self.jobs.values():
                 device_path = self.layer.device_paths.get(str(job.device.get("id")))
@@ -1377,7 +1384,7 @@ class Host:
         it, its Configuration, whether it can be watched, its declared image streams and the driver's extra tabs."""
 
         out = {"badge": self._badge(path, view), "config": [], "watch": self.watch_json(None, ""), "streams": [], "tabs": [],
-               "heard": {"received": None, "age_s": None}}
+               "heard": {"received": None, "age_s": None}, "editable": False, "editing": self.config_editor.status(path)}
         if target is None:
             return out
         job, rel = target
@@ -1386,6 +1393,10 @@ class Host:
             cache = job.cache
             heard = cache.heard(rel)
             out["config"] = entity_state.config_rows(cache, rel, view.now)
+            entity = cache.entities.get(rel)
+            out["editable"] = bool(entity and any(action.name == "set_config" for action in entity.actions))
+        for row in out["config"]:
+            row["edit"] = self.config_editor.edit_of(job, rel, row["key"])
         out["heard"] = {"received": heard, "age_s": round(view.now - heard, 3) if heard is not None else None}
         out["watch"] = self.watch_json(job, rel)
         out["streams"] = entity_state.stream_rows(describe_answer, cache, rel, view.now, lambda r, name: self._fps(job, r, name))
@@ -1848,7 +1859,7 @@ class Host:
         return None, ""
 
     def act(self, path: str, action: str, *, node: int | None = None, confirm: str | None = None, dry_run: bool = False,
-            human: bool | None = None, new_id: int | None = None) -> dict:
+            human: bool | None = None, new_id: int | None = None, extra: list[str] | None = None) -> dict:
         """Run the plugin's ``act`` for one action registered on the entity at ``path``, and wait for it.
 
         The rule (docs/api-v1.md "Actions: io-diagnostics act"): only a person runs an action; agents can't click.
@@ -1862,7 +1873,7 @@ class Host:
         - A dry run asks the plugin on pipes. A real run is a RUN (docs/runs-v1.md): a process on a PTY with a
           recording, here waited for; ``start_act`` is the same run without the wait."""
 
-        out, plan = self._plan_act(path, action, node=node, confirm=confirm, dry_run=dry_run, human=human, new_id=new_id)
+        out, plan = self._plan_act(path, action, node=node, confirm=confirm, dry_run=dry_run, human=human, new_id=new_id, extra=extra)
         if plan is None:
             return out
         if dry_run:
@@ -1881,17 +1892,17 @@ class Host:
         return {**out, **(run.result or {}), "run_id": run.id}
 
     def start_act(self, path: str, action: str, *, node: int | None = None, confirm: str | None = None,
-                  new_id: int | None = None, interactive: bool = True):
+                  new_id: int | None = None, interactive: bool = True, extra: list[str] | None = None):
         """A real run, started and not waited for: ``(run, out)``. ``out`` is ``act``'s answer so far (the plan, or why
         it was refused, with ``run`` None). ``interactive``: it was started from the page, so it takes input and Stop."""
 
-        out, plan = self._plan_act(path, action, node=node, confirm=confirm, dry_run=False, human=True, new_id=new_id)
+        out, plan = self._plan_act(path, action, node=node, confirm=confirm, dry_run=False, human=True, new_id=new_id, extra=extra)
         if plan is None:
             return None, out
         return self._launch_run(plan, out, interactive=interactive), {**out, "run_id": None}
 
     def _plan_act(self, path: str, action: str, *, node: int | None, confirm: str | None, dry_run: bool,
-                  human: bool | None, new_id: int | None):
+                  human: bool | None, new_id: int | None, extra: list[str] | None = None):
         """``(out, plan)``: the answer so far and what would run, or ``(refusal, None)``."""
 
         if human is None:
@@ -1918,7 +1929,7 @@ class Host:
         out.update(plugin=job.spec.name, device_id=str(job.device.get("id", "")), registered_by=source)
         if registered is None:
             return refuse("ActionNotRegistered", f"{job.spec.name} registers no action {action!r} for {entity.name}")
-        argv = act_argv(job.spec, job.device, action, node=node, confirm=confirm, dry_run=dry_run, new_id=new_id)
+        argv = act_argv(job.spec, job.device, action, node=node, confirm=confirm, dry_run=dry_run, new_id=new_id, extra=extra)
         out.update(title=registered.title, danger=registered.danger, argv=argv)
         if not human and not dry_run:
             return refuse("NotInteractive", "not a person (stdin is not a TTY): only --dry-run runs; agents can't click")
@@ -1997,11 +2008,14 @@ class Host:
         return {"period_s": period, "gates": [str(check) for check in declared.get("gates") or []]}
 
     def _watch_gate(self, watch: Watch) -> dict | None:
-        """Why this watch must not run now, in plain words, or None: a run of the plugin's exclusive group is active, or one
-        of the gates the plugin declared says a person's tool holds the port, the camera or the rack bus lock. WAITING (the
-        host's own check holds the lock for a few seconds) and "can't tell" never pause it."""
+        return self._gate_for(watch.job, watch.declared.get("gates") or [])
 
-        job, group = watch.job, watch.job.spec.exclusive
+    def _gate_for(self, job: Job, checks: list[str]) -> dict | None:
+        """Why this plugin may not talk to its device now, in plain words, or None: a run of its exclusive group is active, or
+        one of the ``checks`` says a person's tool holds the port, the camera or the rack bus lock. WAITING (the host's own
+        check holds the lock for a few seconds) and "can't tell" never block. Shared by the watch and a configuration write."""
+
+        group = job.spec.exclusive
         if group:
             run = next((run for run in self.runs.active() if run.spec.group == group), None)
             if run is not None:
@@ -2011,7 +2025,7 @@ class Host:
         with self.lock:
             device_id = str(job.device.get("id"))
             device = self.layer.matchable(device_id) if device_id in self.layer.devices else dict(job.device)
-        for check in watch.declared.get("gates") or []:
+        for check in checks:
             state, detail = self.os.gate(device, check)
             if state is False:
                 return entity_state.holder_reason(check, detail)
@@ -2203,6 +2217,28 @@ class Host:
         with self.lock:
             frame = job.cache.frames.get((rel, stream))
         return None if frame is None else (frame.seq if frame.seq is not None else int((frame.received or 0) * 1000))
+
+    def _display_name(self, path: str, entity) -> str:
+        """What a log line calls a board: ``CAN 1 · fdcanusb FDA81D29`` (its own name, then the device it hangs on)."""
+
+        name = (entity.name if entity else "") or path
+        target = self._watch_target(path)
+        device = target[0].cache.entities.get("") if target and target[1] else None
+        return f"{name} · {device.name}" if device is not None and device.name else name
+
+    def _apply_run_records(self, job: Job, records: list) -> None:
+        """The ``config`` records a configuration write printed (what the board now holds) into the job's cache."""
+
+        lines = "\n".join(json.dumps(record) for record in records if isinstance(record, dict) and record.get("record") == "config")
+        if not lines:
+            return
+        with self.lock:
+            device_path = self.layer.device_paths.get(str(job.device.get("id")), job.device_path)
+            entity = self.layer.entities.get(device_path)
+            parsed, problems = _records(job.spec, lines, device_path, entity.hardware_id if entity else "")
+            outcome = _outcome(job.spec, job.device, device_path, self.clock.now(), 0.0, "ok", None, parsed, problems, "", "")
+            job.cache.apply(outcome, received=self.clock.now())
+        self.notify("config")
 
     def _badge(self, path: str, view: View) -> dict | None:
         """The connection badge of the page header (realsense-viewer's "2.1"): a USB device and what hangs below it carry its link's

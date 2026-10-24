@@ -353,7 +353,7 @@ def _records(spec: PluginSpec, text: str, device_path: str, hardware_id: str) ->
 
 
 def act_argv(spec: PluginSpec, device: dict, action: str, *, node: int | None = None, confirm: str | None = None,
-             dry_run: bool = False, new_id: int | None = None) -> list[str]:
+             dry_run: bool = False, new_id: int | None = None, extra: list[str] | None = None) -> list[str]:
     """``<command> act --device <id> --action <name> [--node N] [--new-id N] [--confirm T] [--dry-run]``
     (docs/actions-vocabulary-v0.1.md; ``--new-id`` is set_id's new bus id)."""
 
@@ -366,7 +366,7 @@ def act_argv(spec: PluginSpec, device: dict, action: str, *, node: int | None = 
         argv += ["--confirm", confirm]
     if dry_run:
         argv.append("--dry-run")
-    return argv
+    return [*argv, *(extra or [])]  # v0.2: a configuration write's --key / --value / --to (config_edit.py)
 
 
 def parse_action_lines(text: str) -> tuple[list[dict], list[str]]:

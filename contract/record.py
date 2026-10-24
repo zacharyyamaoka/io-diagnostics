@@ -105,7 +105,13 @@ STANDARD_ACTIONS = {
     "set_id": "Change CAN id…",
     "open_console": "Open console",
     "identify": "Identify",
+    # v0.2: the Configuration tab's three writes (docs/state-config-v1.md section 9), driven by its edit session, not by a menu
+    "set_config": "Set configuration…",
+    "persist_config": "Save configuration to the board…",
+    "reset_config": "Reset configuration…",
 }
+CONFIG_ACTIONS = ("set_config", "persist_config", "reset_config")
+CONFIG_TYPES = ("int", "float", "bool", "enum", "string")
 # WHY: "Identify" means one thing on every driver (show which physical thing this row is, harmlessly), but how it
 # shows itself is the driver's, and the person should read it before pressing: a motor wiggles, a camera takes a
 # snapshot. So these names keep their label and may add the way in brackets: "Identify (wiggle)". Every other
@@ -259,6 +265,15 @@ class Config:
     expected_source: str = ""
     stamp: float | None = None  # when the driver read it
     source: str = ""
+    # v0.2, editing (docs/state-config-v1.md section 9): ``value`` is what the board runs now (live); ``stored`` is what it keeps
+    # across a restart (a different value = "not saved"); the rest tells a page how to offer an edit and a reset
+    writable: bool = False
+    type: str = ""  # int | float | bool | enum | string
+    range: tuple | None = None  # (low, high) for a number
+    choices: tuple = ()  # the allowed values of an enum
+    default: Any = None  # the factory default, when the driver knows it
+    stored: Any = None
+    safety: bool = False  # a safety key: asks a second confirm and is refused unless the board is stopped (mode 0)
 
 
 @dataclass(frozen=True)
@@ -533,6 +548,8 @@ def _build(cls, data: Mapping):
             value = tuple(tuple(pair) for pair in value)
         elif name == "caused_by":
             value = (value,) if isinstance(value, str) else tuple(value)
+        elif name in ("range", "choices") and isinstance(value, list):
+            value = tuple(value)
         kwargs[name] = value
     return cls(**kwargs)
 
@@ -642,6 +659,13 @@ def validate(record) -> list[str]:
                 problems.append(f"{where}: {name} must be a JSON scalar")
         if record.expected is None and record.expected_source:
             problems.append(f"{where}: expected_source without an expected value")
+        if record.type and record.type not in CONFIG_TYPES:
+            problems.append(f"{where}: type {record.type!r} must be one of {CONFIG_TYPES}")
+        if record.range is not None and not (len(record.range) == 2 and all(_finite(bound) for bound in record.range)
+                                             and record.range[0] <= record.range[1]):
+            problems.append(f"{where}: range must be (low, high) with low <= high")
+        if record.safety and not record.writable:
+            problems.append(f"{where}: a safety key that is not writable has nothing to guard")
     elif isinstance(record, Frame):
         where = f"frame {record.path or '?'} / {record.stream or '?'}"
         if not record.stream:

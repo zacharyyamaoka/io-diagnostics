@@ -25,6 +25,7 @@ from urllib.parse import parse_qs, urlparse
 
 from io_diagnostics import WEB
 from io_diagnostics import release_channels
+from io_diagnostics.arrangements import ArrangementError
 from io_diagnostics.history import MAX_BINS
 from io_diagnostics.host import Host
 from io_diagnostics.settings import SettingsError
@@ -38,6 +39,8 @@ NO_ACTIONS = ("actions never execute through this endpoint: the page runs one on
 # WHY 300 s: a moteus confirm token names one 5-minute window and is honoured for the next one too, so a run within
 # 300 s of its dry run always carries a token the plugin still accepts; a page left open longer dry-runs again.
 TOKEN_WINDOW_S = 300.0
+CONFIG_WRITES = {"/api/v1/config/edit": "edit", "/api/v1/config/set": "set", "/api/v1/config/persist": "persist",
+                 "/api/v1/config/reset": "reset"}
 SETUP_EDITS = {"/api/v1/expect": "expect", "/api/v1/forget": "forget", "/api/v1/retire": "retire"}
 UI_HEADER = "X-IO-Diagnostics"
 UI_HEADER_VALUE = "ui"
@@ -157,6 +160,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(self.host.runs_json())
             if parsed.path == "/api/v1/values":
                 return self._values(query)
+            if parsed.path == "/api/v1/arrangements":
+                return self._json(self.host.arrangements.json())
             if parsed.path in ("/api/v1/frames", "/api/v1/frames/stream"):
                 return self._frames(parsed.path, query)
             found = RUN_PATH.match(parsed.path)
@@ -166,7 +171,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._history(parsed.path, query)
             if parsed.path == "/api/v1/settings":
                 return self._json(self.host.settings_json())
-            if parsed.path in ("/api/v1/act", "/api/v1/watch") or parsed.path in SETUP_EDITS:
+            if parsed.path in ("/api/v1/act", "/api/v1/watch") or parsed.path in SETUP_EDITS or parsed.path in CONFIG_WRITES:
                 return self._json({"error": "POST only, and only from the page (docs/api-v1.md)"}, 405, extra={"Allow": "POST"})
             if parsed.path.startswith("/api/"):
                 return self._json({"error": f"no endpoint {parsed.path!r} (see docs/api-v1.md)"}, 404)
@@ -191,13 +196,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self._run_write(found[1], found[2])
             except Exception as error:  # noqa: BLE001 - show the failure, keep serving
                 return self._json({"error": f"{type(error).__name__}: {error}"}, 500)
-        if endpoint not in ("/api/v1/act", "/api/v1/settings", "/api/v1/watch", *SETUP_EDITS):
+        if endpoint not in ("/api/v1/act", "/api/v1/settings", "/api/v1/watch", "/api/v1/arrangements", *CONFIG_WRITES, *SETUP_EDITS):
             return self._refuse()
         try:
             if endpoint == "/api/v1/settings":
                 return self._settings()
             if endpoint == "/api/v1/watch":
                 return self._watch()
+            if endpoint == "/api/v1/arrangements":
+                return self._arrangements()
+            if endpoint in CONFIG_WRITES:
+                return self._config(CONFIG_WRITES[endpoint])
             return self._act() if endpoint == "/api/v1/act" else self._setup_edit(SETUP_EDITS[endpoint])
         except Exception as error:  # noqa: BLE001 - show the failure, keep serving
             return self._json({"error": f"{type(error).__name__}: {error}"}, 500)
@@ -405,6 +414,50 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(path, str) or not path:
             return self._json({"refused": "BadRequest", "error": "path is the entity's path (a string)"}, 400)
         return self._json(self.host.watch_heartbeat(path))
+
+    def _arrangements(self):
+        # WHY the same page-only rule as /settings: an arrangement is the person's preference, written to their file
+        body, answer = self._body()
+        if body is None:
+            return self._json(*answer)
+        try:
+            return self._json(self.host.arrangements.set(body.get("kind"), body.get("section"), body.get("value")))
+        except ArrangementError as error:
+            return self._json({"refused": "BadArrangement", "error": str(error)}, 400)
+
+    def _config(self, op: str):
+        """The Configuration tab's edit session and writes (docs/state-config-v1.md section 9): page-only like /act, and each one
+        needs the session token that the person's confirm opened. The answer is the editor's, whole."""
+
+        body, answer = self._body()
+        if body is None:
+            return self._json(*answer)
+        path, token = body.get("path"), body.get("token")
+        if not isinstance(path, str) or not path or (op != "edit" and not isinstance(token, str)):
+            return self._json({"refused": "BadRequest", "error": "path is the entity's path; token the edit session's"}, 400)
+        editor = self.host.config_editor
+        if op == "edit":
+            action = body.get("op")
+            if action == "open":
+                result = editor.open(path, body.get("confirm") is True)
+            elif action in ("beat", "close") and isinstance(token, str):
+                result = editor.beat(path, token) if action == "beat" else editor.close(path, token)
+            else:
+                return self._json({"refused": "BadRequest", "error": "op is open, beat or close (the last two with the token)"}, 400)
+        elif op == "set":
+            key = body.get("key")
+            if not isinstance(key, str) or "value" not in body:
+                return self._json({"refused": "BadRequest", "error": "key is a string and value is the new value"}, 400)
+            result = editor.set(path, token, key, body["value"], body.get("confirm_safety") is True)
+        elif op == "persist":
+            result = editor.persist(path, token)
+        else:
+            key = body.get("key")
+            if key is not None and not isinstance(key, str):
+                return self._json({"refused": "BadRequest", "error": "key is a string (or absent: every setting)"}, 400)
+            result = editor.reset(path, token, str(body.get("to") or ""), key, body.get("confirm_safety") is True)
+        status = 200 if result.get("ok") or result.get("state") in ("refused", "rejected") else 403 if result.get("refused") == "NoEditSession" else 400
+        return self._json(result, status)
 
     # --- history and settings ------------------------------------------------------------------------------------
     def _history(self, endpoint: str, query: dict):

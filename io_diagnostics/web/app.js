@@ -167,7 +167,7 @@ function loadScript(src) {
 // stock shadcn for now ... what matters is the location of things"; every other skin stays one pick away (bottom-right)
 // WHY d4 for the Computer (Zach, 2026-10-23, via the orchestrator): its page is the ROS2 System Webview's data (RAM, CPU,
 // swap, load, disks, temperatures, GPU, network, USB); every other entity keeps d0 until he picks one
-const DEFAULTS = { skin: 'shadcn', structure: 'p1', variant: 'v6', sort: 'status', layout: 'd0', computerLayout: 'd4', menu: 'u0', runs: 'r1' };
+const DEFAULTS = { skin: 'shadcn', structure: 'p1', variant: 'v6', sort: 'status', layout: 'd6', computerLayout: 'd6', menu: 'u0', runs: 'r1' };
 const darkQuery = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
 
 // <html data-skin data-mode>: the skin's tokens for the mode. Auto follows the OS until the viewer picks one.

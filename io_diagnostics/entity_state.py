@@ -36,10 +36,13 @@ def config_rows(cache: JobCache, rel: str, now: float) -> list[dict]:
         if path != rel:
             continue
         differs = config.expected is not None and not same_value(config.value, config.expected)
+        unsaved = config.stored is not None and not same_value(config.value, config.stored)
         rows.append({"key": config.key, "value": config.value, "unit": config.unit, "group": config.group,
                      "expected": config.expected, "expected_source": config.expected_source, "differs": differs,
                      "stamp": config.stamp, "age_s": round(now - config.stamp, 3) if config.stamp is not None else None,
-                     "source": config.source})
+                     "source": config.source, "writable": config.writable, "type": config.type,
+                     "range": list(config.range) if config.range else None, "choices": list(config.choices), "default": config.default,
+                     "stored": config.stored, "safety": config.safety, "unsaved": unsaved})
     return rows
 
 

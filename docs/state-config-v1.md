@@ -144,7 +144,7 @@ class, whether it can run now and its last run; a click is the page's usual dry 
 
 - **Driver tabs** are declared in `describe`: `"tabs": [{"id": "processes", "title": "Processes", "path": "", "kind":
   "table", "status": "Processes", "values": ["top_cpu", "top_memory"]}]`. `path` is relative to the device (`""`, or
-  `"host"` for the Computer). A `table` tab draws each named value of the named status as a sortable table: a tab-separated
+  `"host"` for the Computer). A `table` tab draws each named value of the named status (its name, or the part after "<who>: ") as a sortable table: a tab-separated
   text whose first line is the header; a column named `*_bytes` is drawn as bytes, `*_percent` as %. The Computer's
   `computer` plugin declares **Processes**. A camera's streams stay in State.
 - **Badges**, quiet, none when all is well: Diagnostics shows the worst non-OK level's mark and the count of rows not OK;
