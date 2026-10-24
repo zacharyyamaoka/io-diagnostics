@@ -251,6 +251,7 @@ specified in `docs/state-config-v1.md`; `history`'s `state: true` marks a series
      "preconditions": [{"check": "port_free", "text": "Port not held by another process", "state": "fail",
                         "detail": "port held by 640623 tview"}],
      "state": "blocked", "reason": "blocked: port held by 640623 tview", "executable": false, "owner": "moteus_servo",
+     "second_confirm": "",
      "last_run": {"id": "r7", "state": "done", "active": false, "started": 1761096000.0, "started_iso": "2026-10-21T18:20:00-07:00",
                   "ended": 1761096012.0, "ended_iso": "2026-10-21T18:20:12-07:00", "exit_code": 0, "elapsed_s": 12.0}}
   ],
@@ -312,6 +313,15 @@ specified in `docs/state-config-v1.md`; `history`'s `state: true` marks a series
     few s): moteus_servo diagnose usb:1-3, 2 s so far"`, and the action is `"waiting"`, never `"blocked"`: it frees by
     itself, and the page greys it, never in a warning colour. Only a foreign holder is `"fail"` / `"blocked"`, with
     `"blocked by pid 4187 (python3 -m rack_session)"` (its command line from `/proc/<pid>/cmdline`).
+  - **The host's own utilities** (docs/usb-reset.md): a USB device row and a USB port row also carry `reset_port` ("Reset USB port",
+    `interrupts`, `owner` `io_diagnostics`) whatever driver owns the device. It is added to the entity's own actions unless its driver
+    registered that name itself (then the driver's wins) or opted out in `describe` (`"opt_out": ["reset_port"]`; a hub is not
+    offered either while a device behind it opted out). Its preconditions are evaluated by the host: `device_present` (something is
+    plugged in at the port), `no_run_active` (no RobotDx run is active on the device, on anything below it, or on a hub above it;
+    compared by tree path), `reset_privilege` (this user may use `usbreset`, else the `authorized` switch, else `uhubctl`; the
+    detail says why not) and `device_free` (no other process has the device or anything below it open; this host's own watch /
+    follow processes do not count). `device_free` failing never blocks the action: the node's `second_confirm` then holds the
+    sentence the second confirmation names ("tview (pid 4242) has /dev/ttyACM0"), `""` for every other action.
   - `danger`: `query` (reads only) · `interrupts` (stops or resets what runs) · `changes` (writes stored state) ·
     `moves` (record v0.1: hardware moves, e.g. moteus calibration spins the rotor). Every danger but `query` needs a
     per-device confirmation. The same standard `name` can carry a different `danger` on another driver; its `title`
@@ -599,7 +609,12 @@ its confirm token names it). Host function: `Host.act(path, action, node=, confi
 - An action whose `danger` is not `query` needs `--confirm TOKEN` (`refused: "ConfirmRequired"`, with the action's
   confirm text). The host passes the token through; the plugin checks it, since only the owner knows what it
   confirms (moteus: the token its `ConfirmationRequired` event names; RealSense: the camera's serial).
-- Refused before anything runs: `NoSuchEntity`, `NoPlugin`, `ActionNotRegistered`.
+- Refused before anything runs: `NoSuchEntity`, `NoPlugin`, `ActionNotRegistered`. The host's own `reset_port` adds `NoDevice`
+  (nothing is plugged in at the port), `RunActive` (a RobotDx run is active on it; dry runs too), `NotLive` (a fixture replay or a
+  fake machine has no real port) and, from the verb, `NoPrivilege`, `HoldersPresent` and `ConfirmMismatch` (below). Its answer has
+  `registered_by: "builtin"` and `plugin: "io_diagnostics"`; its confirmation token is the dry run's `action_result.token`, bound to
+  the device and to the holders the dry run listed, so `--confirm-holders` (CLI) / `"confirm_holders": true` (page) is the second
+  confirmation and a holder that came since voids the first.
 
 It prints one JSON object and exits 0 (ran, plugin exit 0), 2 (refused: nothing ran) or 1 (the plugin crashed or
 hung):
@@ -646,6 +661,10 @@ The run repeats the request with that token and without `dry_run`:
 ```json
 {"path": "host/usb1/port-1-3/usb-1-3/can/15", "action": "calibrate", "node": 15, "token": "c-3TW1BFkuLa5-UsYKpa3OMp"}
 ```
+
+`reset_port` (docs/usb-reset.md) may also send `"confirm_holders": true` with the real request: the person ticked "I understand
+tview (pid 4242) will lose it". The server turns it into `--confirm-holders` on the verb's command line, for that action only; it
+is the one flag a request can add, and the verb still refuses `HoldersPresent` without it.
 
 `set_id` also names the board's new bus id as `new_id` (an integer; omit it or send `null` for every other action).
 The server passes it to the plugin as `--new-id` and binds the token to it, so the run must repeat it: a token

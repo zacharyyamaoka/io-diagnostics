@@ -105,12 +105,12 @@ def test_an_action_waits_quietly_while_the_hosts_own_check_holds_the_lock(tmp_pa
         usb_device("9-1", "0483", "5740", "272813EF", label="fdcanusb")), lambda: who))
     host.run_all_once()
     device = host.layer.device_paths["usb:9-1"]
-    [action] = host.node(device)["actions"]
+    [action] = [found for found in host.node(device)["actions"] if found["owner"] != "io_diagnostics"]  # not the host's own reset_port
     [precondition] = action["preconditions"]
     assert (precondition["state"], action["state"]) == (WAITING, WAITING)
     assert action["reason"].startswith("this host's own check is running (a few s)") and "blocked" not in action["reason"]
     who[:] = [LockHolder(os.getpid(), "python3 -m rack_session", "FLOCK")]
-    [action] = host.node(device)["actions"]
+    [action] = [found for found in host.node(device)["actions"] if found["owner"] != "io_diagnostics"]
     assert (action["preconditions"][0]["state"], action["state"]) == ("fail", "blocked")
     assert action["reason"] == f"blocked by pid {os.getpid()} (python3 -m rack_session)"
     who[:] = []

@@ -195,7 +195,7 @@ def test_a_confirm_names_the_device_that_owns_the_action(tmp_path):
                         "set_id": "Change the CAN id of CAN 15 on fdcanusb W1?"}, confirms
     refused = host.act(board, "calibrate", node=15, human=True)  # the ConfirmRequired text is filled the same way
     assert refused["refused"] == "ConfirmRequired" and "Calibrate CAN 15 on fdcanusb W1?" in refused["message"], refused
-    [check] = host.node(adapter)["actions"]
+    [check] = [action for action in host.node(adapter)["actions"] if action["owner"] != "io_diagnostics"]  # not the host's own reset_port
     assert check["confirm"] == "Query every id on fdcanusb W1?", check
 
 

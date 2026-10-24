@@ -24,7 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from io_diagnostics import WEB
-from io_diagnostics import release_channels
+from io_diagnostics import host_utilities, release_channels
 from io_diagnostics.arrangements import ArrangementError
 from io_diagnostics.history import MAX_BINS
 from io_diagnostics.host import Host
@@ -569,8 +569,11 @@ class Handler(BaseHTTPRequestHandler):
         # WHY human=True here and nowhere else in the server: the person read the dry run on the page and clicked
         # (a confirm modal for anything but a query); the plugin still checks its own token against the device.
         # The run is interactive: started from the page, so the page may type into it and stop it (docs/runs-v1.md)
+        # the host's own utility asks twice when something else has the device open (docs/usb-reset.md): the page's ticked box
+        # is the second confirmation, and this is the only flag a request may add to the command line
+        again = ["--confirm-holders"] if body.get("confirm_holders") is True and action in host_utilities.NAMES else None
         run, result = self.host.start_act(path, action, node=node, confirm=entry["plugin_token"], new_id=new_id,
-                                          interactive=True)
+                                          interactive=True, extra=again)
         if run is None:
             return self._json({"dry_run": False, "result": result})
         if body.get("detach") is True:

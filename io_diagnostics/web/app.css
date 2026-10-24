@@ -433,6 +433,7 @@ table.grid td.mono.xcol { font-size: 11.5px; }
 .u-result .u-result-h b { color: var(--io-text-strong); }
 .u-records { margin: 0; padding-left: 16px; }
 .u-tail { margin: 0; max-height: 140px; overflow: auto; font: 11px/1.4 var(--io-font-mono); background: var(--io-surface-alt); padding: 6px 8px; border-radius: var(--io-radius-sm); white-space: pre-wrap; }
+.u-fix { max-height: none; overflow-wrap: anywhere; }
 /* the strongest NEUTRAL button: moves (inverted text colours, no warn / error fill) */
 .btn.primary.moves { background: var(--io-text-strong); border-color: var(--io-text-strong); color: var(--io-surface); }
 .btn.primary.moves:hover:not([disabled]) { background: var(--io-text); }

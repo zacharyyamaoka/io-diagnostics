@@ -32,6 +32,7 @@ from io_diagnostics.arrangements import ARRANGEMENTS_FILE, Arrangements
 from io_diagnostics.config_edit import ConfigEditor
 from io_diagnostics import expected as expected_module
 from io_diagnostics import history as history_module
+from io_diagnostics import host_utilities, usb_reset
 from io_diagnostics import logview as logview_module
 from io_diagnostics import probe as probe_module
 from io_diagnostics import roster as roster_module
@@ -202,6 +203,22 @@ class LiveOs:
         if decision.state == "blocked":
             return False, decision.reason.replace("open by", "held by")
         return None, decision.reason
+
+
+def usb_reset_gate(device: dict, check: str) -> tuple[bool | None, str]:
+    """The host's own ``reset_port`` preconditions (docs/usb-reset.md). ``reset_privilege``: may this user reset the port by any
+    of the three mechanisms. ``device_free``: nothing else has the device (or what hangs below it) open; this host's own watch /
+    follow processes do not count, they yield. Read passively (sysfs, /proc), never opens the device."""
+
+    target = usb_reset.target_of(device)
+    if target is None:
+        return None, "not a USB device with a port"
+    if check == "reset_privilege":
+        return usb_reset.privilege(target)
+    found, unseen = usb_reset.holders(target.port, frozenset(RUNNING.passive_sessions()))
+    if found:
+        return False, "; ".join(holder.text() for holder in found)
+    return True, "no process has it open" + (f" (could not look at {unseen} other users' processes)" if unseen else "")
 
 
 def _without_own_watchers(holders_fn):
@@ -1365,6 +1382,9 @@ class Host:
     def _on_run_end(self, run) -> None:
         """A finished ``open_console`` run that says it launched a process (``ActionCompleted`` ``args.pid``): remember it."""
 
+        if run.spec.action == usb_reset.NAME and run.spec.plugin == host_utilities.OWNER:
+            self._after_reset(run)
+            return
         if run.spec.action != "open_console" or run.state != "done":
             return
         for record in (run.result or {}).get("records") or []:
@@ -1376,6 +1396,24 @@ class Host:
                                                          "device_path": run.spec.device_path, "since": self.clock.now()}
                 self.wake()
                 return
+
+    def _after_reset(self, run) -> None:
+        """A port was reset (or tried): every driver job whose device is in it is probed again, as for a new connection
+        (docs/probe-on-connect.md), whether the kernel gave it a new device number or reset it in place; and the OS side is read
+        again at once, so the plug / unplug / reset the kernel logged shows in Activity within a second, not at the next poll.
+        WHY even when the reset failed (exit 1) or was stopped: the device may have dropped without coming back, and the next
+        probe is what says so. Not for a refusal (exit 2: a gate said no, nothing happened to the device)."""
+
+        if run.exit_code is None or run.exit_code == usb_reset.REFUSED:
+            return
+        port = usb_reset.port_of({"id": run.spec.device_id})
+        with self.lock:
+            ids = set(host_utilities.subtree_device_ids(port, self.layer)) if port else {run.spec.device_id}
+            for job in self.jobs.values():
+                if str(job.device.get("id")) in ids:
+                    job.probed, job.blocked, job.next_due = False, None, 0.0
+        self.os.invalidate()
+        self.wake()
 
     def _console_notes(self, merged: tree.Merged, now: float) -> list[DiagnosticStatus]:
         """While a console RobotDx launched is open, the device's row says so, instead of leaving a bare "port held"
@@ -1923,10 +1961,48 @@ class Host:
             if firmware.level == OK:
                 return False, versions
             return None, firmware.message or versions
+        if check in host_utilities.CHECKS:
+            return self._evaluate_utility(check, path, view)
         device_path = tree.nearest_device(path, view.merged, view.layer)
         if device_path is None:
             return None, f"{check}: no physical device above {entity.name}"
         return self.os.gate(view.layer.matchable(view.layer.device_of_path[device_path]), check)
+
+    def _evaluate_utility(self, check: str, path: str, view: View) -> tuple[bool | None, str]:
+        """The preconditions of the host's own utilities (``host_utilities.CHECKS``) for a USB device or port row."""
+
+        found = host_utilities.usb_target(path, view.layer)
+        if found is None:
+            return None, f"{check}: not a USB device or port"
+        device, port = found
+        if check == "device_present":
+            if device is None:
+                return False, f"nothing is plugged in at {port} now"
+            return True, str(device.get("label") or device.get("id"))
+        if check == "no_run_active":
+            busy = self._active_run_near(path, view.layer, found)
+            return (False, busy) if busy else (True, "no run is active on it")
+        if device is None:
+            return None, f"nothing is plugged in at {port} now"
+        # WHY not os.gate: a recording or a fake machine has no real port, and says so (a blocked button), unless a test points
+        # the module at a fake sysfs tree (IO_DIAGNOSTICS_USB_SYSFS), which then answers like a live one
+        if getattr(self.os, "mode", "live") != "live" and not usb_reset.sysfs_overridden():
+            return (False if check == "reset_privilege" else None), "this host replays a recording or a fake machine: there is no real port to reset"
+        return usb_reset_gate(device, check)
+
+    def _active_run_near(self, path: str, layer, found: tuple[dict | None, str]) -> str:
+        """Why a reset would collide with a RobotDx run: an active run on the device, on anything below it (a hub), or on a
+        hub above it. "" when none. WHY by path overlap: the run's own ``device_path`` is where it acts, and a reset takes
+        down everything beneath the port."""
+
+        device, _port = found
+        here = layer.device_paths.get(str(device.get("id"))) if device else None
+        for run in self.runs.active():
+            for mine in (path, here):
+                theirs = run.spec.device_path
+                if mine and theirs and (mine == theirs or mine.startswith(theirs + "/") or theirs.startswith(mine + "/")):
+                    return f"{run.spec.label} is running on it (started {run.to_json()['started_iso'] or 'just now'})"
+        return ""
 
     def _fill(self, path: str, view: View) -> _Blank:
         """The values a confirm text's ``{name}``, ``{id}``, ``{serial}``, ``{latest}`` placeholders take.
@@ -1938,23 +2014,32 @@ class Host:
         entity = view.merged.entities[path]
         device_path = tree.nearest_device(path, view.merged)
         device = view.merged.entities[device_path] if device_path else None
+        port = ""
+        found = host_utilities.usb_target(path, view.layer)
+        if found is not None:  # a USB device or port row: {port} is the port it sits at; a port row's {name} is the device in it
+            port = found[1]
+            if found[0] is not None and entity.kind == "port":
+                device = view.merged.entities.get(view.layer.device_paths.get(str(found[0].get("id")), "")) or device
         serial = entity.identity.get("serial_number") or (device.identity.get("serial_number", "") if device else "")
         firmware = self._firmware(path, view)
-        return _Blank(name=device.name if device else entity.name, id=path.rsplit("/", 1)[-1], serial=serial,
+        return _Blank(name=device.name if device else entity.name, id=path.rsplit("/", 1)[-1], serial=serial, port=port,
                       latest=dict(firmware.values).get("latest_version", "?") if firmware else "?")
 
     def actions_json(self, path: str, view: View) -> list[dict]:
         entity = view.merged.entities[path]
         fill = self._fill(path, view)
         out = []
-        for action in entity.actions:
+        for action in self._entity_actions(path, entity, view):
             results = []
             for check, text in action.preconditions:
                 state, detail = self.evaluate(check, path, view)
                 results.append({"check": check, "text": string.Formatter().vformat(text, (), fill),
                                 "state": {True: "pass", False: "fail", None: "unknown", WAITING: WAITING}[state],
                                 "detail": detail})
-            failing = [result for result in results if result["state"] == "fail"]
+            # WHY device_free is not a block: something else having the device open is the person's call (the second
+            # confirmation names it), not a reason the button is dead (docs/usb-reset.md)
+            second = next((result for result in results if result["check"] == "device_free" and result["state"] == "fail"), None)
+            failing = [result for result in results if result["state"] == "fail" and result is not second]
             waiting = [result for result in results if result["state"] == WAITING]
             unknown = [result for result in results if result["state"] == "unknown"]
             up_to_date = next((result for result in failing if result["check"] == "update_available"), None)
@@ -1974,8 +2059,32 @@ class Host:
                         "scope": action.scope, "kind": action.kind,
                         "confirm": string.Formatter().vformat(action.confirm, (), fill),
                         "preconditions": results, "state": state, "reason": reason, "executable": False,
-                        "owner": entity.owner, "last_run": self._last_run(path, action.name)})
+                        "owner": host_utilities.OWNER if action in host_utilities.OFFERED else entity.owner,
+                        "second_confirm": second["detail"] if second else "", "last_run": self._last_run(path, action.name)})
         return out
+
+    def _entity_actions(self, path: str, entity, view: View) -> list[Action]:
+        """The entity's registered actions, plus the host's own utilities on the rows they belong to (a USB device or port
+        row), unless the entity's driver registered that name itself or opted its devices out."""
+
+        actions = list(entity.actions)
+        for utility in host_utilities.OFFERED:
+            if not any(action.name == utility.name for action in actions) and self._offers(utility.name, path, view.layer):
+                actions.append(utility)
+        return actions
+
+    def _offers(self, name: str, path: str, layer) -> bool:
+        """Whether the host offers its utility ``name`` on this row: a USB device or port, and no driver whose device sits at
+        or below it opted out in ``describe`` (``"opt_out": ["reset_port"]``: a device that must not be reset mid-run; a hub
+        is not reset under such a device either)."""
+
+        found = host_utilities.usb_target(path, layer)
+        if found is None:
+            return False
+        ids = set(host_utilities.subtree_device_ids(found[1], layer))
+        with self.lock:
+            jobs = [job for job in self.jobs.values() if str(job.device.get("id")) in ids]
+        return not any(name in ((self.describes.get(job.spec.name) or {}).get("opt_out") or []) for job in jobs)
 
     # --- actions: run one, for a person ------------------------------------------------------------------------------
     def _owning_job(self, path: str, entity) -> Job | None:
@@ -2040,7 +2149,7 @@ class Host:
                         "wait for it, or stop it, before asking for another dry run"}
             with self.gates.hold(group, person=True):
                 result = run_act(plan.job.spec, plan.job.device, plan.device_path, plan.argv, self.clock.now,
-                                 self._job_env(plan.job))
+                                 self._act_env(plan.job))
             return {**out, **result}
         run = self._launch_run(plan, out, interactive=False)
         run.wait()
@@ -2078,9 +2187,13 @@ class Host:
         if entity is None:
             return refuse("NoSuchEntity", f"no entity at {path!r}")
         job = self._owning_job(path, entity)
+        registered, source = self._registered(job, entity, action) if job is not None else (None, "")
+        if registered is None and action in host_utilities.NAMES:
+            builtin = self._plan_utility(view, entity, path, action, out, confirm=confirm, dry_run=dry_run, human=human, extra=extra)
+            if builtin is not None:
+                return builtin
         if job is None:
             return refuse("NoPlugin", f"no enabled plugin diagnoses {entity.name} ({path})")
-        registered, source = self._registered(job, entity, action)
         out.update(plugin=job.spec.name, device_id=str(job.device.get("id", "")), registered_by=source)
         if registered is None:
             return refuse("ActionNotRegistered", f"{job.spec.name} registers no action {action!r} for {entity.name}")
@@ -2093,6 +2206,42 @@ class Host:
             return refuse("ConfirmRequired", f"{registered.danger}: pass --confirm <token> after reading: {text}")
         device_path = self.layer.device_paths.get(str(job.device.get("id")), job.device_path)
         return out, _ActPlan(job, argv, device_path, entity, registered, node, new_id)
+
+    def _plan_utility(self, view: View, entity, path: str, action: str, out: dict, *, confirm: str | None, dry_run: bool,
+                      human: bool, extra: list[str] | None):
+        """The host's own utility (``host_utilities``) on a USB device or port row: ``(out, plan)``, or None when this row does
+        not get it (the caller then refuses as it would for any unknown action). It runs ``io_diagnostics.usb_reset`` through
+        the same dry run -> token -> run path as a driver's action; its gates are, in order: the driver did not opt out, a
+        device is there, no RobotDx run is active on it, a real run only for a person, with a confirmation, and (here and again
+        in the verb) the privilege and the holders."""
+
+        def refuse(code: str, message: str):
+            return {**out, "refused": code, "message": message}, None
+
+        if not self._offers(action, path, view.layer):
+            return None
+        device, port = host_utilities.usb_target(path, view.layer)
+        out.update(plugin=host_utilities.OWNER, registered_by="builtin", title=host_utilities.RESET_PORT.title,
+                   danger=host_utilities.RESET_PORT.danger)
+        if device is None:
+            return refuse("NoDevice", f"nothing is plugged in at {port} now")
+        out["device_id"] = str(device.get("id", ""))
+        busy = self._active_run_near(path, view.layer, (device, port))
+        if busy:
+            return refuse("RunActive", f"{busy}: wait for it, or stop it, before resetting the port")
+        argv = act_argv(host_utilities.SPEC, device, action, confirm=confirm, dry_run=dry_run, extra=extra)
+        out["argv"] = argv
+        if not human and not dry_run:
+            return refuse("NotInteractive", "not a person (stdin is not a TTY): only --dry-run runs; agents can't click")
+        if not dry_run and not confirm:
+            text = string.Formatter().vformat(host_utilities.RESET_PORT.confirm, (), self._fill(path, view))
+            return refuse("ConfirmRequired", f"{host_utilities.RESET_PORT.danger}: pass --confirm <token> after reading: {text}")
+        if not dry_run and getattr(self.os, "mode", "live") != "live" and not usb_reset.sysfs_overridden():
+            return refuse("NotLive", "this host replays a recording or a fake machine: there is no real port to reset")
+        device_path = self.layer.device_paths.get(str(device.get("id")), "")
+        shown = view.merged.entities.get(device_path)  # WHY its row's name: the confirm, the terminal and the records say "fdcanusb 272813EF"
+        device = {**device, "label": shown.name} if shown is not None and shown.name else device
+        return out, _ActPlan(Job(host_utilities.SPEC, device, device_path), argv, device_path, entity, host_utilities.RESET_PORT, None, None)
 
     def _describe_for(self, job: Job) -> dict | None:
         if self.describes.get(job.spec.name) is None:
@@ -2109,15 +2258,47 @@ class Host:
             # the plugin's own stop verb (docs/runs-v1.md section 6): run by the host after a moves run that did not finish
             stop_argv = [*spec.command, "stop", "--device", device_id, *(["--node", str(plan.node)] if plan.node is not None else [])]
         label = f"{plan.entity.name} · {terminal_module.plain_title(plan.registered.title)}"
+        builtin = spec is host_utilities.SPEC
         run_spec = terminal_module.RunSpec(
             plugin=spec.name, device_id=device_id, device_path=plan.device_path, path=out["path"], action=out["action"],
             title=plan.registered.title, label=label, danger=plan.registered.danger, argv=plan.argv,
-            env=plugin_env(spec, job.device, plan.device_path, started, self._job_env(job)), cwd=spec.cwd,
+            env=plugin_env(spec, job.device, plan.device_path, started, self._act_env(job)), cwd=spec.cwd,
             timeout_s=spec.act_timeout_s, node=plan.node, new_id=plan.new_id, hardware_id=plan.entity.hardware_id,
-            stop_argv=stop_argv, group=spec.exclusive, hold=lambda: self._run_hold(job, spec.exclusive))
+            stop_argv=stop_argv, group=spec.exclusive,
+            hold=(lambda: self._utility_hold(job)) if builtin else (lambda: self._run_hold(job, spec.exclusive)))
         run = self.runs.create(run_spec, interactive=interactive)
         run.launch()
         return run
+
+    def _act_env(self, job: Job) -> dict[str, str]:
+        """``_job_env`` for an act. The host's own utility also learns whether this host is a replay, and which sessions are
+        this host's own watch / follow processes (they hold a device for a page and are not "someone else" to a reset)."""
+
+        env = self._job_env(job)
+        if job.spec is host_utilities.SPEC:
+            env[usb_reset.OS_MODE_ENV] = str(getattr(self.os, "mode", "live"))
+            env[usb_reset.OWN_SESSIONS_ENV] = ",".join(str(session) for session in RUNNING.passive_sessions())
+        return env
+
+    @contextlib.contextmanager
+    def _utility_hold(self, job: Job):
+        """What the host's own reset holds while it runs: the ``exclusive`` group of every plugin whose device is in the port
+        (a person's press goes first, one group at a time in name order so two resets cannot deadlock), and no watch of those
+        devices, so the reset finds nothing of the host's own holding the device."""
+
+        found = host_utilities.usb_target(job.device_path, self.layer) if job.device_path in self.layer.entities else None
+        ids = set(host_utilities.subtree_device_ids(found[1], self.layer)) if found else {str(job.device.get("id"))}
+        with self.lock:
+            jobs = [other for other in self.jobs.values() if str(other.device.get("id")) in ids]
+        groups = sorted({other.spec.exclusive for other in jobs if other.spec.exclusive})
+        with contextlib.ExitStack() as stack:
+            for group in groups:
+                stack.enter_context(self.gates.hold(group, person=True))
+            paused = [watch for other in jobs for watch in self.pause_watches(other)]
+            try:
+                yield
+            finally:
+                self.resume_watches(paused)
 
     @contextlib.contextmanager
     def _run_hold(self, job: Job, group: str):
