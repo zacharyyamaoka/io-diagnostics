@@ -331,6 +331,7 @@ const windowWords = (s) => (s < 3600 ? `${Math.round(s / 60)} min` : `${+(s / 36
 async function loadSettings() {
   try { S.settings = await getJson('/api/v1/settings'); } catch (error) { S.settings = null; }
   renderWindowPicker();
+  renderDepthControls();
 }
 function renderWindowPicker() {
   const picker = $('history-window');
@@ -344,6 +345,40 @@ function renderWindowPicker() {
   if (picker.innerHTML !== html) picker.innerHTML = html;
   picker.value = String(now);
   picker.title = `History window: every health bar and trend (${esc(settings.source || '')}${settings.note ? ` · ${settings.note}` : ''})`;
+}
+// The depth colour map (Zach, 2026-10-24: "in the settings of this app please give the option to set the color map for
+// the depth map"): realsense-viewer's colour scheme names, its histogram equalization switch and, with that off, the
+// distance range the colours span. App-wide like the history window; the host restarts a streaming camera's watch.
+function renderDepthControls() {
+  const settings = S.settings;
+  const limits = (settings && settings.limits && settings.limits.depth_colormap) || null;
+  const shown = Boolean(settings && limits && 'depth_colormap' in settings);
+  $('depthmap-switch').hidden = $('depth-equalize-switch').hidden = !shown;
+  $('depth-range-switch').hidden = !shown || settings.depth_equalize !== false;
+  if (!shown) return;
+  const picker = $('depth-colormap');
+  const html = limits.choices.map((name) => `<option value="${esc(name)}">${esc(name)}</option>`).join('');
+  if (picker.innerHTML !== html) picker.innerHTML = html;
+  picker.value = settings.depth_colormap;
+  $('depth-equalize').checked = settings.depth_equalize !== false;
+  // WHY not while typing: a render must not rewrite the number a person is in the middle of entering
+  if (document.activeElement !== $('depth-min')) $('depth-min').value = String(settings.depth_min_m);
+  if (document.activeElement !== $('depth-max')) $('depth-max').value = String(settings.depth_max_m);
+}
+async function setDepth(changes) {
+  let answer;
+  try {
+    const response = await fetch('/api/v1/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-IO-Diagnostics': 'ui' },
+      body: JSON.stringify(changes) });
+    answer = await response.json();
+    if (!response.ok) throw new Error(answer.error || answer.refused || `HTTP ${response.status}`);
+  } catch (error) {
+    console.warn('depth colour map:', error);
+    renderDepthControls(); // back to what the host holds
+    return;
+  }
+  S.settings = answer;
+  renderDepthControls();
 }
 async function setWindow(seconds) {
   let answer;
@@ -1898,6 +1933,15 @@ document.addEventListener('click', (event) => {
   if (S.chip && !t.closest('#chip-pop')) { S.chip = false; render(); }
 });
 $('search').addEventListener('input', (event) => { S.query = event.target.value; render(); });
+$('depth-colormap').addEventListener('change', (event) => setDepth({ depth_colormap: event.target.value }));
+$('depth-equalize').addEventListener('change', (event) => setDepth({ depth_equalize: event.target.checked }));
+for (const id of ['depth-min', 'depth-max']) {
+  $(id).addEventListener('change', () => {
+    const low = Number($('depth-min').value), high = Number($('depth-max').value);
+    if ($('depth-min').value === '' || $('depth-max').value === '') return renderDepthControls();
+    setDepth({ depth_min_m: low, depth_max_m: high });
+  });
+}
 $('history-window').addEventListener('change', (event) => { const seconds = Number(event.target.value); if (seconds > 0) setWindow(seconds); });
 // the scroll position of the drill step on screen (restored when back / forward returns to it); a scroll while another
 // step is still loading belongs to no step

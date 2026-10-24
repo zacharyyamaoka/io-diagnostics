@@ -100,6 +100,11 @@
         <div class="vo-sep"></div>
         <label class="vo-row" id="variant-switch" title="Tree style"><span class="vo-label">Tree style</span><select id="tree-variant" aria-label="Tree style"></select></label>
         <label class="vo-row" id="window-switch" title="History window" hidden><span class="vo-label">History</span><select id="history-window" aria-label="History window"></select></label>
+        <label class="vo-row" id="depthmap-switch" title="Depth colour map: how the live depth picture of a camera is coloured (realsense-viewer's colour schemes); a camera streaming now restarts its stream to use it" hidden><span class="vo-label">Depth colour map</span><select id="depth-colormap" aria-label="Depth colour map"></select></label>
+        <label class="vo-row vo-switch" id="depth-equalize-switch" title="Histogram equalization: spread the colours over the distances the picture actually holds. Off: the colours span the range below" hidden><span class="vo-label">Depth equalization</span><input type="checkbox" role="switch" id="depth-equalize" aria-label="Depth histogram equalization"></label>
+        <div class="vo-row" id="depth-range-switch" title="With equalization off, the colours span this distance range" hidden><span class="vo-label">Depth range</span>
+          <span class="vo-range"><input type="number" id="depth-min" min="0" max="16" step="0.1" aria-label="Depth range minimum, metres"><span class="vo-unit">to</span><input type="number" id="depth-max" min="0" max="16" step="0.1" aria-label="Depth range maximum, metres"><span class="vo-unit">m</span></span>
+        </div>
         <label class="vo-row" id="skin-switch" title="Skin"><span class="vo-label">Skin</span><select id="skin" aria-label="Skin"></select></label>
         <div class="vo-row"><span class="vo-label">Mode</span>
           <div class="ctl-seg" id="mode-switch" role="radiogroup" aria-label="Light or dark">

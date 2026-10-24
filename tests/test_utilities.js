@@ -37,7 +37,8 @@
 //                re-reads the entity; a failure is the one coloured (diagnostic-level) line; every drill-down is a
 //                browser-history entry (page.goBack / goForward and the mouse's back / forward buttons, as CDP mouse
 //                events); every entity opens in d6 (the entity page) unless the Prototype picker says otherwise; the history window in
-//                View options (POST /api/v1/settings, page-only, on a server with its own config dir).
+//                View options (POST /api/v1/settings, page-only, on a server with its own config dir); the depth colour map beside it
+//                (select, equalization switch, range): changes persist, survive a reload, and are shot light and dark.
 // Screenshots: reports/media/round2/integration-*.png, expected-*.png, reports/media/round3/a-*-<light|dark>.png.
 // Exits 1 on any failed check. Nothing opens a CAN adapter.
 'use strict';
@@ -593,6 +594,7 @@ async function main() {
   }
   try {
     await historyWindow(browser);
+    await depthColormap(browser);
     await expectedSetup(browser);
   } finally {
     await browser.close();
@@ -945,6 +947,92 @@ async function historyWindow(browser) {
     check('history window: no page errors', errors.length === 0, errors.slice(0, 3).join(' | ') || 'none');
   } finally {
     await context.close();
+    stopServer(server.child);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// ---- the depth colour map in View options (Zach, 2026-10-24): POST /api/v1/settings, light and dark shots ----
+const DEPTH_SHOTS = path.join(ROOT, 'reports', 'media', 'depth-colormap');
+async function depthColormap(browser) {
+  const os = require('os');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'io-diagnostics-depth-'));
+  const server = await startServer('F1', [], { IO_DIAGNOSTICS_CONFIG_DIR: dir });
+  const base = server.base;
+  fs.mkdirSync(DEPTH_SHOTS, { recursive: true });
+  const context = await browser.newContext({ viewport: VIEWPORT, colorScheme: 'light' });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(String(error)));
+  const posts = [];
+  page.on('request', (request) => { if (request.url().endsWith('/api/v1/settings') && request.method() === 'POST') posts.push(JSON.parse(request.postData() || '{}')); });
+  const hostSettings = async () => (await fetch(`${base}/api/v1/settings`)).json();
+  const read = () => page.evaluate(() => ({
+    map: document.getElementById('depth-colormap').value, names: [...document.querySelectorAll('#depth-colormap option')].map((o) => o.textContent),
+    equalize: document.getElementById('depth-equalize').checked, rangeHidden: document.getElementById('depth-range-switch').hidden,
+    min: document.getElementById('depth-min').value, max: document.getElementById('depth-max').value }));
+  const shoot = async (scheme) => {
+    const pop = await page.locator('#view-options').boundingBox();
+    await page.screenshot({ path: path.join(DEPTH_SHOTS, `view-options-depth-${scheme}.png`),
+      clip: { x: 0, y: 0, width: Math.min(VIEWPORT.width, pop.x + pop.width + 40), height: pop.y + pop.height + 30 } });
+  };
+  try {
+    await page.goto(`${base}/`);
+    await page.evaluate(() => localStorage.setItem('io-diagnostics.detail-layout', 'd1'));
+    await open(page, base, ADAPTER);
+    await viewOptions(page);
+    await page.waitForSelector('#depthmap-switch:not([hidden]) #depth-colormap option', { state: 'attached' });
+    const before = await read();
+    check('depth colour map: View options lists realsense-viewer\'s names, Jet first and chosen, equalization on, no range yet',
+      before.map === 'Jet' && before.names.slice(0, 10).join(',') === 'Jet,Classic,White to Black,Black to White,Bio,Cold,Warm,Quantized,Pattern,Hue'
+      && before.names.length === 11 && before.equalize && before.rangeHidden, before);
+    await page.selectOption('#depth-colormap', 'Hue');
+    await page.waitForFunction(() => S.settings && S.settings.depth_colormap === 'Hue', null, { timeout: 10000 });
+    await page.uncheck('#depth-equalize');
+    await page.waitForFunction(() => S.settings && S.settings.depth_equalize === false, null, { timeout: 10000 });
+    await page.waitForSelector('#depth-range-switch:not([hidden])');
+    await page.fill('#depth-max', '3');
+    await page.press('#depth-max', 'Tab');
+    await page.waitForFunction(() => S.settings && S.settings.depth_max_m === 3, null, { timeout: 10000 });
+    await page.waitForTimeout(150);
+    const host = await hostSettings();
+    const file = fs.existsSync(path.join(dir, 'settings.toml')) ? fs.readFileSync(path.join(dir, 'settings.toml'), 'utf8') : '';
+    check('depth colour map: each change is one page-only POST, lands in the host and the settings file',
+      posts.length === 3 && posts[0].depth_colormap === 'Hue' && posts[1].depth_equalize === false && posts[2].depth_min_m === 0 && posts[2].depth_max_m === 3
+      && host.depth_colormap === 'Hue' && host.depth_equalize === false && host.depth_max_m === 3
+      && /depth_colormap = "Hue"/.test(file) && /depth_equalize = false/.test(file) && /depth_max_m = 3/.test(file),
+    { posts, host: { map: host.depth_colormap, eq: host.depth_equalize, max: host.depth_max_m }, file: file.trim().split('\n').slice(-4) });
+    const bad = await page.evaluate(async () => {
+      const response = await fetch('/api/v1/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-IO-Diagnostics': 'ui' }, body: JSON.stringify({ depth_colormap: 'Rainbow' }) });
+      return response.status;
+    });
+    check('depth colour map: a name that is not listed is refused (400) and nothing changes', bad === 400 && (await hostSettings()).depth_colormap === 'Hue', bad);
+    await page.reload();
+    await ready(page);
+    await viewOptions(page);
+    const after = await read();
+    check('depth colour map: the choice survives a reload (equalization off shows the range)',
+      after.map === 'Hue' && !after.equalize && !after.rangeHidden && after.min === '0' && after.max === '3', after);
+    await page.mouse.move(5, 995);
+    await shoot('light');
+    check('depth colour map: no page errors', errors.length === 0, errors.slice(0, 3).join(' | ') || 'none');
+  } finally {
+    await context.close();
+  }
+  const dark = await browser.newContext({ viewport: VIEWPORT, colorScheme: 'dark' });
+  const darkPage = await dark.newPage();
+  try {
+    await darkPage.goto(`${base}/`);
+    await darkPage.evaluate(() => localStorage.setItem('io-diagnostics.detail-layout', 'd1'));
+    await open(darkPage, base, ADAPTER);
+    await viewOptions(darkPage);
+    await darkPage.waitForSelector('#depthmap-switch:not([hidden]) #depth-colormap option', { state: 'attached' });
+    await darkPage.mouse.move(5, 995);
+    const pop = await darkPage.locator('#view-options').boundingBox();
+    await darkPage.screenshot({ path: path.join(DEPTH_SHOTS, 'view-options-depth-dark.png'),
+      clip: { x: 0, y: 0, width: Math.min(VIEWPORT.width, pop.x + pop.width + 40), height: pop.y + pop.height + 30 } });
+  } finally {
+    await dark.close();
     stopServer(server.child);
     fs.rmSync(dir, { recursive: true, force: true });
   }

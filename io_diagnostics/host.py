@@ -2128,11 +2128,34 @@ class Host:
                 watch.plugin_blocked, watch.started = None, self.clock.now()
                 frame_env = {"IO_DIAGNOSTICS_FRAME_DIR": str(watch.frame_dir)}
                 watch.follower = Watcher(job.spec, job.device, device_path, watch.declared["period_s"], self.clock.now,
-                                         lambda job=job, env=frame_env: {**self._job_env(job), **env},
+                                         lambda job=job, env=frame_env: {**self._job_env(job), **env, **self._watch_env()},
                                          lambda outcome, watch=watch: self._absorb_watch(watch, outcome),
                                          hardware_id=entity.hardware_id if entity else "", backoff_s=self.follow_backoff_s,
                                          path=watch.rel)
                 watch.follower.start()
+
+    def _watch_env(self) -> dict[str, str]:
+        """What the app's settings tell a watch, read each time one starts: the depth colour map (Zach, 2026-10-24). A driver that
+        does not draw depth ignores them; the RealSense driver honours them under record revision 0.2 (docs/state-config-v1.md)."""
+
+        depth = self.settings.depth()
+        return {"IO_DIAGNOSTICS_DEPTH_COLORMAP": depth["depth_colormap"],
+                "IO_DIAGNOSTICS_DEPTH_EQUALIZE": "1" if depth["depth_equalize"] else "0",
+                "IO_DIAGNOSTICS_DEPTH_MIN_M": f"{depth['depth_min_m']:g}",
+                "IO_DIAGNOSTICS_DEPTH_MAX_M": f"{depth['depth_max_m']:g}"}
+
+    def restart_watches(self) -> None:
+        """Stop every running watch process and start each again at once when its page still beats: the next frame uses the
+        settings now held. WHY a restart and not a message: a watch is a child process that read its environment when it started."""
+
+        with self._watch_lock:
+            running = [watch for watch in self.watches.values() if not watch.stopped]
+            for watch in running:
+                if watch.follower is not None:
+                    watch.follower.stop()
+                    watch.follower = None
+        for watch in running:
+            self._watch_step(watch)
 
     def pause_watches(self, job: Job) -> list[Watch]:
         """Stop every watch of this job's board and wait for its process to exit (``Follower.stop`` kills the group and
@@ -2516,11 +2539,16 @@ class Host:
 
     def set_settings(self, body: dict) -> dict:
         """The page's View options: ``{"history_window_s": 600}`` (seconds, or "10m"), and its Visibility choices:
-        ``{"visibility": {"<row id>": "hide" | "show" | "ack" | null}}``. Raises SettingsError."""
+        ``{"visibility": {"<row id>": "hide" | "show" | "ack" | null}}``, and the depth colour map (``depth_colormap``,
+        ``depth_equalize``, ``depth_min_m``, ``depth_max_m``; a change restarts the running watches). Raises SettingsError."""
 
-        unknown = sorted(set(body) - {"history_window_s", "visibility"})
+        unknown = sorted(set(body) - {"history_window_s", "visibility", *settings_module.DEPTH_KEYS})
         if unknown:
-            raise settings_module.SettingsError(f"no setting {', '.join(map(repr, unknown))}: only history_window_s and visibility")
+            raise settings_module.SettingsError(f"no setting {', '.join(map(repr, unknown))}: only history_window_s, visibility and "
+                                                + ", ".join(settings_module.DEPTH_KEYS))
+        depth = {key: body[key] for key in settings_module.DEPTH_KEYS if key in body}
+        if depth and self.settings.set_depth(depth):
+            self.restart_watches()
         if "visibility" in body:
             self.settings.set_visibility(body["visibility"])
         if "history_window_s" in body:

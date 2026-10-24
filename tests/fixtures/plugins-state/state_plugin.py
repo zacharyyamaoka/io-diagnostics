@@ -427,7 +427,8 @@ def main() -> int:
         return 0
     device = arg("--device") or ""
     log(device=device, path=arg("--path"), frame_dir=os.environ.get("IO_DIAGNOSTICS_FRAME_DIR"),
-        record_version=os.environ.get("IO_DIAGNOSTICS_RECORD_VERSION"))
+        record_version=os.environ.get("IO_DIAGNOSTICS_RECORD_VERSION"),
+        depth={name: os.environ.get(f"IO_DIAGNOSTICS_DEPTH_{name}") for name in ("COLORMAP", "EQUALIZE", "MIN_M", "MAX_M")})
     if VERB == "diagnose":
         diagnose(device)
     elif VERB == "watch":

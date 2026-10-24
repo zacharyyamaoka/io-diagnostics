@@ -799,8 +799,12 @@ The health bar (rqt_robot_monitor's timeline) of one entity and of each of its c
 ## Settings: `GET /api/v1/settings`, `POST /api/v1/settings`
 
 ```json
-{"history_window_s": 900.0, "visibility": {"usb:046d:c34b:KB1": "show"}, "source": "default", "file": "/home/bam/.config/io-diagnostics/settings.toml", "note": "",
- "limits": {"history_window_s": {"min": 60.0, "max": 86400.0, "default": 900.0}}}
+{"history_window_s": 900.0, "visibility": {"usb:046d:c34b:KB1": "show"},
+ "depth_colormap": "Jet", "depth_equalize": true, "depth_min_m": 0.0, "depth_max_m": 6.0,
+ "source": "default", "file": "/home/bam/.config/io-diagnostics/settings.toml", "note": "",
+ "limits": {"history_window_s": {"min": 60.0, "max": 86400.0, "default": 900.0},
+            "depth_colormap": {"choices": ["Jet", "Classic", "White to Black", "Black to White", "Bio", "Cold", "Warm", "Quantized", "Pattern", "Hue", "Turbo"], "default": "Jet"},
+            "depth_equalize": {"default": true}, "depth_range_m": {"min": 0.0, "max": 16.0, "default": [0.0, 6.0]}}}
 ```
 
 - One app-wide window for every health bar and history answer, default 15 min. Where it comes from (`source`), the
@@ -813,6 +817,16 @@ The health bar (rqt_robot_monitor's timeline) of one entity and of each of its c
   row whose ERROR was acknowledged (the page ends it when the error ends). The default is no choice: a row no driver
   claims (`claimed` false) is hidden, everything else shown, and a hidden row that reports a WARN or ERROR of its own shows itself again until acknowledged. It only
   filters what the tree draws: the counts, the chip and every parent's roll-up still count a hidden row's problems.
+- `depth_colormap`, `depth_equalize`, `depth_min_m`, `depth_max_m` (2026-10-24, Zach: "give the option to set the color map for
+  the depth map"): how a camera's live depth picture is coloured, app-wide, shown in View options as "Depth colour map" (a select),
+  "Depth equalization" (a switch) and, with equalization off, "Depth range" (metres). The choices are realsense-viewer's colour
+  scheme names, which are the SDK colorizer's `color_scheme` option 0..9 in that order, then `Turbo` (the SDK has none; the
+  RealSense driver's own map from before this setting). The defaults are the colorizer's own, which realsense-viewer leaves alone:
+  Jet, equalization on, 0 .. 6 m (checked against pyrealsense2 2.58.3 and librealsense `src/proc/colorizer.cpp` / `common/subdevice-model.cpp`;
+  the viewer narrows only a D405, to 0.05 .. 4 m). `POST` any of them (`{"depth_colormap": "Hue", "depth_equalize": false,
+  "depth_min_m": 0.5, "depth_max_m": 3}`; a name in any case; the minimum below the maximum, 0 .. 16 m) to set it now and write it as
+  `depth_colormap = "Hue"` etc. in the file. The host passes it to every `watch` in the environment
+  (`docs/state-config-v1.md` section 4) and **restarts the running watches when a value changed**, so the next frame uses it.
 - `POST /api/v1/settings` with `{"history_window_s": 600}` (seconds, or `"10m"`) sets it now AND writes the file
   (atomically; the file holds `history_window_s = 600`). The same page-only rule as `POST /api/v1/act`: the page's
   `X-IO-Diagnostics: ui` header, `Sec-Fetch-Site: same-origin`, a JSON body, else **403** (`NotFromPage`,

@@ -316,6 +316,10 @@ table.lh tr:hover td { background: var(--io-hover); }
   background-image: linear-gradient(45deg, transparent 50%, var(--io-muted) 50%), linear-gradient(-45deg, transparent 50%, var(--io-muted) 50%);
   background-size: 5px 5px, 5px 5px; background-position: right 12px center, right 7px center; }
 .vo-row select option, .vo-row select optgroup { background: var(--io-popover); color: var(--io-text); }
+.vo-range { display: flex; align-items: center; gap: 6px; }
+.vo-range input { width: 58px; padding: 4px 6px; font: inherit; font-size: 12.5px; color: var(--io-text); border: 1px solid var(--io-border); border-radius: var(--io-radius); background-color: var(--io-field); }
+.vo-range input:focus-visible { outline: var(--io-focus-width) solid var(--io-focus); outline-offset: 1px; }
+.vo-unit { color: var(--io-muted); font-size: 12px; }
 .vo-row select:focus-visible { outline: var(--io-focus-width) solid var(--io-focus); outline-offset: 1px; }
 .vo-toggles:empty { display: none; }
 .vo-switch { cursor: pointer; }
