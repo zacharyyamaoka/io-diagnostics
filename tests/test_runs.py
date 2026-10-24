@@ -278,8 +278,12 @@ def test_interrupt_escalates_sigint_sigterm_sigkill(rig):
     final = watcher.wait_end()
     took = time.monotonic() - began
     assert final["state"] == "stopped" and final["exit_code"] == -9
-    assert [entry["got_signal"] for entry in rig.log_lines() if "got_signal" in entry] == ["SIGINT", "SIGTERM"]
-    assert 0.7 < took < 3.0  # SIGTERM after the 0.4 s grace, SIGKILL after another 0.4 s
+    # WHY a prefix and a loose upper bound (2026-10-24, failed once under a loaded full-suite run, passes alone): the
+    # host's own record (signals, below) is the escalation's proof; whether the hung process gets scheduled to log
+    # SIGTERM inside the 0.4 s before SIGKILL, and the wall-clock ceiling, depend on machine load
+    got = [entry["got_signal"] for entry in rig.log_lines() if "got_signal" in entry]
+    assert got and got == ["SIGINT", "SIGTERM"][: len(got)], got
+    assert 0.7 < took < 10.0  # SIGTERM after the 0.4 s grace, SIGKILL after another 0.4 s: never sooner
     assert final["stop"]["signals"] == ["SIGINT", "SIGTERM", "SIGKILL"]
     assert final["stop"]["plugin_stop"]["ran"] is False  # not a moves-class action: only the signals
     assert not rig.log_lines(stopped=True)
