@@ -2,7 +2,7 @@
 // name, the message, current status (OK, WARNING, ETC) and then optionally the sparkline for the health", one line per row.
 // d1's table with its columns reordered to Name | Message | Current | History, every row ONE line (the message cut with
 // an ellipsis, the full text on hover and one click away), sorted by severity then name (or A-Z, or by hand), dot-notation names
-// folded into folders, ★ pins on top (detail/roworder.js). The status line at the top (the
+// folded into folders, ★ pins on top (detail/d6-rows.js, the entity page's row model). The status line at the top (the
 // entity's health bar) drops down into one timeline lane per diagnostic. Health only: no value, no value sparkline.
 // Shared base: detail/d1x.js; chart: detail/health.js.
 'use strict';

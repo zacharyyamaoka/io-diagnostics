@@ -7,6 +7,8 @@
 // the Diagnostics SECTION, which shows HEALTH ONLY: name, message, status, and a discrete health history (detail/health.js).
 // Values and measurements belong to the State section; they are never drawn here (the diagnostic's own page, one click
 // deeper, still has them).
+// Rows are organised by the entity page's ONE row model (detail/d6-rows.js, IOEntityRows: folders, pins, A-Z / manual / severity order, the host's
+// arrangements.json with localStorage as the fallback); the variants lane's own helper (roworder.js) is gone (Zach, 2026-10-24).
 // Each variant also registers `diagnostics(node, detail, ctx)`: that section's HTML alone, for a page that composes its own
 // sections (the entity-page lane).
 'use strict';
@@ -54,38 +56,39 @@
   }
 
   // ------------------------------------------------------------------------------------ the row order ----
-  // Folders (dot-notation / "who: what" names), ★ pins and the sort inside a folder come from detail/roworder.js (IORowOrder),
-  // remembered in localStorage per entity kind; the State and Configuration sections build the same tree from the same helper.
+  // Folders ("who: what" and dot-notation names), pins and the sort inside a folder come from the shared row model (d6-rows.js), kept per entity
+  // kind and section by the host; State and Configuration build the same trees from the same helper.
   const SEC = 'diagnostics';
-  const kindOf = (node) => (node && node.kind) || 'entity';
-  const R = () => root.IORowOrder;
-  const planOf = (node, rows, opts) => R().plan(rows, kindOf(node), SEC, opts);
-  const toolbar = (node) => R().toolbar(kindOf(node), SEC);
+  const kindOf = (node) => (node && node.kind) || 'device';
+  const ER = () => root.IOEntityRows;
+  // rows -> the plan the row model builds: {pinned: [row], root: folder tree, sp, mode}
+  function planOf(node, rows, opts = {}) {
+    const er = ER();
+    const sp = er.spec(kindOf(node), SEC);
+    return er.build(rows, { idOf: (row) => row.id, nameOf: (row) => row.name, split: (row) => er.folderPath(row.name), sp, mode: sp.sort || 'severity',
+      severityOf: (row) => row.rank, idPrefix: opts.idPrefix || '', tidy: true });
+  }
+  // the order switch (Severity · A-Z · Manual), as the other tabs draw it
+  const toolbar = (node) => `<div class="dx-tb" data-er-section="${SEC}">${ER().sortControl(SEC, ER().spec(kindOf(node), SEC), ['severity', 'name', 'manual'], 'severity')}</div>`;
+
+  // a plan with only its ★ Pinned block (a variant that draws the pins above everything else)
+  const pinnedOnly = (plan) => ({ ...plan, root: { type: 'folder', name: '', path: '', children: [] } });
 
   // The plan drawn: the ★ Pinned block first, then the folders (a button that folds its rows) and the rows, each row through
   // renderRow(info): info = {row, depth, flat (full name), leaf, pinned, drag (attributes), grip, star (html)}.
   function walk(node, plan, renderRow) {
-    const ro = R();
-    const kind = kindOf(node);
-    const rootId = plan.idPrefix || '/';
-    const info = (item, parentId, pinned) => ({ row: item.row, depth: item.depth, flat: pinned || item.flat, leaf: item.leaf, pinned,
-      drag: pinned ? '' : ro.dragAttrs(plan.sort, parentId, item.row.id), grip: pinned ? '' : ro.handle(plan.sort), star: ro.star(kind, SEC, item.row.id) });
-    const shapeOf = (item) => { const worst = item.rows.find((row) => row.rank === item.rank); return item.rank > 0 && worst ? ` ${last ? last.ctx.h.shape(worst.level, worst.level) : ''}` : ''; };
-    const folder = (item, parentId) => {
-      const open = ro.isOpen(kind, SEC, item.id);
-      const kids = open ? item.items.map((child) => (child.folder ? folder(child, item.id) : renderRow(info(child, item.id, false)))).join('') : '';
-      return `<div class="ro-folder" style="--depth:${item.depth}"${ro.dragAttrs(plan.sort, parentId, item.id)}>`
-        + `<button class="ro-fold${open ? ' open' : ''}" data-dx-fold="${esc(item.id)}" aria-expanded="${open}">${ro.handle(plan.sort)}<svg class="ic ro-chev"><use href="#i-chev"/></svg>`
-        + `<span>${esc(item.name)}</span>${shapeOf(item)}</button>${open ? `<div class="ro-kids">${kids}</div>` : ''}</div>`;
+    const er = ER();
+    // a folder rolls up the worst level of its rows as ONE icon, never a count (Zach, 2026-10-24)
+    const leaves = (folder) => folder.children.flatMap((child) => (child.type === 'leaf' ? [child.item] : leaves(child)));
+    const mark = (folder) => {
+      const worst = leaves(folder).reduce((w, row) => (row.rank > w.rank ? row : w), { rank: 0 });
+      return worst.rank > 0 && last ? `<span class="er-fm">${last.ctx.h.shape(worst.level, worst.level)}</span>` : '';
     };
-    let html = '';
-    if (plan.pinned.length) {
-      const open = ro.isOpen(kind, SEC, '@pinned');
-      html += `<div class="ro-folder ro-pinned" style="--depth:0"><button class="ro-fold${open ? ' open' : ''}" data-dx-fold="@pinned" aria-expanded="${open}"><svg class="ic ro-chev"><use href="#i-chev"/></svg>`
-        + `<span>★ Pinned</span></button>`
-        + `${open ? `<div class="ro-kids">${plan.pinned.map((row) => renderRow(info({ row, depth: 0, flat: true, leaf: row.name }, rootId, true))).join('')}</div>` : ''}</div>`;
-    }
-    return html + plan.items.map((item) => (item.folder ? folder(item, rootId) : renderRow(info(item, rootId, false)))).join('');
+    return er.renderTree(plan, { section: SEC, sp: plan.sp, mark, leaf: (row, d) => {
+      const id = d.id === null ? row.id : d.id;
+      return renderRow({ row, depth: d.depth, flat: d.label === null || d.label === row.name, leaf: d.label === null ? row.name : d.label, pinned: d.pinned,
+        drag: ` ${er.rowAttrs(d.parent, id, SEC)}`, grip: er.handle(d.parent, id), star: er.star(row.id, d.pinned) });
+    } });
   }
 
   // ---------------------------------------------------------------------------------------- marks ----
@@ -207,6 +210,12 @@
     return D1().plain('dx-diag', `Diagnostics · ${m.rows.length}`, content, right(m));
   }
 
+  // the host's arrangements (GET /api/v1/arrangements), once; the page redraws when they arrive
+  function loadRows() {
+    const er = ER();
+    if (er && !er.arrangement.started) er.loadArrangements(() => { if (last) last.ctx.redraw(); });
+  }
+
   function injectCss() {
     if (typeof document === 'undefined' || document.querySelector('style[data-layout="d1x"]')) return;
     const style = document.createElement('style');
@@ -227,6 +236,7 @@
       document.head.appendChild(style);
     }
     wire(container);
+    loadRows();
     const d1 = root.IODetailLayouts && root.IODetailLayouts.d1;
     const node = ctx.node;
     const open = ctx.diagnostic && node && ctx.diagnostic.path === node.path ? ctx.diagnostic : null;
@@ -258,6 +268,7 @@
       document.head.appendChild(style);
     }
     wire(container);
+    loadRows();
     last = { container, detail, ctx, id, width: HEALTH().widthOf(container), embedded: true, hooks: hooks || null };
     return `<div data-dx="${id}" data-dx-variant="${id}" data-dx-embedded>${makeSection(ctx.node, detail, ctx)}</div>`;
   }
@@ -320,14 +331,6 @@ button.dx-sumline:focus-visible, .dx-line:focus-visible, .dx-lane:focus-visible,
     wired.add(container);
     const act = (target) => {
       if (!last || !container.querySelector('[data-dx]')) return false; // another layout draws the panel now
-      const ro = root.IORowOrder;
-      const kind = kindOf(last.ctx.node);
-      const pinEl = target.closest('[data-ro-pin]');
-      const sortEl = target.closest('[data-ro-sort]');
-      const foldEl = target.closest('[data-dx-fold]');
-      if (pinEl) { ro.togglePin(kind, SEC, pinEl.dataset.roPin); last.ctx.redraw(); return true; }
-      if (sortEl) { ro.setSort(kind, SEC, sortEl.dataset.roSort); last.ctx.redraw(); return true; }
-      if (foldEl) { ro.toggleFolder(kind, SEC, foldEl.dataset.dxFold); last.ctx.redraw(); return true; }
       const openEl = target.closest('[data-dx-open]');
       const selectEl = target.closest('[data-dx-select]');
       const toggleEl = target.closest('[data-dx-toggle]');
@@ -342,23 +345,27 @@ button.dx-sumline:focus-visible, .dx-line:focus-visible, .dx-lane:focus-visible,
       if (toggleEl) { toggle(toggleEl.dataset.dxToggle, toggleEl.hasAttribute('data-dx-default-open')); last.ctx.redraw(); return true; }
       return false;
     };
+    // WHY only when not embedded: the entity page (d6) routes the row model's clicks, changes and drags for everything inside its container
+    const rows = () => (last && !last.embedded && container.querySelector('[data-dx]') ? { kind: kindOf(last.ctx.node), redraw: last.ctx.redraw } : null);
     container.addEventListener('click', (event) => {
       const target = event.target;
       if (!(target instanceof Element) || target.closest('.ent-tools, [data-util], .u-panel, input, select, textarea, a[data-go], [data-d6-jump]')) return;
+      const mine = rows();
+      if (mine && ER().onClick(target, mine)) return;
       act(target);
     });
-    root.IORowOrder.wireDrag(container, (parentId, ids) => {
-      if (!last) return;
-      root.IORowOrder.moveManual(kindOf(last.ctx.node), SEC, parentId, ids);
-      last.ctx.redraw();
-    });
+    container.addEventListener('change', (event) => { const mine = rows(); if (mine && event.target instanceof Element) ER().onChange(event.target, mine); });
+    container.addEventListener('dragstart', (event) => { const mine = rows(); if (mine) ER().onDragStart(event, mine); });
+    container.addEventListener('dragover', (event) => { if (rows()) ER().onDragOver(event); });
+    container.addEventListener('drop', (event) => { const mine = rows(); if (mine) ER().onDrop(event, mine, container); });
+    container.addEventListener('dragend', () => { if (rows()) ER().clearDrag(container); });
     container.addEventListener('keydown', (event) => {
       if (event.key !== 'Enter' && event.key !== ' ') return;
       const target = event.target;
-      if (!(target instanceof Element) || !target.matches('[data-dx-open], [data-dx-select], [data-dx-toggle], [data-dx-fold]')) return;
+      if (!(target instanceof Element) || !target.matches('[data-dx-open], [data-dx-select], [data-dx-toggle]')) return;
       if (act(target)) event.preventDefault();
     });
   }
 
-  root.IODiagX = { RANK, PROBLEM, rankOf, esc, num, ui, isOpen, toggle, model, history, windowOf, pill, plural, placeholder, cellsOf, summary, lanes, body, line, lineStyle, section, page, planOf, walk, toolbar, kindOf, embed, injectCss, last: () => last };
+  root.IODiagX = { RANK, PROBLEM, rankOf, esc, num, ui, isOpen, toggle, model, history, windowOf, pill, plural, placeholder, cellsOf, summary, lanes, body, line, lineStyle, section, page, planOf, pinnedOnly, walk, toolbar, kindOf, embed, injectCss, last: () => last };
 })(typeof window !== 'undefined' ? window : globalThis);

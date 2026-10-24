@@ -6,6 +6,9 @@
 //    folder tree, like tview's config tree; a name with spaces, a colon or no dot stays at the top level;
 //  - order inside a folder: alphabetical (folders first), or MANUAL (drag a row by its handle), and starred rows first as a
 //    "Pinned" block; Diagnostics may also sort by severity (its default);
+//  - Diagnostics names are "who: what" ("fdcanusb 272813EF CAN 1: bus"): `folderPath` splits them into the same folders, and `tidy` leaves a
+//    folder of one row undrawn; the Diagnostics variants (d1a-d1e, detail/d1x.js) draw through build() / renderTree() like State and Configuration
+//    (Zach, 2026-10-24: one row model; the variants lane's own IORowOrder, localStorage-only, is gone);
 //  - pins, manual order, folded folders and the sort are one arrangement per entity KIND and section, kept by the host beside
 //    settings.toml (GET / POST /api/v1/arrangements), so every CAN board shares one; when the host cannot keep it (an older
 //    host, a read-only home) the page keeps it in this browser's localStorage and says so.
@@ -66,22 +69,62 @@
 
   // ------------------------------------------------------------------------------------- the tree ----
   const segments = (name) => (DOTTED.test(String(name)) ? String(name).split('.') : [String(name)]);
+  const defaultSplit = (name) => { const parts = segments(name); return { path: parts.slice(0, -1), leaf: parts[parts.length - 1] }; };
 
-  // items -> {pinned: [item], root: folder}; folder = {type: 'folder', name, path, children: [folder | leaf]}, leaf = {type: 'leaf', name, item}
-  function build(items, { idOf, nameOf, sp, mode, severityOf }) {
+  // A Diagnostics name reads "<who>: <what>". The who and the what each split on dots when they are dot-notation ("arm.servo.current", not
+  // "5.15.1.55 installed"); a who of the form "<thing> CAN <n>" splits in two ("fdcanusb 272813EF CAN 1" -> fdcanusb 272813EF / CAN 1). The last
+  // segment is the row's leaf name, the rest are folders.
+  const DIAG_DOTTED = /^[\w-]+(\.[\w-]+)+$/;
+  function folderPath(name) {
+    const text = String(name);
+    const at = text.indexOf(': ');
+    const who = at > 0 ? text.slice(0, at) : '';
+    const what = at > 0 ? text.slice(at + 2) : text;
+    const path = [];
+    if (who) {
+      const can = /^(.*\S)\s+(CAN \d+)$/.exec(who);
+      if (DIAG_DOTTED.test(who)) path.push(...who.split('.'));
+      else if (can) path.push(can[1], can[2]);
+      else path.push(who);
+    }
+    let leaf = what;
+    if (DIAG_DOTTED.test(what)) { const parts = what.split('.'); leaf = parts.pop(); path.push(...parts); }
+    return { path, leaf };
+  }
+
+  // items -> {pinned: [item], root: folder, sp, mode}; folder = {type: 'folder', name, path, children: [folder | leaf]}, leaf = {type: 'leaf', name, item}
+  //   split(item) -> {path: [folder names], leaf}     how a name becomes folders (default: dot notation)
+  //   idPrefix                                       keeps two plans on one page (a group's own) from sharing folder ids
+  //   tidy                                           a folder holding ONE row is not drawn (the row keeps its full name), and a single folder holding every
+  //                                                  row is dropped (the entity's header already says it): Diagnostics
+  function build(items, { idOf, nameOf, split, sp, mode, severityOf, idPrefix = '', tidy = false }) {
     const pinned = sp.pins.map((id) => items.find((item) => idOf(item) === id)).filter(Boolean);
     const pinnedIds = new Set(pinned.map(idOf));
     const rest = items.filter((item) => !pinnedIds.has(idOf(item)));
     const root = { type: 'folder', name: '', path: '', children: [] };
+    const join = (parts) => idPrefix + parts.join(split ? '/' : '.');
     for (const item of rest) {
-      const parts = segments(nameOf(item));
+      const { path: folders, leaf } = (split || ((i) => defaultSplit(nameOf(i))))(item);
       let folder = root;
-      parts.slice(0, -1).forEach((part, at) => {
+      folders.forEach((part, at) => {
         let next = folder.children.find((child) => child.type === 'folder' && child.name === part);
-        if (!next) { next = { type: 'folder', name: part, path: parts.slice(0, at + 1).join('.'), children: [] }; folder.children.push(next); }
+        if (!next) { next = { type: 'folder', name: part, path: join(folders.slice(0, at + 1)), children: [] }; folder.children.push(next); }
         folder = next;
       });
-      folder.children.push({ type: 'leaf', name: parts[parts.length - 1], item });
+      folder.children.push({ type: 'leaf', name: leaf, item });
+    }
+    if (tidy) {
+      const only = (folder) => (folder.children[0].type === 'leaf' ? folder.children[0] : only(folder.children[0]));
+      const tidyTree = (folder) => {
+        folder.children = folder.children.map((child) => {
+          if (child.type === 'leaf') return child;
+          if (countLeaves(child) === 1) { const one = only(child); return { type: 'leaf', name: nameOf(one.item), item: one.item }; }
+          return tidyTree(child);
+        });
+        return folder;
+      };
+      tidyTree(root);
+      if (root.children.length === 1 && root.children[0].type === 'folder' && countLeaves(root.children[0]) === rest.length) root.children = root.children[0].children;
     }
     const severity = (node) => (node.type === 'leaf' ? (severityOf ? severityOf(node.item) : 0) : Math.max(0, ...node.children.map(severity)));
     const sort = (folder) => {
@@ -99,7 +142,7 @@
       folder.children.filter((child) => child.type === 'folder').forEach(sort);
     };
     sort(root);
-    return { pinned, root };
+    return { pinned, root, sp, mode };
   }
   const countLeaves = (folder) => folder.children.reduce((n, child) => n + (child.type === 'leaf' ? 1 : countLeaves(child)), 0);
 
@@ -110,7 +153,8 @@
 
   // renders the pinned block and the tree. leaf(item, {label, depth, parent, id, pinned}) draws one row (its own markup, with the
   // marks from star() / handle() and rowAttrs()); the folders are drawn here.
-  function renderTree(result, { section, sp, leaf }) {
+  // mark(folder) -> html: what a folder shows at its end instead of the number of rows (Diagnostics: the worst level below it, as an icon)
+  function renderTree(result, { section, sp, leaf, mark }) {
     const folded = new Set(sp.folded);
     const out = [];
     if (result.pinned.length) {
@@ -125,7 +169,7 @@
         while (node.children.length === 1 && node.children[0].type === 'folder') { node = node.children[0]; label += `.${node.name}`; }
         const open = !folded.has(node.path);
         out.push(`<div class="er-fold" ${rowAttrs(folder.path, child.name, section)} style="--er-depth:${depth}"><button class="er-fb" data-er-fold="${esc(node.path)}" aria-expanded="${open}">`
-          + `<svg class="ic sec-chev"><use href="#i-chev"/></svg><span class="er-fn">${esc(label)}</span><span class="er-fc">${countLeaves(node)}</span></button>${handle(folder.path, child.name)}</div>`);
+          + `<svg class="ic sec-chev"><use href="#i-chev"/></svg><span class="er-fn">${esc(label)}</span>${mark ? mark(node) : `<span class="er-fc">${countLeaves(node)}</span>`}</button>${handle(folder.path, child.name)}</div>`);
         if (open) walk(node, depth + 1);
       }
     };
@@ -139,6 +183,40 @@
     const where = A.local ? 'kept in this browser: the host keeps no arrangements' : A.file ? `kept in ${A.file} (every ${'board of this kind'} shares it)` : 'kept for this run only (the host has no config file)';
     return `<label class="er-sort" title="${esc(where)}"><span>Order</span><select data-er-sort="${section}" aria-label="Order of the rows">${modes.map((m) => `<option value="${m}"${m === mode ? ' selected' : ''}>${SORTS[m]}</option>`).join('')}</select></label>`;
   }
+
+  // The shared row model's own styles: folders, stars, handles, the order switch. WHY here and not in d6.js: the Diagnostics variants
+  // (d1a-d1e) draw rows through this model too and are also whole pages of their own (the Prototype picker), where d6.js never draws.
+  const CSS = `
+.er-ctl { display: inline-flex; align-items: center; gap: 2px; margin-right: 4px; vertical-align: middle; }
+.er-pin { background: transparent; border: 0; padding: 0 2px; color: var(--io-faint); cursor: pointer; font-size: 13px; line-height: 1; opacity: 0; }
+.er-pin.on { opacity: 1; color: var(--io-text-strong); }
+.d6-r:hover .er-pin, .d6-sr:hover .er-pin, .er-cfgrow:hover .er-pin, .dx-r:hover .er-pin, .dx-lane:hover .er-pin, .er-pin:focus-visible { opacity: 1; }
+.er-drag { color: var(--io-faint); cursor: grab; font-size: 11px; letter-spacing: -2px; opacity: 0; user-select: none; }
+.d6-r:hover .er-drag, .d6-sr:hover .er-drag, .er-cfgrow:hover .er-drag, .dx-r:hover .er-drag, .dx-lane:hover .er-drag, .er-fold:hover .er-drag { opacity: .8; }
+.er-dragging { opacity: .45; }
+.er-over-top { box-shadow: inset 0 2px 0 var(--io-accent); }
+.er-over-bottom { box-shadow: inset 0 -2px 0 var(--io-accent); }
+.er-fold { display: flex; align-items: center; justify-content: space-between; padding: 2px 4px 2px calc(var(--er-depth, 0) * 16px); }
+.er-fb { display: inline-flex; align-items: center; gap: 4px; background: transparent; border: 0; padding: 3px 6px 3px 0; color: var(--io-muted); font: 600 12px var(--io-font-ui); cursor: pointer; border-radius: var(--io-radius-sm); }
+.er-fb:hover { color: var(--io-text-strong); }
+.er-fb[aria-expanded="true"] .sec-chev { transform: rotate(90deg); }
+.er-fc { margin-left: 4px; color: var(--io-faint); font-weight: 400; font-size: 11px; }
+.er-fm { display: inline-flex; margin-left: 6px; }
+.er-fm .shape { width: 12px; height: 12px; }
+.er-pinned { margin: 0 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--io-border); }
+.er-pinh { margin: 4px 0 2px; font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--io-muted); font-weight: 600; }
+.er-sort { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--io-faint); text-transform: none; letter-spacing: 0; font-weight: 400; }
+.er-sort select { font: inherit; font-size: 11.5px; color: var(--io-text); background: var(--io-field); border: 1px solid var(--io-border); border-radius: var(--io-radius-sm); padding: 1px 4px; }
+.er-sortc { justify-self: end; }
+`;
+  function install() {
+    if (typeof document === 'undefined' || document.querySelector('style[data-layout="entity-rows"]')) return;
+    const style = document.createElement('style');
+    style.dataset.layout = 'entity-rows';
+    style.textContent = CSS;
+    document.head.appendChild(style);
+  }
+  install();
 
   // ----------------------------------------------------------------------- clicks, changes, drags ----
   // Each returns true when the event was this module's. ctx = {kind, redraw}.
@@ -455,7 +533,7 @@
   function leave() { if (E.token) stopEdit(); }
 
   root.IOEntityRows = {
-    loadArrangements, spec, update, build, renderTree, sortControl, star, handle, rowAttrs, natural, RANK,
+    loadArrangements, spec, update, build, renderTree, sortControl, star, handle, rowAttrs, natural, RANK, folderPath, countLeaves, install,
     onClick, onChange, onDragStart, onDragOver, onDrop, clearDrag,
     config: { panel: configPanel, modalHtml, click: configClick, key: configKey, input: configInput, change: configChange, afterDraw, copyText, leave, editing,
       state: { C, E }, stop: stopEdit },

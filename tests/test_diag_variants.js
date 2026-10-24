@@ -354,17 +354,25 @@ async function main() {
     check('History window: at 1 h the cells cover 1 h with a wider bin (the width follows the window)', at60.window === 3600 && Math.abs(at60.n * seconds(at60.tip) - 3600) <= at60.n && seconds(at60.tip) > seconds(at15.tip), { at15, at60 });
     await setWindow('900');
 
-    // ---- row order: folders from dot-notation names, ★ pins on top, the sort in a folder (detail/roworder.js)
+    // ---- row order: folders from dot-notation names, ★ pins on top, the sort in a folder (the entity page's row model, detail/d6-rows.js; the host keeps it)
     const names = await page.evaluate(() => {
-      const f = window.IORowOrder.folderPath;
+      const f = window.IOEntityRows.folderPath;
       return { dotted: f('arm.servo.current'), dottedWho: f('arm.servo: current'), who: f('bam-GPU: CPU Information'), can: f('fdcanusb 272813EF CAN 1: firmware'), plain: f('comms'),
         version: f('D405: 5.15.1.55 installed'), canOnly: f('CAN 15: comms') };
     });
     check('names: dot notation parses into folders (arm.servo.current -> arm / servo / current)', JSON.stringify(names.dotted) === '{"path":["arm","servo"],"leaf":"current"}' && JSON.stringify(names.dottedWho) === '{"path":["arm","servo"],"leaf":"current"}', names);
     check('names: "who: what" -> who / what; "<thing> CAN n" splits in two; a version number is not a path',
       names.who.path.join() === 'bam-GPU' && names.who.leaf === 'CPU Information' && names.can.path.join('|') === 'fdcanusb 272813EF|CAN 1' && names.can.leaf === 'firmware' && names.plain.path.length === 0 && names.version.path.join() === 'D405', names);
-    const orderKey = 'io-diagnostics.rows.diagnostics.host';
+    // the host keeps the arrangement (pins, order, folded folders) for every browser: each variant starts from an empty one, as it did when it was this browser's localStorage
+    // (the host takes a write only from its own page: a same-origin fetch, run in a scratch page on the host)
+    const forget = async () => {
+      const scratch = await browser.newPage();
+      await scratch.goto(`${targets[0].base}/api/v1/arrangements`);
+      await scratch.evaluate(() => fetch('/api/v1/arrangements', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-IO-Diagnostics': 'ui' }, body: JSON.stringify({ kind: 'host', section: 'diagnostics', value: {} }) }));
+      await scratch.close();
+    };
     for (const id of VARIANTS) {
+      await forget();
       const fresh = await browser.newContext({ viewport: VIEWPORT, colorScheme: 'light' });
       await fresh.addInitScript((layout) => { try { if (!localStorage.getItem('io-diagnostics.detail-layout')) localStorage.setItem('io-diagnostics.detail-layout', layout); } catch (_) { /* */ } }, id);
       const p2 = await fresh.newPage();
@@ -381,71 +389,73 @@ async function main() {
         await p2.waitForTimeout(500);
       };
       await open2();
-      const folderBtn = p2.locator('.sec.dx-diag .ro-folder:not(.ro-pinned) > .ro-fold', { hasText: 'bam-GPU' }).last();
-      const inFolder = () => folderBtn.evaluate((btn) => [...btn.parentElement.querySelectorAll('[data-ro-pin]')].map((el) => el.dataset.roPin));
+      const folderBtn = p2.locator('.sec.dx-diag .er-fold .er-fb', { hasText: 'bam-GPU' }).last();
+      // the rows of a folder follow it in the list: each carries its folder's path (data-er-parent) and the id its star pins
+      const inFolder = () => p2.$$eval('.sec.dx-diag [data-er-row][data-er-parent="bam-GPU"], .sec.dx-diag [data-er-row][data-er-parent="all:bam-GPU"]', (list) => list.map((el) => (el.querySelector('[data-er-pin]') || { dataset: {} }).dataset.erPin));
       const label = `${id} · order`;
-      const stars = () => p2.$$eval('.sec.dx-diag [data-ro-pin]', (list) => list.map((el) => el.dataset.roPin));
-      const folded = await folderBtn.evaluate((f) => ({ text: f.textContent.trim(), open: f.getAttribute('aria-expanded'), id: f.dataset.dxFold, counted: Boolean(f.querySelector('.ro-n')) }));
+      const folded = await folderBtn.evaluate((f) => ({ text: f.textContent.trim(), open: f.getAttribute('aria-expanded'), id: f.dataset.erFold, counted: Boolean(f.querySelector('.er-fc')) || /\d/.test(f.textContent) }));
       check(`${label}: "who:" names become a collapsible folder (bam-GPU), a rolled-up row shows no count`, folded.open === 'true' && folded.text === 'bam-GPU' && !folded.counted, folded);
       check(`${label}: the status line shows only the worst icon (or a quiet OK), never a count`, await p2.evaluate(() => { const el = document.querySelector('.sec.dx-diag .dx-count'); return Boolean(el) && !/\d/.test(el.textContent) && (el.textContent.trim() === 'OK' || Boolean(el.querySelector('.shape'))); }), '');
       // a one-row prefix is not a folder: "computer: plugin run" stays a row with its full name
-      check(`${label}: a one-row prefix is not drawn as a folder`, await p2.evaluate(() => !document.querySelector('.ro-fold[data-dx-fold="computer"]')), '');
+      check(`${label}: a one-row prefix is not drawn as a folder`, await p2.evaluate(() => !document.querySelector('.er-fb[data-er-fold="computer"]')), '');
+      // (>= 10: d1b draws a problem as a card, outside the folder, and the Computer's passive plugin reports a real problem or two on this PC)
       const rowsIn = (await inFolder()).length;
       await folderBtn.click();
       await p2.waitForTimeout(300);
       const closedRows = (await inFolder()).length;
       await folderBtn.click();
       await p2.waitForTimeout(300);
-      check(`${label}: the folder folds its rows away and back`, rowsIn >= 15 && closedRows === 0 && (await inFolder()).length === rowsIn, { rowsIn, closedRows });
+      check(`${label}: the folder folds its rows away and back`, rowsIn >= 10 && closedRows === 0 && (await inFolder()).length === rowsIn, { rowsIn, closedRows });
       // pin
       const pinId = (await inFolder())[1];   // whichever row is second: the Computer's readings are live
-      await p2.hover(`.sec.dx-diag [data-ro-pin="${pinId}"]`, { force: true }).catch(() => {});
-      await p2.click(`.sec.dx-diag [data-ro-pin="${pinId}"]`, { force: true });
+      await p2.hover(`.sec.dx-diag [data-er-pin="${pinId}"]`, { force: true }).catch(() => {});
+      await p2.click(`.sec.dx-diag [data-er-pin="${pinId}"]`, { force: true });
       await p2.waitForTimeout(400);
       const pinned = await p2.evaluate((want) => {
-        const block = document.querySelector('.sec.dx-diag .ro-pinned');
-        const folder = [...document.querySelectorAll('.sec.dx-diag .ro-folder:not(.ro-pinned) > .ro-fold')].find((b) => /bam-GPU/.test(b.textContent));
-        const first = block && block.querySelector('[data-ro-pin]');
-        return { block: Boolean(block), first: first && first.dataset.roPin, before: block && folder ? Boolean(block.compareDocumentPosition(folder) & Node.DOCUMENT_POSITION_FOLLOWING) : false, once: document.querySelectorAll(`.sec.dx-diag [data-ro-pin="${want}"]`).length };
+        const block = document.querySelector('.sec.dx-diag .er-pinned');
+        const folder = [...document.querySelectorAll('.sec.dx-diag .er-fold .er-fb')].find((b) => /bam-GPU/.test(b.textContent));
+        const first = block && block.querySelector('[data-er-pin]');
+        return { block: Boolean(block), first: first && first.dataset.erPin, before: block && folder ? Boolean(block.compareDocumentPosition(folder) & Node.DOCUMENT_POSITION_FOLLOWING) : false, once: document.querySelectorAll(`.sec.dx-diag [data-er-pin="${want}"]`).length };
       }, pinId);
       check(`${label}: ★ pins a row to the top (above the folders, once)`, pinned.block && pinned.first === pinId && pinned.before && pinned.once === 1, pinned);
-      const stored = await p2.evaluate((key) => JSON.parse(localStorage.getItem(key) || '{}'), orderKey);
-      check(`${label}: the pin is kept in localStorage per entity kind (${orderKey})`, Array.isArray(stored.pins) && stored.pins.includes(pinId), stored);
+      await p2.waitForTimeout(500);
+      const stored = ((await (await fetch(`${targets[0].base}/api/v1/arrangements`)).json()).arrangements.host || {}).diagnostics || {};
+      check(`${label}: the pin is kept by the host (arrangements.json), per entity kind, with the other tabs' arrangements`, Array.isArray(stored.pins) && stored.pins.includes(pinId), stored);
       await open2();
-      check(`${label}: the pin survives a reload`, await p2.evaluate((want) => Boolean(document.querySelector(`.sec.dx-diag .ro-pinned [data-ro-pin="${want}"]`)), pinId), '');
+      check(`${label}: the pin survives a reload`, await p2.evaluate((want) => Boolean(document.querySelector(`.sec.dx-diag .er-pinned [data-er-pin="${want}"]`)), pinId), '');
       const other = await fresh.newPage();
       await other.goto(`${targets[3].base}/?sel=${encodeURIComponent(targets[3].sel)}`);
       await other.waitForFunction(() => typeof S !== 'undefined' && S.built && document.querySelector('.d-title'), null, { timeout: 30000 });
       await other.waitForFunction((want) => S.layout === want && document.querySelector('[data-dx]'), id, { timeout: 20000 }).catch(() => {});
-      check(`${label}: another entity kind (a camera) has its own order: no pin there`, await other.evaluate(() => !document.querySelector('.sec.dx-diag .ro-pinned')), '');
+      check(`${label}: another entity kind (a camera) has its own order: no pin there`, await other.evaluate(() => !document.querySelector('.sec.dx-diag .er-pinned')), '');
       await other.close();
       // sort: A-Z inside the folder
-      await p2.click('[data-ro-sort="name"]');
+      await p2.selectOption('[data-er-sort="diagnostics"]', 'name');
       await p2.waitForTimeout(400);
       const ids = (await inFolder()).filter((n) => n !== pinId);
       const sorted = ids.slice().sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
       check(`${label}: A-Z sorts the rows inside the folder`, ids.length >= 14 && ids.join('|') === sorted.join('|'), ids.slice(0, 4));
-      await p2.click('[data-ro-sort="severity"]');
+      await p2.selectOption('[data-er-sort="diagnostics"]', 'severity');
       // manual drag (rows that draw as single-line items: d1a, d1c)
       if (id === 'd1a' || id === 'd1c') {
-        await p2.click('[data-ro-sort="manual"]');
+        await p2.selectOption('[data-er-sort="diagnostics"]', 'manual');
         await p2.waitForTimeout(400);
-        const rowsSel = '.sec.dx-diag .ro-kids [data-ro-item]:not(.ro-folder)';
-        const order = () => p2.$$eval(rowsSel, (list) => list.map((el) => el.dataset.roItem));
-        await p2.evaluate(() => { const b = document.querySelector('[data-ro-sort="manual"]'); if (b.getAttribute('aria-pressed') !== 'true') b.click(); });
-        const start = (await order()).filter((n) => n.startsWith('bam-GPU: '));
+        const rowsSel = '.sec.dx-diag [data-er-row][data-er-parent="bam-GPU"]';  // (d1a, d1c)
+        const order = () => p2.$$eval(rowsSel, (list) => list.map((el) => el.dataset.erId));
+        const start = await order();
         const grabbed = start[1];
-        await p2.locator(`${rowsSel}[data-ro-item="${grabbed}"]`).dragTo(p2.locator(`${rowsSel}[data-ro-item="${start[0]}"]`));
-        await p2.waitForTimeout(500);
-        const after = (await order()).filter((n) => n.startsWith('bam-GPU: '));
-        check(`${label}: manual sort, dragging a row moves it (the second dropped on the first)`, after[0] === grabbed && after.length === start.length, { grabbed, first: after[0] });
+        await p2.locator(`${rowsSel}[data-er-id="${grabbed}"] .er-drag`).dragTo(p2.locator(`${rowsSel}[data-er-id="${start[0]}"]`));
+        await p2.waitForTimeout(600);
+        const after = await order();
+        check(`${label}: manual sort, dragging a row by its handle moves it (the second dropped on the first)`, after[0] === grabbed && after.length === start.length, { grabbed, first: after[0] });
         await open2();
-        const kept = (await p2.$$eval(rowsSel, (list) => list.map((el) => el.dataset.roItem))).filter((n) => n.startsWith('bam-GPU: '));
-        check(`${label}: the manual order survives a reload`, kept[0] === grabbed, kept.slice(0, 2));
+        const kept = await order();
+        check(`${label}: the manual order survives a reload (the host keeps it)`, kept[0] === grabbed, kept.slice(0, 2));
       }
       check(`${label}: no horizontal scroll with folders, pins and the order bar`, await p2.evaluate(() => document.getElementById('detail').scrollWidth <= document.getElementById('detail').clientWidth), '');
       await fresh.close();
     }
+    await forget();
 
     // ---- the five colour schemes
     await paletteChecks(browser, targets[0].base);

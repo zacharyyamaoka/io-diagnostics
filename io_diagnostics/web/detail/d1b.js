@@ -27,7 +27,7 @@
       // ★ pinned rows (any level) sit above everything as single-line rows; the problem cards and the OK folders are the rest
       const all = x.planOf(node, m.rows);
       const pinnedIds = new Set(all.pinned.map((row) => row.id));
-      const pinnedHtml = all.pinned.length ? `<div class="dx-tab" style="${x.lineStyle(W)}">${x.walk(node, { ...all, items: [] }, (r) => x.line(r.row, ctx, hist, { r }))}</div>` : '';
+      const pinnedHtml = all.pinned.length ? `<div class="dx-tab" style="${x.lineStyle(W)}">${x.walk(node, x.pinnedOnly(all), (r) => x.line(r.row, ctx, hist, { r }))}</div>` : '';
       const okPlan = x.planOf(node, m.ok.filter((row) => !pinnedIds.has(row.id)));
       const shownProblems = m.problems.filter((row) => !pinnedIds.has(row.id));
       const problems = shownProblems.map((row) => `<div class="db-p" data-diagnostic>`

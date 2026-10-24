@@ -66,13 +66,13 @@
         ['warnings', 'Warnings', m.rows.filter((row) => row.bad && row.level !== 'error'), true],
         ['all', 'All', m.rows, !m.problems.length],
       ];
-      // the folders are the row-order helper's (dot-notation / "who: what" names, detail/roworder.js): ROS's prefix nesting, any depth
+      // the folders are the shared row model's (dot-notation / "who: what" names, detail/d6-rows.js): ROS's prefix nesting, any depth
       const everything = x.planOf(node, m.rows);
       const pinnedIds = new Set(everything.pinned.map((row) => row.id));
       const leaf = (r) => `<div class="dd-leaf${r.row.bad ? ' bad' : ''}${r.row.name === selected ? ' sel' : ''}" style="--depth:${r.depth}" data-dx-select="${x.esc(r.row.name)}"${r.drag} role="button" tabindex="0" title="${x.esc(r.row.name)} — ${x.esc(r.row.message)}"${r.row.bad ? ' data-diagnostic' : ''}>`
         + `${r.row.bad ? ctx.h.shape(r.row.level, r.row.level) : '<span class="dd-ok" aria-label="OK"></span>'}<span class="dd-t">${r.grip}${r.star}<span class="dx-nt">${x.esc(r.flat === false ? r.leaf : r.row.name)}</span></span>`
         + `<span class="dd-m">${x.esc(r.row.message || '—')}</span><span>${x.cellsOf(r.row, hist, 72, 'spark', ctx)}</span></div>`;
-      const pinnedHtml = everything.pinned.length ? `<div class="dd-g">${x.walk(node, { ...everything, items: [] }, leaf)}</div>` : '';
+      const pinnedHtml = everything.pinned.length ? `<div class="dd-g">${x.walk(node, x.pinnedOnly(everything), leaf)}</div>` : '';
       const tree = pinnedHtml + groups.map(([gid, title, allRows, defaultOpen]) => {
         const open = x.isOpen(`grp:${gid}`, defaultOpen);
         const rows = allRows.filter((row) => !pinnedIds.has(row.id));

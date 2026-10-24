@@ -17,7 +17,7 @@
 .de-mark { display: inline-flex; justify-content: center; align-self: center; color: var(--io-faint); font-size: 13px; line-height: 1; }
 .de-mark .shape { width: 14px; height: 14px; }
 .de-t { min-width: 0; overflow-wrap: anywhere; }
-.de-t .ro-star, .de-t .ro-grip { display: inline-block; vertical-align: middle; }
+.de-t .er-pin, .de-t .er-drag { display: inline-block; vertical-align: middle; }
 .de-r.ok .de-t { color: var(--io-faint); }
 .de-r.bad .de-t { color: var(--io-text-strong); font-weight: 600; }
 .de-h { align-self: center; min-width: 0; }

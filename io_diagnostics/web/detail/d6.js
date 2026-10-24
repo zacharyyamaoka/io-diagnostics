@@ -43,7 +43,6 @@
     nameW: Number(read(KEYS.name)) || 190, tileW: Number(read(KEYS.tile)) || 240,
     folded: readSet(KEYS.folded),        // 'images', 'state:<group>': folded blocks
     off: readSet(KEYS.off),              // `${path}\u0001${stream}`: streams the viewer switched off
-    expanded: new Set(),                 // `${path}\u0001${check}`: Diagnostics rows opened in place
     more: new Set(),                     // entity paths whose hardware line is opened
     query: new Map(),                    // entity path -> the Configuration search text
     raw: false, warnOnly: false,         // the Log's Raw channel and filter
@@ -66,11 +65,6 @@
   const span = (s) => (s < 90 ? `${Math.round(s)} s` : s < 5400 ? `${Math.round(s / 60)} min` : `${+(s / 3600).toFixed(1)} h`);
   const bytes = (n) => { const u = ['B', 'KiB', 'MiB', 'GiB', 'TiB']; let i = 0; let v = Number(n); while (v >= 1024 && i < u.length - 1) { v /= 1024; i += 1; } return `${i ? v.toFixed(v < 10 ? 2 : 1) : v} ${u[i]}`; };
   const enc = encodeURIComponent;
-  function nameHtml(name, h) {
-    const at = String(name).indexOf(': ');
-    return at > 0 ? `<span class="d6-pre">${h.esc(name.slice(0, at + 2))}</span>${h.esc(name.slice(at + 2))}` : h.esc(name);
-  }
-
   // ----------------------------------------------------------------------- the ticking last-heard ----
   function setHeard(age) {
     if (typeof age !== 'number') return;
@@ -168,7 +162,6 @@
   // The health bar and the children's mini bars are the shared discrete state timeline (detail/health.js; the one history
   // renderer, with one palette: Zach, 2026-10-24), the same cells d1 and the d1a-d1e variants draw.
   const windowOf = (ctx) => (ctx.settings && Number(ctx.settings.history_window_s)) || 900;
-  const widthOf = () => root.IOHealth.widthOf(document.getElementById('detail'), 0);
   function bar(bins, from, binS, kind, cls) {
     return root.IOHealth.html(root.IOHealth.fromBar(bins, from, binS), { kind, cls });
   }
@@ -270,12 +263,6 @@
   }
 
   // ------------------------------------------------------------------------------- Diagnostics ----
-  function checklist(check, h) {
-    const values = Object.fromEntries((check.values || []).map((v) => [v.key, v.value]));
-    if (!values.what_to_check) return '';
-    const lines = String(values.what_to_check).split('\n').filter((line) => line.trim());
-    return `<div class="why-lines">${lines.map((line) => `<div>${h.esc(line)}</div>`).join('')}</div>${values.kernel_evidence ? `<div class="why-ev">kernel evidence: ${h.esc(values.kernel_evidence)}</div>` : ''}`;
-  }
   function faultOf(check) {
     const values = Object.fromEntries((check.values || []).map((v) => [v.key, v.value]));
     return values.fault_code ? { code: values.fault_code, meaning: values.fault_meaning || '' } : null;
@@ -293,53 +280,6 @@
     return `<div class="d6-why">Set by its own worst diagnostic${setters > 1 ? `s (${setters})` : ''}: <b>${h.esc(worst.name)}</b>${node.knock_on_of ? ` — explained by <a class="link" data-go="${h.esc(node.knock_on_of)}">${h.esc((ctx.byPath.get(node.knock_on_of) || {}).name || node.knock_on_of)}</a>, counted once there` : ''}.</div>`;
   }
   const isGrouping = (node) => !node.own || node.own.level === null || node.own.level === undefined;
-  function healthBar(path, ctx) {
-    const h = ctx.h;
-    const entry = ctx.bar(path, root.IOHealth.count(windowOf(ctx), widthOf(), 'timeline'));
-    const data = entry.data && entry.data.path === path ? entry.data : null;
-    if (!data) return `<div class="d6-bar"><div class="d6-axis"><span>${entry.error ? `no history: ${h.esc(entry.error)}` : 'history loading…'}</span></div></div>`;
-    const own = data.rows.find((row) => row.depth === 0);
-    const basis = !own || own.basis === 'none' ? 'nothing in the history yet' : own.basis === 'below' ? `everything below · ${own.statuses} status${own.statuses === 1 ? '' : 'es'}` : `its own ${own.statuses} diagnostic${own.statuses === 1 ? '' : 's'}`;
-    return `<div class="d6-bar">${own ? bar(own.bar, data.from, data.bin_s, 'timeline') : ''}<div class="d6-axis"><span>−${span(data.window_s)}</span><span>${h.esc(basis)} · worst per ${span(data.bin_s)}</span><span>now</span></div></div>`;
-  }
-  function statusTable(node, checks, detail, ctx) {
-    const h = ctx.h;
-    if (!checks.length) return '';
-    const sets = PROBLEM.has(node.level) && !isGrouping(node) ? node.level : null;
-    const rowOf = (check, d) => {
-      const level = check.effective_level;
-      const bad = PROBLEM.has(level);
-      const key = `${node.path}\u0001${check.name}`;
-      const open = U.expanded.has(key);
-      const fault = faultOf(check);
-      const known = detail.faults.some((f) => f.code === check.code);
-      const word = bad ? `<span class="lvword lv-${h.esc(level)}">${h.esc(level)}</span>` : '<span class="d6-okw">ok</span>';
-      const flash = U.flash && U.flash.tab === 'diagnostics' && U.flash.code && (U.flash.code === check.code || U.flash.code === (fault && fault.code)) ? ' d6-flash' : '';
-      const tag = sets && level === sets ? '<span class="d6-tag">sets the level</span>' : '';
-      const explain = fault ? `<span class="d6-fx" title="fault code and what it means">${h.esc(fault.code)}${fault.meaning ? ` · ${h.esc(fault.meaning)}` : ''}</span>` : '';
-      const log = known && check.code ? ` <a class="link d6-lg" data-d6-jump="log" data-code="${h.esc(check.code)}" tabindex="0" title="the Log lines of this fault">in the log →</a>` : '';
-      let body = '';
-      if (open) {
-        const values = (check.values || []).filter((v) => !HIDDEN_VALUES.has(v.key));
-        const caused = (check.caused_by || []).map((path) => `<a class="link" data-go="${h.esc(path)}">${h.esc((ctx.byPath.get(path) || {}).name || path)}</a>`).join(', ');
-        const timing = check.expected_period_s ? `every ${num(check.expected_period_s)} s · STALE after ${num(check.stale_after_s)} s` : 'event-driven (never stale)';
-        body = `<div class="d6-x">${bad ? checklist(check, h) : ''}${h.kv(values.map((v) => [v.key, `<span class="d6-v">${h.esc(v.value)}</span>`]))}`
-          + `<div class="d6-meta">received ${h.esc((check.received_iso || '').slice(11, 19) || '—')} · ${h.ago(check.age_s)} ago · ${h.esc(timing)}${check.level !== check.effective_level ? ` · reported ${h.esc(check.level)}` : ''}${check.code ? ` · code <span class="mono">${h.esc(check.code)}</span>` : ''}${caused ? `<br>caused by ${caused}` : ''}<br>${h.esc(check.source || '')}</div></div>`;
-      }
-      const er = ER();
-      return `<div class="d6-r${bad ? ' bad' : ''}${open ? ' open' : ''}${flash}"${bad ? ' data-diagnostic' : ''} data-code="${h.esc(check.code || '')}" ${er.rowAttrs(d.parent, d.id === null ? check.name : d.id, 'diagnostics')} style="--er-depth:${d.depth}">`
-        + `<div class="d6-rl" data-d6-expand="${h.esc(check.name)}" role="button" tabindex="0" aria-expanded="${open}"><svg class="ic d6-chev"><use href="#i-chev"/></svg>`
-        + `<span class="d6-lv">${h.shape(level, level)}${word}</span><span class="d6-rn"><span class="er-ctl">${er.star(check.name, d.pinned)}${er.handle(d.parent, d.id === null ? check.name : d.id)}</span>${nameHtml(d.label === null ? check.name : d.label, h)}</span>`
-        + `<span class="d6-rm">${h.esc(check.message || '—')}${explain ? ` ${explain}` : ''}${check.code && bad ? ` <span class="mono d6-code">${h.esc(check.code)}</span>` : ''}${tag}${log}</span></div>${body}</div>`;
-    };
-    const er = ER();
-    const kind = node.kind || 'device';
-    const sp = er.spec(kind, 'diagnostics');
-    const mode = sp.sort || 'severity';
-    const tree = er.build(checks, { idOf: (c) => c.name, nameOf: (c) => c.name, sp, mode, severityOf: (c) => rankOf(c.effective_level) });
-    const rows = er.renderTree(tree, { section: 'diagnostics', sp, leaf: rowOf });
-    return `<div class="d6-tab-t"><div class="d6-hd"><span></span><span>Level</span><span>Name</span><span class="er-sortc">${er.sortControl('diagnostics', sp, ['severity', 'name', 'manual'], 'severity')}</span></div>${rows}</div>`;
-  }
   function childrenList(node, ctx) {
     const h = ctx.h;
     const children = node.children || [];
@@ -367,10 +307,10 @@
   function diagnosticsPanel(node, detail, ctx) {
     const p = ctx.parts;
     const checks = detail.checks;
-    const problems = checks.filter((c) => PROBLEM.has(c.effective_level)).length;
     const kids = (node.children || []).length;
     // Zach picked d1a (2026-10-24): the Diagnostics tab IS d1a's section, drawn by detail/d1a.js through the one history renderer
-    // (health.js). The d6 table below is only the fallback if d1a did not load.
+    // (health.js); its rows come from the shared row model (d6-rows.js), the same one State and Configuration use. The table this page drew
+    // itself is gone (Zach, 2026-10-24: one row model).
     const d1a = root.IODetailLayouts && root.IODetailLayouts.d1a;
     // the entity page's own marks on a row: a fault code with its meaning, its line in the Log, the light when the Log links here
     const marks = (check) => {
@@ -384,8 +324,7 @@
     };
     const hooks = { rowClass: (row) => marks(row.check).flash, extra: (row) => marks(row.check).extra };
     const section = d1a && d1a.embed ? d1a.embed(document.getElementById('detail'), node, detail, ctx, hooks)
-      : healthBar(node.path, ctx) + plain('d6-diag', `Diagnostics · ${checks.length}`, statusTable(node, checks, detail, ctx) || '<div class="muted">No diagnostics of its own.</div>',
-        problems ? `${problems} problem${problems === 1 ? '' : 's'} first · click a row for its detail` : 'click a row for its detail');
+      : '<div class="muted">The Diagnostics section (detail/d1a.js) did not load.</div>';
     return rollsUp(node, [...checks].sort((a, b) => rankOf(b.effective_level) - rankOf(a.effective_level)), ctx) + section
       + plain('d6-children', `Below · ${kids}`, childrenList(node, ctx), 'each row\'s own health over the same window')
       + fold(ctx, 'faults', `Faults · ${detail.faults.length}`, p.faults()) + fold(ctx, 'links', 'Link health', p.links(), 'the computer diagnoses its own wires')
@@ -706,37 +645,10 @@
 .d6-lb figcaption { padding-top: 6px; font-size: 12px; color: var(--io-muted); }
 .d6-why { margin: 2px 0 0; font-size: 12.5px; color: var(--io-muted); }
 .d6-why b { color: var(--io-text-strong); font-weight: 600; }
-.d6-bar { margin: 8px 0 4px; }
-.d6-axis { display: flex; justify-content: space-between; gap: 10px; margin-top: 3px; font-size: 11px; color: var(--io-faint); font-variant-numeric: tabular-nums; }
-.d6-axis span:nth-child(2) { text-align: center; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .d6-h { cursor: default; }
 .sec.d6-diag .sec-b { padding-top: 0; }
-.d6-tab-t { font-size: 12.5px; }
-.d6-hd, .d6-rl { display: grid; grid-template-columns: 12px 64px minmax(0, 36%) minmax(0, 1fr); gap: 8px; }
-.d6-hd { padding: 2px 4px 4px; color: var(--io-faint); font-size: 11px; border-bottom: 1px solid var(--io-border-soft); }
-.d6-r { border-bottom: 1px solid var(--io-border-soft); }
-.d6-rl { align-items: baseline; padding: 5px 4px; border-radius: var(--io-radius-sm); cursor: pointer; }
-.d6-rl:hover { background: var(--io-hover); }
-.d6-rl:focus-visible { outline: var(--io-focus-width) solid var(--io-focus); outline-offset: 1px; }
-.d6-chev { width: 12px; height: 12px; color: var(--io-faint); align-self: start; margin-top: 2px; transition: transform .12s; }
-.d6-r.open .d6-chev { transform: rotate(90deg); }
-.d6-lv { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
-.d6-lv .shape { width: 12px; height: 12px; }
-.d6-lv .lvword { margin: 0; }
-.d6-okw { color: var(--io-faint); font-size: 11px; letter-spacing: .3px; text-transform: uppercase; }
-.d6-rn { min-width: 0; overflow-wrap: anywhere; color: var(--io-muted); }
-.d6-r.bad .d6-rn { color: var(--io-text-strong); font-weight: 600; }
-.d6-pre { color: var(--io-faint); font-weight: 400; }
-.d6-rm { min-width: 0; overflow-wrap: anywhere; color: var(--io-muted); }
-.d6-r.bad .d6-rm { color: var(--io-text); }
 .d6-fx { display: inline-block; margin-left: 4px; padding: 0 6px; border-radius: var(--io-radius-sm); background: var(--io-control); color: var(--io-text-strong); font-size: 12px; }
-.d6-code { color: var(--io-faint); font-size: 11px; }
 .d6-lg { font-size: 11.5px; margin-left: 6px; white-space: nowrap; }
-.d6-tag { margin-left: 6px; padding: 0 6px; border: 1px solid var(--io-border); border-radius: var(--io-radius-pill); color: var(--io-muted); font-size: 10.5px; white-space: nowrap; }
-.d6-x { padding: 2px 4px 10px 26px; display: grid; gap: 8px; min-width: 0; }
-.d6-x .kv { grid-template-columns: 120px 1fr; }
-.d6-v { white-space: pre-line; }
-.d6-meta { color: var(--io-faint); font-size: 11px; overflow-wrap: anywhere; }
 .d6-ch { display: flex; align-items: center; gap: 8px; height: var(--io-row-h); padding: 0 6px; margin: 0 -6px; border-radius: var(--io-radius-sm); cursor: pointer; white-space: nowrap; }
 .d6-ch:hover { background: var(--io-hover); }
 .d6-ch .ic { color: var(--io-icon); flex: none; }
@@ -748,27 +660,7 @@
 .d6-cs { flex: none; width: 34px; display: inline-flex; justify-content: flex-end; gap: 2px; }
 .d6-hint .shape { width: 10px; height: 10px; opacity: .8; }
 /* the shared row model (d6-rows.js): folders, stars, handles, the sort switch, the edit state of a setting */
-.er-ctl { display: inline-flex; align-items: center; gap: 2px; margin-right: 4px; vertical-align: middle; }
-.er-pin { background: transparent; border: 0; padding: 0 2px; color: var(--io-faint); cursor: pointer; font-size: 13px; line-height: 1; opacity: 0; }
-.er-pin.on { opacity: 1; color: var(--io-text-strong); }
-.d6-r:hover .er-pin, .d6-sr:hover .er-pin, .er-cfgrow:hover .er-pin, .er-pin:focus-visible { opacity: 1; }
-.er-drag { color: var(--io-faint); cursor: grab; font-size: 11px; letter-spacing: -2px; opacity: 0; user-select: none; }
-.d6-r:hover .er-drag, .d6-sr:hover .er-drag, .er-cfgrow:hover .er-drag, .er-fold:hover .er-drag { opacity: .8; }
-.er-dragging { opacity: .45; }
-.er-over-top { box-shadow: inset 0 2px 0 var(--io-accent); }
-.er-over-bottom { box-shadow: inset 0 -2px 0 var(--io-accent); }
-.er-fold { display: flex; align-items: center; justify-content: space-between; padding: 2px 4px 2px calc(var(--er-depth, 0) * 16px); }
-.er-fb { display: inline-flex; align-items: center; gap: 4px; background: transparent; border: 0; padding: 3px 6px 3px 0; color: var(--io-muted); font: 600 12px var(--io-font-ui); cursor: pointer; border-radius: var(--io-radius-sm); }
-.er-fb:hover { color: var(--io-text-strong); }
-.er-fb[aria-expanded="true"] .sec-chev { transform: rotate(90deg); }
-.er-fc { margin-left: 4px; color: var(--io-faint); font-weight: 400; font-size: 11px; }
-.er-pinned { margin: 0 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--io-border); }
-.er-pinh { margin: 4px 0 2px; font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--io-muted); font-weight: 600; }
 .d6-sr .d6-sn, .er-cfgrow .er-name { padding-left: calc(var(--er-depth, 0) * 16px); }
-.d6-r { padding-left: calc(var(--er-depth, 0) * 16px); }
-.er-sort { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--io-faint); text-transform: none; letter-spacing: 0; font-weight: 400; }
-.er-sort select { font: inherit; font-size: 11.5px; color: var(--io-text); background: var(--io-field); border: 1px solid var(--io-border); border-radius: var(--io-radius-sm); padding: 1px 4px; }
-.er-sortc { justify-self: end; }
 .er-tools { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .er-tools .d6-copy { margin-left: 0; }
 .er-name { min-width: 0; display: flex; align-items: center; gap: 4px; overflow: hidden; }
@@ -943,13 +835,6 @@
       if (enlarge) { U.lightbox = { path: node.path, stream: enlarge.dataset.d6Enlarge }; ctx.redraw(); return; }
       const more = target.closest('[data-d6-more]');
       if (more) { if (U.more.has(node.path)) U.more.delete(node.path); else U.more.add(node.path); ctx.redraw(); return; }
-      const expand = target.closest('[data-d6-expand]');
-      if (expand && !target.closest('a')) {
-        const key = `${node.path}\u0001${expand.dataset.d6Expand}`;
-        if (U.expanded.has(key)) U.expanded.delete(key); else U.expanded.add(key);
-        ctx.redraw();
-        return;
-      }
       const toJump = target.closest('[data-d6-jump]');
       if (toJump) { jump(ctx, node, toJump.dataset.d6Jump, toJump.dataset.path || node.path, toJump.dataset.code); event.stopPropagation(); return; }
       const folder = target.closest('[data-d6-fold]');
@@ -1004,8 +889,6 @@
       const { ctx, detail } = live();
       if (ER().config.key(event, ctx, detail)) return;
       if (event.key === 'Escape' && U.lightbox) { U.lightbox = null; ctx.redraw(); event.stopPropagation(); return; }
-      const expand = target.closest('[data-d6-expand]');
-      if (expand && (event.key === 'Enter' || event.key === ' ')) { expand.click(); event.preventDefault(); return; }
       if (target.closest('[data-d6-tabs]')) {
         const tabs = tabsFor(detail);
         const at = tabs.findIndex((tab) => tab.id === activeTab(ctx, ctx.node, tabs));
