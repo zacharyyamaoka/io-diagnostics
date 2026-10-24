@@ -8,6 +8,7 @@ replay exercises the code the rack will run.
 from __future__ import annotations
 
 import collections
+import contextlib
 import dataclasses
 import datetime as dt
 import json
@@ -184,12 +185,13 @@ class LiveOs:
                 return None, "no serial port node for this device"
             if port_holders.function is None:
                 return None, f"port holder check {port_holders.source}"
-            decision = gate.decide(nodes, holders_fn=port_holders.function, uses_rack_lock=False)
+            decision = gate.decide(nodes, holders_fn=_without_own_watchers(port_holders.function), uses_rack_lock=False)
         elif check == "camera_free":
             if camera_holders.function is None:
                 return None, f"camera holder check {camera_holders.source}"
             video = [node for node in nodes_of("v4l", "video_nodes") if node.startswith("/dev/video")]
-            decision = gate.decide(video, camera=True, camera_holders_fn=camera_holders.function, uses_rack_lock=False)
+            decision = gate.decide(video, camera=True, camera_holders_fn=_without_own_watchers(camera_holders.function),
+                                   uses_rack_lock=False)
         else:
             return None, f"{check}: not a check the host evaluates"
         if decision.state == "free":
@@ -197,6 +199,25 @@ class LiveOs:
         if decision.state == "blocked":
             return False, decision.reason.replace("open by", "held by")
         return None, decision.reason
+
+
+def _without_own_watchers(holders_fn):
+    """``holders_fn`` minus the holders that are this host's own ``watch`` / ``follow`` processes.
+
+    WHY: a watch holds the port for the State tab, so without this the host's own watch blocked its own ``port_free`` gate
+    and, for ~10 s after the person left the tab, every config write to the same board (the gates are the host's, the
+    watch is the host's: it yields, see ``Host.release_watches``). A holder string is ``pid COMMAND``."""
+
+    def filtered(*args, **kwargs):
+        kept = []
+        for holder in holders_fn(*args, **kwargs):
+            lead = str(holder).split(None, 1)[0] if str(holder).strip() else ""
+            if lead.isdigit() and RUNNING.is_passive(int(lead)):
+                continue
+            kept.append(holder)
+        return kept
+
+    return filtered
 
 
 def bus_lock_state(holders) -> tuple[bool | str, str]:
@@ -422,6 +443,7 @@ class Watch:
     started: float | None = None
     notified: float = 0.0
     stopped: bool = False
+    paused: int = 0  # >0 while a run (a config write, a utility) uses the same board: the watch yields the port, then resumes
 
 
 class _NoOwner:
@@ -1958,10 +1980,23 @@ class Host:
             title=plan.registered.title, label=label, danger=plan.registered.danger, argv=plan.argv,
             env=plugin_env(spec, job.device, plan.device_path, started, self._job_env(job)), cwd=spec.cwd,
             timeout_s=spec.act_timeout_s, node=plan.node, new_id=plan.new_id, hardware_id=plan.entity.hardware_id,
-            stop_argv=stop_argv, group=spec.exclusive, hold=lambda: self.gates.hold(spec.exclusive, person=True))
+            stop_argv=stop_argv, group=spec.exclusive, hold=lambda: self._run_hold(job, spec.exclusive))
         run = self.runs.create(run_spec, interactive=interactive)
         run.launch()
         return run
+
+    @contextlib.contextmanager
+    def _run_hold(self, job: Job, group: str):
+        """What a run holds while it talks to its device: its ``exclusive`` group (a person's press goes first), and no
+        watch of the same board. WHY the watches stop here and not when the run is asked for: a press queues behind a
+        routine diagnose that may take tens of seconds, and the State tab should keep moving meanwhile."""
+
+        with self.gates.hold(group, person=True):
+            paused = self.pause_watches(job)
+            try:
+                yield
+            finally:
+                self.resume_watches(paused)
 
     # --- the entity page: State, Configuration, image streams, watch (docs/state-config-v1.md) -------------------------------
     def _observe_states(self, job: Job, device_path: str, now: float) -> None:
@@ -2076,6 +2111,9 @@ class Host:
             if time.monotonic() - watch.last_beat > self.watch_grace_s:
                 self._watch_stop(watch)
                 return
+            if watch.paused:
+                watch.gate = {"reason": "paused while a write to this board runs", "holders": []}
+                return
             watch.gate = self._watch_gate(watch)
             if watch.gate is not None:
                 if watch.follower is not None:
@@ -2095,6 +2133,33 @@ class Host:
                                          hardware_id=entity.hardware_id if entity else "", backoff_s=self.follow_backoff_s,
                                          path=watch.rel)
                 watch.follower.start()
+
+    def pause_watches(self, job: Job) -> list[Watch]:
+        """Stop every watch of this job's board and wait for its process to exit (``Follower.stop`` kills the group and
+        waits), so a run that talks to the same device finds the port free. Returns what to give back to ``resume_watches``.
+
+        WHY the host yields and does not make the run wait: the watch is the host's own, held only for a page that is
+        looking; before this a write to a board was refused for ~10 s after the person left the State tab (the watch kept
+        the port until its grace ran out), and a write made while the tab was open could never go through."""
+
+        with self._watch_lock:
+            paused = [watch for watch in self.watches.values() if watch.job.key == job.key and not watch.stopped]
+            for watch in paused:
+                watch.paused += 1
+                if watch.follower is not None:
+                    watch.follower.stop()
+                    watch.follower = None
+        return paused
+
+    def resume_watches(self, paused: list[Watch]) -> None:
+        """Give the board back to the watches ``pause_watches`` stopped: each starts again at once when its page still
+        beats (the State tab is open), else it ends at its grace like any other."""
+
+        with self._watch_lock:
+            for watch in paused:
+                watch.paused = max(0, watch.paused - 1)
+        for watch in paused:
+            self._watch_step(watch)
 
     def _watch_stop(self, watch: Watch) -> None:
         with self._watch_lock:

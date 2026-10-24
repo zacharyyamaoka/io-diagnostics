@@ -73,11 +73,35 @@ def emit_to(handle, **record) -> None:
     handle.flush()
 
 
+def live_watchers() -> list[int]:
+    """The pids of the other ``watch`` processes of this fixture that share this run's ``STATE_LOG`` (what a real driver
+    would find holding its port): a write must find none, because the host stops its own watch first."""
+
+    mine, found = os.environ.get("STATE_LOG", ""), []
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit() or int(entry) == os.getpid():
+            continue
+        try:
+            with open(f"/proc/{entry}/cmdline", "rb") as handle:
+                words = handle.read().split(b"\0")
+            with open(f"/proc/{entry}/environ", "rb") as handle:
+                environment = handle.read().split(b"\0")
+            with open(f"/proc/{entry}/stat") as handle:
+                zombie = handle.read().rsplit(")", 1)[-1].split()[:1] == ["Z"]
+        except OSError:
+            continue
+        if (not zombie and os.path.abspath(__file__).encode() in words and b"watch" in words
+                and f"STATE_LOG={mine}".encode() in environment):
+            found.append(int(entry))
+    return found
+
+
 def log(**fields) -> None:
     path = os.environ.get("STATE_LOG")
     if path:
         with open(path, "a") as handle:
-            handle.write(json.dumps({"verb": VERB, "role": ROLE, "argv": ARGS, "pid": os.getpid(), **fields}) + "\n")
+            handle.write(json.dumps({"verb": VERB, "role": ROLE, "argv": ARGS, "pid": os.getpid(), "watchers": live_watchers(),
+                                     **fields}) + "\n")
 
 
 # ----- the utilities (dry runs only: this plugin never changes or moves anything) -----------------------------------
@@ -272,8 +296,20 @@ def camera_configs(now: float) -> list[dict]:
 
 
 # ----- the verbs --------------------------------------------------------------------------------------------------
+def extra_configs(path: str, now: float) -> list[dict]:
+    """``$STATE_EXTRA_CONFIGS`` more read-only settings in dot-notation folders (a real board's ``conf enumerate`` is ~250),
+    for measuring what a long configuration costs the host and the page; none by default."""
+
+    count = int(os.environ.get("STATE_EXTRA_CONFIGS") or 0)
+    return [{"record": "config", "path": path, "key": f"extra.group{index // 10:02d}.setting{index % 10}", "value": float(index), "stored": float(index),
+             "unit": "", "type": "float", "writable": False, "stamp": now} for index in range(count)]
+
+
 def diagnose(device: str) -> None:
     now = clock()
+    # $STATE_BUS_S / $STATE_CONFIG_S: the seconds a real driver spends on its bus check, then on reading the configuration
+    # (a moteus driver: about 25 s, then up to 20 s); the records of each stage are stamped when it ends
+    time.sleep(float(os.environ.get("STATE_BUS_S") or 0))
     if ROLE == "joint":
         emit(record="entity", path="", name="fdcanusb fixture", kind="adapter",
              identity={"manufacturer": "mjbots", "model": "fdcanusb", "serial_number": "FDA81D29", "sw_version": "1.2.0"}, actions=actions_of("device"))
@@ -291,7 +327,8 @@ def diagnose(device: str) -> None:
         emit(record="status", level="ok", name="CAN 1: firmware", path="can/1", message="1.0.0 is the latest", stamp=now, expected_period_s=30)
         if NEW:
             emit(**motor_state("can/1", now, 30))
-            for row in configs("can/1", now):
+            time.sleep(float(os.environ.get("STATE_CONFIG_S") or 0))
+            for row in [*configs("can/1", clock()), *extra_configs("can/1", clock())]:
                 emit(**{key: value for key, value in row.items() if key != "schema"})
     else:
         emit(record="entity", path="", name="RealSense D405 fixture", kind="camera",

@@ -6,6 +6,8 @@ The plugin is tests/fixtures/plugins-state/state_plugin.py (the "board" is a fil
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import time
 import urllib.error
 import urllib.request
@@ -13,9 +15,11 @@ from pathlib import Path
 
 import pytest
 from test_host_support import FakeOs
-from test_state_config import PAGE, Rig, fetch, wait_for
+from test_state_config import PAGE, Rig, alive, fetch, wait_for
 
 from io_diagnostics.arrangements import ArrangementError, Arrangements
+from io_diagnostics.host import _without_own_watchers
+from io_diagnostics.runner import RUNNING
 from io_diagnostics.server import make_server, serve_in_thread
 
 SAFETY = "servo.max_current_A"
@@ -278,6 +282,111 @@ def test_a_persons_tool_holding_the_port_blocks_every_write_and_nothing_runs(tmp
         rig.os.gates["port_free"] = (True, "no holder")
         assert rig.editor.set(rig.board, token, PLAIN, 0.3)["ok"]  # clear: it goes through
     finally:
+        rig.stop()
+
+
+def holding_port(rig, *, tools=()):
+    """Make the rig's ``port_free`` gate read like the live one: the port is held by every live ``watch`` process of the
+    fixture (and by ``tools``, a person's pids), judged by the host's own ``_without_own_watchers`` rule."""
+
+    def holders(_node):
+        return [f"{pid} state_plugin" for pid in (*live_watch_pids(rig), *tools)]
+
+    judge = _without_own_watchers(holders)
+
+    def gate(_device, check):
+        if check != "port_free":
+            return None, f"{check}: not recorded"
+        held = judge("port")
+        return (False, "held by " + ", ".join(held)) if held else (True, "no holder")
+
+    rig.os.gate = gate
+    return holders
+
+
+def live_watch_pids(rig) -> list[int]:
+    found = []
+    for entry in os.listdir("/proc"):
+        try:
+            words = Path(f"/proc/{entry}/cmdline").read_bytes().split(b"\0")
+            environment = Path(f"/proc/{entry}/environ").read_bytes().split(b"\0")
+            zombie = Path(f"/proc/{entry}/stat").read_text().rsplit(")", 1)[-1].split()[:1] == ["Z"]
+        except OSError:
+            continue
+        if entry.isdigit() and not zombie and b"watch" in words and f"STATE_LOG={rig.log}".encode() in environment:
+            found.append(int(entry))
+    return found
+
+
+def test_the_hosts_own_watch_is_not_a_holder_to_its_own_gates_and_a_persons_tool_still_is(tmp_path):
+    passive = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    person = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    try:
+        with RUNNING.run(passive, "state_joint watch usb:9-1", passive=True):
+            kept = _without_own_watchers(lambda node: [f"{passive.pid} sleep", f"{person.pid} tview", "weird"])("port")
+            assert kept == [f"{person.pid} tview", "weird"]
+            assert RUNNING.is_passive(passive.pid) and not RUNNING.is_passive(person.pid)
+        assert not RUNNING.is_passive(passive.pid)  # finished: no longer ours
+    finally:
+        for process in (passive, person):
+            process.kill()
+            process.wait()
+
+
+def test_a_write_goes_through_at_once_while_the_watch_runs_and_the_watch_resumes_after_it(tmp_path):
+    rig = Board(tmp_path, grace_s=30.0)
+    try:
+        holding_port(rig)
+        token = rig.open()
+        wait_for(lambda: rig.host.watch_heartbeat(rig.board)["watch"]["state"] == "running", what="the watch running")
+        first = rig.host.watch_json(*rig.host._watch_target(rig.board))["pid"]
+        assert live_watch_pids(rig) == [first]  # the port IS held, by the host's own watch ...
+        assert rig.host.watch_heartbeat(rig.board)["watch"]["state"] == "running"  # ... and its own gate does not mind
+        began = time.monotonic()
+        answer = rig.editor.set(rig.board, token, PLAIN, 0.3)
+        assert answer["ok"] and answer["state"] == "accepted", answer
+        assert time.monotonic() - began < 5.0
+        # the driver found no watch holding its port: the host stopped it first and waited for it to exit
+        assert rig.acts("set_config")[-1]["watchers"] == []
+        assert not alive(first)
+        # the page still beats: the watch is back, a new process
+        resumed = wait_for(lambda: (rig.host.watch_heartbeat(rig.board), rig.host.watch_json(*rig.host._watch_target(rig.board)))[1]
+                           if rig.host.watch_json(*rig.host._watch_target(rig.board))["state"] == "running" else None, what="the watch resuming")
+        assert resumed["pid"] != first and len(rig.verbs("watch")) == 2
+        # a save is a write too
+        assert rig.editor.persist(rig.board, token)["ok"] and rig.acts("persist_config")[-1]["watchers"] == []
+        wait_for(lambda: rig.host.watch_json(*rig.host._watch_target(rig.board))["state"] == "running", what="the watch resuming again")
+    finally:
+        rig.stop()
+
+
+def test_a_write_after_the_page_left_the_state_tab_does_not_wait_for_the_grace_and_the_watch_does_not_outlive_it(tmp_path):
+    rig = Board(tmp_path, grace_s=30.0)
+    try:
+        holding_port(rig)
+        token = rig.open()
+        wait_for(lambda: rig.host.watch_heartbeat(rig.board)["watch"]["state"] == "running", what="the watch running")
+        watch = rig.host.watches[(rig.host._watch_target(rig.board)[0].key, "can/1")]
+        watch.last_beat = time.monotonic() - 29.0  # the tab was left 29 s ago: the watch lives one more second
+        assert rig.editor.set(rig.board, token, PLAIN, 0.4)["ok"]
+        assert rig.acts("set_config")[-1]["watchers"] == []  # it did not wait out the 29 s: the host stopped its own watch
+        wait_for(lambda: not rig.host.watches, what="the watch ending at its grace")
+        wait_for(lambda: live_watch_pids(rig) == [], what="its process gone")
+    finally:
+        rig.stop()
+
+
+def test_a_persons_tool_holding_the_port_still_blocks_a_write_while_the_watch_is_ignored(tmp_path):
+    rig = Board(tmp_path, grace_s=30.0)
+    person = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    try:
+        holding_port(rig, tools=(person.pid,))
+        token = rig.open()
+        answer = rig.editor.set(rig.board, token, PLAIN, 0.3)
+        assert answer["refused"] == "Blocked" and rig.acts("set_config") == []
+    finally:
+        person.kill()
+        person.wait()
         rig.stop()
 
 

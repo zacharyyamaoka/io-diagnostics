@@ -116,6 +116,16 @@ A plugin that can stream declares `"watch": {"period_s": 0.1, "gates": ["port_fr
   group is active, the host does not run it (or stops it) and the state is `paused` with the reason in plain words
   ("tview has the port (pid 640623)"); it resumes by itself when the gate clears. A plugin that finds the port busy
   itself prints a `PortBusy` / `BusLockHeld` status and the host reads the holders from it (the probe's rule).
+- **The host's own watch is never a holder.** A `watch` (and a `follow`) holds the port or the camera for the page's sake, so the
+  host's `port_free` / `camera_free` gates ignore a holder that is one of its own watch processes (they are told apart by session,
+  like the bus lock's own-check rule); a person's tool is still a holder. A driver may therefore declare
+  `"gates": ["port_free", "bus_lock_free"]` for its watch and for `config_write`.
+- **A run on the same board takes the board from the watch.** Before a configuration write (`set_config`, `persist_config`,
+  `reset_config`) or any other act of the same plugin and device runs, the host stops every watch of that device and waits for
+  the process to exit (SIGKILL of its process group), so the driver finds the port free at once; when the run ends it starts the
+  watch again if the page is still sending heartbeats (the State tab is open), otherwise the watch ends at its grace like any
+  other. Nothing waits for the grace period to run out. The stop happens when the run *starts* (after it has its `exclusive`
+  group), not when it is pressed, so the State tab keeps moving while a press queues behind a routine diagnose.
 - `GET /api/v1/values?path=` (cheap, no tree build) returns the latest State rows with a recent series each (about two
   minutes, for the sparkline), the streams with their size and fps, `heard` (when the host last received anything from
   this entity: the page's ticking "heard 2 s ago") and `watch`.
@@ -235,3 +245,10 @@ fixture plugins in `tests/fixtures/plugins-state/` honour it the same way (`test
    write and print the `config` record; report the board's `mode` as a State measurement named `mode` (0 = stopped) so the safety
    rule can be judged; declare `config_write: {gates: [...]}` in `describe`; check the interlock yourself too.
 5. `describe` may declare `tabs` (section 7).
+6. **A long `diagnose` is fine for the host and the page, but two numbers are the driver's.** Measured on the fixture with the
+   real shape (a 25 s bus check, then a 20 s configuration stage of 250 `config` records per board): the host applies a run's
+   records when the run ends, so a run that outlives `timeout_s` is killed and **keeps nothing** (including the statuses that were
+   printed before the kill; they age toward STALE): set `timeout_s` above the worst case (60 s for 45 s). Records are judged STALE
+   after three times their `expected_period_s`, so a 45 s run on a 30 s period stays fresh. A person's press (a configuration
+   write) waits for a routine run of the same `exclusive` group to finish: up to the run's length, about 22 s on average for a
+   45 s run. Keep the configuration stage short (read it every Nth run, not every run) if that wait matters.

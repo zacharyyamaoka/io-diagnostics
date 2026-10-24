@@ -65,6 +65,13 @@ MUTATIONS = [
      ["tests/test_state_config.py::test_a_state_series_is_history_but_never_a_health_bar"]),
     ("config: a value that differs is not marked", "io_diagnostics/entity_state.py", "differs = config.expected is not None and not same_value(config.value, config.expected)", "differs = False",
      ["tests/test_state_config.py::test_configuration_marks_a_value_that_differs_from_what_is_expected"]),
+    ("watch: the host's own watch is a holder to its own gates", "io_diagnostics/host.py", "if lead.isdigit() and RUNNING.is_passive(int(lead)):", "if False:",
+     ["tests/test_config_edit.py::test_the_hosts_own_watch_is_not_a_holder_to_its_own_gates_and_a_persons_tool_still_is",
+      "tests/test_config_edit.py::test_a_write_goes_through_at_once_while_the_watch_runs_and_the_watch_resumes_after_it"]),
+    ("watch: a write does not stop the board's watch first", "io_diagnostics/host.py", "            paused = self.pause_watches(job)\n            try:\n                yield", "            paused = []\n            try:\n                yield",
+     ["tests/test_config_edit.py::test_a_write_goes_through_at_once_while_the_watch_runs_and_the_watch_resumes_after_it"]),
+    ("watch: it does not resume after a write", "io_diagnostics/host.py", "                watch.paused = max(0, watch.paused - 1)", "                watch.paused = watch.paused",
+     ["tests/test_config_edit.py::test_a_write_goes_through_at_once_while_the_watch_runs_and_the_watch_resumes_after_it"]),
 ]
 
 

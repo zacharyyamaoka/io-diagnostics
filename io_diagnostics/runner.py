@@ -230,17 +230,32 @@ class Running:
 
     def __init__(self):
         self._sessions: dict[int, tuple[str, float]] = {}  # session id -> (what runs, monotonic start)
+        self._passive: set[int] = set()  # the sessions among them that are the host's own follow / watch processes
         self._lock = threading.Lock()
 
     @contextlib.contextmanager
-    def run(self, process: subprocess.Popen, label: str):
+    def run(self, process: subprocess.Popen, label: str, *, passive: bool = False):
         with self._lock:
             self._sessions[process.pid] = (label, time.monotonic())
+            if passive:
+                self._passive.add(process.pid)
         try:
             yield
         finally:
             with self._lock:
                 self._sessions.pop(process.pid, None)
+                self._passive.discard(process.pid)
+
+    def is_passive(self, pid: int) -> bool:
+        """``pid`` belongs to one of this host's own ``follow`` / ``watch`` processes: they hold the port or the camera
+        for the page's sake, and give it up the moment the host needs it (``Host.release_watches``)."""
+
+        try:
+            session = os.getsid(pid)
+        except (ProcessLookupError, PermissionError, OSError):
+            return False
+        with self._lock:
+            return session in self._passive or pid in self._passive
 
     def owner(self, pid: int) -> tuple[str, float] | None:
         """``(what runs, seconds so far)`` when ``pid`` belongs to one of this host's running processes, else None."""
@@ -561,7 +576,7 @@ class Follower:
         watchdog = threading.Thread(target=self._watch, args=(process,), name=f"io-follow-dog-{self.spec.name}", daemon=True)
         watchdog.start()
         self._report()
-        with RUNNING.run(process, f"{self.spec.name} {self.verb} {self.device.get('id', '')}"):
+        with RUNNING.run(process, f"{self.spec.name} {self.verb} {self.device.get('id', '')}", passive=True):
             while True:
                 line = process.stdout.readline(FOLLOW_MAX_LINE + 1)
                 if not line:
