@@ -324,7 +324,7 @@ const { check, BOARD, BOARD2, CAMERA, ADAPTER } = H;
     if (lineLink) {
       await lineLink.click();
       await page.waitForFunction(() => document.querySelector('.d6-tab.on').dataset.d6Tab === 'diagnostics', null, { timeout: 5000 }).catch(() => {});
-      check('the link opens that fault in Diagnostics, its row lit', (await H.tabOf(page)) === 'diagnostics' && await H.waitFor(() => page.evaluate(() => Boolean(document.querySelector('.d6-r.d6-flash'))), 3000), await H.tabOf(page));
+      check('the link opens that fault in Diagnostics, its row lit', (await H.tabOf(page)) === 'diagnostics' && await H.waitFor(() => page.evaluate(() => Boolean(document.querySelector('.d6-panel .dx-r.d6-flash'))), 3000), await H.tabOf(page));
     }
 
     // ---- Utilities -------------------------------------------------------------------------------------------------------------------

@@ -14,6 +14,22 @@
 
     {"id": "d4", "name": "Resource monitor", "file": "d4.js", "ready": true},
 
-    {"id": "d5", "name": "Drill", "file": "d5.js", "ready": true}
+    {"id": "d5", "name": "Drill", "file": "d5.js", "ready": true},
+
+    {"id": "d1a", "name": "Single-line table", "file": "d1a.js", "ready": true},
+
+    {"id": "d1b", "name": "Problems first", "file": "d1b.js", "ready": true},
+
+    {"id": "d1c", "name": "State timeline lanes", "file": "d1c.js", "ready": true},
+
+    {"id": "d1d", "name": "rqt_robot_monitor", "file": "d1d.js", "ready": true},
+
+    {"id": "d1e", "name": "Checklist", "file": "d1e.js", "ready": true},
+
+    {"id": "roworder", "name": "Row order: folders, pins, sort (shared helper, no layout)", "file": "roworder.js", "ready": true},
+
+    {"id": "health", "name": "Health chart (shared renderer, no layout)", "file": "health.js", "ready": true},
+
+    {"id": "d1x", "name": "Diagnostics variants base (shared, no layout)", "file": "d1x.js", "ready": true}
   ]
 }
