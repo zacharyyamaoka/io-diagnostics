@@ -731,7 +731,7 @@ def is_claimed(path: str, entity: Entity, merged: Merged, layer: OsLayer) -> boo
 
 def node_json(path: str, rows: Rows, layer: OsLayer, faults_by_path: dict[str, int], *, nested: bool,
               memory: dict[str, float] | None = None, live: frozenset | set = frozenset(),
-              expected_paths: frozenset | set = frozenset()) -> dict:
+              expected_paths: frozenset | set = frozenset(), rates: dict[str, dict] | None = None) -> dict:
     merged, summary = rows.merged, rows.summaries[path]
     entity = merged.entities[path]
     own = rows.own.get(path, [])
@@ -766,10 +766,11 @@ def node_json(path: str, rows: Rows, layer: OsLayer, faults_by_path: dict[str, i
         "presence": presence_of(path, entity, summary, own, seen, rows.now, memory or {}, live),
         "claimed": is_claimed(path, entity, merged, layer) or path in expected_paths,
         "usb": usb_json(path, layer),
+        "rate": (rates or {}).get(path),
     }
     children = merged.children.get(path, [])
     node["children"] = ([node_json(child, rows, layer, faults_by_path, nested=True, memory=memory, live=live,
-                                   expected_paths=expected_paths) for child in children]
+                                   expected_paths=expected_paths, rates=rates) for child in children]
                         if nested else list(children))
     return node
 

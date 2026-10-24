@@ -129,6 +129,55 @@ def test_a_full_history_stays_within_its_stated_memory():
     assert used < 30 * 1024 * 1024, used
 
 
+# ----- the received rate (the Table's Rate column; docs/api-v1.md "rate") -----------------------------------------
+def test_a_steady_status_reads_its_promised_rate():
+    history = History()
+    history.observe([report(at) for at in range(100, 140, 2)], now=138)  # every 2 s for 38 s: 0.5 records/s
+    rate = history.rates(138)["rack/can/1"]
+    assert rate["received_per_s"] == pytest.approx(0.5, abs=0.02) and rate["expected_per_s"] == 0.5
+    assert rate["window_s"] >= 30
+
+
+def test_a_status_is_measured_only_after_three_of_its_periods():
+    history = History()
+    history.observe([report(100), report(102)], now=103)
+    assert history.rates(103)["rack/can/1"] == {"received_per_s": None, "expected_per_s": 0.5, "window_s": None}
+    history.observe([report(104), report(106)], now=107)
+    assert history.rates(107)["rack/can/1"]["received_per_s"] is not None
+
+
+def test_a_slow_status_reads_under_half_of_what_it_promised():
+    history = History()
+    for at in range(100, 160, 5):  # promised every 2 s, arrives every 5 s: 0.2 against 0.5
+        history.observe([report(at)], now=at)
+    rate = history.rates(158)["rack/can/1"]
+    assert rate["received_per_s"] == pytest.approx(0.2, abs=0.04) and rate["expected_per_s"] == 0.5
+    assert rate["received_per_s"] < rate["expected_per_s"] / 2
+
+
+def test_a_status_that_stopped_arriving_reads_a_falling_rate_not_its_old_one():
+    history = History()
+    history.observe([report(at) for at in range(100, 130, 2)], now=128)
+    assert history.rates(128)["rack/can/1"]["received_per_s"] == pytest.approx(0.5, abs=0.03)
+    assert history.rates(200)["rack/can/1"]["received_per_s"] == 0.0  # nothing in the last 30 s
+
+
+def test_the_rate_of_a_row_is_the_sum_of_its_periodic_statuses_and_skips_event_driven_and_state_ones():
+    history = History()
+    for at in range(100, 140, 2):
+        history.observe([report(at, name="a"), report(at, name="b"), report(at, name="event", period=None)], now=at)
+    history.measure("rack/can/1", "motor", [Measurement("position", 1.0, "rev")], 138, 138)
+    rate = history.rates(138)["rack/can/1"]
+    assert rate["expected_per_s"] == 1.0 and rate["received_per_s"] == pytest.approx(1.0, abs=0.04)
+    assert set(history.rates(138)) == {"rack/can/1"}
+
+
+def test_an_event_driven_row_has_no_rate():
+    history = History()
+    history.observe([report(100, period=None), report(500, period=None)], now=600)
+    assert history.rates(600) == {}
+
+
 # ----- the host: what it feeds, and the API ------------------------------------------------------------------------
 @pytest.fixture
 def rack(tmp_path):
@@ -153,6 +202,26 @@ def test_the_host_keeps_each_plugin_status_and_each_os_check(rack):
     assert {"thing: presence", "deadbus: plugin run", "fdcanusb DEAD: adapter"} <= names  # OS, host and plugin checks
     assert rack.history_json(f"{device}/can", status="nope")["statuses"] == []
     assert rack.history_json("host/nope") is None
+
+
+def test_the_node_carries_the_received_rate_of_its_periodic_statuses(rack):
+    state = rack.state()
+    device = rack.layer.device_paths["usb:9-1"]
+
+    def find(node, path):
+        if node["path"] == path:
+            return node
+        for child in node["children"]:
+            found = find(child, path)
+            if found:
+                return found
+
+    bus = find(state["tree"], f"{device}/can")
+    assert set(bus["rate"]) == {"received_per_s", "expected_per_s", "window_s"}
+    assert bus["rate"]["expected_per_s"] == 0.5  # DEAD CAN bus: bus promises every 2 s
+    assert 0 <= bus["rate"]["received_per_s"] < bus["rate"]["expected_per_s"]  # the rack was polled every 4-8 s
+    assert rack.node(f"{device}/can")["node"]["rate"] == bus["rate"]
+    assert find(state["tree"], f"{device}/can")["rate"] is not None
 
 
 def test_the_bar_covers_the_entity_and_each_child_row(rack):

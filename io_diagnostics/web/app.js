@@ -963,6 +963,24 @@ function fmtSeen(row) {
   return `<span title="last received ${esc(row.last_received)}">${ago(row.age_s)} ago${period}</span> ${row.stale ? shape('stale', 'stale') : ''}`;
 }
 
+// Rate column (Zach, 2026-10-22: "they should also show stuff like Frequency"): records per second the host actually received
+// for this row against what its records promised (expected_period_s), "0.20 /s · expected 0.20". WHY a quiet note, not a colour:
+// a row that stopped arriving is already stale, which is the health signal; a slow-but-alive one just says so.
+const fmtRate = (value) => (value === 0 ? '0' : value >= 0.1 ? value.toFixed(2) : value.toPrecision(2));
+function rateCell(row) {
+  const rate = row.rate;
+  if (!rate) return '<td class="num"></td>';
+  const expected = `expected ${fmtRate(rate.expected_per_s)}`;
+  if (rate.received_per_s === null || rate.received_per_s === undefined) {
+    return `<td class="num ratecell" title="measuring: the host judges a rate after watching 3 of its periods">— <span class="ratenote">${esc(expected)}</span></td>`;
+  }
+  const slow = rate.received_per_s < rate.expected_per_s / 2;
+  const tip = `${rate.received_per_s} records/s received over the last ${rate.window_s} s; promised ${rate.expected_per_s} records/s (expected_period_s ${row.expected_period_s} s)`
+    + `${slow ? ': under half of what it promised' : ''}`;
+  return `<td class="num ratecell" title="${esc(tip)}">${esc(fmtRate(rate.received_per_s))} /s <span class="ratenote">· ${esc(expected)}</span>`
+    + `${slow ? ' <span class="ratenote slow">· slow</span>' : ''}</td>`;
+}
+
 // Message column: the row's own words; a problem row's own report reads in full text colour, everything else quiet.
 function messageCell(row) {
   const own = row.status && row.status.own;
@@ -981,7 +999,8 @@ function belowCell(row) {
 // structure's extra columns, a fixed layout gave it what was left (Zach's screenshot: "ME"). The table now grows
 // past the pane and scrolls sideways instead.
 const MESSAGE_MIN_PX = 280;
-const FIXED_COLUMNS = [['Name', 380], ['ID', 170], ['Message', null], ['Below', 190]];
+// WHY Rate beside Message (Zach, 2026-10-22: "right now they just show message but they should also show stuff like Frequency"): it is read with it
+const FIXED_COLUMNS = [['Name', 380], ['ID', 170], ['Message', null], ['Rate', 230], ['Below', 190]];
 const TAIL_COLUMNS = [['Last seen', 140], ['Checks', 60], ['Faults', 60]];
 function renderTable() {
   const rows = visibleRows(S.built.rows);
@@ -993,6 +1012,7 @@ function renderTable() {
       + `<td class="namecell">${rowHtml(row, false)}</td>`
       + `<td class="mono idcell" title="${esc(row.id_text || '')}">${esc(row.idText || '')}</td>`
       + messageCell(row)
+      + rateCell(row)
       + belowCell(row)
       + extra.map((column) => `<td class="${column.mono ? 'mono xcol' : 'xcol'}" title="${esc(row.columns[column.key] || '')}">${esc(row.columns[column.key] || '')}</td>`).join('')
       + `<td class="num">${fmtSeen(row)}</td>`
@@ -1007,7 +1027,7 @@ function renderTable() {
   const fixed = [...FIXED_COLUMNS, ...TAIL_COLUMNS].reduce((sum, [, width]) => sum + (width || 0), 0)
     + extra.reduce((sum, column) => sum + (parseInt(column.width, 10) || 160), 0);
   return `<table class="grid" style="min-width:${fixed + MESSAGE_MIN_PX}px"><colgroup>${widths(FIXED_COLUMNS)}${extraCols}${widths(TAIL_COLUMNS)}</colgroup>`
-    + `<thead><tr><th>Name</th><th>ID</th><th class="msgcol">Message</th><th>Below</th>${extraHeads}<th>Last seen</th><th>Checks</th><th>Faults</th></tr></thead>`
+    + `<thead><tr><th>Name</th><th>ID</th><th class="msgcol">Message</th><th>Rate</th><th>Below</th>${extraHeads}<th>Last seen</th><th>Checks</th><th>Faults</th></tr></thead>`
     + `<tbody>${body}</tbody></table>`;
 }
 

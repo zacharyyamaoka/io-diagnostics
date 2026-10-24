@@ -163,7 +163,7 @@
   // The API fields a row carries unchanged (so a renderer can read the same names it read from the API node).
   const API_FIELDS = ['kind', 'icon', 'edge', 'level', 'message', 'own', 'rollup', 'knock_on_of', 'stale', 'connected',
     'hardware_id', 'identity', 'owner', 'id_text', 'last_received', 'age_s', 'expected_period_s', 'stale_after_s',
-    'checks', 'actions', 'faults', 'presence', 'claimed', 'usb'];
+    'checks', 'actions', 'faults', 'presence', 'claimed', 'usb', 'rate'];
 
   // A row for one API entity. `extra` may set key, children, defaultOpen, columns (and anything a structure adds).
   function entityRow(node, options = {}, extra = {}) {
@@ -227,7 +227,7 @@
       key, entity: null, label, model: '', ident: '', apiName: label, apiDepth: null, kind, icon, edge: null,
       level: hint ? hint.level : null, message, own: { level: null, message: '' }, rollup: hint ? { level: hint.level, origin: hint.origin, origin_name: hint.origin_name, message: hint.message, counts: {}, knock_on: [] } : { level: null, counts: {}, knock_on: [] },
       hint: null, knock_on_of: null, stale: false, connected: true, hardware_id: null, identity: {}, owner: null,
-      id_text: '', idText: '', last_received: null, age_s: null, expected_period_s: null, stale_after_s: null,
+      id_text: '', idText: '', last_received: null, age_s: null, expected_period_s: null, stale_after_s: null, rate: null,
       checks: 0, actions: 0, faults: 0, parts: [], status: { own: null, hint, part: null, note: '' },
       title: [label, hint ? `below: ${hint.level} · ${hint.message}` : ''].filter(Boolean).join('\n'),
       columns, subtitle: '', lead: '', suffix: '', attrs: [], children, defaultOpen, node: null,

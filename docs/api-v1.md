@@ -212,6 +212,7 @@ Besides `IO_DIAGNOSTICS_DEVICE`, `_DEVICE_PATH`, `_NOW` and `_SCHEMA`, every plu
   "checks": 2, "actions": 1, "faults": 0, "collapsed": false,
   "presence": {"state": "heard", "age_s": 0.0, "restored": false, "text": ""}, "claimed": true,
   "usb": {"version": "2.10", "speed_mbps": 480},
+  "rate": {"received_per_s": 0.4967, "expected_per_s": 0.5, "window_s": 30.0},
   "children": []
 }
 ```
@@ -239,6 +240,7 @@ Besides `IO_DIAGNOSTICS_DEVICE`, `_DEVICE_PATH`, `_NOW` and `_SCHEMA`, every plu
 | `collapsed` | `true` for a group a page starts closed. Always `false` today (the `host/recently-seen` group is gone: those devices are a check on the Computer). |
 | `presence` | The Claude-sidebar dot (2026-10-24), neutral, never a level: `{state, age_s, restored, text}` with `state` `"heard"` (filled: heard within its expected period), `"stale"` (hollow ring: known, not heard lately; `text` "last heard 6 min ago", `restored` true while it is only the last session's row) or `"live"` (pulsing: a follower is streaming its data). `null` for structure with nothing to hear from (ports, groups, rig rows) and for a row with no records. |
 | `usb` | A USB device row's own `version` (its bcdUSB as sysfs shows it, `"2.10"`) and the `speed_mbps` of the link it runs at, so a page can say "USB 2.1" instead of "480 Mb/s" (`web/usb.js`; the raw speed stays in the tooltip). `null` for any other row. |
+| `rate` | How fast the row's own PERIODIC records actually arrive, against what they promised (the Table's Rate column: "0.20 /s · expected 0.20"). `received_per_s` and `expected_per_s` are sums over the row's periodic records: arrivals per second over the last `max(30 s, 6 × period)` (at most the history window), and `1 / expected_period_s` each, so a board with three 2 s checks reads 1.5 against 1.5. A record is judged once the host has watched it for 3 of its periods; until then `received_per_s` and `window_s` are `null` (measuring) and `expected_per_s` is what is promised. A page shows a quiet note when `received_per_s` is under half of `expected_per_s`; it is not a level (staleness is the health signal). `null` for a row with no periodic record of its own (event-driven only, structure). Counted at the host's receive time (`history.py` `rates()`), so a replay re-stamps arrivals like everything else. |
 | `claimed` | Whether some driver plugin claims the row. An OS device nobody claims (a keyboard, a mouse, a webcam, a NIC) is `false`; the page hides those by default (the Visibility control). Plugin rows, the expected setup's devices and all structure are `true`. |
 | `children` | Child nodes, ordered: ports and groups by name, plugin entities in the order the plugin sent them. |
 

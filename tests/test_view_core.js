@@ -487,6 +487,17 @@ function visibilityUnit() {
   check('usb: link speeds name the USB generation', words.every(([mbps, name]) => Usb.versionName(mbps) === name) && Usb.versionName(123) === null, words.map(([mbps]) => Usb.versionName(mbps)));
   check('usb: a bus label reads the generation, the speed text parses', Usb.relabel('USB bus 1 · 480 Mb/s') === 'USB bus 1 · USB 2.0' && Usb.relabel('USB bus 2 · 10 Gb/s') === 'USB bus 2 · USB 3.2 Gen 2'
     && Usb.relabel('12 Mb/s') === 'USB 1.1' && Usb.relabel('ITE Device') === 'ITE Device' && Usb.parseSpeed('5 Gb/s') === 5000);
+  // IOUsb.label is the one way the page names a USB link: names, messages and events (the speed stays in the tooltip)
+  check('usb: label names a bus, a port message and the host\'s own speed names by generation',
+    Usb.label('USB bus 1 \u00b7 480 Mb/s') === 'USB bus 1 \u00b7 USB 2.0' && Usb.label('1 device \u00b7 12 Mb/s') === '1 device \u00b7 USB 1.1'
+    && Usb.label('1 enumeration in the last hour \u00b7 1 device \u00b7 12 Mb/s') === '1 enumeration in the last hour \u00b7 1 device \u00b7 USB 1.1'
+    && Usb.label('on port 1-3 \u00b7 USB full-speed \u00b7 12 Mb/s') === 'on port 1-3 \u00b7 USB 1.1'
+    && Usb.label('on port 7-1 \u00b7 USB 2 high-speed \u00b7 480 Mb/s \u00b7 hub') === 'on port 7-1 \u00b7 USB 2.0 \u00b7 hub'
+    && Usb.label('x linked at USB 3.2 Gen 1 \u00b7 5 Gb/s earlier') === 'x linked at USB 3.2 Gen 1 earlier'
+    && Usb.label('a USB 2 cable links at 480 Mb/s') === 'a USB 2 cable links as USB 2.0');
+  check('usb: label leaves a network card\'s speed and unrelated text alone',
+    Usb.label('eth0 \u00b7 10 Gb/s') === 'eth0 \u00b7 10 Gb/s' && Usb.label('link up \u00b7 1000 Mb/s') === 'link up \u00b7 1000 Mb/s'
+    && Usb.label('ITE Device') === 'ITE Device' && Usb.label(null) === '' && Usb.relabel === Usb.label);
   check('usb: a device\'s own bcdUSB wins where it says more; the raw speed stays in the tip',
     Usb.fromBcd('2.10') === 'USB 2.1' && Usb.describe({ version: '2.10', speed_mbps: 480 }).text === 'USB 2.1' && /480 Mb\/s/.test(Usb.describe({ version: '2.10', speed_mbps: 480 }).tip)
     && Usb.describe({ version: '3.20', speed_mbps: 480 }).text === 'USB 3.2 · on a USB 2.0 link' && Usb.describe({ speed_mbps: 12 }).text === 'USB 1.1');

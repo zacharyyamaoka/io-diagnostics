@@ -37,6 +37,12 @@ MAX_MEASUREMENTS = 32
 MAX_POINTS = 200_000
 MAX_BINS = 1000
 MAX_TRANSITIONS = 2000  # level changes kept for the activity log (type "level"), the oldest dropped first
+# The received rate of an entity's periodic statuses (docs/api-v1.md "rate"): arrivals per second over the last RATE_PERIODS
+# periods (at least RATE_FLOOR_S), judged only once the status has been watched for RATE_MIN_PERIODS periods.
+ARRIVALS_KEPT = 128
+RATE_PERIODS = 6
+RATE_MIN_PERIODS = 3
+RATE_FLOOR_S = 30.0
 
 
 def stale_after(period: float | None) -> float | None:
@@ -65,6 +71,7 @@ class _Series:
     heard: float = 0.0  # latest arrival, for eviction
     state: bool = False  # v0.2: carries only State measurements (a ``state`` record): no level spans, never in a health bar
     measured: float = -1e18  # the arrival of the latest stored state point, for the 1 Hz downsample
+    arrivals: deque = field(default_factory=lambda: deque(maxlen=ARRIVALS_KEPT))  # receive stamps, oldest first: the rate
 
     def points(self) -> int:
         return len(self.spans) + sum(len(points) for points in self.values.values())
@@ -135,6 +142,8 @@ class History:
             series = self._series[key] = _Series(status.path, status.name)
         at = next((stamp for stamp in (status.received, status.stamp) if stamp is not None), now)
         series.heard = max(series.heard, at)
+        if not series.arrivals or at >= series.arrivals[-1]:  # WHY: a late replay cannot reorder what was received
+            series.arrivals.append(at)
         level = status.level if status.level in RANK else UNKNOWN  # a level nobody defined reads "can't tell"
         spans = series.spans
         last = spans[-1] if spans else None
@@ -298,6 +307,43 @@ class History:
         with self._lock:
             series = self._series.get(key)
             return bool(series and series.state)
+
+    def rates(self, now: float) -> dict[str, dict]:
+        """Per entity path: how fast its periodic statuses actually arrive, against what they promised (Zach, 2026-10-22:
+        "they should also show stuff like Frequency"; the 10-22 design: rate measured vs expected, after Greenwave Monitor).
+
+        ``received_per_s`` and ``expected_per_s`` are sums over the entity's periodic statuses (records per second, and
+        ``1 / expected_period_s`` each), so a board with three 2 s checks reads 1.5 against 1.5. A status is judged
+        only after ``RATE_MIN_PERIODS`` of its own periods have been watched; until then ``received_per_s`` is None
+        (measuring). An event-driven status promises no rate and is not counted."""
+
+        out: dict[str, dict] = {}
+        with self._lock:
+            for (path, _name), series in self._series.items():
+                last = series.spans[-1] if series.spans else None
+                period = last.period if last is not None and last.level is not None else None
+                if series.state or not period or not series.arrivals:
+                    continue
+                entry = out.setdefault(path, {"received_per_s": None, "expected_per_s": 0.0, "window_s": 0.0, "promised": 0.0})
+                entry["promised"] += 1.0 / period
+                if now - series.arrivals[0] < RATE_MIN_PERIODS * period:
+                    continue  # still measuring
+                horizon = min(self.retention_s, max(RATE_FLOOR_S, RATE_PERIODS * period))
+                recent = [stamp for stamp in series.arrivals if stamp >= now - horizon]
+                span = now - recent[0] if recent else 0.0
+                received = (len(recent) - 1) / span if len(recent) >= 2 and span > 0 else 0.0
+                entry["received_per_s"] = (entry["received_per_s"] or 0.0) + received
+                entry["expected_per_s"] += 1.0 / period
+                entry["window_s"] = max(entry["window_s"], span)
+        for entry in out.values():
+            promised = entry.pop("promised")
+            if entry["received_per_s"] is None:  # nothing judged yet: say what is promised, not how fast it arrives
+                entry["expected_per_s"], entry["window_s"] = round(promised, 4), None
+            else:
+                entry["received_per_s"] = round(entry["received_per_s"], 4)
+                entry["expected_per_s"] = round(entry["expected_per_s"], 4)
+                entry["window_s"] = round(entry["window_s"], 1)
+        return out
 
     def period(self, key: tuple[str, str]) -> float | None:
         with self._lock:

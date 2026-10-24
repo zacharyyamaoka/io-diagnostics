@@ -443,6 +443,7 @@ class View:
     live: frozenset = frozenset()  # paths whose data is arriving now (a follower is running)
     expected_paths: frozenset = frozenset()  # device rows the expected setup (or its retired list) names
     composition: composition_module.CompositeView | None = None  # the composites against this tree (docs/composition-v1.md)
+    rates: dict[str, dict] = dataclasses.field(default_factory=dict)  # path -> received vs expected records per second (history.rates)
 
 
 class _Blank(dict):
@@ -1336,7 +1337,8 @@ class Host:
         # it is final and gives back the ones this process no longer produces (docs/activity-log-v1.md decision 4)
         self.eventlog.record(events, now)
         events = [event for event in self.eventlog.overlay(events, now) if event.stamp is None or event.stamp <= now]
-        return View(now, layer, merged, rows, events, self.faults.open_by_path(), setup, checks, memory, streaming, claimed, composed)
+        return View(now, layer, merged, rows, events, self.faults.open_by_path(), setup, checks, memory, streaming, claimed, composed,
+                    self.history.rates(now))
 
     def _device_hardware_id(self, job: Job) -> str:
         entity = self.layer.entities.get(self.layer.device_paths.get(str(job.device.get("id")), job.device_path))
@@ -1568,7 +1570,8 @@ class Host:
                 "host": {"name": self.os.hostname, "sources": list(self.sources)}, "summary": summary,
                 "chip": chip_model(summary, recent, self.url),
                 "tree": tree.node_json(tree.HOST_PATH, view.rows, view.layer, view.faults_by_path, nested=True,
-                                       memory=view.memory, live=view.live, expected_paths=view.expected_paths),
+                                       memory=view.memory, live=view.live, expected_paths=view.expected_paths,
+                                       rates=view.rates),
                 "recent": recent, "expected_setup": self.setup_summary(view), "composition": self.composition_json(view),
                 "runs": self.runs.json(RUNS_IN_STATE)}
 
@@ -1597,7 +1600,7 @@ class Host:
         job_rel = self._watch_target(path)
         extra = self._page_json(path, view, job_rel)
         return {"node": tree.node_json(path, rows, view.layer, view.faults_by_path, nested=False, memory=view.memory,
-                                       live=view.live, expected_paths=view.expected_paths), "ancestors": ancestors,
+                                       live=view.live, expected_paths=view.expected_paths, rates=view.rates), "ancestors": ancestors,
                 "checks": [self.check_json(status, view.now) for status in rows.own.get(path, [])],
                 "actions": self.actions_json(path, view), **extra,
                 "faults": [self.fault_json(fault, view) for fault in self.faults.all() if fault.path == path],

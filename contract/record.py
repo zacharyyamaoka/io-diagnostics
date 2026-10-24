@@ -111,6 +111,8 @@ STANDARD_ACTIONS = {
     "set_config": "Set configuration…",
     "persist_config": "Save configuration to the board…",
     "reset_config": "Reset configuration…",
+    # v0.2: a board left streaming telemetry (tview does not always turn it off) drowns its console replies; this sends it `tel stop`
+    "stop_telemetry": "Stop telemetry",
 }
 CONFIG_ACTIONS = ("set_config", "persist_config", "reset_config")
 CONFIG_TYPES = ("int", "float", "bool", "enum", "string")

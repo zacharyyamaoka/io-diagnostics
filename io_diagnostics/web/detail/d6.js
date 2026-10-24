@@ -223,7 +223,7 @@
       .filter(([, v]) => v).map(([k, v]) => [k, /^<(span|a)/.test(String(v)) ? v : h.esc(v)]);
     return `<div class="d-head d6-head"><div class="d-title">${h.icon(node.icon)}<span class="d6-name">${h.esc(title)}</span>${showModel ? `<span class="d6-model">${h.esc(model)}</span>` : ''}${h.pill(node.level)}</div>`
       + `<div class="d6-line">${badge}<span class="d6-heard" data-d6-heard title="when the host last received anything from this entity">${h.esc(heardText(h))}${stale}</span></div>`
-      + `<div class="d-msg">${h.esc(usbText(node.message || '—'))}</div>`
+      + `<div class="d-msg" title="${h.esc(node.message || '')}">${h.esc(usbText(node.message || '—'))}</div>`
       + `<div class="d6-hw">${hw.map(([k, v]) => `<span><span class="d6-k">${h.esc(k)}</span> <span class="mono">${h.esc(v)}</span></span>`).join('')}`
       + `<button class="d6-more" data-d6-more aria-expanded="${open}">${open ? 'Less' : 'More'} ${open ? '▴' : '▾'}</button></div>`
       + (open ? `<div class="d6-hw-more">${h.kv(rest)}</div>` : '') + '</div>';
