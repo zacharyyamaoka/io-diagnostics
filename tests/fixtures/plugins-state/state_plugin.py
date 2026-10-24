@@ -189,7 +189,7 @@ def write_frame(folder: str, stream: str, seq: int) -> None:
          stamp=clock(), seq=seq)
 
 
-# ----- configuration: read-only on the camera, live-editable on the joint (docs/state-config-v1.md section 9) ----------
+# ----- configuration: read-only on the camera, live-editable on the joint (docs/state-config-v1.md section 8) ----------
 # The "board": live values (RAM) and stored values (flash) in $STATE_CONFIG_FILE, shared by every process of a test; the
 # board's mode in $STATE_MODE_FILE (default 10 = position; a test writes 0 to stop it).
 CONFIG = {

@@ -1,4 +1,4 @@
-"""Editing a board's configuration from the page, made safe (docs/state-config-v1.md section 9).
+"""Editing a board's configuration from the page, made safe (docs/state-config-v1.md section 8).
 
 The moteus model: ``conf set`` changes the RUNNING board (RAM) and ``conf write`` makes it survive a restart. So an edit is
 live the moment it is applied, a person can see whether the board ACCEPTED it (the driver reads it back), and the changes

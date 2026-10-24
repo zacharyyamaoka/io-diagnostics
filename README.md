@@ -76,6 +76,19 @@ realsense-viewer and tview first, or the checks report `BusyHeldBy` / `PortBusy`
 Fixture frames: `F1` (18:11, plug: 28B3A25D's bus error-passive, CAN 15 fault 33), `F2` (18:25, tview holds
 272813EF), `F3` (19:02, after a restart). `--port N` picks another port; the default is 8812.
 
+## The entity page: State, Configuration, a live watch (docs/state-config-v1.md)
+
+Click an entity: a header that stays above tabs (Diagnostics, State, Configuration, Log, Utilities, and a driver's own, like the
+Computer's Processes). State is live while its tab shows (the page's heartbeat keeps the plugin's query-only `watch` running; it
+stops about 10 s after you leave), with image tiles for cameras. Configuration is the same for every driver, folders from dot
+notation, pinned and ordered rows kept per entity kind, and editable live (Edit…, Enter applies, the board reads it back; Save to
+board, Revert all; safety keys ask twice and are written only to a stopped board). The fixture joint and camera that drive it
+(`tests/fixtures/plugins-state`, never any hardware):
+
+```bash
+uv run --project /home/bam/io-diagnostics python /home/bam/io-diagnostics/io_diagnostics/cli.py serve --fixture F1 --plugins /home/bam/io-diagnostics/tests/fixtures/plugins-state --port 5412 --no-udev
+```
+
 ## Add a device: one executable + one toml
 
 A plugin is any executable that answers three verbs with JSON lines on stdout. The host runs
@@ -177,6 +190,10 @@ uv run --project /home/bam/io-diagnostics --group dev --group interop pytest /ho
 
 ```bash
 /usr/bin/node /home/bam/io-diagnostics/tests/test_tree_variants.js
+```
+
+```bash
+/usr/bin/node /home/bam/io-diagnostics/tests/test_entity_page.js
 ```
 
 ```bash

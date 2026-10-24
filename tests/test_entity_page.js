@@ -308,6 +308,25 @@ const { check, BOARD, BOARD2, CAMERA, ADAPTER } = H;
     await page.waitForFunction(() => document.querySelector('.d6-tab.on').dataset.d6Tab === 'log', null, { timeout: 5000 });
     check('a fault in Diagnostics links to its line in the Log', (await H.tabOf(page)) === 'log');
 
+    // and back: a line that raised a fault links to it in Diagnostics, lighting its row. WHY a drawn line: the fixture board's fault is
+    // "found at start", which the Activity log files under the host; the page's own decoration is what is measured here, on a row
+    // shaped like the log's (its code, its message, the entity button).
+    await H.goTab(page, 'log');
+    await page.waitForSelector('.d6-log .al-list', { timeout: 15000 });
+    await page.evaluate((board) => {
+      const row = document.createElement('div');
+      row.className = 'al-row';
+      row.innerHTML = `<span class="al-ent"><button data-al-scope="${board}">CAN 1</button></span><span class="al-code"><span class="kind">FaultConfirmed</span></span><span class="al-msg">MoteusFault.33 confirmed on ${board}: the driver is in fault</span>`;
+      document.querySelector('.d6-log .al-list').appendChild(row);
+    }, BOARD);
+    const lineLink = await page.waitForSelector('.d6-log .d6-lg', { timeout: 5000 }).catch(() => null);
+    check('Log: a line that raised a fault carries a link to it', Boolean(lineLink));
+    if (lineLink) {
+      await lineLink.click();
+      await page.waitForFunction(() => document.querySelector('.d6-tab.on').dataset.d6Tab === 'diagnostics', null, { timeout: 5000 }).catch(() => {});
+      check('the link opens that fault in Diagnostics, its row lit', (await H.tabOf(page)) === 'diagnostics' && await H.waitFor(() => page.evaluate(() => Boolean(document.querySelector('.d6-r.d6-flash'))), 3000), await H.tabOf(page));
+    }
+
     // ---- Utilities -------------------------------------------------------------------------------------------------------------------
     await H.goTab(page, 'utilities');
     const utilities = await page.evaluate(() => ({ rows: [...document.querySelectorAll('.d6-ur')].map((r) => ({ title: r.querySelector('b').textContent, danger: r.querySelector('.d6-ud').textContent, last: r.querySelector('.d6-ul').textContent })), buttons: document.querySelectorAll('.d6-run[data-util]').length }));

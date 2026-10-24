@@ -33,6 +33,8 @@ uv run --project /home/bam/io-diagnostics python /home/bam/io-diagnostics/io_dia
 | `GET /api/v1/values?path=<entity path>[&since=N]` | The entity page's live numbers and images (State), cheap: no tree build. Docs: docs/state-config-v1.md | 250 ms while State shows |
 | `GET /api/v1/frames?path=&stream=` (and `/frames/stream`, MJPEG) | The latest image of a declared stream, and the live multipart stream | on show / stream |
 | `POST /api/v1/watch` | The entity page's heartbeat ONLY: keeps the plugin's `watch` running while a page looks at the entity | 3 s while shown |
+| `POST /api/v1/config/edit`, `/config/set`, `/config/persist`, `/config/reset` | The Configuration tab's edit session and its live writes ONLY, each with the session's token (docs/state-config-v1.md section 8) | on click / 3 s heartbeat |
+| `GET /api/v1/arrangements`, `POST /api/v1/arrangements` | Pinned rows, manual order, folded folders and the sort, per entity kind and section; the POST is the page's ONLY (section 9) | on load / on change |
 | `POST /api/v1/act` | The Utilities panel ONLY: a dry run, then a person's confirmed run with the dry run's token | on click |
 | `POST /api/v1/expect`, `/forget`, `/retire` | The Expected setup card ONLY: one edit of the rig file after a person's confirm | on click |
 | `GET /`, `/<file>` | The page in `io_diagnostics/web/` | — |
@@ -373,6 +375,7 @@ specified in `docs/state-config-v1.md`; `history`'s `state: true` marks a series
   | `pcie` | `PcieAerError` (warn when Corrected, error when Uncorrected / Fatal) | the kernel log (`AER:`, `PCIe Bus Error`); one per burst | `device` (PCI address), `driver`, `count`, `kernel` |
   | `level` | `LevelChanged`: "<check>: ok → error (Code: message)", stale included | the history store (each status's effective level) | `status`, `from`, `to`, `status_code` |
   | `fault` | `FaultConfirmed`, `FaultHealed`, `FaultCleared` | the host's `FaultManager` | `fault`, `occurrence` |
+  | `config` | `ConfigSet`, `ConfigRejected` (warn), `ConfigPersisted`, `ConfigReset`, `ConfigEditStarted`, `ConfigEditEnded`: "CAN 1 · fdcanusb 272813EF: servo.max_current_A set 20 → 15: accepted by the board" | the host's config editor (`io_diagnostics/config_edit.py`): every write of an edit session, accepted or not, and every refusal | `by` (`page`), `key`, `old`, `asked`, `kept`, `accepted`, `run_id`, `refused`, `session` |
   | `boot` | `Booted`, `ShutDown` | the kernel log, `journalctl --list-boots` | `devices` |
   | `run` | `RunStarted`, `RunEnded` (2026-10-24): one pair per real utility run, linked by `args.run_id`; `RunEnded` is warn when stopped or timed out, error when failed (docs/runs-v1.md section 5) | the host (`io_diagnostics.runs`) | `run_id`, `action`, `node`, `plugin`, `state`, `exit_code` |
   | `plugin` | anything a plugin sends, e.g. `NoAck`, `PortHeld`, and a probing driver's `Found`, `Probed`, `ProbeBlocked` (docs/probe-on-connect.md) | the plugin | as sent |

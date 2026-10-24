@@ -1,4 +1,4 @@
-"""Editing a board's configuration from the page, made safe (docs/state-config-v1.md section 9): the edit session, a live write
+"""Editing a board's configuration from the page, made safe (docs/state-config-v1.md section 8): the edit session, a live write
 that the board accepts or rejects, "not saved" and Save, Revert, a safety key's extra conditions, the gates, the page-only rule
 and the Activity log of every write; and the arrangement (pins, manual order, folded folders) the page keeps beside settings.
 The plugin is tests/fixtures/plugins-state/state_plugin.py (the "board" is a file), a real subprocess."""

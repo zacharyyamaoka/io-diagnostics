@@ -110,7 +110,7 @@ async function main() {
   fs.mkdirSync(SHOTS, { recursive: true });
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'runs-view-'));
   const { chromium } = require(PLAYWRIGHT);
-  const browser = await chromium.launch({ executablePath: CHROME, headless: true });
+  const browser = require('./pin_layout').pinDetailLayout(await chromium.launch({ executablePath: CHROME, headless: true }));
   const server = await startServer(stateDir);
   const base = server.base;
   try {

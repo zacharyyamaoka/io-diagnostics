@@ -1,5 +1,5 @@
-// window.IOEntityRows: the entity page's shared ROW MODEL (docs/state-config-v1.md section 10) and the Configuration tab's editing
-// (section 9). Loaded by index.html before the layouts; d6.js draws with it, nothing else does.
+// window.IOEntityRows: the entity page's shared ROW MODEL (docs/state-config-v1.md section 9) and the Configuration tab's editing
+// (section 8). Loaded by index.html before the layouts; d6.js draws with it, nothing else does.
 //
 // ONE row model for Diagnostics, State and Configuration (Zach, 2026-10-24, "# COnfiguration page"):
 //  - a row named in dot notation (servo.max_current_A, motor_position.rotor_to_output_ratio, arm.servo.current) is a leaf in a

@@ -53,7 +53,7 @@ Diagnostics rows show name, message, level and the code's meaning; State rows sh
 Neither section draws the other's field. A device fault code travels in `values` as `fault_code` (the number) and
 `fault_meaning` (one human sentence); the Diagnostics row draws `33 · motor driver fault on bridge enable`.
 
-## 2. Configuration is read-only and the same for every driver
+## 2. Configuration is the same for every driver
 
 ```json
 {"record": "config", "path": "can/1", "key": "servo.max_current_A", "value": 20.0, "unit": "A", "group": "servo",
@@ -64,8 +64,9 @@ Neither section draws the other's field. A device fault code travels in `values`
   from (a deployment record, or "expected setup"). `stamp` is when the driver read the value.
 - The host keeps the latest record per `(path, key)`; a key a driver stops sending stays, with its old stamp.
   `differs` is host-computed: numbers compare with a 1e-9 relative tolerance, everything else as text.
-- Writing a setting is the `update_config` utility, never this record. The page offers search, grouping, a mark on a
-  value that differs from `expected` (with the expected value and its source) and Copy as text.
+- A `config` record never writes anything. Editing is section 8: the same record says whether a setting is `writable`, its
+  `type`, `stored` value and so on, and the writes are actions of an edit session. The page offers search, dot-notation
+  folders (section 9), a mark on a value that differs from `expected` (with the expected value and its source) and Copy as text.
 
 ## 3. Image state
 
@@ -121,11 +122,10 @@ A plugin that can stream declares `"watch": {"period_s": 0.1, "gates": ["port_fr
 
 ## 5. Log
 
-The fourth tab is this entity's Activity (`GET /api/v1/activity`): events whose `path` is the entity or below it,
-newest first, with a Raw channel (the source lines an event folds: the kernel line, `merged` raw enumerations, the full
-`args`). A line that raised or cleared a fault (`FaultConfirmed` / `FaultHealed`) links to that fault's row in
-Diagnostics, and the row links back to its line. The Activity lane's per-entity scope replaces the filter here once it
-is on main.
+The fourth tab is this entity's Activity: the Activity log's own compact view (`IOActivityLog.create({scope, compact})`,
+docs/activity-log-v1.md), scoped to the entity and everything below it, with its Raw channel (the kernel's lines and the
+output of its runs). A configuration write is a line of it (type `config`). A log line that raised or cleared a fault (the fault
+badge on its row) opens that fault in Diagnostics, and the Diagnostics row of a fault opens its line here.
 
 ## 6. USB labels
 
@@ -154,10 +154,75 @@ class, whether it can run now and its last run; a click is the page's usual dry 
 - **Live data:** the `watch` heartbeat runs only while the State tab is showing. Diagnostics, Log and a driver tab read what
   the host already polls.
 
-## 8. What a driver implements (moteus_servo, intel_rgbd)
+## 8. Editing a setting (the Configuration tab)
+
+The moteus model (tview's `conf set` is live in RAM; `conf write` persists), made safe. A `config` record says how a setting may be
+edited and what the board stores:
+
+| field | meaning |
+|---|---|
+| `value` | what the board runs now (live) |
+| `stored` | what it keeps across a restart; `value != stored` is **not saved** |
+| `writable` | the page may offer an edit (default false: the setting is read-only) |
+| `type` | `int` `float` `bool` `enum` `string`: the page's input, and the host's check before anything is sent |
+| `range` / `choices` | `(low, high)` of a number, the allowed values of an enum; a range is the **board's** to enforce (it may clamp) |
+| `default` | the factory default, when the driver knows it |
+| `safety` | true for a safety key (the interlock's set: rotor_to_output_ratio, kp / kd / ki, max current, output sign, watchdog, position limits) |
+
+**Three actions** (standard names, `docs/actions-vocabulary-v0.1.md`, danger `changes`, scope node): `set_config` (`--key K --value V`),
+`persist_config` (moteus `conf write`), `reset_config` (`--to stored|expected|default` [`--key K`]; no key and `--to stored` =
+every setting). The driver prints the `config` records it now holds (the read-back) and exits 0, or prints an event
+`ConfigRejected` and exits 1. They are driven by the edit session, not offered as menu items or in the Utilities tab.
+
+**The edit session** (all page-only like `/act`; a script, another origin or another site gets **403**):
+- `POST /api/v1/config/edit {path, op: "open", confirm: true}` -> `{token, board, grace_s}`: one confirm naming the board.
+  `{op: "beat", token}` every 3 s keeps it; `{op: "close", token}` or `grace_s` (10 s) of silence ends it. The page ends it when
+  the Configuration tab or the entity is left. One session per entity; a second replaces the first.
+- Every write needs the token: `POST /api/v1/config/set {path, token, key, value, confirm_safety}`,
+  `/config/persist {path, token}`, `/config/reset {path, token, to, key?, confirm_safety}`. No token or a dead one: **403
+  `NoEditSession`**. A refusal the host can explain ("the board is not stopped") is a **200** answer with `refused`.
+
+**What each setting says** (`config[].edit` and the answer of a write): **pending** (sent), **accepted** (the read-back equals what
+was set), **rejected** (an error, or the board kept another value: `the board kept 10.0 (asked 50.0)`), **refused** (never sent:
+a gate, the safety rule, a bad value), and **not saved** (`value != stored`, from `unsaved`). A bar collects them: "3 changes live,
+not saved · Save to board · Revert all".
+
+**What the host guarantees**, whatever the page does:
+1. a write is a **run** of the plugin's own action (a recording, `RunStarted` / `RunEnded`), preceded by a dry run of the same
+   write for the plugin's own confirm token, and goes through the same **gates** as a watch: a person's tool holding the port,
+   the rack bus lock, an active run of the plugin's exclusive group (describe `config_write: {gates: [...]}`, default
+   `port_free, bus_lock_free`);
+2. a **safety key** is written only with `confirm_safety` (the page's second confirm), when the board's State reported
+   `mode` 0 (stopped) within its own staleness window, and with no run active on its bus; an unknown or old mode is refused;
+3. the value must be of the row's `type` (an enum: one of `choices`) or nothing is sent;
+4. **every write is an Activity event** (type `config`: `ConfigSet`, `ConfigRejected`, `ConfigPersisted`, `ConfigReset`,
+   `ConfigEditStarted`, `ConfigEditEnded`) with who (`by: page`), the key, old -> new, what the board kept, accepted or not,
+   and the run's id.
+
+## 9. One row model, and the arrangement
+
+Diagnostics, State and Configuration rows share one model (Zach, 2026-10-24: "tview has groupings ... dot notation
+arm.servo.current and you can parse a folder structure from that"):
+- a name in **dot notation** (identifier characters, `.`, no spaces or colons) is a leaf in a **folder** tree; a chain of folders that
+  each hold one folder is one row (`aux1.pins.0`); any other name stays at the top level;
+- order inside a folder: **A-Z** (folders first, numbers in natural order) by default, **manual** (drag a row by its handle),
+  and **starred** rows first in a Pinned block; Diagnostics also has **Severity**, its default;
+- the arrangement is `{pins, order: {folder path: [names]}, folded: [folder paths], sort}` per **entity kind** and section
+  (`diagnostics`, `state`, `config`), so every CAN board shares one. `GET /api/v1/arrangements` and the page-only `POST
+  /api/v1/arrangements {kind, section, value}` keep it in `arrangements.json` beside `settings.toml` (written atomically; a bad
+  value is **400**). When the host cannot keep it (an older host, a read-only home) the page keeps it in this browser's
+  localStorage and says so in the Order control's tooltip. WHY a file of its own and not settings.toml: that file's writer is the View
+  options' and rewrites one setting whole.
+
+## 10. What a driver implements (moteus_servo, intel_rgbd)
+ (moteus_servo, intel_rgbd)
 
 1. `describe`: `"record_version": "0.2"`, `watch {period_s, gates}`, `streams` (RealSense: color, depth, ir).
 2. `watch --device D --path P` (query-only): print `state` records (and `frame` records) at `period_s`, `status` on change,
    one blank line when idle (liveness); exit on SIGTERM; honour the gates yourself too.
-3. `diagnose`: print `config` records (with `expected` from `IO_DIAGNOSTICS_EXPECTED` and its source) and move numeric
-   `values` into `state` records per section 1.
+3. `diagnose`: print `config` records (with `expected` from `IO_DIAGNOSTICS_EXPECTED` and its source, and `writable`, `type`,
+   `range` / `choices`, `default`, `stored`, `safety` per setting) and move numeric `values` into `state` records per section 1.
+4. `set_config`, `persist_config`, `reset_config` (section 8): register them on the board; read the value back after every
+   write and print the `config` record; report the board's `mode` as a State measurement named `mode` (0 = stopped) so the safety
+   rule can be judged; declare `config_write: {gates: [...]}` in `describe`; check the interlock yourself too.
+5. `describe` may declare `tabs` (section 7).

@@ -426,7 +426,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"refused": "BadArrangement", "error": str(error)}, 400)
 
     def _config(self, op: str):
-        """The Configuration tab's edit session and writes (docs/state-config-v1.md section 9): page-only like /act, and each one
+        """The Configuration tab's edit session and writes (docs/state-config-v1.md section 8): page-only like /act, and each one
         needs the session token that the person's confirm opened. The answer is the editor's, whole."""
 
         body, answer = self._body()

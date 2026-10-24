@@ -11,7 +11,7 @@
 // plugin's watch about 10 s later. Images are <img> elements of the MJPEG stream (/api/v1/frames/stream).
 // The tab is the page's `page` drill (?page=<id>: back / forward work), remembered per entity kind.
 // The rows of Diagnostics, State and Configuration share ONE row model (d6-rows.js, window.IOEntityRows): dot-notation names are
-// folders, A-Z or manual order, starred rows first, all saved per entity kind; the Configuration tab edits live (section 9).
+// folders, A-Z or manual order, starred rows first, all saved per entity kind; the Configuration tab edits live (section 8).
 // The Log tab embeds the Activity log (activity/log.js, IOActivityLog.create({scope, compact})) scoped to the entity.
 // WHY the Diagnostics rendering is d1's, copied: a parallel lane designs five variants of that section and owns the history
 // bar; diagnosticsPanel() is the one function to replace when its winner lands.
@@ -467,6 +467,7 @@
     const el = active === 'log' ? container.querySelector('[data-d6-log]') : null;
     if (!el || !window.IOActivityLog) {
       if (LogView.inst) { LogView.inst.unmount(); Object.assign(LogView, { inst: null, el: null, path: null }); }
+      if (logWatcher) { logWatcher.observer.disconnect(); logWatcher = null; }
       return;
     }
     const scope = { path: node.path, name: node.name, mode: 'children' };
@@ -478,9 +479,38 @@
       LogView.inst.mount(el);
       Object.assign(LogView, { el, path: node.path });
     }
+    watchLog(el);
     flashLog(el);
   }
   const faultCodeOf = (text) => ((String(text).match(/[A-Z][A-Za-z]+\.[0-9A-Za-z_]+/) || [])[0] || '');
+  // a line that raised or cleared a fault (its own row, or the badge on its cause's row) gets a link to the fault in Diagnostics; the
+  // log redraws its rows whole, so the links are put back whenever it does
+  let logWatcher = null;
+  function decorateLog(el) {
+    for (const row of el.querySelectorAll('.al-row')) {
+      if (row.querySelector('.d6-lg')) continue;
+      const kind = (row.querySelector('.al-code .kind') || {}).textContent || '';
+      const code = faultCodeOf(row.querySelector('.al-msg') ? row.querySelector('.al-msg').textContent : '');
+      if (!code || !(row.querySelector('.al-badge') || /^Fault/.test(kind))) continue;
+      const where = row.querySelector('[data-al-scope]');
+      const link = document.createElement('a');
+      link.className = 'link d6-lg';
+      link.dataset.d6Jump = 'diagnostics';
+      link.dataset.code = code;
+      link.dataset.path = where ? where.dataset.alScope : '';
+      link.tabIndex = 0;
+      link.textContent = 'in Diagnostics →';
+      (row.querySelector('.al-msg') || row).appendChild(link);
+    }
+  }
+  function watchLog(el) {
+    if (logWatcher && logWatcher.el === el) return;
+    if (logWatcher) logWatcher.observer.disconnect();
+    const observer = new MutationObserver(() => { observer.disconnect(); decorateLog(el); observer.observe(el, { childList: true, subtree: true }); });
+    observer.observe(el, { childList: true, subtree: true });
+    logWatcher = { el, observer };
+    decorateLog(el);
+  }
   function flashLog(el, tries = 6) {
     if (!U.flash || U.flash.tab !== 'log' || !U.flash.code || U.flash.scrolled) return;
     const row = [...el.querySelectorAll('.al-row')].find((r) => [...r.querySelectorAll('.al-badge')].some((b) => faultCodeOf(`${b.title} ${b.textContent}`) === U.flash.code) || faultCodeOf(r.textContent) === U.flash.code);
@@ -878,6 +908,12 @@
       const er = ER();
       if (er && er.onClick(target, { kind: node.kind || 'device', redraw: ctx.redraw })) return;
       if (er && container.querySelector('[data-d6-panel="config"]') && er.config.click(target, ctx, detail)) return;
+      const badge = target.closest('.d6-log .al-badge'); // a fault's badge in the log: that fault, in Diagnostics
+      if (badge) {
+        const code = faultCodeOf(`${badge.title} ${badge.textContent}`);
+        const where = badge.closest('.al-row') && badge.closest('.al-row').querySelector('[data-al-scope]');
+        if (code) { jump(ctx, node, 'diagnostics', where ? where.dataset.alScope : node.path, code); return; }
+      }
       const tab = target.closest('[data-d6-tab]');
       if (tab) { chooseTab(ctx, node, tabsFor(detail), tab.dataset.d6Tab); return; }
       if (target.closest('[data-d6-lb]')) { U.lightbox = null; ctx.redraw(); return; }

@@ -1,4 +1,4 @@
-"""How a person arranges the entity page's rows: pinned rows, manual order, folded folders (docs/state-config-v1.md section 10).
+"""How a person arranges the entity page's rows: pinned rows, manual order, folded folders (docs/state-config-v1.md section 9).
 
 One arrangement per entity KIND (servo, camera, adapter, host...) and section (diagnostics, state, config), so every CAN board
 shares one. Kept in ``arrangements.json`` beside the app's ``settings.toml`` (``~/.config/io-diagnostics/``): the same place the

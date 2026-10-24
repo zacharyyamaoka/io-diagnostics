@@ -68,6 +68,8 @@ async function fixtureHost(extraEnv = {}) {
 async function newContext(browser, view, colorScheme = 'light', extra = {}) {
   const context = await browser.newContext({ viewport: VIEWPORT, colorScheme, ...extra });
   await context.addInitScript((id) => { try { if (!localStorage.getItem('io-diagnostics.runs-view')) localStorage.setItem('io-diagnostics.runs-view', id); } catch (_) { /* private mode */ } }, view);
+  // the run views are about the shell and the run line, not the entity page: they keep the d0 detail panel they were written against
+  await context.addInitScript(() => { try { if (!localStorage.getItem('io-diagnostics.detail-layout')) localStorage.setItem('io-diagnostics.detail-layout', 'd0'); } catch (_) { /* private mode */ } });
   return context;
 }
 

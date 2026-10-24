@@ -878,7 +878,7 @@ async function main() {
   fs.mkdirSync(ROUND2, { recursive: true });
   staticChecks();
   const { chromium } = require(PLAYWRIGHT);
-  const browser = await chromium.launch({ executablePath: CHROME, headless: true });
+  const browser = require('./pin_layout').pinDetailLayout(await chromium.launch({ executablePath: CHROME, headless: true }));
   const servers = [];
   const stopAll = () => servers.forEach((server) => stopServer(server.child));
   process.on('SIGINT', () => { stopAll(); process.exit(130); });

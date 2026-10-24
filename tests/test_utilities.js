@@ -36,7 +36,7 @@
 //                a run is one quiet line under the header that becomes its result (Details ▸), lands in Activity and
 //                re-reads the entity; a failure is the one coloured (diagnostic-level) line; every drill-down is a
 //                browser-history entry (page.goBack / goForward and the mouse's back / forward buttons, as CDP mouse
-//                events); the Computer opens in d4 unless the Prototype picker says otherwise; the history window in
+//                events); every entity opens in d6 (the entity page) unless the Prototype picker says otherwise; the history window in
 //                View options (POST /api/v1/settings, page-only, on a server with its own config dir).
 // Screenshots: reports/media/round2/integration-*.png, expected-*.png, reports/media/round3/a-*-<light|dark>.png.
 // Exits 1 on any failed check. Nothing opens a CAN adapter.
@@ -146,7 +146,7 @@ async function main() {
   fs.mkdirSync(SHOTS, { recursive: true });
   fs.mkdirSync(ROUND3, { recursive: true });
   const { chromium } = require(PLAYWRIGHT);
-  const browser = await chromium.launch({ executablePath: CHROME, headless: true });
+  const browser = require('./pin_layout').pinDetailLayout(await chromium.launch({ executablePath: CHROME, headless: true }));
   const server = await startServer('F1');
   const base = server.base;
   try {
@@ -869,26 +869,26 @@ async function navigation(browser, base) {
   }
 }
 
-// ---- the Computer opens in d4 "Resource monitor" by default; an explicit Prototype pick wins everywhere ----
+// ---- every entity, the Computer too, opens in d6 "Entity page" by default (2026-10-24: tabs; the Computer's Processes tab); an explicit Prototype pick wins everywhere ----
 async function computerDefault(browser, base) {
-  const context = await browser.newContext({ viewport: VIEWPORT, colorScheme: 'light' });
+  const context = await (browser.newContextRaw || browser.newContext)({ viewport: VIEWPORT, colorScheme: 'light' });
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', (error) => errors.push(String(error)));
-  const state = () => page.evaluate(() => ({ layout: S.layout, picker: document.getElementById('detail-layout').value, d4: Boolean(document.querySelector('#detail .d4-root')),
+  const state = () => page.evaluate(() => ({ layout: S.layout, picker: document.getElementById('detail-layout').value, d4: Boolean(document.querySelector('#detail .d6-tabs')),
     stored: localStorage.getItem('io-diagnostics.detail-layout') }));
   try {
     await open(page, base, 'host');
-    await page.waitForSelector('#detail .d4-root', { timeout: 10000 });
+    await page.waitForSelector('#detail .d6-tabs', { timeout: 10000 });
     const host = await state();
     await page.mouse.move(5, 995);
-    await page.screenshot({ path: path.join(ROUND3, 'r35-computer-d4.png') });
+    await page.screenshot({ path: path.join(ROUND3, 'r35-computer-d6.png') });
     await page.click(`.t6-row[data-t6-path="${CAN15}"] .t6-name`);
     await page.waitForFunction((p) => S.node && S.node.node.path === p, CAN15, { timeout: 15000 });
     await page.waitForTimeout(400);
     const other = await state();
-    check('layout: a fresh profile opens the Computer in d4, the rest in d0', host.layout === 'd4' && host.picker === 'd4' && host.d4 && host.stored === null
-      && other.layout === 'd0' && other.picker === 'd0' && !other.d4 && other.stored === null, { host, other });
+    check('layout: a fresh profile opens every entity, the Computer too, in d6 (the entity page)', host.layout === 'd6' && host.picker === 'd6' && host.d4 && host.stored === null
+      && other.layout === 'd6' && other.picker === 'd6' && other.d4 && other.stored === null, { host, other });
     await page.goBack();
     await page.waitForFunction(() => S.node && S.node.node.path === 'host', null, { timeout: 15000 });
     await page.selectOption('#detail-layout', 'd2');
