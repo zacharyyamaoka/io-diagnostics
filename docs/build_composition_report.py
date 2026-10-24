@@ -104,7 +104,7 @@ def build(media: Path, facts: dict) -> str:
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Composites in RobotDx</title><style>{STYLE}</style></head><body><main>
 <h1>Composites in RobotDx</h1>
-<p class="verdict">A file now defines an arm, a robot, a rack and what each contains; RobotDx nests them, rolls the worst child up as an icon, calibrates all six joints from one confirm, and never learns what an arm is. On <code>lane/composition</code> @ <code>{html.escape(facts['branch_head'])}</code>, not merged.</p>
+<p class="verdict">A file now defines an arm, a robot, a rack and what each contains; RobotDx nests them, rolls the worst child up as an icon, calibrates all six joints from one confirm, and never learns what an arm is. On <code>lane/composition</code> @ <code>{html.escape(facts['branch_head'])}</code>, rebased onto main {html.escape(facts['base'])}, not merged.</p>
 <p class="mut">Zach, 2026-10-24: "we need a file 100% that basically defines those parent children relationships ... the high level things should also by design be implemented in someone else's python ... that is the seam we want." Contract: <code>docs/composition-v1.md</code> (first committed in <code>{html.escape(facts['contract_commit'])}</code>, blob <code>{html.escape(facts['contract_blob'])}</code> now). Everything below was recorded from the real page on the fixture host (F1: two fdcanusb adapters of three joints, two cameras, an arm plugin); no hardware: the plugins are stdlib fixtures, and the six runs of the batch are the fixture's, which only print a refusal.</p>
 
 <h2>The hero: open an arm, follow a child link, open "Calibrate all 6…"</h2>
