@@ -197,15 +197,15 @@ const BEHAVIOURS = {
     check(`${tag} the first screen is one calm answer`, /need you|Everything is OK/.test(home) && !(await visible(page, '#detail .d-title')), home.split('\n')[0]);
     await page.keyboard.press('Control+k');
     await page.waitForTimeout(300);
-    check(`${tag} Ctrl-K opens the palette`, await visible(page, '.l4-pal'));
+    check(`${tag} Ctrl-K opens the palette`, await visible(page, '.lx-pal'));
     await page.keyboard.type('can 14', { delay: 30 });
     await page.waitForTimeout(400);
-    const first = await page.locator('.l4-pal [data-i]').first().innerText();
+    const first = await page.locator('.lx-pal [data-i]').first().innerText();
     await page.keyboard.press('ArrowDown');
     await page.keyboard.press('ArrowUp');
     await page.keyboard.press('Enter');
     await page.waitForTimeout(700);
-    check(`${tag} the palette jumps to a device and leaves Home`, !(await visible(page, '.l4-pal')) && /CAN 14/.test(await page.locator('.d-title').first().innerText()) && !(await visible(page, '.l4-home')), first.split('\n')[0]);
+    check(`${tag} the palette jumps to a device and leaves Home`, !(await visible(page, '.lx-pal')) && /CAN 14/.test(await page.locator('.d-title').first().innerText()) && !(await visible(page, '.l4-home')), first.split('\n')[0]);
     const crumbs = await page.locator('.l4-crumbs a').allInnerTexts();
     check(`${tag} the breadcrumb is the hierarchy (bam-GPU > ... > CAN 14)`, crumbs[0] === 'bam-GPU' && /CAN 14/.test(crumbs[crumbs.length - 1]) && crumbs.length >= 3, crumbs);
     await page.keyboard.press('Control+k');
@@ -217,7 +217,7 @@ const BEHAVIOURS = {
     await page.keyboard.press('Control+k');
     await page.keyboard.press('Escape');
     await page.waitForTimeout(200);
-    check(`${tag} Escape closes the palette`, !(await visible(page, '.l4-pal')));
+    check(`${tag} Escape closes the palette`, !(await visible(page, '.lx-pal')));
     await page.keyboard.press('Control+\\');
     await page.waitForTimeout(250);
     const folded = !(await visible(page, '[data-lx-tree]'));
@@ -431,15 +431,16 @@ async function main() {
           roots: document.querySelectorAll('#lx-root').length,
           search: document.querySelectorAll('#search').length,
           styles: document.querySelectorAll('style[data-lx-css]').length,
-          overlays: document.querySelectorAll('.l4-pal-back').length,
+          overlays: document.querySelectorAll('.lx-pal-back').length,
           stored: localStorage.getItem('io-diagnostics.page-layout') === layout,
           drawn: Boolean(document.querySelector('.d-title')) && document.querySelectorAll('#tree-host .t6-row').length > 3,
           bar: document.querySelectorAll('.statusbar .l2-sb').length,
           home: Boolean(document.querySelector('.toolbar #search') && document.querySelector('.toolbar #views') && document.querySelector('.window > .main, .window > #main') && document.querySelector('#main > #left #tree-host')),
         }), id);
         const classic = id === 'l0';
-        check(`switch to ${id.toUpperCase()}: ${classic ? 'the page as it was, every part home' : 'one root, one search, no leftover'}`, state.id && state.roots === (classic ? 0 : 1) && state.search === 1 && state.styles === (classic ? 0 : 1)
-          && state.stored && state.drawn && state.overlays === (id === 'l4' ? 1 : 0) && state.bar === (id === 'l2' ? 1 : 0) && state.home === classic, state);
+        const palette = id === 'l1' || id === 'l4'; // the shared Ctrl-K palette (layouts/palette.js): one more style, one overlay
+        check(`switch to ${id.toUpperCase()}: ${classic ? 'the page as it was, every part home' : 'one root, one search, no leftover'}`, state.id && state.roots === (classic ? 0 : 1) && state.search === 1 && state.styles === (classic ? 0 : palette ? 2 : 1)
+          && state.stored && state.drawn && state.overlays === (palette ? 1 : 0) && state.bar === (id === 'l2' ? 1 : 0) && state.home === classic, state);
       }
       await context.close();
     }

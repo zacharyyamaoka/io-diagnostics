@@ -37,6 +37,7 @@
   // the page's sprite has the entity icons; these are the layout chrome's (same 24-unit stroke family, class "ic")
   const SPRITE = `<svg id="lx-sprite" width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
     <symbol id="lx-collapse" viewBox="0 0 24 24"><path d="m7 20 5-5 5 5M7 4l5 5 5-5"/></symbol>
+    <symbol id="lx-dash" viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="5" rx="1.5"/><rect x="13" y="11" width="8" height="10" rx="1.5"/><rect x="3" y="14" width="8" height="7" rx="1.5"/></symbol>
     <symbol id="lx-expand" viewBox="0 0 24 24"><path d="m7 15 5 5 5-5M7 9l5-5 5 5"/></symbol>
     <symbol id="lx-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></symbol>
     <symbol id="lx-eye-off" viewBox="0 0 24 24"><path d="M3 3l18 18M10.6 5.1A9.6 9.6 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4.1M6.6 6.7A17 17 0 0 0 2 12s3.5 7 10 7a9.7 9.7 0 0 0 4.4-1M9.9 9.9a3 3 0 0 0 4.2 4.2"/></symbol>
@@ -85,8 +86,9 @@
 .lx-tree > .search .lx-clear .ic { width: 12px; height: 12px; }
 .lx-tree-scroll { flex: 1; min-height: 0; overflow: auto; }
 .lx-tree-scroll .t6-head { height: 30px; }
-/* a pane boundary: draggable, remembered, double-click for the default, arrow keys when focused (as the page's own sash) */
-.lx-sash { flex: none; position: relative; z-index: 4; touch-action: none; outline: none; }
+/* a pane boundary: draggable, remembered, double-click for the default, arrow keys when focused (as the page's own sash). WHY z-index 7:
+   the entity page's sticky header (d6-top) is 6 and covers the 3 px of the boundary that lies over the page, so a drag there missed */
+.lx-sash { flex: none; position: relative; z-index: 7; touch-action: none; outline: none; }
 .lx-sash-x { width: 7px; margin: 0 -3px; cursor: col-resize; }
 .lx-sash-y { height: 7px; margin: -3px 0; cursor: row-resize; }
 .lx-sash::before { content: ""; position: absolute; background: transparent; transition: background .1s; }

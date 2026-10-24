@@ -462,7 +462,9 @@ async function main() {
     process.exit(failed ? 1 : 0);
   }
   const { chromium } = require(PLAYWRIGHT);
-  const browser = await chromium.launch({ executablePath: CHROME, headless: true });
+  // WHY L0: this suite clicks the top bar's views (`[data-view="activity"]`); the page's default layout is L1 (a ribbon), the classic top
+  // bar is L0 "Today" (tests/test_layouts.js covers the ribbon). Every context starts with L0 remembered; no assertion changed.
+  const browser = require('./pin_layout').pinPageLayout(await chromium.launch({ executablePath: CHROME, headless: true }));
   const servers = [];
   try {
     const frame = await startServer(tmp('frame'), ['--fixture', 'F1']);

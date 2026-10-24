@@ -39,6 +39,11 @@
     { id: 'runs', icon: 'i-tty', title: 'Runs (the terminal panel)' },
   ];
 
+  // The Dashboard (chart view c4's own view, with its own button in the classic views bar, which L1 does not draw): a ribbon button that
+  // presses c4's, once c4 has mounted; the other ribbon buttons close the board first (c4 closes it only for clicks inside #views)
+  const dashboardButton = () => document.querySelector('#views [data-ch4]');
+  const closeDashboard = () => { const dash = dashboardButton(); if (dash && document.body.classList.contains('ch4-on')) dash.click(); };
+
   const layout = {
     name: 'Obsidian',
     description: 'A ribbon of views at the far left; the left pane has a toolbar row, the search field on top of the tree, then the tree; the main area is the entity page.',
@@ -63,10 +68,26 @@
       ribbon.setAttribute('aria-label', 'Views');
       const fold = ctx.iconButton({ icon: 'sidebar', title: 'Toggle the left pane', click: () => sash.toggle() });
       ribbon.appendChild(fold);
+      // the Ctrl-K palette (layouts/palette.js, L4's, shared): jump to a device or run an action. Zach, 2026-10-24: "L1 obsidian",
+      // with L4's palette on top
+      s.palette = window.IOLayoutPalette.create(ctx, {
+        anchor: () => gear,
+        go: () => [
+          { icon: 'lx-devices', label: 'Devices', sub: 'The tree and the entity page', run: () => ctx.go('tree') },
+          { icon: 'lx-table', label: 'Table', sub: 'Every device in one table', run: () => ctx.go('table') },
+          { icon: 'lx-log', label: 'Activity', sub: 'The log, newest first', run: () => ctx.go('activity') },
+          { icon: 'i-tty', label: 'Terminal', sub: 'Runs of utilities', run: () => ctx.runs.toggle() },
+        ],
+        actions: () => [{ icon: 'lx-sidebar', label: 'Toggle the left pane', sub: 'Ctrl+\\', run: () => sash.toggle() }],
+      });
+      const jump = ctx.iconButton({ icon: 'cmd', title: 'Jump to a device or run an action ( Ctrl K )', click: () => s.palette.open() });
+      jump.dataset.l1Palette = '1';
+      ribbon.appendChild(jump);
       for (const item of RIBBON) {
         const button = ctx.iconButton({ icon: item.icon, title: item.title, pressed: false });
         button.dataset.l1 = item.id;
         button.addEventListener('click', () => {
+          if (item.id !== 'runs') closeDashboard();
           if (item.id === 'runs') { ctx.runs.toggle(); return; }
           if (sash.folded() && item.id === 'tree') sash.fold(false);
           ctx.go(item.id);
@@ -80,6 +101,7 @@
       gear.dataset.voAnchor = '1';
       gear.dataset.voPlace = 'right';
       ribbon.appendChild(gear);
+      s.ribbon_el = ribbon;
       root.appendChild(ribbon);
 
       // ---- the left pane: header, toolbar row, search, tree ----
@@ -122,9 +144,25 @@
       if (!s) return;
       const S = ctx.S;
       for (const [id, button] of s.ribbon) {
-        const on = id === 'runs' ? ctx.runs.open() : id === S.view;
+        const on = id === 'runs' ? ctx.runs.open() : id === S.view && !document.body.classList.contains('ch4-on');
         button.classList.toggle('on', on);
         button.setAttribute('aria-pressed', String(on));
+      }
+      const dash = dashboardButton();
+      if (dash && !s.dash) {
+        s.dash = ctx.iconButton({ icon: 'dash', title: 'Dashboard: the charts you pinned', click: () => dashboardButton().click() });
+        s.dash.dataset.l1 = 'dashboard';
+        s.dash.insertAdjacentHTML('beforeend', '<span class="badge" hidden></span>');
+        s.ribbon_el.insertBefore(s.dash, s.ribbon_el.querySelector('.gap'));
+      }
+      if (s.dash) {
+        const on = Boolean(dash && dash.hasAttribute('data-on'));
+        s.dash.classList.toggle('on', on);
+        s.dash.setAttribute('aria-pressed', String(on));
+        const count = dash ? (dash.querySelector('.ch4-count') || {}).textContent || '' : '';
+        const mark = s.dash.querySelector('.badge');
+        mark.hidden = !count;
+        mark.textContent = count;
       }
       const badge = s.ribbon.get('runs').querySelector('.badge');
       const going = ctx.runs.count();

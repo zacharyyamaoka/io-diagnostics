@@ -4,7 +4,6 @@
 // until it is asked for (Settings/Memory/feedback_calm_ui_progressive_disclosure.md).
 'use strict';
 (function () {
-  const PROBLEM = new Set(['warn', 'unknown', 'stale', 'error']);
   const CSS = `
 .lx-l4 { background: var(--io-surface); }
 .l4-side { flex: none; width: var(--l4-side-w, 260px); background: var(--io-surface-2); }
@@ -50,21 +49,6 @@
 .l4-need .why { grid-column: 2; color: var(--io-muted); font-size: 12.5px; }
 .l4-foot { margin-top: 22px; color: var(--io-faint); font-size: 12.5px; }
 .l4-body #runs-root.r1 { flex: none; }
-.l4-pal-back { position: fixed; inset: 0; z-index: 70; background: var(--io-overlay); display: flex; justify-content: center; align-items: flex-start; padding-top: 14vh; }
-.l4-pal-back[hidden] { display: none; }
-.l4-pal { width: min(620px, calc(100vw - 32px)); max-height: 62vh; display: flex; flex-direction: column; background: var(--io-popover); border: 1px solid var(--io-border); border-radius: var(--io-radius-lg); box-shadow: var(--io-shadow-pop); overflow: hidden; }
-.l4-pal-in { flex: none; display: flex; align-items: center; gap: 10px; padding: 0 14px; height: 46px; border-bottom: 1px solid var(--io-border-soft); color: var(--io-muted); }
-.l4-pal-in input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--io-text); font: inherit; font-size: 14.5px; }
-.l4-pal-list { flex: 1; min-height: 0; overflow: auto; padding: 4px 6px 6px; }
-.l4-pal-g { padding: 8px 8px 3px; font-size: 11px; color: var(--io-faint); font-weight: 600; letter-spacing: .3px; }
-.l4-pal-i { display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 10px; border-radius: var(--io-radius-sm); cursor: pointer; color: var(--io-text); }
-.l4-pal-i.on { background: var(--io-selected); color: var(--io-text-strong); }
-.l4-pal-i .ic { width: 16px; height: 16px; color: var(--io-icon); }
-.l4-pal-i .lab { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.l4-pal-i .sub { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--io-faint); font-size: 12px; }
-.l4-pal-i .shape { width: 13px; height: 13px; margin-left: auto; }
-.l4-pal-foot { flex: none; padding: 6px 14px; border-top: 1px solid var(--io-border-soft); color: var(--io-faint); font-size: 11.5px; }
-.l4-pal-empty { padding: 16px 12px; color: var(--io-muted); }
 `;
 
   const layout = {
@@ -82,7 +66,7 @@
       ctx.css(CSS);
       const root = ctx.root;
       const params = new URLSearchParams(location.search);
-      const s = { home: !(params.get('sel') || params.get('group') || params.get('view')), lastSel: undefined, lastKey: undefined, html: {}, palette: null, hit: 0, items: [] };
+      const s = { home: !(params.get('sel') || params.get('group') || params.get('view')), lastSel: undefined, lastKey: undefined, html: {}, palette: null };
       this.s = s;
 
       // ---- the sidebar: workspace row, search, Home, the tree ----
@@ -97,7 +81,7 @@
       s.homeItem = ctx.el(`<button class="l4-item" data-l4-home>${ctx.ico('home')}<span>Home</span><span class="count"></span></button>`);
       s.homeItem.addEventListener('click', () => { s.home = true; ctx.go('tree'); this.update(ctx); });
       const jump = ctx.el(`<button class="l4-item" data-l4-palette>${ctx.ico('cmd')}<span>Jump to or run…</span><kbd>Ctrl K</kbd></button>`);
-      jump.addEventListener('click', () => this.openPalette(ctx));
+      jump.addEventListener('click', () => s.palette.open());
       nav.append(s.homeItem, jump);
       const lab = document.createElement('div');
       lab.className = 'l4-lab';
@@ -129,7 +113,7 @@
       s.terminal = ctx.iconButton({ icon: 'i-tty', title: 'Terminal (runs)', pressed: false, click: () => ctx.runs.toggle() });
       s.terminal.dataset.l4Runs = '1';
       const jumpBtn = ctx.el(`<button class="l4-jump" data-l4-palette title="Jump to a device or run an action">${ctx.ico('i-search')}<span>Jump to</span><kbd>Ctrl K</kbd></button>`);
-      jumpBtn.addEventListener('click', () => this.openPalette(ctx));
+      jumpBtn.addEventListener('click', () => s.palette.open());
       top.append(s.open, s.crumbs, ctx.take('mode'), ctx.take('inspToggle'), ...s.views, s.terminal, jumpBtn);
       s.body = document.createElement('div');
       s.body.className = 'l4-body';
@@ -140,111 +124,25 @@
       page.append(top, s.body);
       root.appendChild(page);
 
-      // ---- the palette ----
-      const back = ctx.el('<div class="l4-pal-back" hidden><div class="l4-pal" role="dialog" aria-label="Jump to a device or run an action">'
-        + `<div class="l4-pal-in">${ctx.ico('i-search')}<input type="text" placeholder="Jump to a device, or run an action…" autocomplete="off" spellcheck="false" aria-label="Jump to or run"></div>`
-        + '<div class="l4-pal-list" role="listbox"></div><div class="l4-pal-foot">↑ ↓ move · Enter open · Esc close</div></div></div>');
-      ctx.adopt(back, document.body);
-      s.palette = back;
-      s.input = back.querySelector('input');
-      s.list = back.querySelector('.l4-pal-list');
-      back.addEventListener('mousedown', (event) => { if (event.target === back) this.closePalette(); });
-      s.input.addEventListener('input', () => { s.hit = 0; this.paintPalette(ctx); });
-      s.list.addEventListener('click', (event) => { const row = event.target.closest('[data-i]'); if (row) this.choose(ctx, Number(row.dataset.i)); });
-      s.list.addEventListener('mousemove', (event) => { const row = event.target.closest('[data-i]'); if (row && Number(row.dataset.i) !== s.hit) { s.hit = Number(row.dataset.i); this.markHit(); } });
+      // ---- the palette: the shared Ctrl-K palette (layouts/palette.js), with this layout's own Home / Table / Activity / Terminal ----
+      s.palette = window.IOLayoutPalette.create(ctx, {
+        anchor: () => s.crumbs,
+        after: () => { s.home = false; this.update(ctx); },
+        go: () => [
+          { icon: 'lx-home', label: 'Home', sub: 'The calm answer', run: () => { s.home = true; ctx.go('tree'); } },
+          { icon: 'lx-table', label: 'Table', sub: 'Every device in one table', run: () => ctx.go('table') },
+          { icon: 'lx-log', label: 'Activity', sub: 'The log, newest first', run: () => ctx.go('activity') },
+          { icon: 'i-tty', label: 'Terminal', sub: 'Runs of utilities', run: () => ctx.runs.toggle() },
+        ],
+        actions: () => [{ icon: 'lx-sidebar', label: 'Toggle the sidebar', sub: 'Ctrl+\\', run: () => s.sideSash.toggle() }],
+      });
       ctx.on(document, 'keydown', (event) => {
         if (event.target.closest && event.target.closest('.xterm')) return;
-        if ((event.ctrlKey || event.metaKey) && !event.altKey && (event.key === 'k' || event.key === 'K')) { event.preventDefault(); if (s.palette.hidden) this.openPalette(ctx); else this.closePalette(); return; }
-        if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key === '\\') { event.preventDefault(); s.sideSash.toggle(); return; }
-        if (s.palette.hidden) return;
-        if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); this.closePalette(); }
-        else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-          event.preventDefault();
-          const count = s.items.length;
-          if (count) { s.hit = (s.hit + (event.key === 'ArrowDown' ? 1 : count - 1)) % count; this.markHit(); }
-        } else if (event.key === 'Enter') { event.preventDefault(); this.choose(ctx, s.hit); }
+        if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key === '\\') { event.preventDefault(); s.sideSash.toggle(); }
       }, true);
     },
 
     unmount(ctx) { ctx.$('main').style.display = ''; this.s = null; },
-
-    // ---------------------------------------------------------------------------------- the palette ----
-    openPalette(ctx) {
-      const s = this.s;
-      s.palette.hidden = false;
-      s.input.value = '';
-      s.hit = 0;
-      this.paintPalette(ctx);
-      s.input.focus();
-    },
-    closePalette() { const s = this.s; if (s) s.palette.hidden = true; },
-    markHit() {
-      const s = this.s;
-      s.list.querySelectorAll('[data-i]').forEach((row) => { const on = Number(row.dataset.i) === s.hit; row.classList.toggle('on', on); row.setAttribute('aria-selected', String(on)); if (on) row.scrollIntoView({ block: 'nearest' }); });
-    },
-    choose(ctx, at) {
-      const s = this.s;
-      const item = s.items[at];
-      if (!item) return;
-      this.closePalette();
-      s.home = false;
-      item.run();
-      this.update(ctx);
-    },
-    paintPalette(ctx) {
-      const s = this.s;
-      const S = ctx.S;
-      const query = s.input.value.trim().toLowerCase();
-      const words = query.split(/\s+/).filter(Boolean);
-      const matches = (text) => words.every((word) => text.toLowerCase().includes(word));
-      const shapeOf = (level) => (PROBLEM.has(level) ? `<svg class="shape lv-${level}" role="img" aria-label="${level}"><use href="#s-${level}"/></svg>` : '');
-      const open = (path) => { if (S.view !== 'tree') ctx.go('tree'); ctx.select(path); };
-      const groups = [];
-      const add = (name, items) => { if (items.length) groups.push({ name, items }); };
-      const parentOf = (path) => { const crumbs = ctx.crumbs(path); return crumbs.slice(0, -1).map((crumb) => crumb.name).join(' › '); };
-      // what needs you comes first, then every device the words match
-      const attention = ctx.attention().map((item) => ({ icon: `i-${item.icon || 'device'}`, label: item.name, sub: item.device && item.device.path !== item.path ? item.device.name : item.message, level: item.level, run: () => open(item.path) }));
-      if (!query) add('Needs you', attention.slice(0, 6));
-      else add('Needs you', attention.filter((item) => matches(`${item.label} ${item.sub}`)).slice(0, 4));
-      if (query && S.byPath) {
-        const found = [];
-        for (const node of S.byPath.values()) {
-          const label = ctx.api.entityLabel(node.path);
-          if (matches(`${label} ${node.name} ${node.path} ${node.kind}`)) found.push({ icon: `i-${node.icon || 'device'}`, label, sub: parentOf(node.path), level: node.level, run: () => open(node.path) });
-          if (found.length >= 40) break;
-        }
-        add('Devices', found);
-      }
-      const go = [
-        { icon: 'lx-home', label: 'Home', sub: 'The calm answer', run: () => { s.home = true; ctx.go('tree'); } },
-        { icon: 'lx-table', label: 'Table', sub: 'Every device in one table', run: () => ctx.go('table') },
-        { icon: 'lx-log', label: 'Activity', sub: 'The log, newest first', run: () => ctx.go('activity') },
-        { icon: 'i-tty', label: 'Terminal', sub: 'Runs of utilities', run: () => ctx.runs.toggle() },
-      ];
-      add('Go to', go.filter((item) => !query || matches(item.label)));
-      const actions = [
-        { icon: 'lx-gear', label: 'View options', sub: 'Group by, sort, tree style, skin, mode', run: () => setTimeout(() => ctx.openViewOptions(s.crumbs), 0) },
-        { icon: 'lx-collapse', label: 'Collapse all', sub: 'The device tree', run: () => ctx.tree.collapseAll() },
-        { icon: 'lx-expand', label: 'Expand all', sub: 'The device tree', run: () => ctx.tree.expandAll() },
-        { icon: 'lx-sidebar', label: 'Toggle the sidebar', sub: 'Ctrl+\\', run: () => s.sideSash.toggle() },
-        ...['auto', 'light', 'dark'].map((mode) => ({ icon: 'lx-gear', label: `Appearance: ${mode}`, sub: 'Light or dark', run: () => document.querySelector(`#mode-switch [data-mode="${mode}"]`).click() })),
-      ];
-      const hidden = ctx.tree.hiddenToggle();
-      if (hidden) actions.splice(3, 0, { icon: 'lx-eye', label: `${hidden.on ? 'Hide' : 'Show'} ${hidden.label.toLowerCase()}`, sub: 'The tree', run: () => ctx.tree.setHidden(!hidden.on) });
-      // the selected device's utilities: a dry run, as the Utilities menu does (nothing runs until its sheet is confirmed)
-      const utilities = S.node && S.sel && S.node.node && S.node.node.path === S.sel ? (S.node.actions || []).map((action) => ({ icon: 'lx-more', label: action.title || action.name, sub: `Utility · ${ctx.api.entityLabel(S.sel)} · dry run first`, run: () => ctx.api.startDryRun(action.name) })) : [];
-      add('Utilities', utilities.filter((item) => query && matches(item.label)));
-      add('Actions', actions.filter((item) => !query || matches(`${item.label} ${item.sub}`)));
-      s.items = groups.flatMap((group) => group.items);
-      s.hit = Math.min(s.hit, Math.max(0, s.items.length - 1));
-      let at = 0;
-      s.list.innerHTML = groups.map((group) => `<div class="l4-pal-g">${ctx.esc(group.name)}</div>${group.items.map((item) => {
-        const html = `<div class="l4-pal-i" role="option" data-i="${at}">${ctx.ico(item.icon)}<span class="lab">${ctx.esc(item.label)}</span><span class="sub">${ctx.esc(item.sub || '')}</span>${shapeOf(item.level)}</div>`;
-        at += 1;
-        return html;
-      }).join('')}`).join('') || '<div class="l4-pal-empty">Nothing matches.</div>';
-      this.markHit();
-    },
 
     // -------------------------------------------------------------------------------------- the page ----
     update(ctx) {
