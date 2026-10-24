@@ -197,13 +197,15 @@
 
   function pillHtml(node) {
     const counts = belowCounts(node);
-    const levels = WORST_FIRST.filter((level) => counts[level]);
-    if (!levels.length) return '';
+    // WHY one icon, never a count (Zach, 2026-10-24: "when we roll up all we should show is just the highest value of any of the
+    // children and its just the icon"): the worst level below, as its shape
+    const level = WORST_FIRST.find((name) => counts[name]);
+    if (!level) return '';
     const rollup = node.rollup || {};
     const worst = rollup.origin && rollup.origin !== node.path && rollup.message ? ` · worst: ${rollup.message}` : '';
-    const title = `Inside (folded): ${levels.map((level) => `${counts[level]} ${WORD[level]}`).join(' · ')}${worst}`;
-    return `<span class="t2-pill" title="${esc(title)}">${levels.map((level) => `<span class="t2-seg t2-${level}"><b>${counts[level]}</b>`
-      + `<svg class="t2-mini"><use href="#t2-s-${level}"/></svg></span>`).join('')}</span>`;
+    const title = `Inside (folded): ${WORD[level]}${worst}`;
+    return `<span class="t2-pill" title="${esc(title)}"><span class="t2-seg t2-${level}">`
+      + `<svg class="t2-mini"><use href="#t2-s-${level}"/></svg></span></span>`;
   }
 
   function rowHtml(row, view) {

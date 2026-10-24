@@ -325,6 +325,17 @@ def test_a_fixture_reads_no_manifest_unless_named_and_live_reads_the_config_dir(
     assert [rig.name for rig in named.setup.manifest.rigs] == ["1-DOF test rack"]
 
 
+# ----- the rig's members (the nested tree, view/structure/p6.js) ---------------------------------------------------
+def test_state_lists_each_rigs_members_the_rows_of_its_devices_that_are_here(tmp_path):
+    rack = Rack(tmp_path)
+    rig = rack.state()["expected_setup"]["rigs"][0]
+    # the adapters and cameras the manifest names AND the tree has, as rows; B is listed twice over (adapter + 2 cameras by SDK serial)
+    assert rig["name"] == "1-DOF test rack"
+    assert {rack.path_of(A), rack.path_of(B)} <= set(rig["members"])
+    assert all(path in rack.host.view().merged.entities for path in rig["members"])
+    assert len(rig["members"]) == len(set(rig["members"]))
+
+
 # ----- retired --------------------------------------------------------------------------------------------------
 def test_a_retired_adapter_plugged_in_again_says_so_at_once(tmp_path):
     rack = Rack(tmp_path, devices=(*PRESENT, adapter("9-1", DEAD)))

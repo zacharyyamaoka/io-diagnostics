@@ -41,6 +41,9 @@ const S = {
   nodeAt: 0,
   open: new Map(),     // row key -> true/false, for the table and the built-in fallback tree
   selKey: params.get('group'), // the selected row when it stands for no entity (a structure's own grouping row)
+  // the tree's two narrowings (view/core.js reroot / keepInside), both in the URL so back / forward and a reload keep them:
+  into: params.get('into') || null,                              // stepped into this row (an entity path, else a row key)
+  inside: (params.get('inside') || '').split(',').filter(Boolean), // only what is inside these rows (chips above the tree)
   // the page-level drill below the selection (ctx.diagnostic / ctx.page): one browser-history entry per step
   drill: { diag: params.get('diag'), dpath: params.get('dpath'), m: params.get('m'), page: params.get('page') },
   built: null,         // IOView.build(...) of the active structure for the current state
@@ -169,7 +172,7 @@ function loadScript(src) {
 // stock shadcn for now ... what matters is the location of things"; every other skin stays one pick away (bottom-right)
 // WHY d4 for the Computer (Zach, 2026-10-23, via the orchestrator): its page is the ROS2 System Webview's data (RAM, CPU,
 // swap, load, disks, temperatures, GPU, network, USB); every other entity keeps d0 until he picks one
-const DEFAULTS = { skin: 'shadcn', structure: 'p1', variant: 'v6', sort: 'status', layout: 'd6', computerLayout: 'd6', menu: 'u0', runs: 'r1', charts: 'c0' };
+const DEFAULTS = { skin: 'shadcn', structure: 'p6', variant: 'v6', sort: 'status', layout: 'd6', computerLayout: 'd6', menu: 'u0', runs: 'r1', charts: 'c6' };
 const darkQuery = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
 
 // <html data-skin data-mode>: the skin's tokens for the mode. Auto follows the OS until the viewer picks one.
@@ -220,9 +223,9 @@ function loadNode() {
 // (?sel=<path>&diag=<status name>&view=tree), and popstate puts that exact state back. The mouse's back / forward
 // buttons and Alt+← / → are then the browser's own, in a tab and in the Chrome --app window.
 // WHY in the shell, once: d1-d5 each kept a private drill stack the browser could not see; they read ctx.diagnostic.
-const NAV_KEYS = ['sel', 'group', 'diag', 'dpath', 'm', 'page', 'view'];
+const NAV_KEYS = ['sel', 'group', 'diag', 'dpath', 'm', 'page', 'view', 'into', 'inside'];
 const NO_DRILL = { diag: null, dpath: null, m: null, page: null };
-const navNow = () => ({ sel: S.selKey ? null : S.sel || null, group: S.selKey || null, ...S.drill, view: S.view });
+const navNow = () => ({ sel: S.selKey ? null : S.sel || null, group: S.selKey || null, ...S.drill, view: S.view, into: S.into || null, inside: S.inside.join(',') || null });
 function navUrl(nav) {
   const query = new URLSearchParams();
   for (const key of NAV_KEYS) if (nav[key]) query.set(key, nav[key]);
@@ -247,6 +250,8 @@ function replaceNav() {
 }
 function applyNav(nav) {
   S.view = ['tree', 'table', 'activity'].includes(nav.view) ? nav.view : 'tree';
+  S.into = nav.into || null;
+  S.inside = String(nav.inside || '').split(',').filter(Boolean);
   if (nav.group) {
     if (S.selKey !== nav.group) { stashRun(null); S.selKey = nav.group; S.sel = null; S.node = null; S.menuOpen = false; }
   } else if (nav.sel && (nav.sel !== S.sel || S.selKey)) select(nav.sel);
@@ -447,6 +452,91 @@ function onRowAction(name, row) {
   go();
 }
 
+// ------------------------------------------------------------------------- step into, only inside ----
+// Zach, 2026-10-24: "you can like filter to only show things inside certain things" (a chip above the tree) and step into a folder
+// "like the VS Code extension enter-folder" (xiangda.enter-folder): a row's menu re-roots the tree at that row, a ← button (and
+// Ctrl+Shift+Backspace) steps back out one level, the breadcrumb jumps to any level, and the tree's top row is the entered one.
+// Both narrowings are applied by view/core.js to the rows of whatever structure is active; both live in the URL.
+function treeNav() {
+  const nav = document.createElement('div');
+  nav.className = 'tree-nav';
+  nav.hidden = true;
+  nav.addEventListener('click', (event) => {
+    const into = event.target.closest('[data-tn-into]');
+    if (into) { stepInto(into.getAttribute('data-tn-into') || null); return; }
+    if (event.target.closest('[data-tn-up]')) { stepUp(); return; }
+    const chip = event.target.closest('[data-tn-unchip]');
+    if (chip) removeInside(chip.getAttribute('data-tn-unchip'));
+  });
+  return nav;
+}
+const refOf = (crumb) => crumb.entity || crumb.key;
+// a row can be entered when it has rows below it (a leaf is no folder); a reference the current rows do not have is let through
+function canEnter(ref) {
+  const found = ref && S.built ? IOView.findRow(S.built.rows, ref) : null;
+  return !found || found.row.children.length > 0;
+}
+function stepInto(ref) {
+  const next = ref || null;
+  if (next === S.into || (next && !canEnter(next))) return;
+  S.into = next;
+  pushNav();
+  render();
+}
+function stepUp() {
+  const trail = (S.built && S.built.trail) || [];
+  if (!trail.length) return;
+  stepInto(trail.length > 1 ? refOf(trail[trail.length - 2]) : null);
+}
+function addInside(ref) {
+  if (!ref || S.inside.includes(ref)) return;
+  S.inside = [...S.inside, ref];
+  pushNav();
+  render();
+}
+function removeInside(ref) {
+  S.inside = S.inside.filter((item) => item !== ref);
+  pushNav();
+  render();
+}
+// a row menu's choice (view/tree/v6.js onRowNav)
+function onRowNav(kind, row) {
+  const ref = row.entity || row.key;
+  if (kind === 'into') stepInto(ref);
+  else if (kind === 'inside') addInside(ref);
+}
+const TN_ARROW = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3 5 8l5 5"/></svg>';
+const TN_HOME = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 7.5 8 3l5.5 4.5M4 6.7V13h3V9.5h2V13h3V6.7"/></svg>';
+const TN_X = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8"/></svg>';
+function renderTreeNav() {
+  const bar = document.querySelector('#tree-host > .tree-nav');
+  if (!bar) return;
+  const built = S.built;
+  const trail = (built && built.trail) || [];
+  const chips = (built && built.inside) || [];
+  const usable = Boolean(built) && !isLegacy(S.variant) && (trail.length || chips.length);
+  let html = '';
+  if (usable) {
+    if (trail.length) {
+      const last = trail.length - 1;
+      html += '<div class="tn-trail" role="navigation" aria-label="Where the tree starts">'
+        + `<button type="button" class="tn-btn" data-tn-up title="Back out one level ( Ctrl+Shift+Backspace )" aria-label="Back to the parent">${TN_ARROW}</button>`
+        + `<button type="button" class="tn-btn" data-tn-into="" title="Back to the whole tree" aria-label="Back to the whole tree">${TN_HOME}</button>`
+        + trail.map((crumb, at) => (at === last
+          ? `<span class="tn-here" aria-current="location" title="${esc(crumb.label)}">${esc(crumb.label)}</span>`
+          : `<button type="button" class="tn-crumb" data-tn-into="${esc(refOf(crumb))}" title="Start the tree at ${esc(crumb.label)}">${esc(crumb.label)}</button><span class="tn-sep">›</span>`)).join('')
+        + '</div>';
+    }
+    if (chips.length) {
+      html += `<div class="tn-chips" role="group" aria-label="Only what is inside">${chips.map((chip) => `<span class="tn-chip${chip.missing ? ' tn-missing' : ''}" title="${esc(chip.missing ? 'Not in this grouping' : `Only what is inside ${chip.label}`)}">`
+        + `<span class="tn-chip-k">Inside</span><span class="tn-chip-v">${esc(chip.label)}</span>`
+        + `<button type="button" class="tn-chip-x" data-tn-unchip="${esc(chip.ref)}" aria-label="Remove the filter: inside ${esc(chip.label)}" title="Remove this filter">${TN_X}</button></span>`).join('')}</div>`;
+    }
+  }
+  if (bar.dataset.html !== html) { bar.dataset.html = html; bar.innerHTML = html; }
+  bar.hidden = !html;
+}
+
 // a rows renderer reports a row key; legacy renderers report an entity path
 function onTreeSelect(key) {
   const row = S.built && S.built.byKey.get(key);
@@ -478,13 +568,13 @@ function renderTreePane() {
   const renderer = id && renderers()[id];
   const host = $('tree-host');
   if (!renderer) { host.innerHTML = renderTree(); return; } // no proposal loaded: the page's own plain list
-  for (const element of host.children) element.hidden = element.dataset.variant !== id;
+  for (const element of host.children) if (element.dataset.variant !== undefined) element.hidden = element.dataset.variant !== id;
   const pane = paneFor(id);
   pane.hidden = false;
   try {
     if (isLegacy(id)) renderer.render(pane, S.data.tree, { onSelect: onTreeSelect, selectedPath: S.sel, query: NO_QUERY.has(id) ? '' : S.query });
     else {
-      renderer.render(pane, S.built.rows, { onSelect: onTreeSelect, onSelectEntity, onRowAction, selectedPath: selectedKey(), query: S.query,
+      renderer.render(pane, S.built.rows, { onSelect: onTreeSelect, onSelectEntity, onRowAction, onRowNav, selectedPath: selectedKey(), query: S.query,
         summary: S.data.summary, host: S.built.host, structure: S.structure });
     }
   } catch (error) {
@@ -1785,7 +1875,10 @@ function render() {
   if (!S.data) return;
   const byPath = index(S.data.tree);
   S.byPath = byPath;
-  S.built = IOView.build(S.data, S.structure, { ...structureOptions(), query: S.query, sort: S.sort, changes: changesOf(S.act) });
+  S.built = IOView.build(S.data, S.structure, { ...structureOptions(), query: S.query, sort: S.sort, changes: changesOf(S.act), into: S.into, inside: S.inside });
+  // the row stepped into is gone (unplugged, or this grouping does not have it): back to the whole tree, quietly
+  if (S.into && S.built.intoMissing) { S.into = null; replaceNav(); S.built = IOView.build(S.data, S.structure, { ...structureOptions(), query: S.query, sort: S.sort, changes: changesOf(S.act), inside: S.inside }); }
+  renderTreeNav();
   $('clock').textContent = S.data.clock.iso ? `${S.data.clock.iso.slice(5, 10)}  ${S.data.clock.time}` : '—';
   const fixture = S.data.fixture;
   $('mode').textContent = fixture ? `Replay ${fixture.name} · ${fixture.label} (recorded)` : `Live · ${S.data.host.name}`;
@@ -1982,6 +2075,14 @@ document.addEventListener('keydown', (event) => {
   render();
 });
 
+document.addEventListener('keydown', (event) => {
+  if (!(event.ctrlKey || event.metaKey) || !event.shiftKey || event.altKey || event.key !== 'Backspace') return;
+  if (event.target && event.target.closest && event.target.closest('input, textarea, select, [contenteditable]')) return;
+  if (!S.into) return;
+  event.preventDefault();
+  stepUp();
+});
+
 async function boot() {
   // index.html's inline script already set data-skin / data-mode from storage, so the first paint is right
   const [skins, structures, detailLayouts, utilityMenus, runEntries, chartEntries] = await Promise.all([readManifest('skins/index.json', 'skins'),
@@ -1996,6 +2097,7 @@ async function boot() {
     ...runEntries.entries.map((entry) => loadScript(`runs/${entry.file}`)),
     ...chartEntries.entries.map((entry) => loadScript(`charts/${entry.file}`)),
   ]);
+  $('tree-host').prepend(treeNav());
   setupSkins(skins.default);
   setupStructures(structures);
   setupSwitcher();
@@ -2004,7 +2106,7 @@ async function boot() {
   // the page layout (layouts/host.js): moves the page's parts into one of five arrangements; everything it draws is ours
   if (window.IOLayoutHost) {
     await window.IOLayoutHost.start({ S, $, esc, render, entityLabel, renderActivity: typeof renderActivity === 'function' ? renderActivity : null, eventRow, setViewOptions, setToggle, structureOptions,
-      toggleShown: (toggle) => IOView.toggleShown(toggle, structureOptions()), startDryRun, select: onSelectEntity,
+      toggleShown: (toggle) => IOView.toggleShown(toggle, structureOptions()), startDryRun, select: onSelectEntity, stepInto, stepUp, addInside, canEnter,
       setView(view) { S.view = view; pushNav(); render(); } });
   }
   if (S.view === 'table' && (S.sel || S.selKey) && (S.drill.diag || S.drill.page)) S.inspOpen = true;

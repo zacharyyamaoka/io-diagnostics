@@ -263,9 +263,9 @@
     const rollup = node.rollup || {};
     const level = node.hint ? node.hint.level : (ownLevel(node) === null && isProblem(rollup.level) ? rollup.level : null);
     if (!level || !SHAPES[level]) return null;
-    const count = Object.values(rollup.counts || {}).reduce((sum, n) => sum + n, 0);
     const who = rollup.origin_name || (node.hint && node.hint.origin) || '';
-    const text = count > 1 ? `${count} below · worst ${who}` : `below · ${who}`;
+    // WHY no count (Zach, 2026-10-24: "when we roll up all we should show is just the highest value of any of the children")
+    const text = `below · ${who}`;
     return { level, text, title: (node.hint && node.hint.message) || rollup.message || text };
   }
 

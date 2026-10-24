@@ -361,6 +361,55 @@
     return sorted;
   }
 
+  // ------------------------------------------------------------------------ step into, only inside ----
+  // Two views of the same rows, applied after a structure has built them (so every structure gets them):
+  //   step into   re-roots the tree at one row, the way the VS Code extension "Enter Folder" (xiangda.enter-folder) makes a folder
+  //               look like the explorer's root: that row is the only root, expanded, and `trail` lists the rows above it
+  //               (root first, the entered row last) for the breadcrumb and "up".
+  //   only inside keeps the rows inside any of the chosen rows (each with everything below it) plus the rows above them for
+  //               context; siblings and everything else are left out. Several chosen rows can be kept at once (chips).
+  // A reference is a row's entity path, else its key (a structure's own grouping row has no entity).
+  const isRef = (row, ref) => row.entity === ref || row.key === ref;
+  function findRow(rows, ref, trail = []) {
+    for (const row of rows) {
+      if (isRef(row, ref)) return { row, trail: [...trail, row] };
+      const below = findRow(row.children || [], ref, [...trail, row]);
+      if (below) return below;
+    }
+    return null;
+  }
+  const crumbOf = (row) => ({ key: row.key, entity: row.entity || null, label: row.label, icon: row.icon });
+
+  function reroot(rows, ref) {
+    const found = ref ? findRow(rows, ref) : null;
+    if (!found) return { rows, trail: [], missing: Boolean(ref) };
+    return { rows: [{ ...found.row, defaultOpen: found.row.children.length > 0, entered: true }], trail: found.trail.map(crumbOf), missing: false };
+  }
+
+  function keepInside(rows, refs) {
+    if (!refs || !refs.length) return rows;
+    const keep = (list) => list.reduce((out, row) => {
+      if (refs.some((ref) => isRef(row, ref))) { out.push({ ...row, inside: true }); return out; }
+      const children = keep(row.children || []);
+      if (children.length) out.push({ ...row, children, context: true, defaultOpen: true });
+      return out;
+    }, []);
+    return keep(rows);
+  }
+
+  // The worst level among a row's children, as the row's own roll-up hint: the same shape the API sends (level, origin, origin_name,
+  // message). WHY recomputed by a structure that moves rows (p6 takes a rig's devices out from under the computer): the API's hint
+  // counts what is physically below, the tree must say what it draws below.
+  function rollupFrom(children) {
+    return groupRow({ key: '', label: '', children }).status.hint;
+  }
+  function setRollup(row) {
+    const hint = rollupFrom(row.children);
+    row.status = { ...row.status, hint };
+    row.hint = hint ? { level: hint.level, origin: hint.origin, message: hint.message } : null;
+    return row;
+  }
+
   // toggles[].when: a toggle that only means something in one mode of its structure (P2's Empty ports, Connections
   // only). `when` is an option key (shown while that option is on) or a function(options) -> boolean.
   function toggleShown(toggle, options = {}) {
@@ -406,6 +455,17 @@
     const opts = { ...defaultOptions(structure), ...options };
     const top = topLevel(state, opts);
     let rows = structure ? finalize(structure.rows(state, opts) || []) : [];
+    const whole = rows;
+    let trail = [];
+    let intoMissing = false;
+    if (opts.into) {
+      const entered = reroot(rows, opts.into);
+      ({ trail, missing: intoMissing } = entered);
+      rows = entered.rows;
+    }
+    const inside = (opts.inside || []).map((ref) => { const found = findRow(whole, ref); return { ref, label: found ? found.row.label : ref, missing: !found, icon: found ? found.row.icon : null }; });
+    if (inside.length) rows = keepInside(rows, inside.map((chip) => chip.ref));
+    if (opts.into || inside.length) rows = finalize(rows);
     if (opts.query && !(structure && structure.handlesQuery)) rows = applyQuery(rows, opts.query);
     if (structure && structure.hintScope === 'children') dropLeafHints(rows);
     if (opts.sort) rows = sortRows(rows, opts.sort, opts);
@@ -415,6 +475,9 @@
       options: opts,
       columns: (structure && structure.columns) || [],
       rows,
+      trail,        // step into: the rows above the entered row, root first, the entered row last ([] = not stepped in)
+      intoMissing,  // `into` names a row this grouping does not have
+      inside,       // only inside: one chip per chosen row {ref, label, icon, missing}
       ...indexRows(rows),
       summary: (state && state.summary) || null,
       // WHY a structure that draws the host as its own root row (p1) is never "elided": the head then has no host button
@@ -426,7 +489,7 @@
     RANK, PROBLEM, DEFAULT_OPTIONS, SORTS,
     isGrouping, ownProblem, hintOf, labelOf, partLabel, partsOf, worstPart, childrenOf, isEmpty, topLevel,
     entityRow, groupRow, finalize, applyQuery, searchText, indexRows, defaultOptions, structureIds, build, toggleShown,
-    sortRows,
+    sortRows, findRow, reroot, keepInside, rollupFrom, setRollup,
   };
   root.IOView = IOView;
   if (typeof module !== 'undefined' && module.exports) module.exports = IOView;

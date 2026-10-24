@@ -252,8 +252,8 @@
       // Rule 6, kept quiet: an open row whose problem is visible right below needs no hint, EXCEPT the black-box
       // case where the cause is one of its own parts (CAN 15 says OK, its driver part is in ERROR).
       if (!open || (direct && origin.edge === 'part_of')) {
-        const count = (node.rollup && node.rollup.counts && node.rollup.counts[hint.level]) || 1;
-        const text = direct ? CHILD_IN[hint.level] : `${count} ${count === 1 ? WORD[hint.level] : WORDS[hint.level]} below`;
+        // WHY no count (Zach, 2026-10-24): a roll-up is the worst level below and its icon, not how many
+        const text = direct ? CHILD_IN[hint.level] : `${WORD[hint.level]} below`;
         return `<span class="v3-hint" title="${esc(hint.message || '')}">${glyph(hint.level)}${esc(text)}</span>`;
       }
       return '';
@@ -261,7 +261,7 @@
     if (!open && kids(node).length) {
       // folded away by the user: say something is down there even when it is no worse than this row
       const below = causesBelow(node);
-      if (below) return `<span class="v3-hint v3-hint-plain">${below} more below</span>`;
+      if (below) return '<span class="v3-hint v3-hint-plain">more below</span>';
       const knockOn = (node.rollup && node.rollup.knock_on && node.rollup.knock_on.length) || 0;
       if (knockOn) return `<span class="v3-hint v3-hint-plain" title="problems explained by this row's own failure">${knockOn} knock-on</span>`;
     }

@@ -18,7 +18,7 @@ const ROOT = path.resolve(__dirname, '..');
 const UV = '/home/bam/.local/bin/uv';
 const fs = require('fs');
 const V = require(path.join(ROOT, 'io_diagnostics', 'web', 'view', 'core.js'));
-const STRUCTURES = ['p0', 'p1', 'p2', 'p3', 'p4', 'p5'];
+const STRUCTURES = ['p0', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7'];
 for (const id of STRUCTURES) require(path.join(ROOT, 'io_diagnostics', 'web', 'view', 'structure', `${id}.js`));
 const LIVE = path.join(ROOT, 'tests', 'fixtures', 'live', 'rack-state-2026-10-22-1741.json');
 
@@ -203,7 +203,7 @@ function rigUnit() {
     seen.push({ id, label: row && row.label, own: row && row.status.own, top: level.indexOf(row), leaf: row && row.children.length === 0 });
   }
   check('rig row: in every structure, its counts verbatim, a warn of its own, a leaf', seen.every((item) => item.label === RIG_NAME && item.own === 'warn' && item.leaf), seen);
-  check('rig row: first at the top level of p0 and p1 (the at-a-glance answer)', seen.filter((item) => ['p0', 'p1'].includes(item.id)).every((item) => item.top === 0), seen);
+  check('rig row: first at the top level of p0 and p1 (the at-a-glance answer; p6 / p7 draw it as a top-level row: nestedUnit)', seen.filter((item) => ['p0', 'p1'].includes(item.id)).every((item) => item.top === 0), seen);
   const ok = V.build(withRig(liveRackState()), 'p1', {}).flat.find((each) => each.entity === RIG);
   check('rig row: searchable by its name', V.build(state, 'p1', { query: '6/7 boards' }).flat.some((each) => each.entity === RIG) && Boolean(ok));
 }
@@ -272,9 +272,9 @@ function seamUnit() {
   const busRow = p5.flat.find((r) => r.entity === 'host/usb1/port-1-3/usb-1-3/can');
   check('p5: the bus words are the row lead, the id column counts nodes', /error-passive/.test(busRow.lead) && busRow.idText === '3 nodes', { lead: busRow.lead, id: busRow.idText });
   const columns = STRUCTURES.flatMap((id) => (globalThis.IOStructures[id].columns || []).map((column) => `${id}.${column.key}:${column.mono}`));
-  check('extra columns declare mono', columns.length === 3 && columns.every((text) => text.endsWith(':true')), columns);
+  check('extra columns declare mono', columns.length === 5 && columns.every((text) => text.endsWith(':true')), columns);
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'io_diagnostics', 'web', 'view', 'structure', 'index.json'), 'utf8'));
-  check('the default structure is p1', manifest.default === 'p1', manifest.default);
+  check('the default structure is p6 (Nested)', manifest.default === 'p6', manifest.default);
 }
 
 // ------------------------------------------------------------------- real fixture frames ----
@@ -436,7 +436,7 @@ function sortUnit() {
     && folders.every((row) => row.defaultOpen) && plain.rows[0].defaultOpen, folders.map((row) => `${row.label}:${row.defaultOpen}`));
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'io_diagnostics', 'web', 'view', 'structure', 'index.json'), 'utf8'));
   const picker = manifest.structures.filter((entry) => entry.picker !== false).sort((a, b) => a.pick - b.pick).map((entry) => `${entry.id}:${entry.group}`);
-  check('Group by: Devices · Type · Port · Bus · Physical; P3 off the picker, its file kept', picker.join() === 'p1:Devices,p2:Type,p4:Port,p5:Bus,p0:Physical'
+  check('Group by: Nested · Physical · Type · Port · Bus · API tree · Purpose; P3 off the picker, its file kept', picker.join() === 'p6:Nested,p1:Physical,p7:Type,p4:Port,p5:Bus,p0:API tree,p2:Purpose'
     && manifest.structures.some((entry) => entry.id === 'p3' && entry.ready && entry.picker === false), picker);
 }
 
@@ -492,8 +492,80 @@ function visibilityUnit() {
     && Usb.describe({ version: '3.20', speed_mbps: 480 }).text === 'USB 3.2 · on a USB 2.0 link' && Usb.describe({ speed_mbps: 12 }).text === 'USB 1.1');
 }
 
+
+// ------------------------------------------------- 2026-10-24: Nested (p6), Type (p7), step into, only inside ----
+// Zach: "infinitely nestable from the top ... multiple things on the top level"; "if you group by type ... a group of computers,
+// Cells"; "filter to only show things inside certain things"; step into a folder like VS Code's Enter Folder.
+function nestedUnit() {
+  const state = withRig(liveRackState());
+  const ADAPTER = 'host/usb1/port-1-3/usb-1-3';
+  const CAMERA = 'host/usb6/port-6-1/usb-6-1';
+  const BOARD = `${ADAPTER}/can/14`;
+  state.expected_setup = { rigs: [{ name: '1-DOF test rack', path: RIG, devices: 3, members: [ADAPTER, CAMERA] }], retired: [] };
+  const kinds = (rows) => rows.map((row) => row.kind).join();
+  const p6 = V.build(state, 'p6', {});
+  const rig = p6.byEntity.get(RIG) && p6.byKey.get(p6.byEntity.get(RIG));
+  const host = p6.rows.find((row) => row.kind === 'host');
+
+  check('p6: the top level is the computer and the rig, side by side, no section rows', kinds(p6.rows).split(',').sort().join() === 'host,rig'
+    && p6.flat.every((row) => row.entity), kinds(p6.rows));
+  check('p6: a rig holds the devices its expected setup names, to any depth (rig > adapter > board)', rig.children.map((row) => row.entity).sort().join() === [ADAPTER, CAMERA].sort().join()
+    && p6.byKey.get(p6.byEntity.get(BOARD)).depth === 2 && p6.byKey.get(p6.byEntity.get(BOARD)).parent === p6.byEntity.get(ADAPTER), rig.children.map((row) => row.label));
+  check('p6: an entity is drawn once: a rig\'s adapter is not also under the computer', p6.flat.filter((row) => row.entity === ADAPTER).length === 1
+    && !host.children.some((row) => row.entity === ADAPTER || row.entity === CAMERA), host.children.map((row) => row.label));
+  check('p6: a roll-up is the worst child, recomputed for the rows that lost a child', rig.status.hint && rig.status.hint.level === 'error' && host.status.hint === null,
+    { rig: rig.status.hint && rig.status.hint.level, host: host.status.hint });
+  const plain = liveRackState();
+  check('p6: with no rig it is the physical tree (one root, the computer)', V.build(plain, 'p6', {}).flat.map((row) => row.key).join() === V.build(plain, 'p1', {}).flat.map((row) => row.key).join());
+  const ports = V.build(state, 'p6', { showTransport: true });
+  check('p6: Ports (the physical layers) brings them back as rows, the rig still nests', ports.flat.some((row) => row.kind === 'port') && ports.byKey.get(ports.byEntity.get(ADAPTER)).parent === ports.byEntity.get(RIG), ports.flat.length);
+
+  const p7 = V.build(state, 'p7', {});
+  const folders = p7.rows.map((row) => `${row.label}:${row.children.map((child) => child.kind).join('+')}`);
+  check('p7: top-level entities in folders by kind (Computers, Rigs, Adapters, Cameras), listed in that order', p7.rows.map((row) => row.label).join() === 'Computers,Rigs,Adapters,Cameras'
+    && p7.rows.every((row) => row.entity === null && row.key.startsWith('type:')), folders);
+  check('p7: a device keeps what is below it (the adapter its boards); the computer and the rig are leaves', p7.byKey.get(p7.byEntity.get(ADAPTER)).children.some((row) => row.entity === BOARD)
+    && p7.byKey.get(p7.byEntity.get(RIG)).children.length === 0 && p7.byKey.get(p7.byEntity.get('host')).children.length === 0, folders);
+  check('p7: a folder rolls up its members\' worst level', p7.rows.find((row) => row.label === 'Adapters').status.hint.level === 'error', p7.rows.map((row) => row.status.hint && row.status.hint.level));
+
+  // ---- step into: re-root at one row, the trail above it for the breadcrumb
+  const into = V.build(state, 'p6', { into: ADAPTER });
+  check('step into: the entered row is the only root, open, marked entered; the trail is its way down from the top', into.rows.length === 1 && into.rows[0].entity === ADAPTER
+    && into.rows[0].entered === true && into.rows[0].depth === 0 && into.rows[0].defaultOpen === true && into.trail.map((crumb) => crumb.entity).join() === `${RIG},${ADAPTER}`, into.trail);
+  check('step into: what is below keeps its rows and re-counts depth from the new root', into.byKey.get(into.byEntity.get(BOARD)).depth === 1
+    && into.flat.every((row) => row.depth >= 0), into.flat.map((row) => `${row.depth}:${row.label}`));
+  const gone = V.build(state, 'p6', { into: 'host/nowhere' });
+  check('step into: a row the grouping does not have is reported (intoMissing) and the whole tree stays', gone.intoMissing === true && gone.trail.length === 0 && gone.rows.length === p6.rows.length);
+  const folder = V.build(state, 'p7', { into: 'type:adapters' });
+  check('step into: a structure\'s own folder row (no entity) can be entered by its key', folder.rows.length === 1 && folder.rows[0].label === 'Adapters' && folder.trail.length === 1 && folder.trail[0].entity === null, folder.trail);
+  const again = V.build(state, 'p6', { into: ADAPTER, query: 'CAN 14' });
+  check('step into: a search then searches inside it', again.flat.map((row) => row.entity).join() === `${ADAPTER},${BOARD}`, again.flat.map((row) => row.label));
+
+  // ---- only inside: the chosen rows and everything below them, the rows above them for context, nothing else
+  const inside = V.build(state, 'p6', { inside: [RIG] });
+  const subtree = (row) => [row.entity, ...row.children.flatMap(subtree)];
+  check('only inside: a rig keeps itself and all it holds; the computer beside it is gone', inside.rows.length === 1 && inside.rows[0].entity === RIG && inside.rows[0].inside === true
+    && inside.flat.map((row) => row.entity).join() === subtree(rig).join(), inside.flat.map((row) => row.label));
+  const deep = V.build(state, 'p6', { inside: [BOARD] });
+  check('only inside: a deep row keeps its way down as context and drops its siblings (rig > adapter > CAN 14)', deep.flat.map((row) => row.entity).join() === `${RIG},${ADAPTER},${BOARD}`
+    && deep.flat[0].context === true && deep.flat[2].inside === true, deep.flat.map((row) => row.label));
+  const two = V.build(state, 'p6', { inside: [BOARD, CAMERA] });
+  check('only inside: several rows at once (chips), each with what is below it', two.flat.map((row) => row.entity).sort().join() === [RIG, ADAPTER, BOARD, CAMERA].sort().join()
+    && two.inside.map((chip) => chip.ref).join() === `${BOARD},${CAMERA}` && two.inside.every((chip) => chip.label && !chip.missing), two.inside);
+  const ghost = V.build(state, 'p6', { inside: ['host/nowhere'] });
+  check('only inside: a row that is not here is a struck chip and keeps nothing', ghost.inside[0].missing === true && ghost.rows.length === 0);
+  const both = V.build(state, 'p6', { into: RIG, inside: [CAMERA] });
+  check('only inside: with step into, the filter applies inside the entered row', both.flat.map((row) => row.entity).join() === `${RIG},${CAMERA}`, both.flat.map((row) => row.label));
+  check('only inside: the input rows are not changed (a build is repeatable)', JSON.stringify(V.build(state, 'p6', {}).flat.map((row) => row.key)) === JSON.stringify(p6.flat.map((row) => row.key)));
+
+  // ---- a roll-up is only ever an icon: no structure puts a count in a row's mark
+  const marks = V.build(state, 'p6', {}).flat.map((row) => row.status.hint).filter(Boolean);
+  check('roll-up: the hint of a row is one level and one cause, no count field', marks.length > 0 && marks.every((hint) => typeof hint.level === 'string' && !('count' in hint) && !('counts' in hint)), marks);
+}
+
 (async () => {
   unit();
+  nestedUnit();
   visibilityUnit();
   sortUnit();
   liveFrame();

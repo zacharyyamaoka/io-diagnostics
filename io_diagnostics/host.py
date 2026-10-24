@@ -1375,7 +1375,10 @@ class Host:
         manifest = self.setup.manifest
         return {"file": str(self.setup.path) if self.setup.path else None, "editable": bool(self.setup.path) and not self.setup.note,
                 "note": self.setup.note,
-                "rigs": [{"name": rig.name, "path": expected_module.rig_path(rig), "devices": len(rig.devices)} for rig in manifest.rigs],
+                # `members`: the rows of the rig's devices that are here (the page nests them under the rig row, tree structure p6)
+                "rigs": [{"name": rig.name, "path": expected_module.rig_path(rig), "devices": len(rig.devices),
+                          "members": [found.path for found in (view.setup.found if view.setup else []) if found.rig is rig and found.path]}
+                         for rig in manifest.rigs],
                 "retired": [{"name": entry.name, "hardware_id": entry.hardware_id, "serial": entry.serial, "date": entry.date,
                              "reason": entry.reason, "path": next((path for path, retired in (view.setup.retired if view.setup else {}).items()
                                                                    if retired is entry), None)} for entry in manifest.retired]}

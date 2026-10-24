@@ -293,7 +293,8 @@
       ? `<button type="button" class="t6-eye" data-t6-eye="${esc(row.key)}" aria-label="${hiddenNow ? 'Show this row' : verdict.surfaced ? 'Acknowledge the error and hide this row' : 'Hide this row'}"`
         + ` title="${hiddenNow ? 'Hidden: click to show it' : verdict.surfaced ? 'Shown because it is in error: click to acknowledge and hide it' : 'Click to hide this row'}">`
         + `${small(hiddenNow ? EYE_OFF : EYE)}</button>` : '';
-    const more = row.entity ? `<button type="button" class="t6-more" data-t6-more="${esc(row.key)}" aria-label="Row menu" aria-haspopup="menu" title="Row menu">${small(DOTS)}</button>` : '';
+    // a folder row of a structure's own (Type's "Adapters") has no entity but still has the navigation items
+    const more = row.entity || hasKids ? `<button type="button" class="t6-more" data-t6-more="${esc(row.key)}" aria-label="Row menu" aria-haspopup="menu" title="Row menu">${small(DOTS)}</button>` : '';
     const html = `<div class="${classes.join(' ')}" role="treeitem" aria-level="${row.depth + 1}"${hasKids ? ` aria-expanded="${open}"` : ''}`
       + ` aria-selected="${selected}" data-t6-path="${esc(row.key)}" style="--t6-d:${row.depth}" title="${esc(row.title || row.label)}">`
       + `${guide}${chevron}${presenceHtml(row)}${typeIcon(row.icon)}<span class="t6-name">${highlight(row.label, row.hit ? q : '')}</span>${heard}${lead}${note}${attrs}${suffix}`
@@ -404,6 +405,11 @@
     const row = st.byKey.get(visible[at]);
     const go = (key) => { st.scrollToSelected = true; select(st, key); };
     const hasKids = row && row.children.length > 0;
+    // VS Code Enter Folder's key: step into the selected folder (the way back out is Ctrl+Shift+Backspace, the page's)
+    if (event.key === 'Enter' && event.shiftKey && (event.ctrlKey || event.metaKey)) {
+      if (hasKids && typeof st.opts.onRowNav === 'function') { event.preventDefault(); st.opts.onRowNav('into', row); }
+      return;
+    }
     switch (event.key) {
       case 'ArrowDown': go(visible[Math.min(visible.length - 1, visible.indexOf(st.selected) + 1)]); break;
       case 'ArrowUp': go(visible[Math.max(0, at - 1)]); break;
@@ -437,10 +443,11 @@
   function openMenu(st, key, anchor) {
     if (st.menu && st.menu.key === key) { closeMenu(st); return; }
     const row = st.byKey.get(key);
-    if (!row || !row.entity) return;
+    if (!row || !(row.entity || row.children.length)) return;
     const rect = anchor.getBoundingClientRect();
-    st.menu = { key, row, entity: row.entity, info: null, confirm: null, result: null, busy: false, x: rect.right, y: rect.bottom };
+    st.menu = { key, row, entity: row.entity, nav: typeof st.opts.onRowNav === 'function' ? st.opts.onRowNav : null, info: row.entity ? null : {}, confirm: null, result: null, busy: false, x: rect.right, y: rect.bottom };
     paintMenu(st);
+    if (!row.entity) return;
     fetch(`/api/v1/node?path=${encodeURIComponent(row.entity)}`).then((response) => response.json()).then((info) => {
       if (st.menu && st.menu.key === key) { st.menu.info = info; paintMenu(st); }
     }).catch(() => { if (st.menu && st.menu.key === key) { st.menu.info = { error: true }; paintMenu(st); } });
@@ -460,7 +467,13 @@
     const setup = menu.info && menu.info.setup;
     const items = [];
     const copy = row.hardware_id || row.entity;
-    items.push(item('copy', 'Copy id', copy));
+    if (copy) items.push(item('copy', 'Copy id', copy));
+    // Zach, 2026-10-24: "filter to only show things inside certain things" and step into a folder (VS Code's Enter Folder)
+    if (row.children.length && typeof menu.nav === 'function') {
+      if (copy) items.push('<div class="t6-mi-sep"></div>');
+      items.push(item('nav:inside', "Show only what's inside", 'a filter chip above the tree'));
+      items.push(item('nav:into', 'Step into', 'Ctrl+Shift+Enter · make this the top of the tree'));
+    }
     if (setup && setup.role === 'board') {
       items.push(item('setup:forget', 'Remove from bus', 'A removed board that answers again comes back.', !setup.can.forget));
       items.push(item('setup:expect', setup.expected ? "Don't expect" : 'Expect', setup.rig ? `in ${setup.rig}` : "its adapter isn't in the expected setup", !setup.can.expect));
@@ -510,6 +523,7 @@
     if (!target || !menu) return;
     const id = target.getAttribute('data-t6-mi');
     if (id === 'cancel') { menu.confirm = null; paintMenu(st); return; }
+    if (id.startsWith('nav:')) { closeMenu(st); menu.nav(id.slice(4), menu.row); return; }
     if (id === 'copy') {
       const text = menu.row.hardware_id || menu.row.entity;
       try { navigator.clipboard.writeText(text); } catch (error) { /* not allowed here */ }

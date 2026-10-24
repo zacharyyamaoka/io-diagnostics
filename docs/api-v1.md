@@ -87,7 +87,8 @@ Besides `IO_DIAGNOSTICS_DEVICE`, `_DEVICE_PATH`, `_NOW` and `_SCHEMA`, every plu
   "tree": {"...": "node, see below; children nested"},
   "recent": [{"...": "event, see Activity"}],
   "expected_setup": {"file": "/home/bam/.config/io-diagnostics/expected.toml", "editable": true, "note": "",
-                     "rigs": [{"name": "1-DOF test rack", "path": "host/rig-1-dof-test-rack", "devices": 4}],
+                     "rigs": [{"name": "1-DOF test rack", "path": "host/rig-1-dof-test-rack", "devices": 4,
+                               "members": ["host/usb-1-3/fdcanusb-272813ef"]}],
                      "retired": [{"name": "fdcanusb 28B3A25D", "hardware_id": "usb:0483:5740:28B3A25D", "serial": "",
                                   "date": "2026-10-23", "reason": "frames never reached the bus (2026-10-22) ...",
                                   "path": null}]},
@@ -147,7 +148,7 @@ Besides `IO_DIAGNOSTICS_DEVICE`, `_DEVICE_PATH`, `_NOW` and `_SCHEMA`, every plu
   run on a pseudo-terminal; the page draws its tabs from this list.
 - `expected_setup` (2026-10-23): the person's rig manifest (docs/expected-setup.md): its `file` (`null` = none on
   this host: a fixture or a fake machine without `--expected`), whether the panel may `editable`-ly rewrite it, the
-  `note` saying why it does not read, its `rigs` (each with its rig row's `path`) and its `retired` devices (`path`
+  `note` saying why it does not read, its `rigs` (each with its rig row's `path` and `members`: the rows of its devices that are here) and its `retired` devices (`path`
   = the row of one that is plugged in again, else `null`).
 - **Expected setup** rows: one composite row per rig, `host/rig-<name>` (`kind` `"rig"`, `icon` `"group"`), first
   under the host. Its `name` self-reports the counts ("1-DOF test rack · 2/2 adapters · 6/7 boards · 2/2 cameras");
