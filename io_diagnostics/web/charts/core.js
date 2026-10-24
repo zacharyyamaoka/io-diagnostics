@@ -225,7 +225,7 @@ html[data-chart]:not([data-chart="c0"]) .ch-spark:hover .ch-line { background: v
   }
   // The Plot's input from a resolved model; `extra` overrides per series (axis, colour index).
   function plotModel(model, extra = {}) {
-    return { from: model.from, to: model.to, levels: extra.levels === false ? null : model.levels,
+    return { from: model.from, to: model.to, loading: model.loading, levels: extra.levels === false ? null : model.levels,
       series: model.series.map((s, at) => ({ ...s, cls: (extra.cls ?? at), axis: extra.axis || 'L', dim: s.style === 'dim' })) };
   }
 
@@ -308,7 +308,7 @@ html[data-chart]:not([data-chart="c0"]) .ch-spark:hover .ch-line { background: v
       const stripH = this.o.strip ? 16 : 0;
       const H = this.o.height === 'fill' ? Math.max(90, this.root.clientHeight) : this.o.height;
       this.seenHeight = this.root.clientHeight;
-      const ml = 50; const mr = hasRight ? 50 : 12; const mt = 18; const mb = 22 + (stripH ? stripH + 6 : 0);
+      const ml = 50; const mr = hasRight ? 50 : 12; const mt = 20; const mb = 22 + (stripH ? stripH + 6 : 0);
       const pw = Math.max(40, width - ml - mr); const ph = Math.max(30, H - mt - mb);
       const [a, b] = this.visible();
       const x = (t) => ml + ((t - a) / (b - a)) * pw;
@@ -344,7 +344,8 @@ html[data-chart]:not([data-chart="c0"]) .ch-spark:hover .ch-line { background: v
             ? `<text class="chp-tick" x="${ml - 6}" y="${(+y + 3.5).toFixed(1)}" text-anchor="end">${esc(num(v, step))}</text>`
             : `<text class="chp-tick" x="${ml + pw + 6}" y="${(+y + 3.5).toFixed(1)}" text-anchor="start">${esc(num(v, step))}</text>`;
         }
-        if (unit) svg += `<text class="chp-unit" x="${side === 'L' ? ml - 6 : ml + pw + 6}" y="${mt - 6}" text-anchor="${side === 'L' ? 'end' : 'start'}">${esc(unit)}</text>`;
+        // the right axis's units sit at the figure's right edge (they can be several: "°C · Mbit/s")
+        if (unit) svg += `<text class="chp-unit" x="${side === 'L' ? ml - 6 : width - 2}" y="${mt - 9}" text-anchor="end">${esc(unit)}</text>`;
       }
       // x axis
       const base = mt + ph;
@@ -403,7 +404,7 @@ html[data-chart]:not([data-chart="c0"]) .ch-spark:hover .ch-line { background: v
           svg += `<rect class="chp-lv ${span.level}"${PROBLEM.has(span.level) ? ' data-diagnostic' : ''} x="${x1.toFixed(1)}" y="${(y0 + stripH - tall).toFixed(1)}" width="${Math.max(1, x2 - x1).toFixed(1)}" height="${tall}"><title>${clock(span.from)}–${clock(span.to)} ${span.level}${span.message ? `: ${esc(span.message)}` : ''}</title></rect>`;
         }
       }
-      svg += '<g class="chp-cur" hidden></g>';
+      svg += '<g class="chp-cur"></g>';
       this.svg.innerHTML = svg;
       if (this.cursorT !== null && this.hover) this.showCursor(this.cursorT); else this.cursorT = null;
     }
@@ -426,7 +427,7 @@ html[data-chart]:not([data-chart="c0"]) .ch-spark:hover .ch-line { background: v
     leave() {
       this.cursorT = null;
       const g = this.svg.querySelector('.chp-cur');
-      if (g) g.setAttribute('hidden', '');
+      if (g) g.innerHTML = ''; // WHY emptied: an SVG <g> ignores the hidden attribute
       this.tip.hidden = true;
       if (this.o.onCursor) this.o.onCursor(null, []);
     }
@@ -451,7 +452,7 @@ html[data-chart]:not([data-chart="c0"]) .ch-spark:hover .ch-line { background: v
       }
       const cx = g.x(Math.min(Math.max(at ?? t, g.a), g.b));
       const cur = this.svg.querySelector('.chp-cur');
-      if (cur) { cur.innerHTML = `<line x1="${cx.toFixed(1)}" x2="${cx.toFixed(1)}" y1="${g.mt}" y2="${g.mt + g.ph}"/>${svg}`; cur.removeAttribute('hidden'); }
+      if (cur) cur.innerHTML = `<line x1="${cx.toFixed(1)}" x2="${cx.toFixed(1)}" y1="${g.mt}" y2="${g.mt + g.ph}"/>${svg}`;
       if (this.o.tip) {
         if (!rows.length) { this.tip.hidden = true; } else {
           this.tip.innerHTML = `<div class="t">${clock(at ?? t)}</div>${rows.map((r) => `<div class="r"><span class="chp-sw chp-sw${r.series.cls % 6}"></span><b>${esc(r.series.label)}</b><i>${esc(fmt(r.v, r.series.unit))}</i></div>`).join('')}`;

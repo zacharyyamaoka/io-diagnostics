@@ -219,9 +219,9 @@ const SCENARIOS = {
     await wheel(page, area.l + area.w * 0.93, area.t + area.h * 0.35, -120, 5);
     await ctl.pace(1000);
     await ctl.snap('zoomed');
-    await page.mouse.move(area.l + area.w * 0.6, area.t + area.h * 0.4);
+    await page.mouse.move(area.l + area.w * 0.3, area.t + area.h * 0.4);
     await page.mouse.down();
-    await page.mouse.move(area.l + area.w * 0.35, area.t + area.h * 0.4, { steps: 14 });
+    await page.mouse.move(area.l + area.w * 0.6, area.t + area.h * 0.4, { steps: 14 });
     await page.mouse.up();
     await ctl.pace(1200);
     await page.dblclick('#ch5-page .chp-svg', { position: { x: area.w * 0.5, y: 120 } });
@@ -250,7 +250,7 @@ async function run(chromium, id, mode, video) {
   const started = Date.now();
   const ctl = {
     snap: async (name) => { fs.mkdirSync(OUT, { recursive: true }); await page.screenshot({ path: path.join(OUT, `${id}-${name}-${mode}.png`) }); },
-    pace: (ms) => page.waitForTimeout(video ? ms : Math.min(ms, 500)),
+    pace: (ms) => page.waitForTimeout(video ? ms : Math.min(ms, 1300)),
   };
   await SCENARIOS[id](page, ctl);
   const seconds = (Date.now() - started) / 1000;

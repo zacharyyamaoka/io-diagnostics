@@ -108,13 +108,13 @@ const readable = (page, selector, inShadowHost) => page.evaluate(([sel, hostSel]
   const box = svg.getBoundingClientRect();
   const ticks = [...svg.querySelectorAll('.chp-tick, .chp-unit')];
   const boxes = ticks.map((t) => ({ text: t.textContent, r: t.getBoundingClientRect(), size: parseFloat(getComputedStyle(t).fontSize) }));
-  let overlaps = 0;
+  let overlaps = 0; const pairs = [];
   for (let i = 0; i < boxes.length; i += 1) for (let j = i + 1; j < boxes.length; j += 1) {
     const a = boxes[i].r; const b = boxes[j].r;
-    if (a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1) overlaps += 1;
+    if (a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1) { overlaps += 1; pairs.push(`${boxes[i].text}|${boxes[j].text}`); }
   }
   const outside = boxes.filter((t) => t.r.left < box.left - 1 || t.r.right > box.right + 1 || t.r.top < box.top - 1 || t.r.bottom > box.bottom + 1).map((t) => t.text);
-  return { count: boxes.length, minSize: Math.min(...boxes.map((t) => t.size)), overlaps, outside, xLabels: boxes.filter((t) => /^\d\d:\d\d|^now$/.test(t.text)).length, w: box.width, h: box.height };
+  return { pairs, count: boxes.length, minSize: Math.min(...boxes.map((t) => t.size)), overlaps, outside, xLabels: boxes.filter((t) => /^\d\d:\d\d|^now$/.test(t.text)).length, w: box.width, h: box.height };
 }, [selector, inShadowHost || null]);
 // The warn-colours rule (docs/round2-seams.md): outside status marks and [data-diagnostic] (a status's own limits and problem spans), nothing in the
 // new surfaces computes to a warn / error / stale / unknown colour or its -text / -soft / -line tint (a colour equal to a neutral token is not gated).
@@ -492,7 +492,7 @@ async function testC5(browser, base) {
   check('c5: amber / red only on the status limits and problem spans (the warn-colours rule)', (await warnColoursOutside(page, ['#ch5-page'])).length === 0, await warnColoursOutside(page, ['#ch5-page']));
   await shot(page, 'c5-page.png');
   // zoom with the wheel, pan with a drag, reset with a double click
-  const area = await page.evaluate(() => { const r = document.querySelector('#ch5-page .chp-svg').getBoundingClientRect(); return { x: r.left + r.width * 0.8, y: r.top + r.height * 0.4, w: r.width }; });
+  const area = await page.evaluate(() => { const r = document.querySelector('#ch5-page .chp-svg').getBoundingClientRect(); return { x: r.left + r.width * 0.965, y: r.top + r.height * 0.4, w: r.width }; });
   const range0 = await page.evaluate(() => document.querySelector('.ch5-range').textContent);
   await page.mouse.move(area.x, area.y);
   for (let i = 0; i < 4; i += 1) { await page.mouse.wheel(0, -120); await page.waitForTimeout(60); }
@@ -500,9 +500,9 @@ async function testC5(browser, base) {
   const zoomed = await page.evaluate(() => ({ text: document.querySelector('.ch5-range').textContent, reset: !document.querySelector('[data-zoom="reset"]').disabled }));
   check('the wheel zooms into the history window (the visible range shrinks, marked zoomed)', /zoomed/.test(zoomed.text) && zoomed.text !== range0 && zoomed.reset, { range0, zoomed });
   await shot(page, 'c5-zoomed.png');
-  await page.mouse.move(area.x, area.y);
+  await page.mouse.move(area.x - 600, area.y);
   await page.mouse.down();
-  await page.mouse.move(area.x - 180, area.y, { steps: 6 });
+  await page.mouse.move(area.x - 300, area.y, { steps: 6 }); // dragging right pulls earlier data into view
   await page.mouse.up();
   await page.waitForTimeout(500);
   const panned = await page.evaluate(() => document.querySelector('.ch5-range').textContent);
@@ -569,11 +569,11 @@ async function testC5(browser, base) {
     const plugins = (await (await fetch(`${base}/api/v1/plugins`)).json()).plugins.map((plugin) => plugin.name);
     check('only the fixture plugin charts_fixture is loaded', plugins.join() === 'charts_fixture', plugins);
     if (plugins.join() !== 'charts_fixture') throw new Error('refusing to continue: a non-fixture plugin is loaded');
-    // wait for the moving series to fill: 40 s at 2 Hz is 80 points, enough to zoom into
+    // wait for the moving series to fill: 80 s at 2 Hz is 160 points, enough to zoom into
     for (let i = 0; i < 90; i += 1) {
       const history = await (await fetch(`${base}/api/v1/history?path=host`)).json();
       const cpu = (history.statuses || []).find((s) => /CPU Information/.test(s.name));
-      if (cpu && cpu.measurements[0].points.length >= 80) break;
+      if (cpu && cpu.measurements[0].points.length >= 160) break;
       await sleep(1000);
     }
     browser = await chromium.launch({ executablePath: CHROME, headless: true });
