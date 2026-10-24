@@ -108,10 +108,11 @@ body.resizing .inspector { transition: none; }
 
 /* the problem SHAPES (the sprite's s-* symbols; the glyph inside takes --io-on-status) */
 .shape { width: 14px; height: 14px; flex: none; display: inline-block; vertical-align: -2px; }
-.shape.lv-warn { color: var(--io-warn); }
-.shape.lv-error { color: var(--io-error); }
-.shape.lv-stale { color: var(--io-stale); }
-.shape.lv-unknown { color: var(--io-unknown); }
+.shape.lv-warn { color: var(--hc-warn, var(--io-warn)); }
+.shape.lv-warn { --io-on-status: #1d1d20; }
+.shape.lv-error { color: var(--hc-error, var(--io-error)); }
+.shape.lv-stale { color: var(--hc-stale, var(--io-stale)); }
+.shape.lv-unknown { color: var(--hc-unknown, var(--io-unknown)); }
 .knock .shape, .shape.knock { color: var(--io-knock); }
 
 /* ---- rows: the fallback list and the table's name column share the tree's grammar ------------------- */

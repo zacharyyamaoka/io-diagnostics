@@ -630,7 +630,7 @@ async function testC6(browser, base) {
   await page.waitForTimeout(1500);
   check('c4: it survives a reload and is still on the Dashboard view', await page.evaluate(() => document.querySelectorAll('#ch4-dash .ch4-tile').length === 1 && getComputedStyle(document.getElementById('ch4-dash')).display !== 'none'));
   // clean up the board so a later run on this host starts empty
-  await fetch(`${base}/api/v1/settings`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-IO-Diagnostics': 'ui' }, body: JSON.stringify({ dashboard: [] }) });
+  await page.evaluate(() => fetch('/api/v1/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-IO-Diagnostics': 'ui' }, body: JSON.stringify({ dashboard: [] }) }));
   const sc = await hScroll(page);
   check('no horizontal scroll at 1400x900', sc.doc <= 0 && sc.body <= 0, sc);
   check('no console errors', errors.length === 0, errors.slice(0, 3));

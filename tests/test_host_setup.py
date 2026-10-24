@@ -329,7 +329,7 @@ def test_a_fixture_reads_no_manifest_unless_named_and_live_reads_the_config_dir(
 def test_state_lists_each_rigs_members_the_rows_of_its_devices_that_are_here(tmp_path):
     rack = Rack(tmp_path)
     rig = rack.state()["expected_setup"]["rigs"][0]
-    # the adapters and cameras the manifest names AND the tree has, as rows; B is listed twice over (adapter + 2 cameras by SDK serial)
+    # the adapters and cameras the manifest names AND the tree has, as rows (an expected device that is not plugged in is no member row)
     assert rig["name"] == "1-DOF test rack"
     assert {rack.path_of(A), rack.path_of(B)} <= set(rig["members"])
     assert all(path in rack.host.view().merged.entities for path in rig["members"])

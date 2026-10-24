@@ -167,7 +167,7 @@ async function main() {
         layout: S.layout, menu: S.menu, sort: S.sort }));
       // round 3.5: the default skin is stock shadcn/ui (round 3 had Bare Metal = contrast); the layout d0 (the first
       // selection is the worst cause's CAN bus, not the Computer) and the menu u0; sort by status
-      check(`defaults (OS ${scheme})`, fresh.structure === 'p1' && fresh.variant === 'v6' && fresh.skin === 'shadcn' && fresh.mode === scheme && fresh.pref === 'auto'
+      check(`defaults (OS ${scheme})`, fresh.structure === 'p6' && fresh.variant === 'v6' && fresh.skin === 'shadcn' && fresh.mode === scheme && fresh.pref === 'auto'
         && fresh.layout === 'd0' && fresh.menu === 'u0' && fresh.sort === 'status', fresh);
       // round 3.5: shadcn is the default skin, in light and dark following the OS (above), linked by index.html itself
       {
@@ -221,8 +221,8 @@ async function main() {
         await page.reload();
         await ready(page);
         const dropped = await page.evaluate(() => ({ structure: S.structure, listed: [...document.querySelectorAll('#structure option')].map((o) => `${o.value}:${o.textContent}`) }));
-        check('Group by lists Devices · Type · Port · Bus · Physical; a remembered p3 falls back', dropped.structure === 'p1'
-          && dropped.listed.join() === 'p1:Devices,p2:Type,p4:Port,p5:Bus,p0:Physical', dropped);
+        check('Group by lists Nested · Physical · Type · Port · Bus · API tree · Purpose; a remembered p3 falls back', dropped.structure === 'p6'
+          && dropped.listed.join() === 'p6:Nested,p1:Physical,p7:Type,p4:Port,p5:Bus,p0:API tree,p2:Purpose', dropped);
       }
       await context.close();
     }
@@ -1067,8 +1067,8 @@ async function expectedSetup(browser) {
   page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
   const rigRow = () => page.evaluate((key) => {
     const row = document.querySelector(`.t6-row[data-t6-path="${key}"]`);
-    // "first": the first row under the computer's root row (the root, bam-GPU, is the very first row)
-    return row ? { name: row.querySelector('.t6-name').textContent, shape: Boolean(row.querySelector('.t6-st .t6-shape')), first: row === document.querySelectorAll('.t6-row')[1] } : null;
+    // "first": a top-level row (the Nested tree draws the rig beside the computer, no longer under it)
+    return row ? { name: row.querySelector('.t6-name').textContent, shape: Boolean(row.querySelector('.t6-st .t6-shape')), first: row.style.getPropertyValue('--t6-d') === '0' } : null;
   }, RIG);
   try {
     const plugins = await (await fetch(`${base}/api/v1/plugins`)).json();

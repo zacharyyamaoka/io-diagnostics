@@ -102,10 +102,13 @@
 .t6-shape .t6-ink { fill: none; stroke: var(--io-on-status); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .t6-shape .t6-ink-dot { fill: var(--io-on-status); }
 .t6-shape .t6-line { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
-.t6-shape.t6-warn { color: var(--io-warn); }
-.t6-shape.t6-error { color: var(--io-error); }
-.t6-shape.t6-stale { color: var(--io-faint); }
-.t6-shape.t6-unknown { color: var(--io-unknown); }
+/* WHY the health palette (detail/health.js, --hc-*, Statuspage's own colours; Zach, 2026-10-24: one palette): the tree's marks, the roll-up icons and the
+   header counts draw in the same colours as the health bars; the skin's own status tokens are the fallback until health.js has loaded */
+.t6-shape.t6-warn { color: var(--hc-warn, var(--io-warn)); }
+.t6-shape.t6-warn { --io-on-status: #1d1d20; } /* the health palette's yellow is a light colour: the mark inside the triangle is dark, in both themes */
+.t6-shape.t6-error { color: var(--hc-error, var(--io-error)); }
+.t6-shape.t6-stale { color: var(--hc-stale, var(--io-faint)); }
+.t6-shape.t6-unknown { color: var(--hc-unknown, var(--io-unknown)); }
 /* the roll-up of a collapsed row (same logo as the rows below it); on an open row it is revealed on hover / selection */
 .t6-mark.t6-roll .t6-shape { opacity: .8; }
 .t6-mark.t6-roll.t6-open { opacity: 0; transition: opacity .12s; }

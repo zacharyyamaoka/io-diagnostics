@@ -780,15 +780,15 @@ async function runFoundation(browser, base, frame) {
     const fresh = await page.evaluate(() => ({ mode: document.documentElement.dataset.mode, skin: document.documentElement.dataset.skin,
       variant: document.getElementById('tree-variant').value, structure: document.getElementById('structure').value,
       skins: [...document.querySelectorAll('#skin option')].map((o) => o.value), structures: [...document.querySelectorAll('#structure option')].map((o) => o.value) }));
-    check(frame, 'found', 'defaults', fresh.mode === 'dark' && fresh.skin === DEFAULT_SKIN && fresh.variant === 'v6' && fresh.structure === 'p1',
+    check(frame, 'found', 'defaults', fresh.mode === 'dark' && fresh.skin === DEFAULT_SKIN && fresh.variant === 'v6' && fresh.structure === 'p6',
       `fresh browser, OS dark: mode ${fresh.mode} (Auto), skin ${fresh.skin} of [${fresh.skins}], tree ${fresh.variant}, structure ${fresh.structure} of [${fresh.structures}]`);
-    // every READY skin (with the default structure p1) and every READY structure (with the default skin): a lane that
+    // every READY skin (with the default structure p6) and every READY structure (with the default skin): a lane that
     // flips its manifest line gets these gates without touching this file (docs/round2-seams.md)
-    const combos = [{ skin: DEFAULT_SKIN, structure: 'p1' },
-      ...pickerIds().filter((id) => id !== 'p1').map((structure) => ({ skin: DEFAULT_SKIN, structure })),
-      ...readyIds('skins/index.json', 'skins').filter((id) => id !== DEFAULT_SKIN).map((skin) => ({ skin, structure: 'p1' }))];
+    const combos = [{ skin: DEFAULT_SKIN, structure: 'p6' },
+      ...pickerIds().filter((id) => id !== 'p6').map((structure) => ({ skin: DEFAULT_SKIN, structure })),
+      ...readyIds('skins/index.json', 'skins').filter((id) => id !== DEFAULT_SKIN).map((skin) => ({ skin, structure: 'p6' }))];
     for (const combo of combos) {
-      const isDefault = combo.skin === DEFAULT_SKIN && combo.structure === 'p1';
+      const isDefault = combo.skin === DEFAULT_SKIN && combo.structure === 'p6';
       if (!isDefault) {
         await pick(page, '#skin', combo.skin);
         await pick(page, '#structure', combo.structure);
@@ -832,7 +832,7 @@ async function runFoundation(browser, base, frame) {
             check(frame, tag, 'table message', widths.message >= MESSAGE_MIN && widths.detail > 0,
               `Message column ${widths.message} px (>= ${MESSAGE_MIN}) in a ${widths.pane} px pane beside a ${widths.detail} px detail pane · extra columns [${widths.columns}]`);
           }
-          if (view === 'tree' && combo.structure === 'p1') {
+          if (view === 'tree' && combo.structure === 'p6') {
             const c = await page.evaluate(contrastMeasure, CONTRAST);
             check(frame, tag, 'contrast', c.pairs === 52 && c.failing.length === 0 && c.unresolved.length === 0,
               `${c.pairs} pairs (text 4.5:1 on 4 surfaces, shapes 3:1 on surface + selected) · lowest ${c.lowest}${c.failing.length ? ` · FAIL ${c.failing.join(' | ')}` : ''}${c.unresolved.length ? ` · unresolved ${c.unresolved.join(', ')}` : ''}`);

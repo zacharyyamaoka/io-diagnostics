@@ -124,8 +124,9 @@ html[data-chart]:not([data-chart="c0"]) .ch-spark:hover .ch-line { background: v
 .chp-cur .c2 { stroke: oklch(from var(--io-info) l c calc(h + 58)); } .chp-cur .c3 { stroke: oklch(from var(--io-info) l c calc(h - 58)); }
 .chp-cur .c4 { stroke: var(--io-muted); } .chp-cur .c5 { stroke: var(--io-faint); }
 .chp-lv { stroke: none; }
-.chp-lv.ok { fill: var(--io-border); } .chp-lv.warn { fill: var(--io-warn); } .chp-lv.error { fill: var(--io-error); }
-.chp-lv.stale { fill: var(--io-stale); } .chp-lv.unknown { fill: var(--io-unknown); }
+/* the health strip of a chart and of a Dashboard tile: the health palette (--hc-*, detail/health.js), like every health bar */
+.chp-lv.ok { fill: var(--hc-ok, var(--io-border)); } .chp-lv.warn { fill: var(--hc-warn, var(--io-warn)); } .chp-lv.error { fill: var(--hc-error, var(--io-error)); }
+.chp-lv.stale { fill: var(--hc-stale, var(--io-stale)); } .chp-lv.unknown { fill: var(--hc-unknown, var(--io-unknown)); }
 .chp-lvbg { fill: var(--io-border-soft); }
 .chp-tip { position: absolute; top: 4px; left: 0; z-index: 2; pointer-events: none; min-width: 120px; max-width: 280px; padding: 5px 8px; font-size: 12px; line-height: 1.35;
   background: var(--io-popover); color: var(--io-text); border: 1px solid var(--io-border); border-radius: var(--io-radius); box-shadow: var(--io-shadow-pop); white-space: nowrap; }
