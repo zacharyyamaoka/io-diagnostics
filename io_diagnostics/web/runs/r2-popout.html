@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Run · RobotDx</title>
+<link rel="icon" href="data:,">
+<script>
+  // The same skin and light / dark as the page that opened this window (index.html's first-paint script).
+  (function () {
+    var html = document.documentElement, skin = null, mode = null;
+    try { skin = localStorage.getItem('io-diagnostics.skin'); mode = localStorage.getItem('io-diagnostics.mode'); } catch (_) {}
+    var dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    html.dataset.skin = skin || 'shadcn';
+    html.dataset.mode = mode === 'light' || mode === 'dark' ? mode : (dark ? 'dark' : 'light');
+  })();
+</script>
+<link rel="stylesheet" href="../tokens.css">
+<link rel="stylesheet" href="../skins/shadcn.css" data-skin-css="shadcn">
+<link rel="stylesheet" href="../vendor/xterm/xterm.css">
+<style>
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--io-surface); color: var(--io-text); font: var(--io-font-size)/1.4 var(--io-font-ui); display: flex; flex-direction: column; }
+  header { flex: none; display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--io-border); background: var(--io-surface-2); }
+  header h1 { margin: 0; font: 600 14px/1.3 var(--io-font-display); color: var(--io-text-strong); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  header .state { color: var(--io-muted); font-family: var(--io-font-mono); font-size: 12px; white-space: nowrap; }
+  header .state.bad { color: var(--io-error-text); }
+  header .sp { flex: 1; }
+  .spin { width: 9px; height: 9px; flex: none; border-radius: 50%; border: 2px solid var(--io-border); border-top-color: var(--io-text); animation: spin 0.9s linear infinite; }
+  .spin[hidden] { display: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+  main { flex: 1; min-height: 0; padding: 8px 4px 2px 12px; }
+  #term { height: 100%; }
+  #term .xterm { height: 100%; }
+  #term .xterm-viewport { background: transparent !important; }
+  form { flex: none; display: flex; align-items: center; gap: 6px; padding: 8px 14px; border-top: 1px solid var(--io-border-soft); background: var(--io-surface-2); }
+  form[hidden] { display: none; }
+  form .chev { color: var(--io-faint); font-family: var(--io-font-mono); }
+  form input { flex: 1; min-width: 0; font: 12.5px var(--io-font-mono); color: var(--io-text); background: var(--io-field); border: 1px solid var(--io-border); border-radius: var(--io-radius-sm); padding: 5px 8px; outline: none; }
+  form input:focus-visible { border-color: var(--io-focus); box-shadow: 0 0 0 2px var(--io-accent-soft); }
+  button { border: 1px solid var(--io-border); background: var(--io-field); color: var(--io-text); border-radius: var(--io-radius-sm); padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+  button:hover:not([disabled]) { background: var(--io-hover); }
+  button[disabled] { opacity: .55; cursor: default; }
+  button.moves { background: var(--io-text-strong); border-color: var(--io-text-strong); color: var(--io-surface); }
+  footer { flex: none; padding: 4px 14px; border-top: 1px solid var(--io-border-soft); color: var(--io-faint); font-size: 11.5px; display: flex; gap: 12px; min-height: 24px; align-items: center; }
+  footer a { color: var(--io-accent-text); }
+  .gone { padding: 24px; color: var(--io-muted); }
+</style>
+</head>
+<body>
+<header>
+  <span class="spin" id="spin" hidden></span>
+  <h1 id="title">Run</h1>
+  <span class="state" id="state"></span>
+  <span class="sp"></span>
+  <button id="stop" hidden></button>
+</header>
+<main><div id="term"></div></main>
+<form id="answer" hidden autocomplete="off">
+  <span class="chev" aria-hidden="true">›</span>
+  <input id="line" type="text" aria-label="Answer for the process" placeholder="Type an answer and press Enter" spellcheck="false" autocomplete="off">
+  <button type="submit">Send</button>
+  <span id="quick" hidden><button type="button" data-key="y">Yes</button> <button type="button" data-key="n">No</button></span>
+</form>
+<footer id="foot" role="status"></footer>
+<script src="../vendor/xterm/xterm.js"></script>
+<script src="../vendor/xterm/addon-fit.js"></script>
+<script src="core.js"></script>
+<script>
+  // r2's "Pop out": the run in its own window, at /runs/r2-popout.html?run=<id>. The same runtime as the page (core.js:
+  // the stream, the three writes, the xterm binding); this window polls the run itself because no shell is polling /state.
+  'use strict';
+  (function () {
+    const R = window.IORuns;
+    const id = new URLSearchParams(location.search).get('run') || '';
+    const $ = (name) => document.getElementById(name);
+    const esc = (text) => String(text ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const PROMPT = /(\?|:|>|\])\s*$/;
+    const YES_NO = /\[(y\/n|y\/N|Y\/n)\]|\((y\/n)\)/i;
+    let bound = null;
+    let stopping = false;
+
+    // skins other than the default load like the page does (skins/index.json names the file)
+    (async () => {
+      const skin = document.documentElement.dataset.skin;
+      if (skin === 'shadcn') return;
+      try {
+        const manifest = await (await fetch('../skins/index.json')).json();
+        const entry = (manifest.skins || []).find((item) => item.id === skin);
+        if (entry) { const link = document.createElement('link'); link.rel = 'stylesheet'; link.href = `../skins/${entry.file}`; document.head.appendChild(link); }
+      } catch (_) { /* the default skin stays */ }
+    })();
+
+    function cursorLine() {
+      if (!bound || !bound.term) return '';
+      const buffer = bound.term.buffer.active;
+      const line = buffer.getLine(buffer.baseY + buffer.cursorY);
+      return line ? line.translateToString(true) : '';
+    }
+
+    function paint() {
+      const run = R.get(id);
+      if (!run) return;
+      document.title = `${run.label} · RobotDx`;
+      $('title').textContent = run.label;
+      $('spin').hidden = !run.active;
+      const words = R.stateWords(run);
+      $('state').textContent = run.active ? `${words} ${R.elapsed(run)}` : `${words}${run.exit_code !== null && run.exit_code !== undefined ? ` · exit ${run.exit_code}` : ''} · ${R.elapsed(run)}`;
+      $('state').classList.toggle('bad', run.state === 'failed' || run.state === 'timed_out');
+      const interactive = run.active && run.interactive;
+      $('answer').hidden = !interactive;
+      $('stop').hidden = !interactive;
+      if (interactive) {
+        const moves = run.danger === 'moves';
+        $('stop').className = moves ? 'moves' : '';
+        $('stop').disabled = stopping || run.stopping;
+        $('stop').textContent = stopping || run.stopping ? 'Stopping…' : (moves ? 'Stop (motor goes limp)' : 'Stop');
+        const line = cursorLine();
+        $('quick').hidden = !(PROMPT.test(line.trimEnd()) && YES_NO.test(line));
+      }
+      let foot;
+      if (run.active) foot = interactive ? 'Typing in the output or in the box goes to the process · Ctrl-C stops it' : 'Started from another window of this host: you can watch it here, not type into it';
+      else foot = `<a href="${esc(R.castUrl(id))}" download="${esc(id)}.cast">recording (.cast)</a><span>${esc(run.stop && run.stop.plugin_stop && run.stop.plugin_stop.ran ? `the plugin's stop: ${run.stop.plugin_stop.message || run.stop.plugin_stop.outcome}` : '')}</span>`;
+      if ($('foot').dataset.html !== foot) { $('foot').dataset.html = foot; $('foot').innerHTML = foot; }
+    }
+
+    async function load() {
+      const run = await R.refresh(id);
+      if (!run) { $('term').innerHTML = `<div class="gone">No run ${esc(id)} on this host.</div>`; return false; }
+      return true;
+    }
+
+    $('answer').addEventListener('submit', (event) => {
+      event.preventDefault();
+      const input = $('line');
+      if (!input.value) return;
+      const text = `${input.value}\n`;
+      input.value = '';
+      R.sendInput(id, text);
+    });
+    $('quick').addEventListener('click', (event) => { const key = event.target.closest('[data-key]'); if (key) R.sendInput(id, `${key.dataset.key}\n`); });
+    $('stop').addEventListener('click', async () => { stopping = true; paint(); const answer = await R.interrupt(id); if (!answer.ok) stopping = false; paint(); });
+
+    (async () => {
+      if (!(await load())) return;
+      bound = R.attachTerminal($('term'), id, { fontSize: 13 });
+      bound.focus();
+      if (bound.term) bound.term.onWriteParsed(paint);
+      R.onChange(paint);
+      paint();
+      // the run's own page polls /api/v1/state; this window asks for the one run, once a second while it goes
+      setInterval(async () => { const run = R.get(id); if (!run || run.active) { await R.refresh(id); } paint(); }, 1000);
+    })();
+  }());
+</script>
+</body>
+</html>

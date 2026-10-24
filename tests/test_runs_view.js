@@ -145,7 +145,7 @@ async function main() {
         badgeHidden: toggle && toggle.querySelector('.r1-badge').hidden, rootHidden: document.getElementById('runs-root').hidden,
         xterm: typeof window.Terminal, fit: typeof (window.FitAddon && window.FitAddon.FitAddon), title: select.title };
     });
-    check('seam: r1 registered, the Runs select lists it', seam.views.includes('r1') && seam.ids.join() === 'r1' && seam.value === 'r1' && seam.chosen === 'r1' && seam.protoShown, seam);
+    check('seam: r1 registered, the Runs select lists it', seam.views.includes('r1') && seam.ids[0] === 'r1' && seam.value === 'r1' && seam.chosen === 'r1' && seam.protoShown, seam);
     check('seam: xterm.js and its fit addon are vendored', seam.xterm === 'function' && seam.fit === 'function' && seam.runs === 'function', seam);
     check('seam: the toggle is in the status bar, the panel hidden', seam.toggle && seam.badgeHidden && seam.rootHidden, seam);
     const ctxShape = await page.evaluate(() => Object.fromEntries(['runs', 'run', 'onChange', 'stream', 'sendInput', 'interrupt', 'resize', 'terminal', 'castUrl', 'open', 'redraw', 'css', 'pref', 'setPref']

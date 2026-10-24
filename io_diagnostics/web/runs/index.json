@@ -4,12 +4,12 @@
   "runs": [
     {"id": "r1", "name": "Terminal panel with tabs", "file": "r1.js", "ready": true},
 
-    {"id": "r2", "name": "Output in place", "file": "r2.js", "ready": false},
+    {"id": "r2", "name": "Output in place", "file": "r2.js", "ready": true},
 
-    {"id": "r3", "name": "Runs as rows", "file": "r3.js", "ready": false},
+    {"id": "r3", "name": "Runs as rows", "file": "r3.js", "ready": true},
 
     {"id": "r4", "name": "Runs in the Activity log", "file": "r4.js", "ready": false},
 
-    {"id": "r5", "name": "A tmux session", "file": "r5.js", "ready": false}
+    {"id": "r5", "name": "A tmux session", "file": "r5.js", "ready": true}
   ]
 }
