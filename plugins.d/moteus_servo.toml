@@ -50,9 +50,10 @@ cwd = "/home/bam/bam_ws/.claude/worktrees/traj-sim2real-rack/src/core/mdp/agent/
 # Seconds per call. The plugin bounds its own bus check at 25 s (--timeout) and reports what it measured by
 # then. It asks one id per transaction (moteus 1.0.0 never bounds a reply from a real fdcanusb), so every
 # absent id of the 1-32 scan costs 50 ms: a dead bus ~1.6 s plus 0.3 s of re-asks per expected board, a healthy
-# 3-board bus about 3-6 s (scan, 20 query cycles, config + identity per board, can status). 45 s leaves room
-# for uv's start.
-timeout_s = 45
+# 3-board bus about 3-6 s (scan, 20 query cycles, config + identity per board, can status). WHY 60 (2026-10-24):
+# a probe, or a diagnose whose cached configuration is over 30 min old, adds the whole-config read
+# (conf enumerate, up to 20 s), so 25 + 20 s plus uv's start; a run over the limit keeps nothing (measured).
+timeout_s = 60
 # Seconds per act call, never used by diagnose. WHY 1800: a firmware update backs up the config, downloads,
 # flashes, verifies and restores (the driver allows it up to 1800 s); calibration spins the rotor for up to 600 s.
 act_timeout_s = 1800
