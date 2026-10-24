@@ -628,7 +628,7 @@ async function testC6(browser, base) {
   await page.reload();
   await page.waitForSelector('.l1-ribbon [data-l1="dashboard"]', { timeout: 20000 });
   await page.waitForTimeout(1500);
-  check('c4: it survives a reload and is still on the Dashboard view', await page.evaluate(() => document.querySelectorAll('#ch4-dash .ch4-tile').length === 1 && getComputedStyle(document.getElementById('ch4-dash')).display !== 'none'));
+  check('c4: it survives a reload and is still on the Dashboard view, inside the L1 shell (not above it)', await page.evaluate(() => document.querySelectorAll('#ch4-dash .ch4-tile').length === 1 && getComputedStyle(document.getElementById('ch4-dash')).display !== 'none' && Boolean(document.getElementById('ch4-dash').closest('.l1-main'))));
   // clean up the board so a later run on this host starts empty
   await page.evaluate(() => fetch('/api/v1/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-IO-Diagnostics': 'ui' }, body: JSON.stringify({ dashboard: [] }) }));
   const sc = await hScroll(page);

@@ -322,7 +322,9 @@ body.ch4-on .seg button.on:not([data-ch4]) { background: transparent; color: var
       }
       return false;
     },
-    update() { adopt(); refresh(); if (button && view) button.setAttribute('data-on', ''); },
+    // WHY layout() here too: a page layout (layouts/*.js) moves #main after this view mounted (the Dashboard remembered as open across a reload),
+    // and the board must follow it, or it is left at the window's top level above the layout
+    update() { adopt(); layout(); refresh(); if (button && view) button.setAttribute('data-on', ''); },
     sync() {},
   };
   function onViews(event) {

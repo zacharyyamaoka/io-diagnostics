@@ -184,10 +184,12 @@ async function encode(videoPath, name, trimS) {
       const at = await page.evaluate(() => [...document.querySelectorAll('.d6-panel .ch-spark')].findIndex((el) => JSON.parse(el.dataset.spark).l === 'RAM Load Average'));
       await glide(page, sparks.nth(at).locator('.ch-line'), { dx: -40 });
       await page.waitForTimeout(1200);
+      await page.evaluate(() => document.querySelector('.d6-panel .ch-spark[data-open]').scrollIntoView({ block: 'center' }));
+      await page.waitForTimeout(400);
       await glide(page, sparks.nth(at + 1).locator('.ch-line'), { click: false, dx: 60 });
       await page.waitForTimeout(500);
       await shoot(page, `state-unfolded-${scheme}`);
-      step(`state-unfolded-${scheme}`, await page.evaluate(() => Boolean(document.querySelector('.d6-panel .ch-spark[data-open]')) && getComputedStyle(document.querySelector('.d6-panel .ch-spark:not([data-open]) .ch-btn[data-ch-btn="focus"]')).opacity === '1'));
+      step(`state-unfolded-${scheme}`, await page.evaluate((i) => Boolean(document.querySelector('.d6-panel .ch-spark[data-open]')) && getComputedStyle(document.querySelectorAll('.d6-panel .ch-spark')[i].querySelector('.ch-btn[data-ch-btn="focus"]')).opacity === '1', at + 1));
 
       // pin three values, then the Dashboard
       for (const label of ['swap used %', 'CPU Load Average', 'eth0 rx']) {
@@ -202,11 +204,12 @@ async function encode(videoPath, name, trimS) {
       await page.waitForTimeout(500);
       await page.click('.l1-ribbon [data-l1="dashboard"]');
       await page.waitForSelector('#ch4-dash .ch4-tile');
-      await page.waitForTimeout(1500);
+      await page.waitForTimeout(5000); // the "Pinned ... Open dashboard" toast goes after 4 s
       await shoot(page, `dashboard-${scheme}`);
       step(`dashboard-${scheme}`, await page.evaluate(() => document.querySelectorAll('#ch4-dash .ch4-tile').length >= 2));
       await page.evaluate(() => fetch('/api/v1/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-IO-Diagnostics': 'ui' }, body: JSON.stringify({ dashboard: [] }) }));
-      await page.evaluate(() => localStorage.removeItem('io-diagnostics.chart.c4.tiles'));
+      await page.click('.l1-ribbon [data-l1="tree"]'); // closes the board (it is remembered as open otherwise)
+      await page.evaluate(() => { localStorage.removeItem('io-diagnostics.chart.c4.tiles'); localStorage.setItem('io-diagnostics.chart.c4.view', '0'); });
 
       // the tree: Nested, only inside, stepped into an adapter, Type
       await page.goto(`${base}/?sel=${encodeURIComponent(BOARD)}`);
@@ -217,7 +220,7 @@ async function encode(videoPath, name, trimS) {
       await shoot(page, `tree-inside-${scheme}`);
       await page.locator('#tree-host .tn-chip-x').first().dispatchEvent('click');
       await page.waitForTimeout(500);
-      await rowMenu(page, 'fdcanusb · 272813EF', 'nav:into');
+      await rowMenu(page, 'fdcanusb · fixture', 'nav:into');
       await page.waitForTimeout(500);
       await shoot(page, `tree-into-${scheme}`);
       step(`tree-into-${scheme}`, await page.evaluate(() => Boolean(document.querySelector('.tree-nav .tn-here')) && /fdcanusb/.test(document.querySelector('.tn-here').textContent)));
@@ -244,10 +247,10 @@ async function encode(videoPath, name, trimS) {
       const loaded = (Date.now() - started) / 1000;
       // search in the tree pane
       await glide(page, page.locator('#search'));
-      await page.keyboard.type('272813', { delay: 90 });
+      await page.keyboard.type('CAN 1', { delay: 90 });
       await page.waitForTimeout(1200);
       // open a board
-      await glide(page, rowOf(page, 'moteus-c1 · CAN 1'));
+      await glide(page, rowOf(page, 'moteus c1 · CAN 1'));
       await page.waitForSelector('.d6-tabs');
       await page.waitForTimeout(900);
       await glide(page, page.locator('[data-d6-tab="state"]'));
@@ -259,7 +262,7 @@ async function encode(videoPath, name, trimS) {
       // step into the adapter and back out
       await page.fill('#search', '');
       await page.waitForTimeout(700);
-      await rowMenu(page, 'fdcanusb · 272813EF', 'nav:into');
+      await rowMenu(page, 'fdcanusb · fixture', 'nav:into');
       await page.waitForTimeout(1600);
       await glide(page, page.locator('.tree-nav [data-tn-up]'));
       await page.waitForTimeout(1100);
