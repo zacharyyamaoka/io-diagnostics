@@ -55,6 +55,12 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
 - Unknown fields may be added to any object later (additive changes keep `api` = `"io-diagnostics/1"`); a page
   must ignore fields it does not know.
 
+## The plugin environment
+
+Besides `IO_DIAGNOSTICS_DEVICE`, `_DEVICE_PATH`, `_NOW` and `_SCHEMA`, every plugin invocation (`describe`, `diagnose`, `probe`, `watch`,
+`follow`, `act`, `stop`) gets `IO_DIAGNOSTICS_RECORD_VERSION` (`"0.2"`: the record revision this host understands). A driver writes the
+0.2 record kinds and describe fields only when it is set (docs/state-config-v1.md section 10); a watch also gets `IO_DIAGNOSTICS_FRAME_DIR`.
+
 ## `GET /api/v1/state`
 
 ```json

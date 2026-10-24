@@ -435,3 +435,43 @@ def test_the_unsupported_page_still_gets_a_node(served):
     camera, base = served
     node = json.loads(fetch(f"{base}/api/v1/node?path=host")[2])
     assert node["watch"]["supported"] is False and node["config"] == [] and node["streams"] == [] and node["tabs"] == []
+
+
+# ----- the compatibility guard: the host says which record revision it understands ---------------------------------------
+def test_the_record_version_reaches_every_plugin_verb(joint):
+    """describe, diagnose, watch and act (a dry run) each see IO_DIAGNOSTICS_RECORD_VERSION=0.2; probe, follow and stop go through the same
+    env builder (runner.plugin_env), as does describe (runner.describe)."""
+
+    joint.host.watch_heartbeat(joint.board)
+    wait_for(lambda: joint.verbs("watch"), what="the watch")
+    joint.host.act(joint.board, "calibrate", dry_run=True, human=False)
+    seen = {}
+    for line in joint.log.read_text().splitlines():
+        row = json.loads(line)
+        seen.setdefault(row["verb"], set()).add(row.get("record_version"))
+    assert {"describe", "diagnose", "watch", "act"} <= set(seen), seen
+    assert all(versions == {"0.2"} for versions in seen.values()), seen
+
+
+def test_a_plugin_run_by_an_older_host_behaves_as_it_did_before():
+    """No IO_DIAGNOSTICS_RECORD_VERSION: no state, config or frame record, no watch / streams / config_write in describe (the fixture honours
+    it the way the real drivers will)."""
+
+    import subprocess
+    import sys
+
+    def run(*argv, version=None):
+        env = {key: value for key, value in os.environ.items() if key != "IO_DIAGNOSTICS_RECORD_VERSION"}
+        if version:
+            env["IO_DIAGNOSTICS_RECORD_VERSION"] = version
+        return subprocess.run([sys.executable, str(PLUGIN), "--role", "joint", *argv], env=env, capture_output=True, text=True, timeout=20).stdout
+
+    old = json.loads(run("describe"))
+    assert old["record_version"] == "0.1" and not {"watch", "streams", "config_write"} & set(old)
+    assert not any(action["name"].endswith("_config") for action in old["actions"])
+    kinds = {json.loads(line)["record"] for line in run("diagnose", "--device", "usb:9-1").splitlines()}
+    assert kinds == {"entity", "status"}
+    assert run("watch", "--device", "usb:9-1", "--path", "can/1") == ""
+    new = json.loads(run("describe", version="0.2"))
+    assert new["record_version"] == "0.2" and "watch" in new
+    assert {"state", "config"} <= {json.loads(line)["record"] for line in run("diagnose", "--device", "usb:9-1", version="0.2").splitlines()}

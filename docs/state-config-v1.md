@@ -217,6 +217,13 @@ arm.servo.current and you can parse a folder structure from that"):
   options' and rewrites one setting whole.
 
 ## 10. What a driver implements (moteus_servo, intel_rgbd)
+
+**The compatibility guard.** The host sets `IO_DIAGNOSTICS_RECORD_VERSION=0.2` (the `RECORD_VERSION` it understands) in **every**
+plugin invocation: `describe`, `diagnose`, `probe`, `watch`, `follow`, `act` and `stop`. A driver emits the record kinds and the
+describe fields newer than 0.1 (`state`, `config`, `frame`; `watch`, `streams`, `tabs`, `config_write`; the `set_config`,
+`persist_config`, `reset_config` actions) **only when the variable says 0.2 or later**. Without it (an older host, such as Stable's
+release, or a driver run by hand) its output stays exactly what it was, so a driver that lands first cannot break an older host. The
+fixture plugins in `tests/fixtures/plugins-state/` honour it the same way (`tests/test_state_config.py`).
  (moteus_servo, intel_rgbd)
 
 1. `describe`: `"record_version": "0.2"`, `watch {period_s, gates}`, `streams` (RealSense: color, depth, ir).

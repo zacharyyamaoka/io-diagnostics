@@ -36,6 +36,10 @@ WIDTH, HEIGHT = 160, 120
 FAULT_MEANING = "motor driver fault on bridge enable"
 MODE_MEANING = {0: "stopped", 10: "position"}
 EXPECTED_SOURCE = "deployment record rack-2026-10-21"
+# The host says which record revision it understands (docs/state-config-v1.md section 10). Without 0.2 this plugin behaves as a 0.1 driver
+# did: no state, config or frame record, no watch, streams, tabs or configuration writes in describe, so an older host is never surprised.
+HOST_VERSION = tuple(int(part) for part in (os.environ.get("IO_DIAGNOSTICS_RECORD_VERSION") or "0.1").split(".") if part.isdigit())
+NEW = HOST_VERSION >= (0, 2)
 
 
 _BASE = float(os.environ.get("IO_DIAGNOSTICS_NOW") or time.time())
@@ -102,13 +106,23 @@ ACTIONS = {
 }
 
 
+CONFIG_WRITES = ("set_config", "persist_config", "reset_config")
+
+
+def registered() -> list[dict]:
+    return [action for action in ACTIONS[ROLE] if NEW or action["name"] not in CONFIG_WRITES]
+
+
 def actions_of(scope: str) -> list[dict]:
-    return [action for action in ACTIONS[ROLE] if action["scope"] == scope]
+    return [action for action in registered() if action["scope"] == scope]
 
 
 # ----- describe ---------------------------------------------------------------------------------------------------
 def describe() -> dict:
-    answer = {"name": f"state_{ROLE}", "schema": SCHEMA, "record_version": "0.2", "actions": ACTIONS[ROLE]}
+    answer = {"name": f"state_{ROLE}", "schema": SCHEMA, "record_version": "0.2" if NEW else "0.1", "actions": registered()}
+    if not NEW:
+        answer["matches"] = ["usb:0483:5740"] if ROLE == "joint" else ["usb:8086:0b5b"]
+        return answer
     if ROLE == "joint":
         answer.update(matches=["usb:0483:5740"], watch={"period_s": PERIOD_S, "gates": ["port_free"], "danger": "query"},
                       config_write={"gates": ["port_free"]})
@@ -275,22 +289,26 @@ def diagnose(device: str) -> None:
              values=[{"key": "fault_code", "value": "33"}, {"key": "fault_meaning", "value": FAULT_MEANING},
                      {"key": "what_to_check", "value": "1. Check the motor phase wiring\n2. Clear faults, then try again"}])
         emit(record="status", level="ok", name="CAN 1: firmware", path="can/1", message="1.0.0 is the latest", stamp=now, expected_period_s=30)
-        emit(**motor_state("can/1", now, 30))
-        for row in configs("can/1", now):
-            emit(**{key: value for key, value in row.items() if key != "schema"})
+        if NEW:
+            emit(**motor_state("can/1", now, 30))
+            for row in configs("can/1", now):
+                emit(**{key: value for key, value in row.items() if key != "schema"})
     else:
         emit(record="entity", path="", name="RealSense D405 fixture", kind="camera",
              identity={"manufacturer": "Intel", "model": "D405", "model_id": "intel-realsense-d405", "serial_number": "219323070276",
                        "sw_version": "5.16.0.1"}, actions=actions_of("device"))
         emit(record="status", level="ok", name="camera: firmware", path="", message="5.16.0.1 is the latest", stamp=now, expected_period_s=30)
         emit(record="status", level="ok", name="camera: comms", path="", message="answers", stamp=now, expected_period_s=30)
-        emit(record="state", path="", name="camera", stamp=now, expected_period_s=30,
-             measurements=[{"key": "asic temperature", "value": 41.5, "unit": "Cel", "warn_high": 80.0}, {"key": "frames dropped", "value": 0}])
-        for row in camera_configs(now):
-            emit(**{key: value for key, value in row.items() if key != "schema"})
+        if NEW:
+            emit(record="state", path="", name="camera", stamp=now, expected_period_s=30,
+                 measurements=[{"key": "asic temperature", "value": 41.5, "unit": "Cel", "warn_high": 80.0}, {"key": "frames dropped", "value": 0}])
+            for row in camera_configs(now):
+                emit(**{key: value for key, value in row.items() if key != "schema"})
 
 
 def watch(path: str) -> None:
+    if not NEW:
+        return  # an older host has no watch verb: there is nothing to say
     if os.environ.get("STATE_HOLD_PORT"):
         emit(record="status", level="unknown", name="watch: port", path=path, code="PortBusy", stamp=clock(),
              message="port held by tview", values=[{"key": "port_holders", "value": "640623 tview"}])
@@ -323,7 +341,7 @@ def act(action: str) -> int:
              confirm=f"Do {action}?", token=f"tok-{action}")
         return 0
     out = records()
-    if action not in ("set_config", "persist_config", "reset_config"):
+    if action not in CONFIG_WRITES or not NEW:
         emit_to(out, record="event", code="ActionRefused", severity="warn", stamp=clock(), message="the state fixture only dry-runs that")
         return 0
     if arg("--confirm") != f"tok-{action}":
@@ -367,10 +385,12 @@ def act(action: str) -> int:
 
 def main() -> int:
     if VERB == "describe":
+        log(record_version=os.environ.get("IO_DIAGNOSTICS_RECORD_VERSION"))
         print(json.dumps(describe()))
         return 0
     device = arg("--device") or ""
-    log(device=device, path=arg("--path"), frame_dir=os.environ.get("IO_DIAGNOSTICS_FRAME_DIR"))
+    log(device=device, path=arg("--path"), frame_dir=os.environ.get("IO_DIAGNOSTICS_FRAME_DIR"),
+        record_version=os.environ.get("IO_DIAGNOSTICS_RECORD_VERSION"))
     if VERB == "diagnose":
         diagnose(device)
     elif VERB == "watch":

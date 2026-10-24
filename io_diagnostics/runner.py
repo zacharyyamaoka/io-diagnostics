@@ -37,10 +37,14 @@ from typing import Any, Callable
 from io_diagnostics.plugins import PluginSpec
 from io_diagnostics.probe import Blocked
 
-from contract.record import (ERROR, OK, SCHEMA, UNKNOWN, WARN, Config, DiagnosticStatus, Entity, Event, Frame, KeyValue,
+from contract.record import (ERROR, OK, RECORD_VERSION, SCHEMA, UNKNOWN, WARN, Config, DiagnosticStatus, Entity, Event, Frame, KeyValue,
                              Measurement, State, from_dict, validate)
 
 RUNNER_SOURCE = "io_diagnostics.runner"
+# WHY: a driver emits the record kinds and describe fields newer than a host (state, config, frame, watch, tabs, streams) only when this
+# says the host understands them, so a driver that lands first cannot break an older host such as Stable's release. Set in every plugin
+# invocation: describe, diagnose, probe, watch, follow, act and stop.
+RECORD_VERSION_ENV = "IO_DIAGNOSTICS_RECORD_VERSION"
 STDERR_TAIL = 800
 MAX_EVENTS_PER_JOB = 500
 OUTCOME_LEVEL = {"ok": (OK, ""), "malformed": (WARN, "PluginOutputMalformed"), "crashed": (ERROR, "PluginCrashed"),
@@ -278,7 +282,7 @@ def plugin_env(spec: PluginSpec, device: dict, device_path: str, now: float, ext
     env.update({"IO_DIAGNOSTICS_DEVICE_PATH": device_path,
                 "IO_DIAGNOSTICS_DEVICE": json.dumps(device, default=str),
                 "IO_DIAGNOSTICS_NOW": repr(now),
-                "IO_DIAGNOSTICS_SCHEMA": SCHEMA})
+                "IO_DIAGNOSTICS_SCHEMA": SCHEMA, RECORD_VERSION_ENV: RECORD_VERSION})
     env.update(extra or {})
     return env
 
@@ -789,6 +793,7 @@ def describe(spec: PluginSpec, timeout_s: float | None = None, extra_env: dict[s
     env.pop("VIRTUAL_ENV", None)
     env.update(spec.env)
     env.update(extra_env or {})
+    env[RECORD_VERSION_ENV] = RECORD_VERSION
     try:
         completed = subprocess.run([*spec.command, "describe"], cwd=spec.cwd, stdin=subprocess.DEVNULL, capture_output=True,
                                    text=True, errors="replace", timeout=timeout_s or spec.timeout_s, env=env,

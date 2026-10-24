@@ -391,8 +391,14 @@ const { check, BOARD, BOARD2, CAMERA, ADAPTER } = H;
     if (computer) {
       servers.push(computer);
       const cpage = await (await H.newContext(browser)).newPage();
+      // the tree has no Computer row: bam-GPU, the root, IS the host entity; clicking it opens the Computer's page
       await cpage.goto(`${computer.base}/?sel=host`);
-      await cpage.waitForFunction(() => typeof S !== 'undefined' && S.node && document.querySelector('.d6-tabs'), null, { timeout: 30000 });
+      await cpage.waitForFunction(() => typeof S !== 'undefined' && S.node && document.querySelector('.d6-tabs') && document.querySelectorAll('.t6-row').length > 2, null, { timeout: 40000 });
+      await cpage.click('.t6-row:nth-of-type(2) .t6-name');
+      await cpage.waitForFunction(() => S.node && S.node.node.path !== 'host', null, { timeout: 15000 });
+      await cpage.click('.t6-row[data-t6-path="host"] .t6-name');
+      await cpage.waitForFunction(() => S.node && S.node.node.path === 'host' && document.querySelector('.d6-tabs'), null, { timeout: 15000 });
+      check('the bam-GPU root row opens the Computer\'s page in the entity page', await cpage.evaluate(() => Boolean(document.querySelector('.d6-tabs')) && /bam-GPU|Computer/.test(document.querySelector('.d6-head .d-title').textContent)), await cpage.evaluate(() => document.querySelector('.d6-head .d-title').textContent));
       await cpage.waitForSelector('[data-d6-tab="processes"]', { timeout: 20000 });
       const tabs = await cpage.evaluate(() => [...document.querySelectorAll('.d6-tab')].map((t) => t.dataset.d6Tab));
       check('the Computer gets a Processes tab after Utilities', tabs.join() === 'diagnostics,state,config,log,utilities,processes', tabs);
