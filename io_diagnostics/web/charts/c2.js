@@ -125,7 +125,7 @@
   };
   // Enter / Space on the focused fold header
   document.addEventListener('keydown', (event) => {
-    if (!env || env.active !== ID || (event.key !== 'Enter' && event.key !== ' ')) return;
+    if (!env || !env.isActive(ID) || (event.key !== 'Enter' && event.key !== ' ')) return;
     const path = event.composedPath ? event.composedPath()[0] : event.target;
     if (path && path.matches && path.matches('[data-ch2-fold]')) {
       const host = path.getRootNode().host;

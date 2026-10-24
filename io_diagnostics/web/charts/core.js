@@ -81,6 +81,8 @@
 .ch-host { display: none; }
 .ch-btn { display: none; position: absolute; right: 0; top: 50%; transform: translateY(-50%); width: 22px; height: 22px; padding: 0; align-items: center; justify-content: center;
   border: 1px solid var(--io-border); background: var(--io-popover); color: var(--io-muted); border-radius: var(--io-radius-sm); cursor: pointer; opacity: 0; transition: opacity .1s; }
+.ch-btn[data-ch-slot="1"] { right: 26px; }
+.ch-btn[data-ch-slot="2"] { right: 52px; }
 .ch-btn:hover { color: var(--io-text-strong); background: var(--io-control-hover); }
 .ch-btn.on { color: var(--io-text-strong); background: var(--io-pressed); opacity: 1; }
 html[data-chart]:not([data-chart="c0"]) .ch-btn { display: inline-flex; }
@@ -570,7 +572,10 @@ html[data-chart]:not([data-chart="c0"]) .ch-spark:hover .ch-line { background: v
     const attrs = view && view.attrs ? view.attrs(spec, key) : '';
     const tip = view && view.tip ? view.tip(spec, key) : null;
     const iconName = view && view.icon ? view.icon(spec, key) : '';
-    const button = iconName ? `<button type="button" class="ch-btn${view.btnOn && view.btnOn(spec, key) ? ' on' : ''}" data-ch-btn tabindex="0" aria-label="${esc(tip || 'Enlarge')}">${icon(iconName)}</button>` : '';
+    // WHY buttons(): a combined view (c6) puts several controls on one row (unfold, focus page, pin); a single-purpose view
+    // keeps icon / tip / btnOn. Each control is `data-ch-btn="<name>"` and sits in its own slot from the right edge.
+    const controls = view && view.buttons ? view.buttons(spec, key) : (iconName ? [{ name: 'main', icon: iconName, tip, on: view.btnOn && view.btnOn(spec, key) }] : []);
+    const button = controls.map((control, slot) => `<button type="button" class="ch-btn${control.on ? ' on' : ''}" data-ch-btn="${esc(control.name)}" data-ch-slot="${controls.length - 1 - slot}" tabindex="0" title="${esc(control.tip || '')}" aria-label="${esc(control.tip || 'Enlarge')}">${icon(control.icon)}</button>`).join('');
     return `<span class="ch-spark" data-spark="${esc(JSON.stringify(spec))}" data-ch-key="${esc(key)}"${tip === null ? '' : ` title="${esc(tip)}"`}${attrs}><span class="ch-line">${html}${button}</span><span class="ch-host"></span></span>`;
   }
 
@@ -600,7 +605,7 @@ html[data-chart]:not([data-chart="c0"]) .ch-spark:hover .ch-line { background: v
     const target = event.target && event.target.closest ? event.target : null;
     const el = target ? target.closest('.ch-spark') : null;
     const spec = el ? specOf(el) : null;
-    const hit = { el, spec, key: el ? el.getAttribute('data-ch-key') : null, real, button: Boolean(real && real.closest && real.closest('[data-ch-btn]')) };
+    const hit = { el, spec, key: el ? el.getAttribute('data-ch-key') : null, real, button: (real && real.closest && real.closest('[data-ch-btn]') ? real.closest('[data-ch-btn]').getAttribute('data-ch-btn') : '') };
     let handled;
     try { handled = view.on(kind, event, hit); } catch (error) { console.error(`chart view ${activeId} ${kind}:`, error); }
     if (el && (kind === 'click' || kind === 'contextmenu' || kind === 'pointerdown')) {
@@ -657,6 +662,8 @@ html[data-chart]:not([data-chart="c0"]) .ch-spark:hover .ch-line { background: v
     wrap, select, mount, ids, hostRoot, shadowStyle, addStyle, scheduleSync, resolve, plotModel, statsOf, lastOf, specKey, viewKey, specOf, historyUrl,
     Plot, store, icon, ICONS, esc, num, fmt, unitText, clock, spanText, isNum, asNum, niceTicks, limitsOf,
     get ctx() { return ctx; }, get active() { return activeId; },
+    // a combined view lists the single views it is made of (`parts`); each part asks this instead of comparing `active`
+    isActive: (id) => activeId === id || Boolean(current() && current().parts && current().parts.includes(id)),
   };
   root.IOCharts = env;
   injectStyle();

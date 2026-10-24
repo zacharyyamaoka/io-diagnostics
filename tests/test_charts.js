@@ -29,7 +29,7 @@ const SMALL = { width: 1280, height: 720 };
 const args = process.argv.slice(2);
 const shotsAt = args.indexOf('--shots');
 const SHOTS = shotsAt >= 0 ? args[shotsAt + 1] : null;
-const WANT = args.filter((arg, at) => /^c[0-5]$/.test(arg) && at !== (shotsAt >= 0 ? shotsAt + 1 : -1));
+const WANT = args.filter((arg, at) => /^c[0-6]$/.test(arg) && at !== (shotsAt >= 0 ? shotsAt + 1 : -1));
 const wants = (id) => !WANT.length || WANT.includes(id);
 
 let passed = 0;
@@ -60,9 +60,10 @@ function startServer(stateDir, configDir) {
 }
 const stop = (child) => { try { process.kill(-child.pid, 'SIGTERM'); } catch (_) { /* gone */ } };
 
-async function newPage(browser, base, view, { size = BIG, mode = 'light', keep = false } = {}) {
+// `tab`: open the entity page's own tab (d6, the default entity page) instead of pinning the Computer page to d4, whose sparklines c1-c5 were built on
+async function newPage(browser, base, view, { size = BIG, mode = 'light', keep = false, tab = '' } = {}) {
   const context = await browser.newContext({ viewport: size, colorScheme: mode, acceptDownloads: true });
-  if (!keep) await context.addInitScript(([v, m]) => { try { if (!sessionStorage.getItem('charts-test-init')) { sessionStorage.setItem('charts-test-init', '1'); localStorage.setItem('io-diagnostics.chart-view', v); localStorage.setItem('io-diagnostics.mode', m); } } catch (_) { /* private mode */ } }, [view, mode]);
+  if (!keep) await context.addInitScript(([v, m]) => { try { if (!sessionStorage.getItem('charts-test-init')) { sessionStorage.setItem('charts-test-init', '1'); localStorage.setItem('io-diagnostics.chart-view', v); localStorage.setItem('io-diagnostics.mode', m); if (!tab) localStorage.setItem('io-diagnostics.detail-layout', 'd4'); } } catch (_) { /* private mode */ } }, [view, mode]);
   const page = await context.newPage();
   const errors = [];
   page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
@@ -70,7 +71,7 @@ async function newPage(browser, base, view, { size = BIG, mode = 'light', keep =
   page.on('response', (response) => { if (response.status() >= 400) errors.push(`${response.status()} ${response.url().replace(base, '')}`); });
   page.errors = errors;
   page.context_ = context;
-  await page.goto(`${base}/?sel=host`);
+  await page.goto(`${base}/?sel=host${tab ? `&page=${tab}` : ''}`);
   await page.waitForFunction(() => window.IOCharts && document.querySelector('.ch-spark') && document.documentElement.dataset.chart, null, { timeout: 30000 });
   await page.waitForTimeout(1500);
   return page;
@@ -147,7 +148,7 @@ async function testC0(browser, base) {
   console.log('\n# c0 · the page as it is');
   const page = await newPage(browser, base, 'c0');
   const ids = await page.evaluate(() => [...document.querySelectorAll('#chart-view option')].map((o) => o.value));
-  check('the Prototype picker lists c0 and c1..c5, c0 selected', ids.join() === 'c0,c1,c2,c3,c4,c5' && (await page.evaluate(() => document.getElementById('chart-view').value)) === 'c0', ids);
+  check('the Prototype picker lists c0 and c1..c6, c0 selected', ids.join() === 'c0,c1,c2,c3,c4,c5,c6' && (await page.evaluate(() => document.getElementById('chart-view').value)) === 'c0', ids);
   const labelsNow = await labels(page);
   check('the Computer page wraps its sparklines (CPU, Memory, ...)', ['CPU', 'Memory', 'Network'].every((l) => labelsNow.includes(l)), labelsNow.slice(0, 8));
   const hasBtn = await page.evaluate(() => [...document.querySelectorAll('.ch-btn')].some((b) => getComputedStyle(b).display !== 'none'));
@@ -558,6 +559,84 @@ async function testC5(browser, base) {
   await page.context_.close();
 }
 
+
+// ================================================================== c6 (the default: c2 + c5 + c4) ====================
+// Zach, 2026-10-24: c2 "Unfold in place" for every value sparkline, a zoom / expand button for c5's focus page, c4's pin and Dashboard. They
+// are mounted together (charts/c6.js), each unchanged. Driven on the entity page's State tab (d6), where the sparkline rows are the Computer's
+// moving series, with NO chart view remembered: the default must be c6.
+async function testC6(browser, base) {
+  console.log('\n# c6 · unfold in place + focus page + pin to the dashboard, together (the default)');
+  const context = await browser.newContext({ viewport: BIG, colorScheme: 'light', acceptDownloads: true });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
+  page.on('pageerror', (error) => errors.push(String(error)));
+  await page.goto(`${base}/?sel=host&page=state`);
+  await page.waitForFunction(() => window.IOCharts && document.querySelector('.d6-panel .ch-spark') && document.documentElement.dataset.chart, null, { timeout: 30000 });
+  await page.waitForTimeout(1500);
+  const first = await page.evaluate(() => ({ chart: document.documentElement.dataset.chart, picked: document.getElementById('chart-view').value, tab: document.querySelector('.d6-tab.on').dataset.d6Tab,
+    sparks: document.querySelectorAll('.d6-panel .ch-spark').length, plain: document.querySelectorAll('.d6-panel .d6-ss').length, buttons: [...document.querySelector('.d6-panel .ch-spark').querySelectorAll('.ch-btn')].map((b) => b.dataset.chBtn).join() }));
+  check('the default chart view is c6 and nothing was chosen by the test', first.chart === 'c6' && first.picked === 'c6', first);
+  check('the State tab\'s sparkline rows go through IOCharts.wrap (no bare .d6-ss left), each with pin, expand and unfold controls', first.tab === 'state' && first.sparks >= 8 && first.plain === 0 && first.buttons === 'pin,focus,unfold', first);
+  const labelsNow = await page.evaluate(() => [...document.querySelectorAll('.d6-panel .ch-spark')].map((el) => JSON.parse(el.dataset.spark).l));
+  const at = labelsNow.indexOf('RAM Load Average');
+  check('a State row names its series (the status, the measurement) so the history API can draw it', at >= 0 && await page.evaluate((i) => { const spec = JSON.parse(document.querySelectorAll('.d6-panel .ch-spark')[i].dataset.spark); return spec.p === 'host' && /RAM Information/.test(spec.s[0][0]) && spec.s[0][1] === 'RAM Load Average'; }, at), labelsNow.slice(0, 6));
+  const row = page.locator('.d6-panel .ch-spark').nth(at);
+  await row.scrollIntoViewIfNeeded();
+
+  // c2: a press on the sparkline unfolds it right under its row
+  const box = await row.locator('.ch-line').boundingBox();
+  await page.mouse.move(box.x + 10, box.y + 8, { steps: 3 });
+  await page.mouse.click(box.x + box.width / 2 - 30, box.y + 8);
+  await page.waitForTimeout(900);
+  const unfolded = await page.evaluate((i) => { const el = document.querySelectorAll('.d6-panel .ch-spark')[i]; const shadow = el.querySelector('.ch-host').shadowRoot; const r = el.getBoundingClientRect(); const row = el.closest('.d6-sr').getBoundingClientRect();
+    return { open: el.hasAttribute('data-open'), svg: Boolean(shadow && shadow.querySelector('.chp-svg')), wide: r.width >= row.width - 12, title: shadow && shadow.querySelector('.ch2-title') && shadow.querySelector('.ch2-title').textContent }; }, at);
+  check('c2: pressing the sparkline unfolds a full-width chart in the State row (axes, limits)', unfolded.open && unfolded.svg && unfolded.wide && unfolded.title === 'RAM Load Average', unfolded);
+  await shot(page, 'c6-state-unfolded.png');
+  check('c2: the chart never opened the diagnostic page (a click on a sparkline is not a row click)', await page.evaluate(() => !S.drill.diag), await page.evaluate(() => S.drill));
+  await page.evaluate((i) => document.querySelectorAll('.d6-panel .ch-spark')[i].querySelector('.ch-host').shadowRoot.querySelector('[data-ch2-fold]').click(), at);
+  await page.waitForTimeout(600);
+  check('c2: its header folds it again', await page.evaluate((i) => !document.querySelectorAll('.d6-panel .ch-spark')[i].hasAttribute('data-open'), at));
+
+  // c5: the expand button opens the value on a page of its own; Back returns
+  await row.hover();
+  await row.locator('[data-ch-btn="focus"]').click();
+  await page.waitForSelector('#ch5-page .chp-svg', { timeout: 6000 });
+  const focus = await page.evaluate(() => ({ page: S.drill.page, h1: document.querySelector('#ch5-page h1').textContent, zoom: Boolean(document.querySelector('#ch5-page [data-zoom="in"]')), main: getComputedStyle(document.getElementById('main')).display }));
+  check('c5: the expand button opens the focus page (zoom, pan), one browser-history entry', /^chart:/.test(focus.page || '') && focus.h1 === 'RAM Load Average' && focus.zoom && focus.main === 'none', focus);
+  await shot(page, 'c6-focus.png');
+  await page.goBack();
+  await page.waitForTimeout(900);
+  check('c5: the browser Back returns to the State tab', await page.evaluate(() => !document.getElementById('ch5-page') && getComputedStyle(document.getElementById('main')).display !== 'none' && document.querySelector('.d6-tab.on').dataset.d6Tab === 'state'));
+
+  // c4: the pin adds it to the Dashboard view
+  const pinRow = page.locator('.d6-panel .ch-spark').nth(await page.evaluate(() => [...document.querySelectorAll('.d6-panel .ch-spark')].findIndex((el) => JSON.parse(el.dataset.spark).l === 'swap used %')));
+  await pinRow.scrollIntoViewIfNeeded();
+  await pinRow.hover();
+  await pinRow.locator('[data-ch-btn="pin"]').click();
+  await page.waitForTimeout(600);
+  const pinned = await page.evaluate(() => ({ count: (document.querySelector('#views [data-ch4] .ch4-count') || {}).textContent, pinnedAttr: document.querySelectorAll('.ch-spark[data-pinned]').length }));
+  check('c4: the pin adds a tile; the Dashboard button counts it and the row shows it pinned', pinned.count === '1' && pinned.pinnedAttr >= 1, pinned);
+  await page.click('.l1-ribbon [data-l1="dashboard"]'); // L1 (the default layout) has no views bar: the ribbon's Dashboard button presses c4's
+  await page.waitForSelector('#ch4-dash .ch4-tile', { timeout: 6000 });
+  await page.waitForTimeout(900);
+  const board = await page.evaluate(() => ({ tiles: document.querySelectorAll('#ch4-dash .ch4-tile').length, title: document.querySelector('#ch4-dash .ch4-t').textContent, svg: Boolean(document.querySelector('#ch4-dash .chp-svg')), shown: getComputedStyle(document.getElementById('ch4-dash')).display }));
+  check('c4: the Dashboard view shows the pinned tile as a chart', board.tiles === 1 && board.title === 'swap used %' && board.svg && board.shown !== 'none', board);
+  await shot(page, 'c6-dashboard.png');
+  const saved = await (await fetch(`${base}/api/v1/settings`)).json();
+  check('c4: the board is in the app settings (it follows the person), not only this browser', saved.dashboard.length === 1 && saved.dashboard[0].spec.l === 'swap used %', saved.dashboard.map((tile) => tile.spec.l));
+  await page.reload();
+  await page.waitForSelector('.l1-ribbon [data-l1="dashboard"]', { timeout: 20000 });
+  await page.waitForTimeout(1500);
+  check('c4: it survives a reload and is still on the Dashboard view', await page.evaluate(() => document.querySelectorAll('#ch4-dash .ch4-tile').length === 1 && getComputedStyle(document.getElementById('ch4-dash')).display !== 'none'));
+  // clean up the board so a later run on this host starts empty
+  await fetch(`${base}/api/v1/settings`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-IO-Diagnostics': 'ui' }, body: JSON.stringify({ dashboard: [] }) });
+  const sc = await hScroll(page);
+  check('no horizontal scroll at 1400x900', sc.doc <= 0 && sc.body <= 0, sc);
+  check('no console errors', errors.length === 0, errors.slice(0, 3));
+  await context.close();
+}
+
 (async () => {
   const { chromium } = require(PLAYWRIGHT);
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'charts-state-'));
@@ -583,6 +662,7 @@ async function testC5(browser, base) {
     if (wants('c3')) await testC3(browser, base);
     if (wants('c4')) await testC4(browser, base);
     if (wants('c5')) await testC5(browser, base);
+    if (wants('c6')) await testC6(browser, base);
   } finally {
     if (browser) await browser.close();
     stop(server.child);

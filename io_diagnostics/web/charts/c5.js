@@ -166,7 +166,7 @@ body.ch5-page .ch5 { display: flex; }
 
   // show or hide the page to match the shell's drill (a URL, a reload, Back, our own open)
   function syncPage() {
-    if (!env || env.active !== ID) return;
+    if (!env || !env.isActive(ID)) return;
     const id = env.ctx.page && env.ctx.page();
     const spec = id && id.startsWith(PREFIX) ? specOfPage(id) : null;
     if (!spec) { close(); return; }

@@ -404,6 +404,15 @@
       + `<span class="d6-dim" title="${stream.colormap ? `colormap ${h.esc(stream.colormap)}` : ''}">${h.esc(size)} · ${h.esc(rate)}</span></figcaption>`
       + `<button class="d6-pic" data-d6-enlarge="${h.esc(stream.name)}" aria-label="Enlarge ${h.esc(stream.title)}"${on && stream.seq !== null ? '' : ' disabled'}>${picture}</button></figure>`;
   }
+  // The sparkline's grid cell. With the chart helper (charts/core.js, IOCharts.wrap) the cell is the wrapper: the page says which
+  // series the sparkline draws (the state record's name, the measurement) and the selected chart view (c6 by default) makes it
+  // unfold, open on a page of its own or pin to the Dashboard. WHY the wrapper replaces `.d6-ss`: an unfolded chart spans the
+  // whole row (grid-column 1 / -1), so the wrapper must be the row grid's direct child, as d4 draws it.
+  function sparkCell(group, row, ring) {
+    const line = spark(ring, Live.now, SPARK_WINDOW_S, row);
+    if (!window.IOCharts || !Live.path) return `<span class="d6-ss">${line}</span>`;
+    return window.IOCharts.wrap({ p: Live.path, l: row.key, s: [[group.name, row.key]] }, line);
+  }
   // one State row, as a leaf of the shared row model: name (with its star and handle), value, sparkline
   function stateLeaf(group, h) {
     const er = ER();
@@ -414,7 +423,7 @@
       const id = d.id === null ? row.key : d.id;
       return `<div class="d6-sr${bad ? ' bad' : ''}"${bad ? ' data-diagnostic' : ''} ${er.rowAttrs(d.parent, id, 'state')} style="--er-depth:${d.depth}"><span class="d6-sn" title="${h.esc(row.key)}"><span class="er-ctl">${er.star(stateId(group, row), d.pinned)}${er.handle(d.parent, id)}</span>${h.esc(d.label === null ? row.key : d.label)}</span>`
         + `<span class="d6-sv${row.meaning ? ' txt' : ''}">${bad ? h.shape(row.level, `${row.key}: ${row.level}`) : ''}${value}</span>`
-        + `<span class="d6-ss">${spark(ring, Live.now, SPARK_WINDOW_S, row)}</span></div>`;
+        + sparkCell(group, row, ring) + '</div>';
     };
   }
   const stateId = (group, row) => (group.name ? `${group.name}::${row.key}` : row.key);
