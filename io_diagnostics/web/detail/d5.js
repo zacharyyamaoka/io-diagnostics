@@ -15,8 +15,7 @@
   const doc = root.document;
   const RANK = { ok: 0, warn: 1, unknown: 2, stale: 3, error: 4 };
   const PROBLEM = new Set(['warn', 'unknown', 'stale', 'error']);
-  const BINS = 60;
-  const MINI_BINS = 30;
+  const BINS = 88;               // 88 thin bars fill the 440 px health bar (health.js: 3 px wide, 2 px apart); the mini bars re-bin
   const API = '/api/v1';
 
   // ------------------------------------------------------------------------------ style ----
@@ -38,22 +37,7 @@
 .d5-health { margin-top: 10px; display: grid; grid-template-columns: minmax(60px, max-content) 1fr; gap: 3px 10px; align-items: center; font-size: 11.5px; }
 .d5-health .hl { color: var(--io-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px; }
 .d5-axis { grid-column: 2; display: flex; justify-content: space-between; color: var(--io-faint); font-size: 10.5px; font-variant-numeric: tabular-nums; }
-.d5-bar { display: flex; height: 8px; gap: 1px; min-width: 0; }
-.d5-bar.mini { height: 5px; width: 72px; flex: none; }
-.d5-bar > i { flex: 1; min-width: 0; border-radius: 1px; background: transparent; box-shadow: inset 0 -1px var(--io-border-soft); }
-.d5-bar > i.ok { background: var(--d5-ok); box-shadow: none; }
-.d5-bar > i.warn { background: var(--io-warn); box-shadow: none; }
-.d5-bar > i.error { background: var(--io-error); box-shadow: none; }
-.d5-bar > i.stale { background: var(--io-stale); box-shadow: none; }
-.d5-bar > i.unknown { background: var(--io-unknown); box-shadow: none; }
-.d5-span { position: relative; height: 8px; min-width: 0; box-shadow: inset 0 -1px var(--io-border-soft); }
-.d5-span.mini { height: 5px; width: 72px; flex: none; }
-.d5-span > i { position: absolute; top: 0; bottom: 0; border-radius: 1px; }
-.d5-span > i.ok { background: var(--d5-ok); }
-.d5-span > i.warn { background: var(--io-warn); }
-.d5-span > i.error { background: var(--io-error); }
-.d5-span > i.stale { background: var(--io-stale); }
-.d5-span > i.unknown { background: var(--io-unknown); }
+.d5-bar.mini, .d5-span.mini { width: 72px; flex: none; }
 .d5-list { display: flex; flex-direction: column; margin: 0 -8px; }
 .d5-row { display: flex; align-items: center; gap: 8px; width: 100%; min-height: var(--io-row-h); padding: 4px 8px; border: 0; border-radius: var(--io-radius-sm); background: transparent; color: var(--io-text); font: inherit; text-align: left; cursor: pointer; }
 .d5-row + .d5-row { box-shadow: 0 -1px var(--io-border-soft); }
@@ -232,21 +216,18 @@
 
   // -------------------------------------------------------------------------- drawing ----
   // A health bar from /api/v1/history/bar: one cell per bin, the worst level any status held there; null = no data
-  // (an empty cell, never a level). WHY data-diagnostic: its colours ARE the diagnostic results (the warn-colours gate).
+  // (a hollow cell, never a level). Drawn as the shared discrete state timeline (detail/health.js; Zach, 2026-10-24:
+  // separate tall rectangles with a gap), re-binned to the count its width holds. WHY data-diagnostic: its colours ARE the
+  // diagnostic results (the warn-colours gate; IOHealth.html sets it).
   function binBar(bar, mini = false) {
-    if (!bar || !bar.length) return `<span class="d5-bar${mini ? ' mini' : ''}" data-diagnostic></span>`;
-    return `<span class="d5-bar${mini ? ' mini' : ''}" data-diagnostic>${bar.map((level) => `<i class="${level || 'none'}"></i>`).join('')}</span>`;
+    const kind = mini ? 'spark' : 'timeline';
+    if (!bar || !bar.length) return `<span class="d5-bar${mini ? ' mini' : ''}"></span>`;
+    return IOHealth.html(IOHealth.rebin(IOHealth.fromBins(bar), IOHealth.count(900, mini ? 72 : 440, kind)), { kind, cls: `d5-bar${mini ? ' mini' : ''}` });
   }
-  // One status's own timeline from /api/v1/history levels: each span exactly where the host put it (held, stale and
-  // no-data spans included), so out-of-sync statuses never gain a step between their arrivals.
+  // One status's own timeline from /api/v1/history levels, binned into the same cells (the worst span's message in each hover).
   function spanBar(levels, from, to, mini = false) {
-    const width = Math.max(to - from, 1e-6);
-    const cells = (levels || []).filter((item) => item.level).map((item) => {
-      const left = Math.max(0, (item.from - from) / width) * 100;
-      const right = Math.min(1, (item.to - from) / width) * 100;
-      return `<i class="${esc(item.level)}" style="left:${left.toFixed(2)}%;width:${Math.max(right - left, 0.4).toFixed(2)}%" title="${esc(`${item.level} · ${clock(item.from)}–${clock(item.to)}${item.message ? ` · ${item.message}` : ''}`)}"></i>`;
-    }).join('');
-    return `<span class="d5-span${mini ? ' mini' : ''}" data-diagnostic>${cells}</span>`;
+    const kind = mini ? 'spark' : 'timeline';
+    return IOHealth.html(IOHealth.fromLevels(levels, from, to, IOHealth.count(to - from, mini ? 72 : 440, kind)), { kind, cls: `d5-span${mini ? ' mini' : ''}` });
   }
   const numericPoints = (series) => ((series && series.points) || []).map(([t, v]) => [t, typeof v === 'boolean' ? (v ? 1 : 0) : (v === null || v === undefined ? null : Number(v))])
     .map(([t, v]) => [t, Number.isFinite(v) ? v : null]);
@@ -395,7 +376,7 @@
       return `<button class="d5-row${drill ? '' : ' static'}${child.problem && !child.knock ? ' bad' : ''}" role="listitem"${child.problem ? ' data-diagnostic' : ''}${attrs} title="${esc(child.label)}">`
         + `<svg class="ic"><use href="#i-${esc(child.icon || 'device')}"/></svg>`
         + `<span class="d5-tx"><span class="d5-nm">${esc(child.label)}</span><span class="d5-ms">${esc(child.message || '')}</span></span>`
-        + `${child.mark}<span class="d5-side">${bar ? binBar(bar.bar.slice(-MINI_BINS), true) : ''}</span>${chev}</button>`;
+        + `${child.mark}<span class="d5-side">${bar ? binBar(bar.bar, true) : ''}</span>${chev}</button>`;
     }).join('')}</div>`;
   }
 

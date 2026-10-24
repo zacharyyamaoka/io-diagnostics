@@ -12,7 +12,7 @@
 (function (root) {
   const ID = 'd4';
   const POLL_MS = 3000;
-  const BINS = 60;
+  const BINS = 52;               // 52 thin bars fill the 260 px health bar (health.js: 3 px wide, 2 px apart)
   const MAX_PARTS = 8;
   const PROBLEM = new Set(['warn', 'error', 'stale', 'unknown']);
   const RANK = { ok: 0, warn: 1, unknown: 2, stale: 3, error: 4 };
@@ -36,17 +36,13 @@
 .d4-st .cause { display: block; color: var(--io-faint); font-size: 11.5px; }
 .d4-lv-warn { color: var(--io-warn-text); } .d4-lv-error { color: var(--io-error-text); }
 .d4-lv-stale { color: var(--io-stale-text); } .d4-lv-unknown { color: var(--io-unknown-text); }
-.d4-strip { display: block; width: 100%; height: 8px; }
-.d4-strip .b-ok, .d4-bar .b-ok { fill: var(--io-border); }
-.d4-strip .b-warn, .d4-bar .b-warn { fill: var(--io-warn); } .d4-strip .b-error, .d4-bar .b-error { fill: var(--io-error); }
-.d4-strip .b-stale, .d4-bar .b-stale { fill: var(--io-stale); } .d4-strip .b-unknown, .d4-bar .b-unknown { fill: var(--io-unknown); }
-.d4-strip .b-none, .d4-bar .b-none { fill: var(--io-border-soft); }
+.d4-strip { width: 100%; }
 .d4-health { margin-top: 10px; }
 .d4-hrow { display: grid; grid-template-columns: minmax(90px, 34%) 1fr; gap: 0 10px; align-items: center; font-size: 12px; padding: 2px 0; }
 .d4-hrow .n { color: var(--io-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .d4-hrow .n.depth1 { padding-left: 12px; }
 .d4-hrow .n a { color: var(--io-accent-text); cursor: pointer; text-decoration: var(--io-link-decoration); }
-.d4-bar { display: block; width: 100%; height: 10px; }
+.d4-bar { width: 100%; }
 .d4-hnone { font-size: 11.5px; color: var(--io-faint); margin-top: 4px; }
 .d4-hnone a { color: var(--io-accent-text); cursor: pointer; text-decoration: var(--io-link-decoration); }
 .d4-axis { display: flex; justify-content: space-between; color: var(--io-faint); font-size: 10.5px; font-family: var(--io-font-mono); }
@@ -273,29 +269,17 @@
     });
     return `<svg class="d4-spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="height:${h}px" aria-hidden="true">${body}</svg>`;
   }
-  // One status's own level timeline (the honest spans of /api/v1/history): no data draws nothing.
+  // One status's own level timeline (the honest spans of /api/v1/history) as the shared discrete state timeline
+  // (detail/health.js): separate tall rectangles with a gap, hollow = no data. `big` is the diagnostic page's wider one.
   function strip(levels, from, to, cls = 'd4-strip', h = 8) {
     if (!levels || !(to > from)) return '';
-    const w = 300;
-    const rects = levels.filter((span) => span.level).map((span) => {
-      const x = ((Math.max(span.from, from) - from) / (to - from)) * w;
-      const x2 = ((Math.min(span.to, to) - from) / (to - from)) * w;
-      const tall = PROBLEM.has(span.level) ? h : Math.max(2, h * 0.3);
-      return `<rect class="b-${span.level}" x="${x.toFixed(1)}" y="${(h - tall).toFixed(1)}" width="${Math.max(0.8, x2 - x).toFixed(1)}" height="${tall.toFixed(1)}"><title>${clock(span.from)}–${clock(span.to)} ${span.level}${span.message ? `: ${span.message.replace(/[<&"]/g, '')}` : ''}</title></rect>`;
-    }).join('');
-    return `<svg class="${cls}" data-diagnostic viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="height:${h}px">${rects}</svg>`;
+    const kind = h > 8 ? 'timeline' : 'spark';
+    return IOHealth.html(IOHealth.fromLevels(levels, from, to, IOHealth.count(to - from, kind === 'timeline' ? 440 : 64, kind)), { kind, cls, label: 'level over the window' });
   }
-  // The health bar of /api/v1/history/bar: the worst level held per bin; null = nothing held, drawn as nothing.
+  // The health bar of /api/v1/history/bar: the worst level held per bin, as the same discrete cells; null = no data (hollow).
+  // WHY OK is a quiet neutral cell like the rest, not a thin band (Zach, 2026-10-24: separate rectangles, "all the green is distracting").
   function healthBar(bar) {
-    const w = 300;
-    const bw = w / bar.length;
-    // WHY a thin grey band for OK and full height only for a problem: quiet by default, the eye finds the tall marks
-    const rects = bar.map((level, at) => {
-      if (!level) return '';
-      const tall = PROBLEM.has(level) ? 10 : 3;
-      return `<rect class="b-${level}" x="${(at * bw).toFixed(2)}" y="${10 - tall}" width="${Math.max(0.6, bw - 0.6).toFixed(2)}" height="${tall}"/>`;
-    }).join('');
-    return `<svg class="d4-bar" data-diagnostic viewBox="0 0 ${w} 10" preserveAspectRatio="none">${rects}</svg>`;
+    return IOHealth.html(IOHealth.rebin(IOHealth.fromBins(bar), IOHealth.count(900, 260, 'lane')), { kind: 'lane', cls: 'd4-bar', label: 'health over the window' });
   }
   const axis = (seconds) => `<div class="d4-axis"><span>−${spanText(seconds)}</span><span>−${spanText(seconds / 2)}</span><span>now</span></div>`;
 

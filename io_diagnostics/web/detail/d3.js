@@ -16,7 +16,7 @@
   const PROBLEM = new Set(['warn', 'unknown', 'stale', 'error']);
   const RANK = { ok: 0, warn: 1, unknown: 2, stale: 3, error: 4 };
   const rank = (level) => (level in RANK ? RANK[level] : -1);
-  const BINS = 60;
+  const BINS = 96;               // the bars are 3 px wide, 2 px apart (health.js): 96 of them fill the 480 px bar; a child's mini bar re-bins
   const HIDDEN_VALUES = new Set(['what_to_check', 'kernel_evidence']);
 
   // This layout's own view state (the page's state S is not ours to write).
@@ -118,19 +118,19 @@
     return `<svg class="d3-spark${big ? ' big' : ''}${fill ? ' fill' : ''}" viewBox="0 0 ${w} ${h}" ${size} aria-hidden="true">${limits}${lines}</svg>`;
   }
 
-  // One status's level over the window, span by span as the API holds it (no data = nothing drawn, never a level).
-  function strip(levels, from, to, h = 8) {
-    const w = 600;
-    const x = (t) => ((t - from) / Math.max(1e-9, to - from)) * w;
-    const rects = (levels || []).filter((span) => span.level).map((span) => `<rect x="${x(span.from).toFixed(2)}" y="0" width="${Math.max(0.8, x(span.to) - x(span.from)).toFixed(2)}" height="${h}" class="d3-lv-${span.level}"><title>${clock(span.from)}–${clock(span.to)} · ${span.level}${span.message ? ` · ${escText(span.message)}` : ''}</title></rect>`).join('');
-    return `<div class="d3-strip" data-diagnostic><svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" preserveAspectRatio="none"><line x1="0" x2="${w}" y1="${h - 0.5}" y2="${h - 0.5}" class="d3-base"/>${rects}</svg></div>`;
+  // One status's level over the window as the shared discrete state timeline (detail/health.js; Zach, 2026-10-24: separate
+  // tall rectangles with a gap, never a line): its spans binned, the worst span's message in each cell's hover.
+  function strip(levels, from, to) {
+    return IOHealth.html(IOHealth.fromLevels(levels, from, to, IOHealth.count(to - from, 480, 'timeline')), { kind: 'timeline', label: 'level over the window' });
   }
   const escText = (text) => String(text ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
-  // The health bar (rqt_robot_monitor): the worst level any status held in each bin; null = no data yet.
-  function healthBar(cells, title) {
+  // The health bar (rqt_robot_monitor): the worst level any status held in each bin; null = no data yet. Drawn as the shared
+  // discrete state timeline, re-binned to the count its width holds (a child's mini bar is narrow: few cells).
+  function healthBar(cells, title, mini) {
     if (!cells || !cells.some(Boolean)) return '<span class="d3-nodata">no data in the window</span>';
-    return `<div class="d3-bar" data-diagnostic title="${escText(title || '')}">${cells.map((level) => `<i class="${level ? `d3-lv-${level}` : 'd3-none'}"></i>`).join('')}</div>`;
+    const kind = mini ? 'spark' : 'timeline';
+    return IOHealth.html(IOHealth.rebin(IOHealth.fromBins(cells), IOHealth.count(900, mini ? 90 : 480, kind)), { kind, label: title || 'health over the window' });
   }
 
   // Measurements of one status: series that differ only by an index (CPU 0 Load … CPU 23 Load, usb1 … usb8 claimed %)
@@ -411,7 +411,7 @@
       const barRow = bars.get(path);
       const problem = PROBLEM.has(child.level) || (child.hint && PROBLEM.has(child.hint.level));
       return `<div class="d3-child" data-go="${h.esc(path)}" title="${h.esc(child.name)}">${h.icon(child.icon)}<span class="d3-cn">${h.esc(child.name)}</span>`
-        + `<span class="d3-cm">${h.esc(child.message || '')}</span><span class="d3-cb">${barRow && barRow.bar.some(Boolean) ? healthBar(barRow.bar, '') : ''}</span>`
+        + `<span class="d3-cm">${h.esc(child.message || '')}</span><span class="d3-cb">${barRow && barRow.bar.some(Boolean) ? healthBar(barRow.bar, '', true) : ''}</span>`
         + `<span class="d3-st${child.knock_on_of ? ' knock' : ''}">${problem ? h.shape(PROBLEM.has(child.level) ? child.level : child.hint.level, child.message) : ''}</span></div>`;
     }).join('');
     return { count: children.length, html };
@@ -639,9 +639,7 @@
 .d3-rollup { margin: 8px 0 4px; color: var(--io-faint); font-size: 11.5px; line-height: 1.5; }
 .d3-h { margin: 18px 0 6px; font: 600 12px/1.3 var(--io-font-ui); color: var(--io-muted); text-transform: none; letter-spacing: 0; }
 .d3-barline { display: flex; align-items: center; gap: 8px; margin: 2px 0 8px; }
-.d3-bar { flex: 1; min-width: 0; display: flex; gap: 1px; height: 10px; }
-.d3-bar i { flex: 1; min-width: 1px; border-radius: 1px; }
-.d3-bar i.d3-none { background: transparent; border-bottom: 1px dotted var(--io-border); }
+.d3-barline > .ioh { flex: 1 1 auto; }
 .d3-changes { display: grid; }
 .d3-ev { display: grid; grid-template-columns: 62px 16px minmax(0, 1fr) auto; gap: 6px; align-items: baseline; padding: 3px 0; font-size: 12.5px; color: var(--io-text); border-bottom: 1px solid var(--io-border-soft); }
 .d3-ev:last-child { border-bottom: 0; }
@@ -669,7 +667,7 @@
 .d3-child .ic { color: var(--io-icon); }
 .d3-cn { color: var(--io-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 240px; }
 .d3-cm { color: var(--io-muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.d3-cb .d3-bar { height: 8px; }
+.d3-cb .ioh { width: 100%; }
 .d3-back { margin-top: 20px; font-size: 12.5px; }
 `;
     document.head.appendChild(style);

@@ -13,13 +13,12 @@
 // The rows of Diagnostics, State and Configuration share ONE row model (d6-rows.js, window.IOEntityRows): dot-notation names are
 // folders, A-Z or manual order, starred rows first, all saved per entity kind; the Configuration tab edits live (section 8).
 // The Log tab embeds the Activity log (activity/log.js, IOActivityLog.create({scope, compact})) scoped to the entity.
-// WHY the Diagnostics rendering is d1's, copied: a parallel lane designs five variants of that section and owns the history
-// bar; diagnosticsPanel() is the one function to replace when its winner lands.
+// WHY the Diagnostics rendering is d1's, copied: a parallel lane designs five variants of that section (d1a-d1e); diagnosticsPanel()
+// is the one function to replace when its winner lands. Its history is NOT a copy: every health bar here is detail/health.js.
 'use strict';
 (function (root) {
   const RANK = { ok: 0, warn: 1, unknown: 2, stale: 3, error: 4 };
   const PROBLEM = new Set(['warn', 'unknown', 'stale', 'error']);
-  const BINS = 60;
   const HIDDEN_VALUES = new Set(['what_to_check', 'kernel_evidence', 'fault_code', 'fault_meaning']);
   const BASE_TABS = [
     { id: 'diagnostics', title: 'Diagnostics' }, { id: 'state', title: 'State' }, { id: 'config', title: 'Configuration' },
@@ -166,12 +165,12 @@
   }
 
   // ------------------------------------------------------------------------------------- the marks ----
-  // The health bar and a status's strip are d1's, drawn the same (the variants lane owns their styling).
-  function bar(bins, from, binS, cls, h) {
-    if (!bins || !bins.length) return '';
-    return `<div class="d6-hb ${cls}" data-diagnostic role="img" aria-label="health over the window">${bins.map((level, at) => {
-      return `<i class="${level ? h.esc(level) : 'none'}" title="${h.esc(level || 'no data')} · worst per ${span(binS)}"></i>`;
-    }).join('')}</div>`;
+  // The health bar and the children's mini bars are the shared discrete state timeline (detail/health.js; the one history
+  // renderer, with one palette: Zach, 2026-10-24), the same cells d1 and the d1a-d1e variants draw.
+  const windowOf = (ctx) => (ctx.settings && Number(ctx.settings.history_window_s)) || 900;
+  const widthOf = () => root.IOHealth.widthOf(document.getElementById('detail'), 0);
+  function bar(bins, from, binS, kind, cls) {
+    return root.IOHealth.html(root.IOHealth.fromBar(bins, from, binS), { kind, cls });
   }
   function spark(points, now, maxS, series) {
     // the line grows from the left until it fills the last `maxS` seconds, then scrolls (a minimum of 10 s so a first sample is not a smear)
@@ -296,12 +295,12 @@
   const isGrouping = (node) => !node.own || node.own.level === null || node.own.level === undefined;
   function healthBar(path, ctx) {
     const h = ctx.h;
-    const entry = ctx.bar(path, BINS);
+    const entry = ctx.bar(path, root.IOHealth.count(windowOf(ctx), widthOf(), 'timeline'));
     const data = entry.data && entry.data.path === path ? entry.data : null;
     if (!data) return `<div class="d6-bar"><div class="d6-axis"><span>${entry.error ? `no history: ${h.esc(entry.error)}` : 'history loading…'}</span></div></div>`;
     const own = data.rows.find((row) => row.depth === 0);
     const basis = !own || own.basis === 'none' ? 'nothing in the history yet' : own.basis === 'below' ? `everything below · ${own.statuses} status${own.statuses === 1 ? '' : 'es'}` : `its own ${own.statuses} diagnostic${own.statuses === 1 ? '' : 's'}`;
-    return `<div class="d6-bar">${own ? bar(own.bar, data.from, data.bin_s, '', h) : ''}<div class="d6-axis"><span>−${span(data.window_s)}</span><span>${h.esc(basis)} · worst per ${span(data.bin_s)}</span><span>now</span></div></div>`;
+    return `<div class="d6-bar">${own ? bar(own.bar, data.from, data.bin_s, 'timeline') : ''}<div class="d6-axis"><span>−${span(data.window_s)}</span><span>${h.esc(basis)} · worst per ${span(data.bin_s)}</span><span>now</span></div></div>`;
   }
   function statusTable(node, checks, detail, ctx) {
     const h = ctx.h;
@@ -345,7 +344,7 @@
     const h = ctx.h;
     const children = node.children || [];
     if (!children.length) return '';
-    const entry = ctx.bar(node.path, BINS);
+    const entry = ctx.bar(node.path, root.IOHealth.count(windowOf(ctx), 120, 'spark'));
     const data = entry && entry.data && entry.data.path === node.path ? entry.data : null;
     const bars = new Map(data ? data.rows.filter((row) => row.depth === 1).map((row) => [row.path, row]) : []);
     const worst = (child) => Math.max(rankOf(child.level), child.hint ? rankOf(child.hint.level) : -1);
@@ -358,7 +357,7 @@
       const row = bars.get(child.path);
       const hint = child.hint ? `<span class="d6-hint" title="below: ${h.esc(child.hint.level)}">${h.shape(child.hint.level, `below: ${child.hint.level}`)}</span>` : '';
       return `<div class="d6-ch${child.connected === false ? ' off' : ''}" data-go="${h.esc(child.path)}" title="${h.esc(child.name)}">${h.icon(child.icon)}<span class="d6-cn">${h.esc(child.name)}</span>`
-        + `<span class="d6-cm">${h.esc(child.message || '')}</span>${row && row.basis !== 'none' ? bar(row.bar, data.from, data.bin_s, 'd6-mini', h) : '<span class="d6-mini d6-nobar">no history</span>'}`
+        + `<span class="d6-cm">${h.esc(child.message || '')}</span>${row && row.basis !== 'none' ? bar(row.bar, data.from, data.bin_s, 'spark', 'd6-mini') : '<span class="d6-mini d6-nobar">no history</span>'}`
         + `<span class="d6-cs">${h.shape(child.level, child.message)}${hint}</span></div>`;
     }).join('');
   }
@@ -370,9 +369,24 @@
     const checks = detail.checks;
     const problems = checks.filter((c) => PROBLEM.has(c.effective_level)).length;
     const kids = (node.children || []).length;
-    return rollsUp(node, [...checks].sort((a, b) => rankOf(b.effective_level) - rankOf(a.effective_level)), ctx) + healthBar(node.path, ctx)
-      + plain('d6-diag', `Diagnostics · ${checks.length}`, statusTable(node, checks, detail, ctx) || '<div class="muted">No diagnostics of its own.</div>',
-        problems ? `${problems} problem${problems === 1 ? '' : 's'} first · click a row for its detail` : 'click a row for its detail')
+    // Zach picked d1a (2026-10-24): the Diagnostics tab IS d1a's section, drawn by detail/d1a.js through the one history renderer
+    // (health.js). The d6 table below is only the fallback if d1a did not load.
+    const d1a = root.IODetailLayouts && root.IODetailLayouts.d1a;
+    // the entity page's own marks on a row: a fault code with its meaning, its line in the Log, the light when the Log links here
+    const marks = (check) => {
+      const fault = faultOf(check);
+      const known = detail.faults.some((f) => f.code === check.code);
+      const h = ctx.h;
+      const flash = U.flash && U.flash.tab === 'diagnostics' && U.flash.code && (U.flash.code === check.code || U.flash.code === (fault && fault.code)) ? ' d6-flash' : '';
+      const explain = fault ? `<span class="d6-fx" title="fault code and what it means">${h.esc(fault.code)}${fault.meaning ? ` · ${h.esc(fault.meaning)}` : ''}</span>` : '';
+      const log = known && check.code ? `<a class="link d6-lg" data-d6-jump="log" data-code="${h.esc(check.code)}" tabindex="0" title="the Log lines of this fault">in the log →</a>` : '';
+      return { flash, extra: `${explain}${log}` };
+    };
+    const hooks = { rowClass: (row) => marks(row.check).flash, extra: (row) => marks(row.check).extra };
+    const section = d1a && d1a.embed ? d1a.embed(document.getElementById('detail'), node, detail, ctx, hooks)
+      : healthBar(node.path, ctx) + plain('d6-diag', `Diagnostics · ${checks.length}`, statusTable(node, checks, detail, ctx) || '<div class="muted">No diagnostics of its own.</div>',
+        problems ? `${problems} problem${problems === 1 ? '' : 's'} first · click a row for its detail` : 'click a row for its detail');
+    return rollsUp(node, [...checks].sort((a, b) => rankOf(b.effective_level) - rankOf(a.effective_level)), ctx) + section
       + plain('d6-children', `Below · ${kids}`, childrenList(node, ctx), 'each row\'s own health over the same window')
       + fold(ctx, 'faults', `Faults · ${detail.faults.length}`, p.faults()) + fold(ctx, 'links', 'Link health', p.links(), 'the computer diagnoses its own wires')
       + fold(ctx, 'setup', 'Expected setup', p.setup(), 'the rig file, never the device') + fold(ctx, 'status', 'Rollup', p.status())
@@ -684,10 +698,6 @@
 .d6-why { margin: 2px 0 0; font-size: 12.5px; color: var(--io-muted); }
 .d6-why b { color: var(--io-text-strong); font-weight: 600; }
 .d6-bar { margin: 8px 0 4px; }
-.d6-hb { display: flex; gap: 1px; height: 12px; }
-.d6-hb i { flex: 1 1 0; min-width: 1px; border-radius: 1px; background: var(--io-guide); }
-.d6-hb i.none { background: transparent; box-shadow: inset 0 -2px 0 var(--io-border); }
-.d6-hb i.warn { background: var(--io-warn); } .d6-hb i.error { background: var(--io-error); } .d6-hb i.stale { background: var(--io-stale); } .d6-hb i.unknown { background: var(--io-unknown); }
 .d6-axis { display: flex; justify-content: space-between; gap: 10px; margin-top: 3px; font-size: 11px; color: var(--io-faint); font-variant-numeric: tabular-nums; }
 .d6-axis span:nth-child(2) { text-align: center; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .d6-h { cursor: default; }
@@ -724,7 +734,7 @@
 .d6-ch.off { color: var(--io-off); }
 .d6-cn { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; color: var(--io-text); }
 .d6-cm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--io-muted); font-size: 12px; }
-.d6-mini { flex: none; width: 120px; height: 8px; gap: 0; }
+.d6-mini { flex: none; width: 120px; }
 .d6-nobar { color: var(--io-faint); font-size: 11px; height: auto; text-align: right; }
 .d6-cs { flex: none; width: 34px; display: inline-flex; justify-content: flex-end; gap: 2px; }
 .d6-hint .shape { width: 10px; height: 10px; opacity: .8; }

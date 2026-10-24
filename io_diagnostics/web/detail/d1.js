@@ -17,7 +17,7 @@
 (function (root) {
   const RANK = { ok: 0, warn: 1, unknown: 2, stale: 3, error: 4 };
   const PROBLEM = new Set(['warn', 'unknown', 'stale', 'error']);
-  const BINS = 60;            // the entity's health bar; the children's mini bars reuse the same bins
+  const MINI_W = 120;         // the children's mini bars: their width, so the cell count follows it (health.js)
   const HIDDEN_VALUES = new Set(['what_to_check', 'kernel_evidence']); // drawn as the checklist, not as values
 
   // ------------------------------------------------------------------------------------------ state ----
@@ -40,26 +40,16 @@
   }
 
   // ---------------------------------------------------------------------------------- the marks ----
-  // The health bar: one cell per bin, the worst level any status held in it, as the API computed it. null = no data
-  // (a baseline only, never a level); OK is a quiet grey; only a problem has a colour.
-  function bar(bins, from, binS, cls, h) {
-    if (!bins || !bins.length) return '';
-    return `<div class="d1-hb ${cls}" data-diagnostic role="img" aria-label="health over the window">${bins.map((level, at) => {
-      const t0 = from + at * binS;
-      return `<i class="${level ? h.esc(level) : 'none'}" title="${clock(t0)}–${clock(t0 + binS)} · ${level ? h.esc(level) : 'no data'}"></i>`;
-    }).join('')}</div>`;
-  }
+  // The health bar and a diagnostic's own timeline are the shared discrete state timeline (detail/health.js; Zach,
+  // 2026-10-24: separate tall rectangles with a clear gap, never a line). One cell per bin, the worst level any status held
+  // in it, as the API computed it; null = no data; OK is a quiet grey, only a problem has a colour.
+  const windowOf = (ctx) => (ctx.settings && Number(ctx.settings.history_window_s)) || 900;
+  const widthOf = (reserve) => IOHealth.widthOf(last && last.container, reserve);
+  const bar = (bins, from, binS, kind, cls) => IOHealth.html(IOHealth.fromBar(bins, from, binS), { kind, cls });
 
-  // One status's own timeline, span by span (exact, not binned): the diagnostic page's strip.
-  function strip(levels, from, to, h) {
-    const width = Math.max(to - from, 1e-9);
-    return `<div class="d1-strip" data-diagnostic role="img" aria-label="level over the window">${levels.map((item) => {
-      const left = Math.max(0, (item.from - from) / width) * 100;
-      const right = Math.min(1, (item.to - from) / width) * 100;
-      if (right <= left) return '';
-      return `<i class="${item.level ? h.esc(item.level) : 'none'}" style="left:${left.toFixed(3)}%;width:${(right - left).toFixed(3)}%"`
-        + ` title="${clock(item.from)}–${clock(item.to)} · ${item.level ? h.esc(item.level) : 'no data'}${item.message ? ` · ${h.esc(item.message)}` : ''}"></i>`;
-    }).join('')}</div>`;
+  // One status's own timeline: its spans binned into the same discrete cells, the worst span's message in each hover.
+  function strip(levels, from, to) {
+    return IOHealth.html(IOHealth.fromLevels(levels, from, to, IOHealth.count(to - from, widthOf(0), 'timeline')), { kind: 'timeline', label: 'level over the window' });
   }
 
   // A sparkline over [from, to] on the host clock: a point only where a value arrived, the line broken where a value
@@ -173,15 +163,15 @@
 
   function healthBar(path, ctx, label) {
     const h = ctx.h;
-    const entry = ctx.bar(path, BINS);
+    const entry = ctx.bar(path, IOHealth.count(windowOf(ctx), widthOf(0), 'timeline'));
     const data = entry.data && entry.data.path === path ? entry.data : null;
-    if (!data) return `<div class="d1-bar"><div class="d1-axis"><span>${entry.error ? `no history: ${h.esc(entry.error)}` : 'history loading…'}</span></div></div>`;
+    if (!data) return `<div class="d1-bar"><div class="ioh-axis"><span>${entry.error ? `no history: ${h.esc(entry.error)}` : 'history loading…'}</span></div></div>`;
     const own = data.rows.find((row) => row.depth === 0);
     const basis = !own || own.basis === 'none' ? 'nothing in the history yet'
       : own.basis === 'below' ? `everything below · ${own.statuses} status${own.statuses === 1 ? '' : 'es'}`
         : `${label || 'its own'} ${own.statuses} diagnostic${own.statuses === 1 ? '' : 's'}`;
-    return `<div class="d1-bar">${own ? bar(own.bar, data.from, data.bin_s, '', h) : ''}`
-      + `<div class="d1-axis"><span>−${span(data.window_s)}</span><span>${h.esc(basis)} · worst per ${span(data.bin_s)}</span><span>now</span></div></div>`;
+    return `<div class="d1-bar">${own ? bar(own.bar, data.from, data.bin_s, 'timeline') : ''}`
+      + `${IOHealth.axis(data, `${basis} · worst per ${span(data.bin_s)}`, 'd1-axis')}</div>`;
   }
 
   // ------------------------------------------------------------------------------- the entity page ----
@@ -218,7 +208,7 @@
     const h = ctx.h;
     const children = (node && node.children) || [];
     if (!children.length) return '';
-    const entry = ctx.bar(node.path, BINS);
+    const entry = ctx.bar(node.path, IOHealth.count(windowOf(ctx), MINI_W, 'spark'));
     const data = entry && entry.data && entry.data.path === node.path ? entry.data : null;
     const bars = new Map(data ? data.rows.filter((row) => row.depth === 1).map((row) => [row.path, row]) : []);
     const worst = (child) => Math.max(rankOf(child.level), child.hint ? rankOf(child.hint.level) : -1);
@@ -232,7 +222,7 @@
       const hint = child.hint ? `<span class="d1-hint" title="below: ${h.esc(child.hint.level)}">${h.shape(child.hint.level, `below: ${child.hint.level}`)}</span>` : '';
       return `<div class="d1-ch${child.connected === false ? ' off' : ''}" data-go="${h.esc(child.path)}" title="${h.esc(child.name)}">${h.icon(child.icon)}`
         + `<span class="d1-cn">${h.esc(child.name)}</span><span class="d1-cm">${h.esc(child.message || '')}</span>`
-        + `${row && row.basis !== 'none' ? bar(row.bar, data.from, data.bin_s, 'd1-mini', h) : '<span class="d1-mini d1-nobar">no history</span>'}`
+        + `${row && row.basis !== 'none' ? bar(row.bar, data.from, data.bin_s, 'spark', 'd1-mini') : '<span class="d1-mini ioh-none">no history</span>'}`
         + `<span class="d1-cs${child.knock_on_of ? ' knock' : ''}">${h.shape(child.level, child.message)}${hint}</span></div>`;
     }).join('');
   }
@@ -273,12 +263,12 @@
       + `<div class="d-msg">${check ? h.esc(check.message || '—') : '<span class="muted">This diagnostic is no longer reported; its history stays.</span>'}`
       + `${check && check.code ? ` <span class="mono muted">${h.esc(check.code)}</span>` : ''}</div>`
       + `<div class="d-path">${h.esc(node.name)} · ${h.esc(node.path)}</div></div>`;
-    let timeline = '<div class="d1-axis"><span>history loading…</span></div>';
-    if (history.error && !data) timeline = `<div class="d1-axis"><span>no history: ${h.esc(history.error)}</span></div>`;
-    else if (data && !status) timeline = '<div class="d1-axis"><span>nothing in the history for this diagnostic yet</span></div>';
+    let timeline = '<div class="ioh-axis"><span>history loading…</span></div>';
+    if (history.error && !data) timeline = `<div class="ioh-axis"><span>no history: ${h.esc(history.error)}</span></div>`;
+    else if (data && !status) timeline = '<div class="ioh-axis"><span>nothing in the history for this diagnostic yet</span></div>';
     else if (data) {
-      timeline = strip(status.levels, data.from, data.to, h)
-        + `<div class="d1-axis"><span>−${span(data.window_s)} · ${clock(data.from)}</span><span>each level held until stale · empty = no data</span><span>now · ${clock(data.to)}</span></div>`;
+      timeline = strip(status.levels, data.from, data.to)
+        + `<div class="ioh-axis"><span>−${span(data.window_s)} · ${clock(data.from)}</span><span>worst level per cell · hollow = no data</span><span>now · ${clock(data.to)}</span></div>`;
     }
     const changes = status ? status.levels.slice().reverse().map((item) => {
       const bad = PROBLEM.has(item.level);
@@ -312,17 +302,6 @@
 .d1-why { margin: 10px 0 0; font-size: 12.5px; color: var(--io-muted); }
 .d1-why b { color: var(--io-text-strong); font-weight: 600; }
 .d1-bar { margin: 8px 0 4px; }
-.d1-hb { display: flex; gap: 1px; height: 12px; }
-.d1-hb i { flex: 1 1 0; min-width: 1px; border-radius: 1px; background: var(--io-guide); }
-.d1-hb i.none, .d1-strip i.none { background: transparent; box-shadow: inset 0 -2px 0 var(--io-border); }
-.d1-hb i.warn, .d1-strip i.warn { background: var(--io-warn); }
-.d1-hb i.error, .d1-strip i.error { background: var(--io-error); }
-.d1-hb i.stale, .d1-strip i.stale { background: var(--io-stale); }
-.d1-hb i.unknown, .d1-strip i.unknown { background: var(--io-unknown); }
-.d1-axis { display: flex; justify-content: space-between; gap: 10px; margin-top: 3px; font-size: 11px; color: var(--io-faint); font-variant-numeric: tabular-nums; }
-.d1-axis span:nth-child(2) { text-align: center; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.d1-strip { position: relative; height: 14px; box-shadow: inset 0 -2px 0 var(--io-border); }
-.d1-strip i { position: absolute; top: 0; bottom: 0; background: var(--io-guide); }
 .d1-h { cursor: default; }
 .sec.d1-diag .sec-b, .sec.d1-history .sec-b { padding-top: 0; }
 .d1-tab { font-size: 12.5px; }
@@ -370,8 +349,8 @@
 .d1-ch.off { color: var(--io-off); }
 .d1-cn { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; color: var(--io-text); }
 .d1-cm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--io-muted); font-size: 12px; }
-.d1-mini { flex: none; width: 120px; height: 8px; gap: 0; }
-.d1-nobar { color: var(--io-faint); font-size: 11px; height: auto; text-align: right; }
+.d1-mini { flex: none; width: 120px; }
+.d1-mini.ioh-none { text-align: right; }
 .d1-cs { flex: none; width: 34px; display: inline-flex; justify-content: flex-end; gap: 2px; }
 .d1-hint .shape { width: 10px; height: 10px; opacity: .8; }
 .d1-back { margin-bottom: 8px; font-size: 12.5px; }
@@ -428,6 +407,10 @@
       if (act(target)) event.preventDefault();
     });
   }
+
+  // WHY exported: the d1a-d1e variants (detail/d1x.js) keep this page's reason line, children, folded sections and its
+  // diagnostic page, and change only the Diagnostics section.
+  root.IOD1 = { rollsUp, childrenList, fold, plain, checklist, metaLine, nameHtml, injectCss, PROBLEM, RANK, rankOf };
 
   root.IODetailLayouts = root.IODetailLayouts || {};
   root.IODetailLayouts.d1 = {

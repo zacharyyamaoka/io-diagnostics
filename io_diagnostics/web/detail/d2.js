@@ -12,6 +12,7 @@
 (function (root) {
   const RANK = { ok: 0, warn: 1, unknown: 2, stale: 3, error: 4 };
   const PROBLEM = new Set(['warn', 'unknown', 'stale', 'error']);
+  const TRACK_W = 300;         // a lane's track, in px: the cell count follows it (health.js)
   const BINS = 120;            // health-bar bins per lane (the bar API's own rule decides each bin's level)
   const REFRESH_MS = 2500;     // /api/v1/history and /history/bar while the entity is shown (the API asks 2-5 s)
   const MAX_TICKS = 160;       // past this many arrivals in the window the ticks are a smear: drawn as none
@@ -49,12 +50,7 @@
 .d2-axis .d2-grid { position: absolute; bottom: 0; width: 1px; height: 3px; background: var(--io-border); }
 .d2-axis .d2-curlbl { position: absolute; top: 0; transform: translateX(-50%); font-size: 10.5px; padding: 0 4px; border-radius: var(--io-radius-sm); background: var(--io-popover); color: var(--io-text-strong); font-family: var(--io-font-mono); white-space: nowrap; box-shadow: 0 0 0 1px var(--io-border); z-index: 2; }
 .d2-track.d2-nodata { background-image: linear-gradient(to right, var(--io-border-soft) 50%, transparent 0); background-size: 4px 1px; background-repeat: repeat-x; background-position: left calc(100% - 5px); }
-.d2-seg { position: absolute; bottom: 4px; min-width: 1px; }
-.d2-seg.d2-ok { height: 2px; background: var(--io-guide-strong); }
-.d2-seg.d2-warn { height: 9px; background: var(--io-warn); }
-.d2-seg.d2-unknown { height: 9px; background: var(--io-unknown); }
-.d2-seg.d2-error { height: 15px; background: var(--io-error); }
-.d2-seg.d2-stale { height: 15px; background: repeating-linear-gradient(135deg, var(--io-stale) 0 2px, transparent 2px 5px); box-shadow: inset 0 -2px 0 var(--io-stale); }
+.d2-track > .ioh.d2-cells { position: absolute; left: 0; right: 0; top: 3px; bottom: 3px; height: auto; }
 .d2-tick { position: absolute; bottom: 0; width: 1px; height: 3px; background: var(--io-faint); }
 .d2-cur { position: absolute; top: 0; bottom: 0; width: 1px; margin-left: -.5px; background: var(--io-text-strong); pointer-events: none; z-index: 1; }
 .d2-spark { position: absolute; left: 0; top: 3px; width: 100%; height: calc(100% - 6px); overflow: visible; }
@@ -137,11 +133,8 @@
   }
   function spanTrack(status, axis, opts = {}) {
     if (!axis || !status) return `<div class="d2-track d2-nodata">${cursor(axis)}</div>`;
-    const segs = (status.levels || []).filter((span) => span.level && span.to > axis.from).map((span) => {
-      const left = pct(span.from, axis);
-      const width = Math.max(0, pct(span.to, axis) - left);
-      return `<i class="d2-seg d2-${span.level}" style="left:${left.toFixed(3)}%;width:${width.toFixed(3)}%"></i>`;
-    }).join('');
+    // the shared discrete state timeline (detail/health.js), the same axis: separate tall cells, hollow = no data
+    const segs = IOHealth.html(IOHealth.fromLevels(status.levels || [], axis.from, axis.to, IOHealth.count(axis.to - axis.from, TRACK_W, 'lane')), { kind: 'lane', cls: 'd2-cells' });
     const stamps = opts.ticks === false ? [] : arrivals(status).filter((t) => t >= axis.from && t <= axis.to);
     const ticks = stamps.length <= (opts.maxTicks || QUIET_TICKS) ? stamps.map((t) => `<i class="d2-tick" style="left:${pct(t, axis).toFixed(3)}%"></i>`).join('') : '';
     return `<div class="d2-track d2-nodata">${segs}${ticks}${cursor(axis)}</div>`;
@@ -149,21 +142,7 @@
   // a health bar (the bar API's bins: the worst level any status held in each) as merged segments on the same axis
   function barTrack(bar, rowData, axis) {
     if (!axis || !bar || !rowData) return `<div class="d2-track d2-nodata">${cursor(axis)}</div>`;
-    let html = '';
-    const bins = rowData.bar;
-    for (let at = 0; at < bins.length;) {
-      let end = at + 1;
-      while (end < bins.length && bins[end] === bins[at]) end += 1;
-      if (bins[at]) {
-        const from = bar.from + at * bar.bin_s;
-        const to = bar.from + end * bar.bin_s;
-        if (to > axis.from && from < axis.to) {
-          const left = pct(from, axis);
-          html += `<i class="d2-seg d2-${bins[at]}" style="left:${left.toFixed(3)}%;width:${Math.max(0, pct(to, axis) - left).toFixed(3)}%"></i>`;
-        }
-      }
-      at = end;
-    }
+    const html = IOHealth.html(IOHealth.rebin(IOHealth.fromBar(rowData.bar, bar.from, bar.bin_s), IOHealth.count(axis.to - axis.from, TRACK_W, 'lane')), { kind: 'lane', cls: 'd2-cells' });
     return `<div class="d2-track d2-nodata">${html}${cursor(axis)}</div>`;
   }
   const binAt = (bar, rowData, t) => {
