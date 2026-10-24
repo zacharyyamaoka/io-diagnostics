@@ -1,0 +1,10 @@
+# Fixture plugin for runs (docs/runs-v1.md): a driver whose act prints like a real tool (progress with \r, a prompt, a
+# record fd) and has its own stop verb. Never touches hardware.
+#   serve --fixture F2 --plugins tests/fixtures/plugins-terminal --port 0 --no-udev
+name = "terminal_fixture"
+description = "an adapter driver whose act is a live terminal session (runs-v1)"
+command = ["{python}", "{here}/terminal_plugin.py"]
+timeout_s = 10
+period_s = 30
+act_timeout_s = 60
+matches = ["usb:0483:5740"]

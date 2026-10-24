@@ -29,6 +29,7 @@ uv run --project /home/bam/io-diagnostics python /home/bam/io-diagnostics/io_dia
 | `GET /api/v1/history?path=<entity path>[&status=<name>][&window=<duration>]` | One entity's statuses over the window: level spans (stale and no data included) and every measurement value | on select, then 2-5 s |
 | `GET /api/v1/history/bar?path=<entity path>&bins=N[&window=<duration>]` | The health bar of an entity and of each child row: the worst level held per bin | 2-5 s |
 | `GET /api/v1/settings`, `POST /api/v1/settings` | The app-wide settings (the history window); the POST is the page's View options ONLY | on open / on change |
+| `GET /api/v1/runs` (and `/runs/<id>`, `/runs/<id>/stream`, `/runs/<id>/cast`; `POST /runs/<id>/input`, `/signal`, `/resize`, page-only) | Every real utility is a run on a terminal: the list, one run, its live output (SSE), its recording, and the page's typing and Stop. The whole contract is docs/runs-v1.md | stream / on open |
 | `POST /api/v1/act` | The Utilities panel ONLY: a dry run, then a person's confirmed run with the dry run's token | on click |
 | `POST /api/v1/expect`, `/forget`, `/retire` | The Expected setup card ONLY: one edit of the rig file after a person's confirm | on click |
 | `GET /`, `/<file>` | The page in `io_diagnostics/web/` | — |
@@ -78,7 +79,8 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
                      "rigs": [{"name": "1-DOF test rack", "path": "host/rig-1-dof-test-rack", "devices": 4}],
                      "retired": [{"name": "fdcanusb 28B3A25D", "hardware_id": "usb:0483:5740:28B3A25D", "serial": "",
                                   "date": "2026-10-23", "reason": "frames never reached the bus (2026-10-22) ...",
-                                  "path": null}]}
+                                  "path": null}]},
+  "runs": {"active": 0, "total": 0, "items": []}
 }
 ```
 
@@ -122,6 +124,9 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
   top bar's dot since 2026-10-23: `"error"` over `"warn"` over `"stale"` (stale or unknown), `"ok"` = no dot). The web page
   may draw its own chip from `summary`; the `menu` is what the tray shows.
 - `recent`: the 6 newest events (same shape as in `/api/v1/activity`).
+- `runs` (2026-10-24): the newest 30 runs (docs/runs-v1.md: `id`, `label`, `state`, `active`, `elapsed_s`, `exit_code`,
+  `interactive`...), newest first, with the count of `active` ones and the `total` the host holds. A real utility is a
+  run on a pseudo-terminal; the page draws its tabs from this list.
 - `expected_setup` (2026-10-23): the person's rig manifest (docs/expected-setup.md): its `file` (`null` = none on
   this host: a fixture or a fake machine without `--expected`), whether the panel may `editable`-ly rewrite it, the
   `note` saying why it does not read, its `rigs` (each with its rig row's `path`) and its `retired` devices (`path`
@@ -328,6 +333,7 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
   | `level` | `LevelChanged`: "<check>: ok → error (Code: message)", stale included | the history store (each status's effective level) | `status`, `from`, `to`, `status_code` |
   | `fault` | `FaultConfirmed`, `FaultHealed`, `FaultCleared` | the host's `FaultManager` | `fault`, `occurrence` |
   | `boot` | `Booted`, `ShutDown` | the kernel log, `journalctl --list-boots` | `devices` |
+  | `run` | `RunStarted`, `RunEnded` (2026-10-24): one pair per real utility run, linked by `args.run_id`; `RunEnded` is warn when stopped or timed out, error when failed (docs/runs-v1.md section 5) | the host (`io_diagnostics.runs`) | `run_id`, `action`, `node`, `plugin`, `state`, `exit_code` |
   | `plugin` | anything a plugin sends, e.g. `NoAck`, `PortHeld`, and a probing driver's `Found`, `Probed`, `ProbeBlocked` (docs/probe-on-connect.md) | the plugin | as sent |
 
 - `id` is the event's **stable** id; `provisional` is `true` while only udev has said it. A plug is
@@ -547,7 +553,10 @@ issued for `CAN 15 → CAN 7` cannot run `CAN 15 → CAN 9` (`TokenMismatch`).
 ```
 
 and answers `{"dry_run": false, "result": {...}}` with the `Host.act` result of the real run (`records` are the
-plugin's lines: `ActionCompleted`, `ConfirmationRequired`, `ActionRefused`, ...). The server passes the PLUGIN's
+plugin's lines: `ActionCompleted`, `ConfirmationRequired`, `ActionRefused`, ...). Since 2026-10-24 a real run is a RUN
+(docs/runs-v1.md): the plugin runs on a pseudo-terminal, the answer carries `result.run_id`, and `"detach": true` in
+the request answers **202** `{"dry_run": false, "run": {...}}` at once so the page can show the live output. A dry run
+on a bus whose `exclusive` group a run is holding is refused `Busy` (nothing waits for minutes). The server passes the PLUGIN's
 token from the dry run (`action_result.token`, or `confirm_token`) as `--confirm`; the plugin still checks it against
 the device. It runs a real action only when ALL of these hold, else **403** `{"refused": "<Code>", "error": "<plain
 reason>"}` and nothing reaches the plugin:

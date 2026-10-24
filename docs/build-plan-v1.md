@@ -28,6 +28,21 @@ class | netdev | tty glob], actions: [...]}; `<cmd> diagnose --device <id>` → 
 pyrealsense2) stay in the driver's own uv env, a crashing driver can't take the host down, any language works, and
 the driver's diagnostics.py is "the exact same code" the driver already has.
 
+**A real `act` is a run on a terminal (additive, 2026-10-24; Zach: "I would like to see the terminal output ... or enter
+user input"; contract: docs/runs-v1.md).** The host starts a real `act` (never a dry run) with stdin, stdout and stderr on
+a PTY, so a tool prints progressively, redraws with `\r` and can wait for a typed answer, and passes the plugin a second
+descriptor named in `IO_DIAGNOSTICS_RECORD_FD`:
+- **Set:** the plugin writes its JSON-line records (the `action-result`, Events like `ActionCompleted`) to that fd and
+  everything a person would read to stdout / stderr; a wrapped vendor tool INHERITS the terminal (live output, it can
+  prompt). **Not set** (a dry run, `diagnose`, `probe`, `follow`, an old plugin that ignores the variable): stdout stays
+  the record channel, exactly as before. An old plugin under a run still works: the host finds no record on the fd and
+  reads the terminal's lines that parse as a record (they also show in the terminal).
+- **`stop`, an optional verb** (`"stop": true` in `describe`): `<cmd> stop --device <id> [--node N]` puts the device in its
+  quiet state (moteus: mode 0), needs no `--confirm` (stopping is the safe direction), prints JSON lines, and is safe at any
+  time. The host runs it itself, never the page, after a `moves`-class run that did not finish (stopped, timed out, failed).
+- **Stop** from the page is SIGINT to the plugin's process group, then SIGTERM and SIGKILL after 3 s each; a step that must
+  survive a stopped plugin (a firmware flash) keeps its own session.
+
 **`follow`, an optional long-running verb (additive, 2026-10-23; Zach: "something that feels a bit like system
 monitor with the live data").** A plugin may declare in `describe` `"follow": {"period_s": 1}` (or `"follow": true`,
 1 s). The host's service (`serve`, `tray`; never `once`) then runs NO periodic diagnose for that plugin's devices and

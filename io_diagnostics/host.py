@@ -28,10 +28,11 @@ from io_diagnostics import probe as probe_module
 from io_diagnostics import settings as settings_module
 from io_diagnostics import tree
 from io_diagnostics.faults import Faults
+from io_diagnostics import terminal as terminal_module
 from io_diagnostics.plugins import load_plugins, match_devices
 from io_diagnostics.runner import (RUNNER_SOURCE, RUNNING, Follower, Gates, Job, RunOutcome, Scheduler, absolute, act_argv,
-                                   describe, follow_period, follow_status, host_status, rebase, run_act, run_check,
-                                   run_plugin)
+                                   describe, follow_period, follow_status, host_status, plugin_env, rebase, run_act,
+                                   run_check, run_plugin)
 
 from contract.record import (OK, RANK, RECORD_VERSION, SCHEMA, STALE, STALE_FACTOR, STALE_FLOOR_S, UNKNOWN, WARN, Action,
                              DiagnosticStatus, Entity, Event, KeyValue, Measurement, effective_level, from_dict, to_dict)
@@ -53,6 +54,7 @@ FAST_REFRESH_S = 0.5
 WAITING = "waiting"
 GATE_CACHE_S = 2.0
 RECENT = 6
+RUNS_IN_STATE = 30  # the newest runs /api/v1/state carries (docs/runs-v1.md)
 
 
 # ----- clocks -------------------------------------------------------------------------------------------------
@@ -376,13 +378,27 @@ class _Blank(dict):
         return "{" + key + "}"
 
 
+@dataclass
+class _ActPlan:
+    """What a real or dry act would run: the owning job, the argv, and the entity and action it is for."""
+
+    job: Job
+    argv: list[str]
+    device_path: str
+    entity: Entity
+    registered: Action
+    node: int | None
+    new_id: int | None
+
+
 class Host:
     def __init__(self, *, plugins_dir: Path = PLUGINS_DIR, clock: Clock | None = None, os_source=None,
                  fixture: dict | None = None, plugin_env: dict[str, str] | None = None, enable: tuple[str, ...] = (),
                  state_file: Path | None = None, expected_file: Path | None = None, settings_file: Path | None = None,
                  history_window_s: float | None = None, follow_backoff_s: tuple[float, float] | None = None,
                  recheck_poll_s: float | None = None, recheck_settle_s: float | None = None,
-                 recheck_backoff_s: float | None = None):
+                 recheck_backoff_s: float | None = None, runs_dir: Path | None = None, run_grace_s: float | None = None,
+                 run_ring_bytes: int | None = None, run_budget_bytes: int | None = None):
         self.plugins_dir = Path(plugins_dir)
         # WHY settable: the defaults are the product (probe.py: holders' pids every 1 s, 0.5 s settle, 10 s first
         # backoff); a test of the backoff alone shortens the last
@@ -430,6 +446,13 @@ class Host:
         self.describes: dict[str, dict | None] = {spec.name: None for spec in self.specs}
         self.url = ""
         self.lock = threading.RLock()
+        # every real act (docs/runs-v1.md): a process on a PTY, its output ring and recording, its events. ``runs_dir``
+        # None keeps them in memory only (a host built by hand, a fixture replay)
+        self.runs = terminal_module.RunRegistry(
+            runs_dir, self.clock.now, lambda stamp: activity_module.iso(stamp, self.utc_offset_s), self.notify,
+            ring_bytes=run_ring_bytes or terminal_module.RING_BYTES,
+            budget_bytes=run_budget_bytes or terminal_module.CAST_BUDGET_BYTES,
+            grace_s=run_grace_s if run_grace_s is not None else terminal_module.GRACE_S)
         self.started = time.monotonic()
         self._last_os_level: dict[tuple[str, str], tuple[str, str]] = {}
         self._described: set[str] = set()
@@ -958,6 +981,7 @@ class Host:
         for follower in list(self.followers.values()):
             follower.stop()
         self.followers.clear()
+        self.runs.shutdown()
         if hasattr(self.os, "close"):
             self.os.close()
         self.notify("stop")
@@ -984,6 +1008,7 @@ class Host:
             live = [self._placed(event, self.layer) for event in self.live.events()]
             events, self.pending = activity_module.merge(self.usb.events, self.usb.consumed, live)
             events += self.faults.events
+            events += self.runs.events()  # RunStarted / RunEnded (docs/runs-v1.md section 5)
             events += activity_module.level_events(self.history.transitions(now))
             for job in self.jobs.values():
                 device_path = self.layer.device_paths.get(str(job.device.get("id")))
@@ -1147,7 +1172,7 @@ class Host:
                 "host": {"name": self.os.hostname, "sources": list(self.sources)}, "summary": summary,
                 "chip": chip_model(summary, recent, self.url),
                 "tree": tree.node_json(tree.HOST_PATH, view.rows, view.layer, view.faults_by_path, nested=True),
-                "recent": recent, "expected_setup": self.setup_summary(view)}
+                "recent": recent, "expected_setup": self.setup_summary(view), "runs": self.runs.json(RUNS_IN_STATE)}
 
     def setup_summary(self, view: View) -> dict:
         manifest = self.setup.manifest
@@ -1581,7 +1606,7 @@ class Host:
 
     def act(self, path: str, action: str, *, node: int | None = None, confirm: str | None = None, dry_run: bool = False,
             human: bool | None = None, new_id: int | None = None) -> dict:
-        """Run the plugin's ``act`` for one action registered on the entity at ``path``.
+        """Run the plugin's ``act`` for one action registered on the entity at ``path``, and wait for it.
 
         The rule (docs/api-v1.md "Actions: io-diagnostics act"): only a person runs an action; agents can't click.
         - ``human`` is whether a person asked: the CLI passes stdin-is-a-TTY, and so does the default. Not a person
@@ -1590,7 +1615,41 @@ class Host:
           host passes it through; the plugin checks it against the device (moteus: its time-window token, RealSense:
           the camera's serial), because only the owner knows what it confirms.
         - ``new_id`` passes through as ``--new-id`` (set_id's new bus id); the plugin checks it.
-        - It runs inside the plugin's ``exclusive`` group, so it never collides with its own diagnose."""
+        - It runs inside the plugin's ``exclusive`` group, so it never collides with its own diagnose.
+        - A dry run asks the plugin on pipes. A real run is a RUN (docs/runs-v1.md): a process on a PTY with a
+          recording, here waited for; ``start_act`` is the same run without the wait."""
+
+        out, plan = self._plan_act(path, action, node=node, confirm=confirm, dry_run=dry_run, human=human, new_id=new_id)
+        if plan is None:
+            return out
+        if dry_run:
+            group = plan.job.spec.exclusive
+            busy = next((run for run in self.runs.active() if group and run.spec.group == group), None)
+            if busy is not None:
+                # WHY refuse and not wait: a run can last minutes at a prompt, and the page's dry run would hang for it
+                return {**out, "refused": "Busy", "message": f"{busy.spec.label} is running on the same bus ({group}): "
+                        "wait for it, or stop it, before asking for another dry run"}
+            with self.gates.hold(group):
+                result = run_act(plan.job.spec, plan.job.device, plan.device_path, plan.argv, self.clock.now,
+                                 self._job_env(plan.job))
+            return {**out, **result}
+        run = self._launch_run(plan, out, interactive=False)
+        run.wait()
+        return {**out, **(run.result or {}), "run_id": run.id}
+
+    def start_act(self, path: str, action: str, *, node: int | None = None, confirm: str | None = None,
+                  new_id: int | None = None, interactive: bool = True):
+        """A real run, started and not waited for: ``(run, out)``. ``out`` is ``act``'s answer so far (the plan, or why
+        it was refused, with ``run`` None). ``interactive``: it was started from the page, so it takes input and Stop."""
+
+        out, plan = self._plan_act(path, action, node=node, confirm=confirm, dry_run=False, human=True, new_id=new_id)
+        if plan is None:
+            return None, out
+        return self._launch_run(plan, out, interactive=interactive), {**out, "run_id": None}
+
+    def _plan_act(self, path: str, action: str, *, node: int | None, confirm: str | None, dry_run: bool,
+                  human: bool | None, new_id: int | None):
+        """``(out, plan)``: the answer so far and what would run, or ``(refusal, None)``."""
 
         if human is None:
             try:
@@ -1603,8 +1662,8 @@ class Host:
                "outcome": "refused", "returncode": None, "duration_s": 0.0, "records": [], "action_result": None, "rejected": [],
                "stderr_tail": "", "message": ""}
 
-        def refuse(code: str, message: str) -> dict:
-            return {**out, "refused": code, "message": message}
+        def refuse(code: str, message: str) -> tuple[dict, None]:
+            return {**out, "refused": code, "message": message}, None
 
         entity = view.merged.entities.get(path)
         if entity is None:
@@ -1624,9 +1683,41 @@ class Host:
             text = string.Formatter().vformat(registered.confirm, (), self._fill(path, view))
             return refuse("ConfirmRequired", f"{registered.danger}: pass --confirm <token> after reading: {text}")
         device_path = self.layer.device_paths.get(str(job.device.get("id")), job.device_path)
-        with self.gates.hold(job.spec.exclusive):
-            result = run_act(job.spec, job.device, device_path, argv, self.clock.now, self._job_env(job))
-        return {**out, **result}
+        return out, _ActPlan(job, argv, device_path, entity, registered, node, new_id)
+
+    def _describe_for(self, job: Job) -> dict | None:
+        if self.describes.get(job.spec.name) is None:
+            self.describes[job.spec.name] = describe(job.spec, extra_env=self._job_env())
+        return self.describes[job.spec.name]
+
+    def _launch_run(self, plan: "_ActPlan", out: dict, *, interactive: bool):
+        job, spec = plan.job, plan.job.spec
+        started = self.clock.now()
+        device_id = str(job.device.get("id", ""))
+        stop_argv = None
+        if plan.registered.danger == "moves" and (self._describe_for(job) or {}).get("stop"):
+            # the plugin's own stop verb (docs/runs-v1.md section 6): run by the host after a moves run that did not finish
+            stop_argv = [*spec.command, "stop", "--device", device_id, *(["--node", str(plan.node)] if plan.node is not None else [])]
+        label = f"{plan.entity.name} · {terminal_module.plain_title(plan.registered.title)}"
+        run_spec = terminal_module.RunSpec(
+            plugin=spec.name, device_id=device_id, device_path=plan.device_path, path=out["path"], action=out["action"],
+            title=plan.registered.title, label=label, danger=plan.registered.danger, argv=plan.argv,
+            env=plugin_env(spec, job.device, plan.device_path, started, self._job_env(job)), cwd=spec.cwd,
+            timeout_s=spec.act_timeout_s, node=plan.node, new_id=plan.new_id, hardware_id=plan.entity.hardware_id,
+            stop_argv=stop_argv, group=spec.exclusive, hold=lambda: self.gates.hold(spec.exclusive))
+        run = self.runs.create(run_spec, interactive=interactive)
+        run.launch()
+        return run
+
+    # --- runs (docs/runs-v1.md) ---------------------------------------------------------------------------------
+    def runs_json(self) -> dict:
+        everything = self.runs.json()
+        return {"runs": everything["items"], "active": everything["active"], "total": everything["total"],
+                "limits": self.runs.limits()}
+
+    def run_json(self, run_id: str) -> dict | None:
+        run = self.runs.get(run_id)
+        return run.to_json(detail=True) if run else None
 
     # --- activity, records, plugins -----------------------------------------------------------------------------
     def activity(self, limit: int = 200, types: tuple[str, ...] | None = None) -> dict:
@@ -1781,17 +1872,20 @@ def make_host(*, fixture: str | None = None, plugins_dir: Path | None = None, on
 
     settings = {"settings_file": expected_module.default_config_dir() / settings_module.SETTINGS_FILE,
                 "history_window_s": history_window_s}
+    # WHY runs are recorded live, and in a replay only when the state dir is named: a replayed frame's runs must never
+    # land in the person's own run history (docs/runs-v1.md section 4)
+    replay_runs = default_state_dir() / "runs" if os.environ.get("IO_DIAGNOSTICS_STATE_DIR") else None
     if machine is not None:
         if fixture is not None:
             raise SystemExit("--machine and --fixture are two different OS sides: pick one")
         clock = FixedClock(time.time()) if once else Clock()
         return Host(plugins_dir=plugins_dir or PLUGINS_DIR, clock=clock, os_source=MachineOs(machine), enable=enable,
-                    expected_file=expected, **settings)
+                    expected_file=expected, runs_dir=replay_runs, **settings)
     if fixture is None:
         # WHY live only: the remembered devices are this machine's; a fixture or a fake machine must never add to them
         clock = FixedClock(time.time()) if once else Clock()
         return Host(plugins_dir=plugins_dir or PLUGINS_DIR, clock=clock, os_source=LiveOs(), enable=enable,
-                    state_file=default_state_dir() / SEEN_FILE,
+                    state_file=default_state_dir() / SEEN_FILE, runs_dir=default_state_dir() / "runs",
                     expected_file=expected or expected_module.default_config_dir() / expected_module.EXPECTED_FILE,
                     **settings)
     document, frame = load_fixture(fixture)
@@ -1802,7 +1896,7 @@ def make_host(*, fixture: str | None = None, plugins_dir: Path | None = None, on
     return Host(plugins_dir=plugins_dir or FIXTURE_PLUGINS_DIR, clock=clock, os_source=FixtureOs(frame),
                 fixture=fixture_info(document, frame), enable=enable, expected_file=expected,
                 plugin_env={"IO_DIAGNOSTICS_FIXTURE": frame["name"], "IO_DIAGNOSTICS_FIXTURE_FILE": str(FIXTURE_FILE)},
-                **settings)
+                runs_dir=replay_runs, **settings)
 
 
 __all__ = ["Clock", "ReplayClock", "FixedClock", "LiveOs", "FixtureOs", "MachineOs", "Host", "View", "make_host",

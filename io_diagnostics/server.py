@@ -13,7 +13,9 @@ lane, it also answers ``/__sps/*`` for the Stable / Preview chip (release_channe
 
 from __future__ import annotations
 
+import base64
 import json
+import re
 import secrets
 import threading
 import time
@@ -25,6 +27,7 @@ from io_diagnostics import release_channels
 from io_diagnostics.history import MAX_BINS
 from io_diagnostics.host import Host
 from io_diagnostics.settings import SettingsError
+from io_diagnostics.terminal import KEEPALIVE_S, RunError
 
 DEFAULT_PORT = 8812
 TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
@@ -38,6 +41,9 @@ SETUP_EDITS = {"/api/v1/expect": "expect", "/api/v1/forget": "forget", "/api/v1/
 UI_HEADER = "X-IO-Diagnostics"
 UI_HEADER_VALUE = "ui"
 MAX_BODY = 64 * 1024
+RUN_PATH = re.compile(r"^/api/v1/runs/([0-9A-Za-z_-]+)(?:/(stream|cast|input|signal|resize))?$")
+RUN_WRITES = ("input", "signal", "resize")
+MAX_TERMINAL = 500  # columns or rows a resize may ask for
 EVENTS_KEEPALIVE_S = 15.0  # an SSE comment this often while nothing changes, so a dead client is noticed
 EVENTS_COALESCE_S = 0.1  # a burst of changes (a plug's ~30 udev blocks) is one diff
 EVENTS_WINDOW = 200  # the newest events each diff compares
@@ -129,6 +135,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(self.host.plugins())
             if parsed.path == "/api/v1/health":
                 return self._json(self.host.health())
+            if parsed.path == "/api/v1/runs":
+                return self._json(self.host.runs_json())
+            found = RUN_PATH.match(parsed.path)
+            if found and found[2] not in RUN_WRITES:
+                return self._run_get(found[1], found[2], query)
             if parsed.path in ("/api/v1/history", "/api/v1/history/bar"):
                 return self._history(parsed.path, query)
             if parsed.path == "/api/v1/settings":
@@ -152,6 +163,12 @@ class Handler(BaseHTTPRequestHandler):
         endpoint = urlparse(self.path).path
         if release_channels.is_sps_path(endpoint):
             return self._sps("POST")
+        found = RUN_PATH.match(endpoint)
+        if found and found[2] in RUN_WRITES:
+            try:
+                return self._run_write(found[1], found[2])
+            except Exception as error:  # noqa: BLE001 - show the failure, keep serving
+                return self._json({"error": f"{type(error).__name__}: {error}"}, 500)
         if endpoint not in ("/api/v1/act", "/api/v1/settings", *SETUP_EDITS):
             return self._refuse()
         try:
@@ -212,6 +229,79 @@ class Handler(BaseHTTPRequestHandler):
         lines += [f"event: {name}", "data: " + json.dumps(data, default=str, ensure_ascii=False)]
         self.wfile.write(("\n".join(lines) + "\n\n").encode())
         self.wfile.flush()
+
+    # --- runs (docs/runs-v1.md): reads, the output stream, and the three page-only writes ---------------------------
+    def _run_get(self, run_id: str, part: str | None, query: dict):
+        run = self.host.runs.get(run_id)
+        if run is None:
+            return self._json({"error": f"no run {run_id!r}"}, 404)
+        if part is None:
+            return self._json(run.to_json(detail=True))
+        if part == "cast":
+            path = run.cast_path
+            if path is None or not path.is_file():
+                return self._json({"error": "this run has no recording (the host keeps none)"}, 404)
+            return self._send(200, path.read_bytes(), "application/x-asciicast; charset=utf-8")
+        return self._run_stream(run, query)
+
+    def _run_stream(self, run, query: dict):
+        """Replay the ring from ``from`` (default: the oldest byte held), follow live, send ``end`` and close."""
+
+        raw = (query.get("from") or [""])[0]
+        if raw and not raw.isdigit():
+            return self._json({"error": "from is a byte offset (a whole number)"}, 400)
+        with run.cond:
+            run._load_buffer()
+            available = run.first_offset
+        offset = max(int(raw), available) if raw else available
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+        try:
+            self._sse("hello", {"run": run.to_json(), "from": offset, "available_from": available,
+                              "dropped_bytes": run.dropped})
+            while True:
+                chunks, ended = run.read_from(offset, KEEPALIVE_S)
+                for start, seconds, data in chunks:
+                    offset = start + len(data)
+                    self._sse("output", {"offset": start, "t": round(seconds, 4), "b64": base64.b64encode(data).decode()},
+                              event_id=str(offset))
+                if ended:
+                    return self._sse("end", {"run": run.to_json(detail=True)})
+                if not chunks:
+                    self.wfile.write(b": keepalive\n\n")
+                    self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            return  # the client left
+
+    def _run_write(self, run_id: str, op: str):
+        """input / signal / resize: the page's own request (the same check as /act), then the contract's refusals in order."""
+
+        body, answer = self._body()
+        if body is None:
+            return self._json(*answer)
+        run = self.host.runs.get(run_id)
+        if run is None:
+            return self._json({"refused": "NoSuchRun", "error": f"no run {run_id!r}"}, 404)
+        try:
+            run.check_writable()
+            if op == "input":
+                if not isinstance(body.get("text"), str):
+                    raise RunError("BadRequest", "text is a string", 400)
+                return self._json({"ok": True, "written": run.send_input(body["text"])})
+            if op == "signal":
+                if body.get("signal") != "interrupt":
+                    raise RunError("BadRequest", "signal is \"interrupt\" (the only signal a page may send)", 400)
+                return self._json({"ok": True, "stage": run.interrupt()})
+            cols, rows = body.get("cols"), body.get("rows")
+            if not all(isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= MAX_TERMINAL for value in (cols, rows)):
+                raise RunError("BadRequest", f"cols and rows are whole numbers 1..{MAX_TERMINAL}", 400)
+            run.resize(cols, rows)
+            return self._json({"ok": True, "cols": cols, "rows": rows})
+        except RunError as error:
+            return self._json({"refused": error.code, "error": str(error)}, error.status)
 
     # --- the Stable / Preview chip, under the release-channels runtime only (release_channels.py) -------------------
     def _sps(self, method: str):
@@ -337,10 +427,16 @@ class Handler(BaseHTTPRequestHandler):
         if entry is None:
             return self._json({"refused": refused, "error": reason}, 403)
         # WHY human=True here and nowhere else in the server: the person read the dry run on the page and clicked
-        # (a confirm modal for anything but a query); the plugin still checks its own token against the device
-        result = self.host.act(path, action, node=node, confirm=entry["plugin_token"], dry_run=False, human=True,
-                               new_id=new_id)
-        return self._json({"dry_run": False, "result": result})
+        # (a confirm modal for anything but a query); the plugin still checks its own token against the device.
+        # The run is interactive: started from the page, so the page may type into it and stop it (docs/runs-v1.md)
+        run, result = self.host.start_act(path, action, node=node, confirm=entry["plugin_token"], new_id=new_id,
+                                          interactive=True)
+        if run is None:
+            return self._json({"dry_run": False, "result": result})
+        if body.get("detach") is True:
+            return self._json({"dry_run": False, "run": run.to_json()}, 202)
+        run.wait()
+        return self._json({"dry_run": False, "result": {**result, **(run.result or {}), "run_id": run.id}})
 
     def _refuse(self):
         self._json({"error": NO_ACTIONS}, 405, extra={"Allow": "GET"})

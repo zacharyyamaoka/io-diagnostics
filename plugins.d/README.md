@@ -72,7 +72,24 @@ host, the host adds its own `USB/PCIe links` line there.
 <command> diagnose --device <id>                  → JSON lines, one contract.record v0 record each
 <command> act --device <id> --action <n> [--node N] [--confirm <token>] [--dry-run]   → JSON lines (the result)
 <command> probe --device <id>                     → optional; the same JSON lines, once per connection (below)
+<command> stop --device <id> [--node N]           → optional ("stop": true in describe); the device's quiet state, no --confirm (below)
 ```
+
+**A real `act` runs on a terminal (docs/runs-v1.md).** The host gives it a PTY for stdin / stdout / stderr, so a tool
+prints live, redraws with `\r` and can wait for a typed answer, and it names a second descriptor in
+**`IO_DIAGNOSTICS_RECORD_FD`**. When that variable is set a plugin writes its JSON-line records to THAT fd and nothing but
+records to it; everything a person should read goes to stdout / stderr, and a wrapped vendor tool inherits the terminal
+(its stdin / stdout / stderr as the plugin got them). When it is not set (a dry run, `diagnose`, `probe`, `follow`) stdout is
+the record channel as before, so a plugin written earlier keeps working: under a run the host finds no record on the fd and
+reads the terminal's lines that parse as a record. A plugin knows it is on a run with `os.environ.get("IO_DIAGNOSTICS_RECORD_FD")`
+and `isatty(0)`; `IO_DIAGNOSTICS_RUN_ID` names the run. A Stop is SIGINT to the plugin's process group (a step that must
+outlive it, a firmware flash, keeps its own session), then SIGTERM and SIGKILL after 3 s each.
+
+**`stop` (optional).** A plugin whose `moves` actions can leave a device energised declares `"stop": true` in `describe` and
+implements `<command> stop --device <id> [--node N]`: the device's quiet state (moteus: mode 0, the real path of `stop_all`),
+**no `--confirm`** (stopping is the safe direction), JSON lines like `act`, safe at any time, behind the same port-holder and
+bus-lock gate as every bus action. The host runs it itself, after the process has exited, when a `moves` run ends stopped,
+timed out or failed, and records what it said in the run. The page never calls it.
 
 **`probe` (optional).** A driver that declares `"probe": {"timeout_s": 30}` (or `true`) in `describe` is probed ONCE per
 connection, in place of that connection's first `diagnose`: when it is plugged in (or present at host start) and on every

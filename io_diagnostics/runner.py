@@ -369,6 +369,26 @@ def act_argv(spec: PluginSpec, device: dict, action: str, *, node: int | None = 
     return argv
 
 
+def parse_action_lines(text: str) -> tuple[list[dict], list[str]]:
+    """An act's record lines (``run_act``'s stdout, a run's record fd): every JSON object kept as the plugin wrote it;
+    ``(records, why each other non-blank line was rejected)``."""
+
+    records, rejected = [], []
+    for number, raw in enumerate(text.splitlines(), start=1):
+        if not raw.strip():
+            continue
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as error:
+            rejected.append(f"line {number}: not JSON ({error.msg})")
+            continue
+        if isinstance(data, dict):
+            records.append(data)
+        else:
+            rejected.append(f"line {number}: a JSON {type(data).__name__}, not an object")
+    return records, rejected
+
+
 def run_act(spec: PluginSpec, device: dict, device_path: str, argv: list[str], now: Callable[[], float],
             extra_env: dict[str, str] | None = None) -> dict:
     """Run one ``act`` argv, bounded by the plugin's ``act_timeout_s`` (never its diagnose timeout: a firmware flash
@@ -392,19 +412,7 @@ def run_act(spec: PluginSpec, device: dict, device_path: str, argv: list[str], n
     action = argv[argv.index("--action") + 1] if "--action" in argv[:-1] else "act"
     stdout, stderr, timed_out = _communicate(process, spec.act_timeout_s, f"{spec.name} {action} {device.get('id', '')}")
     duration = time.monotonic() - clock
-    records, rejected = [], []
-    for number, raw in enumerate((stdout or "").splitlines(), start=1):
-        if not raw.strip():
-            continue
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError as error:
-            rejected.append(f"line {number}: not JSON ({error.msg})")
-            continue
-        if isinstance(data, dict):
-            records.append(data)
-        else:
-            rejected.append(f"line {number}: a JSON {type(data).__name__}, not an object")
+    records, rejected = parse_action_lines(stdout or "")
     tail = (stderr or "").strip()[-STDERR_TAIL:]
     if timed_out:
         outcome, message = "timeout", f"no answer within {spec.act_timeout_s:g} s (act_timeout_s): killed"

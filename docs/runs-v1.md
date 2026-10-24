@@ -87,7 +87,7 @@ All JSON, `Cache-Control: no-store`. Reads are GET like everything else; the thr
 | `POST /api/v1/runs/<id>/signal` | `{"signal": "interrupt"}` (the only signal): §6. `{"ok": true, "stage": "SIGINT"}` |
 | `POST /api/v1/runs/<id>/resize` | `{"cols": 100, "rows": 24}` (1..500): the terminal's size, so wrapped lines and progress bars fit the view |
 | `GET /api/v1/state` | gains `runs`: `{"active": N, "total": N, "items": [<run>, ...up to 30 newest]}` |
-| `POST /api/v1/act` | a real run (token present) accepts `"detach": true`: answers **202** `{"dry_run": false, "run": <run>}` at once, the process keeps going. Without it the call blocks until the run ends and answers `{"dry_run": false, "result": {..., "run_id": "<id>"}}` as before (existing callers and tests keep working). A refused run (`ConfirmRequired`, `NoPlugin`...) answers `{"dry_run": false, "result": {"refused": ...}}`, no `run` |
+| `POST /api/v1/act` | a dry run asked while a run holds the same `exclusive` group is refused at once, `{"dry_run": true, "result": {"refused": "Busy", ...}, "token": null}` (a run can sit at a prompt for minutes; nothing waits for it). A real run (token present) accepts `"detach": true`: answers **202** `{"dry_run": false, "run": <run>}` at once, the process keeps going. Without it the call blocks until the run ends and answers `{"dry_run": false, "result": {..., "run_id": "<id>"}}` as before (existing callers and tests keep working). A refused run (`ConfirmRequired`, `NoPlugin`...) answers `{"dry_run": false, "result": {"refused": ...}}`, no `run` |
 
 `limits`: `{"ring_bytes": 2097152, "input_max": 4096, "cast_budget_bytes": 67108864, "grace_s": 3.0}`.
 
@@ -97,7 +97,7 @@ reason>"}` unless the request is the page's own: `NotFromPage` (no `X-IO-Diagnos
 Stable proxy), `NotJson` (the same `_from_page` check as `/act`, one function). Then, in this order: **404**
 `NoSuchRun`, **403** `NotInteractive` (not started from the page in this process), **409** `NotRunning` (already
 ended), **400** `BadRequest` (body shape, an unknown signal name, over `input_max`). Nothing reaches the process on
-any refusal. No token: the run's token was spent when it started.
+any refusal (a body that is not a JSON object is **400** before any of these). No token: the run's token was spent when it started.
 
 ## 3. A real terminal, and where records go
 
@@ -111,7 +111,7 @@ descriptor, named in the environment variable **`IO_DIAGNOSTICS_RECORD_FD`**.
 
 - **Set:** the plugin writes its JSON-line records (the `action-result`, Events like `ActionCompleted`, anything the
   host parses) to that fd, one object per line, and nothing else to it. Everything a person would read goes to
-  stdout / stderr (the terminal). The host parses the record fd line by line as it arrives.
+  stdout / stderr (the terminal). The host reads the record fd as the lines arrive and parses them when the run ends.
 - **Not set** (dry runs, `diagnose`, `probe`, `follow`, every other verb, and any old plugin that ignores the
   variable): stdout stays the record channel, exactly as before. A plugin that does not know the variable still works
   under a run: the host finds no record on the fd, so it falls back to the lines of the terminal that parse as a JSON
