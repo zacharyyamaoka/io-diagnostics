@@ -1,0 +1,15 @@
+{
+  "about": "Run views (docs/runs-v1.md section 7): window.IORunViews[id] = {name, description, order, mount(ctx), unmount(ctx), update(ctx), open(id, ctx), runLine(util, run, ctx)}. One entry per proposal, pre-listed; the page loads runs/<file> only for entries with ready=true and lists every one that registered mount() in the bottom-right Prototype picker ('Runs'). A proposal lane flips ONLY its own line to ready and rewrites ONLY its own file (entries are blank-line separated so parallel lanes merge cleanly).",
+  "default": "r1",
+  "runs": [
+    {"id": "r1", "name": "Terminal panel with tabs", "file": "r1.js", "ready": true},
+
+    {"id": "r2", "name": "Output in place", "file": "r2.js", "ready": false},
+
+    {"id": "r3", "name": "Runs as rows", "file": "r3.js", "ready": false},
+
+    {"id": "r4", "name": "Runs in the Activity log", "file": "r4.js", "ready": false},
+
+    {"id": "r5", "name": "A tmux session", "file": "r5.js", "ready": false}
+  ]
+}

@@ -21,6 +21,12 @@
 // header (a dry-run sheet under it, a quiet run line under the header, the result in Activity); every drill-down is a
 // browser-history entry (back / forward, the mouse's buttons); one shared history cache and a page-level drill seam
 // for the layouts; the Computer opens in d4 unless the picker says otherwise.
+//
+// Runs (docs/runs-v1.md, 2026-10-24): every real utility is a run on a terminal. The page starts it detached
+// (POST /api/v1/act `detach`), keeps the run's id on the utility, reads its progress from /api/v1/state `runs`, and
+// hands the run to the selected RUN VIEW (window.IORunViews, runs/*.js; r1 is the default): a ctx (makeRunsCtx) with the
+// runs, their live output (xterm.js, vendor/xterm), typing, Stop and a place to draw. A third select in the bottom-right
+// Prototype picker switches the run view.
 'use strict';
 
 const params = new URLSearchParams(location.search);
@@ -60,6 +66,7 @@ const S = {
   inspPinned: false,   // ... or pinned open (the toolbar toggle, `]`)
   layout: null,        // the detail layout drawing the detail panel (detail/*.js)
   menu: null,          // the utility menu drawing the Utilities section (utilities/*.js)
+  runView: null,       // the run view drawing runs (runs/*.js): r1 by default
   closed: new Set(),   // detail section ids the viewer folded (remembered per section)
   actFilter: 'all',    // the activity log's filter: all | faults
   opened: new Set(),   // detail section ids the viewer opened that start folded (ctx.section(..., {defaultOpen: false}))
@@ -103,6 +110,7 @@ const PREFS = {
   inspectorPinned: 'io-diagnostics.inspector-pinned',
   layout: 'io-diagnostics.detail-layout',
   menu: 'io-diagnostics.utility-menu',
+  runView: 'io-diagnostics.runs-view',
   sections: 'io-diagnostics.detail-sections',
   sectionsOpen: 'io-diagnostics.detail-sections-open',
 };
@@ -161,7 +169,7 @@ function loadScript(src) {
 // stock shadcn for now ... what matters is the location of things"; every other skin stays one pick away (bottom-right)
 // WHY d4 for the Computer (Zach, 2026-10-23, via the orchestrator): its page is the ROS2 System Webview's data (RAM, CPU,
 // swap, load, disks, temperatures, GPU, network, USB); every other entity keeps d0 until he picks one
-const DEFAULTS = { skin: 'shadcn', structure: 'p1', variant: 'v6', sort: 'status', layout: 'd0', computerLayout: 'd4', menu: 'u0' };
+const DEFAULTS = { skin: 'shadcn', structure: 'p1', variant: 'v6', sort: 'status', layout: 'd0', computerLayout: 'd4', menu: 'u0', runs: 'r1' };
 const darkQuery = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
 
 // <html data-skin data-mode>: the skin's tokens for the mode. Auto follows the OS until the viewer picks one.
@@ -175,6 +183,7 @@ function applyTheme() {
 async function tick() {
   try {
     S.data = await getJson('/api/v1/state');
+    if (window.IORuns && S.data.runs) { window.IORuns.ingest(S.data.runs); syncRunUtilities(); }
     S.lastOk = performance.now();
     S.lastError = '';
     if (!S.sel && !S.selKey) {
@@ -681,29 +690,38 @@ function setPinned(pinned) {
 // layout (detail/*.js) and the utility menu (utilities/*.js) switch live and are remembered.
 const layouts = () => window.IODetailLayouts || {};
 const menus = () => window.IOUtilityMenus || {};
+const runViews = () => window.IORunViews || {};
 const registryIds = (registry, prefix) => Object.keys(registry).filter((id) => registry[id] && typeof registry[id][prefix] === 'function')
   .sort((a, b) => ((registry[a].order ?? 50) - (registry[b].order ?? 50)) || a.localeCompare(b));
-function setupPrototype(layoutDefault, menuDefault) {
+function setupPrototype(layoutDefault, menuDefault, runsDefault) {
   const wire = (select, registry, method, pref, fallback, key) => {
     const ids = registryIds(registry, method);
     const stored = readPref(pref);
     S[key] = ids.includes(stored) ? stored : ids.includes(fallback) ? fallback : ids[0] || null;
-    select.innerHTML = ids.map((id) => `<option value="${esc(id)}" title="${esc(registry[id].description || '')}">${esc(id)} · ${esc(registry[id].name || id)}</option>`).join('');
+    // WHY the run view shows only its id ("r1"): the bar's room is limited and the skin switcher beside it must stay in reach;
+    // its name and description are the option's tooltip
+    const label = (id) => (key === 'runView' ? esc(id) : `${esc(id)} · ${esc(registry[id].name || id)}`);
+    const tip = (id) => (key === 'runView' ? `${registry[id].name || id}: ${registry[id].description || ''}` : registry[id].description || '');
+    select.innerHTML = ids.map((id) => `<option value="${esc(id)}" title="${esc(tip(id))}">${label(id)}</option>`).join('');
+    if (key === 'runView') select.title = 'Runs view: how a running utility shows its terminal (r1 · Terminal panel with tabs ... r5)';
     select.value = S[key] || '';
     select.addEventListener('change', () => {
       if (!registry[select.value]) return;
       S[key] = select.value;
       writePref(pref, select.value);
       if (key === 'layout') S.layoutChoice = select.value; // an explicit pick wins on every entity, the Computer too
+      if (key === 'runView') mountRunView();
       render();
     });
     return ids.length;
   };
   const shown = wire($('detail-layout'), layouts(), 'render', PREFS.layout, layoutDefault || DEFAULTS.layout, 'layout')
-    + wire($('utility-menu'), menus(), 'html', PREFS.menu, menuDefault || DEFAULTS.menu, 'menu');
+    + wire($('utility-menu'), menus(), 'html', PREFS.menu, menuDefault || DEFAULTS.menu, 'menu')
+    + wire($('run-view'), runViews(), 'mount', PREFS.runView, runsDefault || DEFAULTS.runs, 'runView');
   // no stored layout: the per-entity default (layoutFor) decides, and the picker shows what it chose
   S.layoutChoice = registryIds(layouts(), 'render').includes(readPref(PREFS.layout)) ? readPref(PREFS.layout) : null;
-  $('proto-switch').hidden = shown < 3; // one layout and one menu: nothing to switch
+  $('proto-switch').hidden = shown < 4; // one layout, one menu and one run view: nothing to switch
+  mountRunView();
   try { S.closed = new Set(JSON.parse(readPref(PREFS.sections) || '[]')); } catch (_) { S.closed = new Set(); }
   try { S.opened = new Set(JSON.parse(readPref(PREFS.sectionsOpen) || '[]')); } catch (_) { S.opened = new Set(); }
 }
@@ -841,7 +859,9 @@ function renderActivity() {
   if (!act) return '<div class="err muted">loading activity…</div>';
   const faults = S.actFilter === 'faults';
   // the utilities this page ran come first (newest first): the host logs no action runs of its own yet
-  const events = faults ? act.events.filter(isFaultEvent) : [...S.ran, ...act.events];
+  // WHY the host's RunStarted / RunEnded of a run this page started are left out: this page's own line says the same
+  const mine = new Set(S.ran.map((line) => line.runId).filter(Boolean));
+  const events = faults ? act.events.filter(isFaultEvent) : [...S.ran, ...act.events.filter((event) => !(event.type === 'run' && mine.has((event.args || {}).run_id)))];
   const active = act.faults.filter((fault) => fault.active).length;
   const filter = `<div class="seg small act-filter" role="radiogroup" aria-label="Show">${[['all', 'All events'], ['faults', 'Faults']].map(([id, label]) => `<button data-act-filter="${id}" role="radio" aria-checked="${S.actFilter === id}" class="${S.actFilter === id ? 'on' : ''}">${label}</button>`).join('')}</div>`;
   const memory = faults ? `<div class="act-note muted">The host's fault memory holds ${act.faults.length} fault${act.faults.length === 1 ? '' : 's'}${act.faults.length ? ` (${active} active)` : ''}: pending → confirmed → healed, as logged below.</div>` : '';
@@ -1119,13 +1139,17 @@ const UTIL_ICONS = {
 const utilIcon = (name) => `<svg class="u-ic" viewBox="0 0 24 24" aria-hidden="true">${UTIL_ICONS[STANDARD.has(name) ? name : 'more']}</svg>`;
 const plainTitle = (title) => String(title || '').replace(/…$/, '');
 
+// WHY Tools: a vendor's own console (tview, realsense-viewer) is something a person looks for by name (Zach, 2026-10-24: he
+// did not find "Open console"); it sits right after Checks, outside Maintenance and never in Motion.
+const TOOLS = new Set(['open_console']);
 function utilityGroups(actions) {
   const order = (action) => (STANDARD.has(action.name) ? STANDARD_ORDER.indexOf(action.name) : STANDARD_ORDER.length);
   const sorted = [...actions].sort((a, b) => order(a) - order(b));
   const standard = sorted.filter((action) => STANDARD.has(action.name));
   return [
-    { id: 'checks', title: 'Checks', items: standard.filter((action) => action.danger === 'query') },
-    { id: 'maintenance', title: 'Maintenance', items: standard.filter((action) => action.danger !== 'query' && action.danger !== 'moves') },
+    { id: 'checks', title: 'Checks', items: standard.filter((action) => action.danger === 'query' && !TOOLS.has(action.name)) },
+    { id: 'tools', title: 'Tools', items: standard.filter((action) => TOOLS.has(action.name)) },
+    { id: 'maintenance', title: 'Maintenance', items: standard.filter((action) => action.danger !== 'query' && action.danger !== 'moves' && !TOOLS.has(action.name)) },
     { id: 'motion', title: 'Motion · makes hardware move', items: standard.filter((action) => action.danger === 'moves') },
     { id: 'more', title: 'More', items: sorted.filter((action) => !STANDARD.has(action.name)) },
   ].filter((group) => group.items.length);
@@ -1183,21 +1207,108 @@ async function runUtility() {
   util.startedAt = Date.now();
   S.runDetails = false;
   render();
-  // the run repeats the dry run's new id: the server's token is bound to it (a token for CAN 7 never runs CAN 9)
-  const { status, data } = await postAct({ path: util.path, action: util.name, node: util.node, ...(util.newId !== null ? { new_id: util.newId } : {}), token: util.dry.token });
-  // WHY no "is it still the open one" return: the run happened; its result belongs to its entity's run line (kept in
-  // S.runs while the viewer looks elsewhere) and to the Activity log either way
+  // the run repeats the dry run's new id: the server's token is bound to it (a token for CAN 7 never runs CAN 9).
+  // WHY detach: the run is a terminal session that may wait for a typed answer, so the page does not hold the request
+  const { status, data } = await postAct({ path: util.path, action: util.name, node: util.node, ...(util.newId !== null ? { new_id: util.newId } : {}), token: util.dry.token, detach: true });
+  if (status === 202 && data.run && window.IORuns) {
+    // WHY no "is it still the open one" return: the run is going; its end (syncRunUtilities) belongs to its entity's run
+    // line (kept in S.runs while the viewer looks elsewhere) and to the Activity log either way
+    util.runId = data.run.id;
+    window.IORuns.ingest([data.run]);
+    // a quiet query keeps the panel as the person left it; anything that changes or moves a device shows its terminal
+    if (util.danger !== 'query') openRun(util.runId);
+    render();
+    return;
+  }
+  finishUtility(util, status, data);
+}
+
+// The utility is over: its result (a refusal, or the finished run's) becomes the run line and an Activity line.
+function finishUtility(util, status, data) {
   util.phase = 'done';
   util.doneAt = Date.now();
-  if (status === 200) util.result = data.result; else { util.refused = data.refused || `HTTP ${status}`; util.error = data.error || ''; }
+  if (status === 200 && data.result) util.result = data.result; else { util.refused = data.refused || `HTTP ${status}`; util.error = data.error || ''; }
   const outcome = runOutcome(util);
   S.ran.unshift({ time: new Date(util.doneAt).toTimeString().slice(0, 8), kind: 'utility', port: util.label, message: `${plainTitle(util.title)}: ${outcome.text}`,
-    severity: outcome.ok ? 'info' : 'error', source: 'this page (POST /api/v1/act)', path: util.path, stamp: util.doneAt / 1000 });
+    severity: outcome.stopped ? 'warn' : outcome.ok ? 'info' : 'error', source: 'this page (POST /api/v1/act)', path: util.path, stamp: util.doneAt / 1000, runId: util.runId || null });
   S.ran = S.ran.slice(0, 50);
   S.actAt = 0; // the Activity log and the entity's diagnostics are read again now: the action may have changed them
   if (S.sel === util.path) { S.nodeAt = 0; loadNode(); }
   render();
 }
+
+// A utility whose run has ended on the host: read its result once and finish it. Called after every poll.
+function syncRunUtilities() {
+  for (const util of [S.util, ...S.runs.values()]) {
+    if (!util || util.phase !== 'running' || !util.runId || util.syncing) continue;
+    const run = window.IORuns.get(util.runId);
+    if (!run || run.active) continue;
+    util.syncing = true;
+    window.IORuns.detail(util.runId)
+      .then((detail) => finishUtility(util, 200, { result: { ...(detail.result || {}), run_id: detail.id } }))
+      .catch((error) => finishUtility(util, 0, { refused: 'Unreachable', error: String(error) }));
+  }
+}
+
+// ----------------------------------------------------------------------------------------- run views ----
+// The ctx a run view draws from (docs/runs-v1.md section 7). One object; its members are live.
+let runsCtx = null;
+function makeRunsCtx() {
+  const R = window.IORuns;
+  const prefKey = (key) => `io-diagnostics.runs.${key}`;
+  return {
+    runs: R.list, run: R.get, onChange: R.onChange, stream: R.stream, sendInput: R.sendInput, interrupt: R.interrupt, resize: R.resize,
+    terminal: R.attachTerminal, castUrl: R.castUrl,
+    open: (id) => openRun(id),
+    redraw: () => queueRedraw(),
+    root: $('runs-root'),
+    statusSlot: $('runs-status'),
+    css(key, text) {
+      if (document.querySelector(`style[data-runs-css="${key}"]`)) return;
+      const style = document.createElement('style');
+      style.dataset.runsCss = key;
+      style.textContent = text;
+      document.head.appendChild(style);
+    },
+    pref(key, fallback) { const value = readPref(prefKey(key)); return value === null || value === '' ? fallback : value; },
+    setPref(key, value) { writePref(prefKey(key), value); },
+    h: { esc, shape, plainTitle, elapsed: R.elapsed, stateWords: R.stateWords },
+  };
+}
+// Mount the selected run view, after unmounting the one before it (the Prototype picker's third select).
+let mountedRunView = null;
+function mountRunView() {
+  if (!window.IORuns) return;
+  if (!runsCtx) runsCtx = makeRunsCtx();
+  const next = runViews()[S.runView] && S.runView;
+  if (mountedRunView === next) return;
+  if (mountedRunView && runViews()[mountedRunView]) {
+    try { runViews()[mountedRunView].unmount(runsCtx); } catch (error) { console.error(`run view ${mountedRunView} unmount:`, error); }
+  }
+  mountedRunView = null;
+  if (!next) return;
+  try {
+    runViews()[next].mount(runsCtx);
+    mountedRunView = next;
+  } catch (error) {
+    console.error(`run view ${next} mount:`, error);
+    $('runs-root').innerHTML = `<div class="err">run view ${esc(next)} failed: ${esc(error)}</div>`;
+    $('runs-root').hidden = false;
+  }
+}
+function updateRunView() {
+  const view = mountedRunView && runViews()[mountedRunView];
+  if (!view || !view.update) return;
+  try { view.update(runsCtx); } catch (error) { console.error(`run view ${mountedRunView} update:`, error); }
+}
+// Show a run: the selected view's open(id).
+function openRun(id) {
+  const view = mountedRunView && runViews()[mountedRunView];
+  if (view && view.open) {
+    try { view.open(id, runsCtx); } catch (error) { console.error(`run view ${mountedRunView} open:`, error); }
+  }
+}
+const canShowRun = () => Boolean(mountedRunView && runViews()[mountedRunView] && runViews()[mountedRunView].open);
 
 // What a finished run says, in one line: ok + its own message ("Firmware updated to 1.1.2"), or why it failed.
 function runOutcome(util) {
@@ -1205,6 +1316,8 @@ function runOutcome(util) {
   const result = util.result;
   const refusedByDriver = (result.records || []).find((record) => FAILED_CODES.has(record.code));
   if (!result.refused && result.outcome === 'ok' && !refusedByDriver) return { ok: true, text: result.message || `done in ${result.duration_s} s` };
+  // WHY not a failure: the person pressed Stop; one quiet line, the host's own words for how it ended
+  if (result.outcome === 'stopped') return { ok: true, stopped: true, text: `${plainTitle(util.title)} ${result.message || 'stopped'}` };
   const why = result.refused ? `refused: ${result.refused}` : refusedByDriver ? refusedByDriver.code : result.outcome;
   return { ok: false, text: `${why}${(result.message || (refusedByDriver && refusedByDriver.message)) ? ` · ${result.message || refusedByDriver.message}` : ''}` };
 }
@@ -1413,9 +1526,13 @@ function runLine() {
   const path = S.selKey ? null : S.sel;
   const util = S.util && S.util.path === path && (S.util.phase === 'running' || S.util.phase === 'done') ? S.util : null;
   if (!util) return '';
+  const run = util.runId && window.IORuns ? window.IORuns.get(util.runId) : null;
+  const custom = run && mountedRunView && runViews()[mountedRunView].runLine ? runViews()[mountedRunView].runLine(util, run, runsCtx) : null;
+  if (custom) return custom; // a run view that draws the line itself (r2: the output in place)
+  const show = util.runId && canShowRun() ? `<button class="ent-run-more" data-run-open="${esc(util.runId)}">Show output</button>` : '';
   if (util.phase === 'running') {
     const seconds = Math.max(0, Math.round((Date.now() - util.startedAt) / 1000));
-    return `<div class="ent-run running" role="status" aria-live="polite"><span class="ent-run-t">${esc(gerund(util.title))} on ${esc(util.label)}… ${seconds} s</span></div>`;
+    return `<div class="ent-run running" role="status" aria-live="polite"><span class="ent-run-t">${esc(gerund(util.title))} on ${esc(util.label)}… ${seconds} s${show ? ' · ' : ''}</span>${show}</div>`;
   }
   const outcome = runOutcome(util);
   const age = (Date.now() - util.doneAt) / 1000;
@@ -1423,7 +1540,7 @@ function runLine() {
   const words = outcome.ok ? outcome.text : `${plainTitle(util.title)} failed · ${outcome.text}`;
   const more = `<button class="ent-run-more" data-run-details aria-expanded="${S.runDetails}">Details ${S.runDetails ? '▾' : '▸'}</button>`;
   return `<div class="ent-run ${outcome.ok ? 'ok' : 'fail'}" role="status"${outcome.ok ? '' : ' data-diagnostic'}>`
-    + `${outcome.ok ? '' : shape('error', 'failed')}<span class="ent-run-t" title="${esc(words)}">${esc(words)} · ${esc(when)} · </span>${more}</div>`
+    + `${outcome.ok ? '' : shape('error', 'failed')}<span class="ent-run-t" title="${esc(words)}">${esc(words)} · ${esc(when)} · </span>${show ? `${show}<span class="ent-run-t"> · </span>` : ''}${more}</div>`
     + (S.runDetails ? `<div class="ent-run-details">${runDetailsHtml(util)}</div>` : '');
 }
 
@@ -1667,6 +1784,7 @@ function render() {
   renderChip();
   renderModal();
   renderStatusbar();
+  updateRunView();
 }
 
 // A new selection: its node loads, the drill below the old one closes. A utility belongs to the entity it was opened
@@ -1748,6 +1866,8 @@ document.addEventListener('click', (event) => {
   }
   if (t.closest('[data-util-cancel]') || t.id === 'modal') { if (S.util && S.util.phase === 'confirm') S.util.phase = 'shown'; return render(); }
   if (t.closest('[data-util-close]')) { S.util = null; return render(); }
+  const showRun = t.closest('[data-run-open]');
+  if (showRun) { openRun(showRun.dataset.runOpen); return undefined; }
   if (t.closest('[data-util-tick]')) return undefined; // its change event records the tick
   // the Expected setup card: a click opens its confirm; only the confirm's button writes the file
   const setupButton = t.closest('[data-setup]');
@@ -1800,6 +1920,8 @@ document.addEventListener('input', (event) => {
   render();
 });
 document.addEventListener('keydown', (event) => {
+  // WHY: a terminal program (vi, less, a prompt) needs Escape and every other key; the page's layers stay out of it
+  if (event.target.closest && event.target.closest('.xterm')) return;
   const typing = event.target.closest && event.target.closest('input, select, textarea, [contenteditable]');
   // `]` pins the Table's inspector open (again: unpins and folds it), as VS Code toggles its secondary side bar
   if (event.key === ']' && !typing && !event.ctrlKey && !event.metaKey && !event.altKey && S.view === 'table') {
@@ -1822,19 +1944,21 @@ document.addEventListener('keydown', (event) => {
 
 async function boot() {
   // index.html's inline script already set data-skin / data-mode from storage, so the first paint is right
-  const [skins, structures, detailLayouts, utilityMenus] = await Promise.all([readManifest('skins/index.json', 'skins'),
-    readManifest('view/structure/index.json', 'structures'), readManifest('detail/index.json', 'layouts'), readManifest('utilities/index.json', 'menus')]);
+  const [skins, structures, detailLayouts, utilityMenus, runEntries] = await Promise.all([readManifest('skins/index.json', 'skins'),
+    readManifest('view/structure/index.json', 'structures'), readManifest('detail/index.json', 'layouts'), readManifest('utilities/index.json', 'menus'),
+    readManifest('runs/index.json', 'runs')]);
   S.skins = skins.entries.length ? skins.entries : [{ id: DEFAULTS.skin, name: 'shadcn/ui', file: 'shadcn.css', primary: true }];
   await Promise.all([
     ...S.skins.map((skin) => loadStylesheet(`skins/${skin.file}`, skin.id)),
     ...structures.entries.map((entry) => loadScript(`view/structure/${entry.file}`)),
     ...detailLayouts.entries.map((entry) => loadScript(`detail/${entry.file}`)),
     ...utilityMenus.entries.map((entry) => loadScript(`utilities/${entry.file}`)),
+    ...runEntries.entries.map((entry) => loadScript(`runs/${entry.file}`)),
   ]);
   setupSkins(skins.default);
   setupStructures(structures);
   setupSwitcher();
-  setupPrototype(detailLayouts.default, utilityMenus.default);
+  setupPrototype(detailLayouts.default, utilityMenus.default, runEntries.default);
   S.inspPinned = readPref(PREFS.inspectorPinned) === '1';
   if (S.view === 'table' && (S.sel || S.selKey) && (S.drill.diag || S.drill.page)) S.inspOpen = true;
   setupPanes();

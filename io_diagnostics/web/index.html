@@ -19,6 +19,8 @@
 <link rel="stylesheet" href="tokens.css">
 <link rel="stylesheet" href="skins/shadcn.css" data-skin-css="shadcn">
 <link rel="stylesheet" href="app.css">
+<!-- the terminal emulator the runs panel uses (xterm.js, vendored: the page is served offline; vendor/xterm/NOTICE.md) -->
+<link rel="stylesheet" href="vendor/xterm/xterm.css">
 <!-- The tree styles (window.IOTreeRenderers); the bottom-right cluster switches them live. Linking every stylesheet
      here keeps the renderers from injecting their own (each class family is prefixed: t1-, t2-, v3-, v4-, v5-, t6-,
      so they cannot touch each other's rows). -->
@@ -127,12 +129,15 @@
       <div class="detail" id="detail"></div>
     </aside>
   </div>
+  <!-- the run view's panel (runs/*.js, docs/runs-v1.md section 7): hidden until a view uses it -->
+  <div id="runs-root" hidden></div>
   <footer class="statusbar">
     <span id="lastmsg">—</span>
     <span class="sb-note">diagnoses passively · a utility runs only after its dry run and your click</span>
     <!-- The skin, at the bottom too (round 3.5: Zach, "please still give me the option to change the skin at the bottom"),
          then the TEMPORARY Prototype picker (never a URL flag): the detail layout and the utility menu, live, remembered.
          Everything else lives in View options. -->
+    <span id="runs-status"></span>
     <div class="controls" id="controls">
       <div class="ctl" id="skin-bar-switch" title="Skin: every skin (View options has the same list)">
         <span class="ctl-label">Skin</span>
@@ -142,12 +147,16 @@
         <span class="ctl-label">Prototype</span>
         <select id="detail-layout" aria-label="Detail layout" title="Detail layout"></select>
         <select id="utility-menu" aria-label="Utility menu" title="Utility menu"></select>
+        <select id="run-view" aria-label="Runs view" title="Runs view"></select>
       </div>
     </div>
   </footer>
 </main>
 
 <div class="modal-back" id="modal" hidden></div>
+<script src="vendor/xterm/xterm.js"></script>
+<script src="vendor/xterm/addon-fit.js"></script>
+<script src="runs/core.js"></script>
 <script src="view/core.js"></script>
 <script src="tree/v1.js"></script>
 <script src="tree/v2.js"></script>

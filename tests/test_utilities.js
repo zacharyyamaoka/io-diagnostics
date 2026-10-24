@@ -351,7 +351,7 @@ async function main() {
     await open(page, base, ADAPTER);
     await utilities(page);
     const adapterGroups = await page.evaluate(() => [...document.querySelectorAll('.ent-menu .ugroup')].map((group) => group.className.replace('ugroup ugroup-', '')));
-    check('utilities: checks come first', adapterGroups[0] === 'checks' && adapterGroups.join() === 'checks,maintenance,motion', adapterGroups);
+    check('utilities: checks come first', adapterGroups[0] === 'checks' && adapterGroups.join() === 'checks,tools,maintenance,motion', adapterGroups);
     await page.click('[data-util="check_comms"]');
     await page.waitForSelector('[data-util-run]');
     const runLabel = await page.textContent('[data-util-run]');
@@ -394,7 +394,7 @@ async function main() {
     await page.waitForSelector('.ent-run-details .u-records');
     const records = await page.evaluate(() => document.querySelector('.ent-run-details').textContent);
     await page.screenshot({ path: path.join(ROUND3, 'r35-result-details.png'), clip: detail });
-    check('query: runs with one more click, its result is the line', runLabel === 'Run Check communication' && !result.modalShown && /· just now · Details ▸$/.test(result.line)
+    check('query: runs with one more click, its result is the line', runLabel === 'Run Check communication' && !result.modalShown && /· just now · (Show output · )?Details ▸$/.test(result.line)
       && !result.diagnostic && !result.details && /ActionCompleted/.test(records) && posts.length === 4, { runLabel, result, records: records.slice(0, 160), posts: posts.length });
     check('query: the entity re-reads its diagnostics at once', nodeAfter.some((at) => at >= doneAt - 400 && at <= doneAt + 600), { doneAt, nodeAfter: nodeAfter.map((at) => at - doneAt) });
     await page.click('[data-view="activity"]');
