@@ -9,7 +9,6 @@ part of what V2/V4/V5 are judged on.
 
 from __future__ import annotations
 
-import math
 import os
 import subprocess
 import tempfile
@@ -20,56 +19,53 @@ import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("AyatanaAppIndicator3", "0.1")
 gi.require_version("Notify", "0.7")
-import cairo  # noqa: E402
 from gi.repository import AyatanaAppIndicator3 as AppIndicator  # noqa: E402
 from gi.repository import GLib, Gtk, Notify  # noqa: E402
 
 OPEN = "/home/bam/.local/bin/open"  # Zach's focus-safe opener (never xdg-open)
 
 
-# The status dot's colours: Discord's own status palette (red, idle amber, offline grey). "ok" has no dot.
-# "attention" is the older two-icon model's name (the V2/V4/V5 prototypes and the notification), drawn as warn.
-DOTS = {"ok": None, "warn": (0.941, 0.698, 0.196), "error": (0.949, 0.247, 0.263), "stale": (0.502, 0.518, 0.557),
-        "attention": (0.941, 0.698, 0.196)}
+# The heart's colour per status: the brand rose when all is OK, then Discord's own status palette (idle amber,
+# red, offline grey); the error and stale hearts are also broken / dotted (brand/logos states), so the status reads
+# without colour too. "attention" is the older two-icon model's name (V2/V4/V5 prototypes, the notification) = warn.
+HEARTS = {"ok": "#f483a5", "warn": "#f0b232", "error": "#f23f43", "stale": "#80848e", "attention": "#f0b232"}
+FACE = "#ffffff"
+TOPBAR = Path(__file__).resolve().parent / "topbar"  # brand/logos r3-01 Big Sticker symbolic + states, copied
+SVG = "{http://www.w3.org/2000/svg}"
+
+
+def recolour(svg_text: str, heart: str) -> str:
+    """The symbolic mark with its head and face (the group's first four shapes: outline, bridge, two eyes) in white
+    and every later shape (the heart, whole or broken or dotted) in ``heart``."""
+
+    import xml.etree.ElementTree as ElementTree
+
+    ElementTree.register_namespace("", SVG[1:-1])
+    root = ElementTree.fromstring(svg_text)
+    group = root.find(f"{SVG}g")
+    group.set("fill", FACE)
+    for shape in list(group)[4:]:
+        shape.set("fill", heart)
+    return ElementTree.tostring(root, encoding="unicode")
 
 
 def draw_icons(directory: Path) -> None:
-    """22 px glyphs: a calm robot face (a rounded head, two eyes joined by a line), plain or with a status dot.
-    WHY a face: Zach's RobotDiagnostics placeholder (2026-10-23) until a logo is picked from brand/logos; an original
-    two-dot face in the spirit of a health robot, not a copy of any character. WHY a dot in a cut-out ring at the
-    bottom right: Zach (2026-10-23) "a simple icon that shows a color for the status similar to discord", whose
-    badge sits there with a transparent gap, so the colour reads on any top bar without touching the face's lines."""
+    """22 px glyphs: the RobotDx mark, Big Sticker (Zach, 2026-10-24: "final logo selection is the original Big
+    Sticker Heart"), its face always the same and white, its heart coloured and shaped by the status. WHY colour on
+    the heart: Zach (2026-10-23) "a simple icon that shows a color for the status similar to discord", and health
+    shows only through the heart (the logo rounds' rule). WHY PNGs drawn here, not the -symbolic files: GNOME
+    recolours a symbolic icon to the panel's text colour, which would drop the status colour."""
 
-    for status, dot in DOTS.items():
-        name = f"io-diagnostics-{status}"
-        surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, 22, 22)
-        context = cairo.Context(surface)
-        context.set_source_rgba(1, 1, 1, 0.95)
-        context.set_line_width(1.6)
-        context.save()
-        context.translate(11, 12)
-        context.scale(9.0, 7.0)
-        context.arc(0, 0, 1, 0, 2 * math.pi)
-        context.restore()
-        context.stroke()
-        for x in (7.2, 14.8):
-            context.arc(x, 12, 1.7, 0, 2 * math.pi)
-            context.fill()
-        context.set_line_width(1.1)
-        context.move_to(7.2, 12)
-        context.line_to(14.8, 12)
-        context.stroke()
-        if dot:
-            context.set_operator(cairo.OPERATOR_CLEAR)
-            # WHY at (18.2, 18.2): the ring clears the right eye and the line's end (5.5 px away), cutting only the
-            # head's outline, so the face itself never changes (measured on the rendered strip, 2026-10-23)
-            context.arc(18.2, 18.2, 4.9, 0, 2 * math.pi)
-            context.fill()
-            context.set_operator(cairo.OPERATOR_OVER)
-            context.set_source_rgb(*dot)
-            context.arc(18.2, 18.2, 3.5, 0, 2 * math.pi)
-            context.fill()
-        surface.write_to_png(str(directory / f"{name}.png"))
+    gi.require_version("GdkPixbuf", "2.0")
+    from gi.repository import GdkPixbuf
+
+    for status, heart in HEARTS.items():
+        source = TOPBAR / f"{'warn' if status == 'attention' else status}.svg"
+        loader = GdkPixbuf.PixbufLoader.new_with_type("svg")
+        loader.set_size(22, 22)
+        loader.write(recolour(source.read_text(), heart).encode())
+        loader.close()
+        loader.get_pixbuf().savev(str(directory / f"io-diagnostics-{status}.png"), "png", [], [])
 
 
 class Indicator:

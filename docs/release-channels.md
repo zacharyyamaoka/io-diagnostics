@@ -37,8 +37,10 @@ stop --all` change what Zach uses: Zach's calls, never an agent's.
 
 - `app: "robotdiagnostics"`: the id the old desktop entry, icon and WM class already used, so the dock icon and the
   icon theme entry stay the same.
-- `icon: brand/placeholder/robotdiagnostics.svg`: the placeholder face, byte-identical to the icon already installed
-  as `robotdiagnostics` (until a logo is picked from `brand/logos`).
+- `icon: brand/logos/r3-01-big-sticker.svg`: the RobotDx logo (Zach, 2026-10-24: "final logo selection is the
+  original Big Sticker Heart"), installed as `robotdiagnostics` by `sps install-desktop`. The tray draws the same mark
+  from `contract/topbar/` (the symbolic icon and its states, copied there because a release snapshot leaves out
+  `brand/`), with the heart coloured by status.
 - `stable.port: 8820`: Zach's muscle memory (the old service's port). The page's origin is unchanged, so its
   browser-stored settings key off the same origin.
 - `stable.build` copies `io_diagnostics/web` to `.sps-site` (`output`): the page is static files; the Stable server

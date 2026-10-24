@@ -43,9 +43,15 @@ def test_the_dot_colour_is_error_then_warn_then_grey():
 
 
 def test_every_status_has_an_icon():
+    """Each status the dot can take has a Big Sticker icon (contract/topbar), its heart recoloured, its face white."""
+
     import pytest
 
-    pytest.importorskip("cairo")
-    from contract.indicator import DOTS
+    pytest.importorskip("gi")
+    from contract.indicator import FACE, HEARTS, TOPBAR, recolour
 
-    assert {dot_status(_attention(level)) for level in ("ok", "warn", "error", "stale", "unknown")} | {"ok"} <= set(DOTS)
+    statuses = {dot_status(_attention(level)) for level in ("ok", "warn", "error", "stale", "unknown")} | {"ok"}
+    assert statuses <= set(HEARTS)
+    for status in statuses:
+        drawn = recolour((TOPBAR / f"{status}.svg").read_text(), HEARTS[status])
+        assert f'fill="{FACE}"' in drawn and f'fill="{HEARTS[status]}"' in drawn, status
