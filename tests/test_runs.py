@@ -625,14 +625,17 @@ def test_a_real_act_waits_for_a_held_bus_lock_and_then_runs(tmp_path):
     rig, lock = bus_rig(tmp_path)
     held = HeldLock(lock)
     try:
-        began = time.monotonic()
-        threading.Timer(2.0, held.release).start()
         run = rig.start("calibrate")
         watcher = Watcher(rig, run["id"])
         watcher.wait_for("waiting for the bus: held by moteus_servo.diagnostics (pid 356724) · checking usb:9-1")
         assert rig.run(run["id"])["state"] == "waiting" and rig.run(run["id"])["active"] is True
-        watcher.wait_for("Continue? [y/N]", timeout=15)  # the lock was released after 2 s: the act went through the gates
-        assert time.monotonic() - began >= 1.8
+        # WHY release only after the host has asked again and been refused: a 2 s timer started before the run raced the
+        # plugin's own start under a loaded full-suite run (the lock was free before the act ever saw it held)
+        deadline = time.monotonic() + 15
+        while len(rig.log_lines(blocked=True)) < 2 and time.monotonic() < deadline:
+            time.sleep(0.1)
+        held.release()
+        watcher.wait_for("Continue? [y/N]", timeout=15)  # the lock was released: the act went through the gates
         rig.write(run["id"], "input", {"text": "y\n"})
         final = watcher.wait_end()
         assert (final["state"], final["exit_code"]) == ("done", 0) and final["result"]["records"][0]["code"] == "ActionCompleted"
