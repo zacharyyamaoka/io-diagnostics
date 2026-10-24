@@ -873,6 +873,11 @@ FOLLOW_CADENCE = {"Processes": PROCESSES_PERIOD_S, "NTP offset": NTP_PERIOD_S}
 def describe() -> dict:
     return {"name": NAME, "version": VERSION, "schema": SCHEMA, "record_version": RECORD_VERSION, "matches": ["host"],
             "actions": [], "follow": {"period_s": FOLLOW_PERIOD_S},
+            # the entity page's extra tab (docs/state-config-v1.md section 7): the top processes the follow reports, drawn as a
+            # sortable table from the two tab-separated values of the "Processes" status (header line: pid name cpu_percent rss_bytes)
+            "tabs": [{"id": "processes", "title": "Processes", "path": "", "kind": "table", "status": "Processes",
+                      "values": ["top_cpu", "top_memory"],
+                      "description": "the busiest processes by CPU and by memory, like System Monitor's Processes tab"}],
             "description": "the Computer: CPU, memory, disks, temperatures, GPU, clock, uptime, network, USB bandwidth"
                            " (follow: the same once a second, plus the top processes)"}
 

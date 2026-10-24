@@ -4,15 +4,16 @@
 revision **0.2**, additive on 0.1 (a reader that knows 0.1 ignores what it does not know). Served by
 `io_diagnostics/server.py`; the records are `contract/record.py`; the page is `web/detail/d6.js`.*
 
-An entity page has four sections, each one kind of record, all joined on the entity path. They are **not** merged into
-one type: health, values, settings, actions and logs have different lifetimes and different readers.
+An entity page is a header that is always visible and **tabs**, each tab one kind of record, all joined on the entity
+path (Zach, 2026-10-24: "faster to switch between things than having to scroll down"; System Monitor and tview do it).
+They are **not** merged into one type: health, values, settings, actions and logs have different lifetimes and readers.
 
-| Section | Record | SOVD resource (ISO 17978; ros2_medkit implements it) | Read from |
+| Tab | Record | SOVD resource (ISO 17978; ros2_medkit implements it) | Read from |
 |---|---|---|---|
 | **Diagnostics** | `status` (+ the host's `Fault` memory) | faults | `GET /api/v1/node` `checks`, `faults` |
 | **State** | `state` and every `Measurement` | data | `GET /api/v1/values`, `/frames` |
 | **Configuration** | `config` | configurations | `GET /api/v1/node` `config` |
-| **Utilities** (header menu) | `Action` | operations | `POST /api/v1/act` |
+| **Utilities** (the ☰ menu in the header too) | `Action` | operations | `POST /api/v1/act` |
 | **Log** | `event` | logs | `GET /api/v1/activity` |
 
 ## 1. State is the entity's live values
@@ -120,7 +121,7 @@ A plugin that can stream declares `"watch": {"period_s": 0.1, "gates": ["port_fr
 
 ## 5. Log
 
-The fourth section is this entity's Activity (`GET /api/v1/activity`): events whose `path` is the entity or below it,
+The fourth tab is this entity's Activity (`GET /api/v1/activity`): events whose `path` is the entity or below it,
 newest first, with a Raw channel (the source lines an event folds: the kernel line, `merged` raw enumerations, the full
 `args`). A line that raised or cleared a fault (`FaultConfirmed` / `FaultHealed`) links to that fault's row in
 Diagnostics, and the row links back to its line. The Activity lane's per-entity scope replaces the filter here once it
@@ -132,7 +133,28 @@ Wherever a USB link is drawn: from the device's `bcdUSB` (sysfs `version`) and t
 **USB 1.1**; 480 Mb/s → **USB 2.0** (the device's own 2.1 when `bcdUSB` says so); 5 Gb/s → **USB 3.2 Gen 1**; 10 Gb/s →
 **USB 3.2 Gen 2**; 20 Gb/s → **USB 3.2 Gen 2x2**; 40 Gb/s → **USB4**. The raw speed is the tooltip.
 
-## 7. What a driver implements (moteus_servo, intel_rgbd)
+## 7. Tabs
+
+The header stays above the tabs and is always visible: the name and model, the connection badge (`USB 2.1`, `CAN 1 · fdcanusb
+FDA81D29`), the ticking last-heard clock (`heard 2 s ago`, from `heard` in `node` and `values`), the Utilities menu and a
+hardware line (serial, firmware, model id; the rest one click away).
+
+1. **Diagnostics** (default) 2. **State** 3. **Configuration** 4. **Log** 5. **Utilities** (every action with its danger
+class, whether it can run now and its last run; a click is the page's usual dry run first), then the driver's own tabs.
+
+- **Driver tabs** are declared in `describe`: `"tabs": [{"id": "processes", "title": "Processes", "path": "", "kind":
+  "table", "status": "Processes", "values": ["top_cpu", "top_memory"]}]`. `path` is relative to the device (`""`, or
+  `"host"` for the Computer). A `table` tab draws each named value of the named status as a sortable table: a tab-separated
+  text whose first line is the header; a column named `*_bytes` is drawn as bytes, `*_percent` as %. The Computer's
+  `computer` plugin declares **Processes**. A camera's streams stay in State.
+- **Badges**, quiet, none when all is well: Diagnostics shows the worst non-OK level's mark and the count of rows not OK;
+  Log the number of warnings or errors that arrived since the tab was last shown.
+- **Navigation:** the tab is in the URL (`?page=<id>`, so back and forward work); it is remembered per entity kind, so
+  another board opens on the same tab. Ctrl+PageUp / Ctrl+PageDown, or 1-9 / the arrow keys with the tab bar focused.
+- **Live data:** the `watch` heartbeat runs only while the State tab is showing. Diagnostics, Log and a driver tab read what
+  the host already polls.
+
+## 8. What a driver implements (moteus_servo, intel_rgbd)
 
 1. `describe`: `"record_version": "0.2"`, `watch {period_s, gates}`, `streams` (RealSense: color, depth, ir).
 2. `watch --device D --path P` (query-only): print `state` records (and `frame` records) at `period_s`, `status` on change,
