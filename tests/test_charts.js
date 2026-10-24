@@ -63,7 +63,7 @@ const stop = (child) => { try { process.kill(-child.pid, 'SIGTERM'); } catch (_)
 // `tab`: open the entity page's own tab (d6, the default entity page) instead of pinning the Computer page to d4, whose sparklines c1-c5 were built on
 async function newPage(browser, base, view, { size = BIG, mode = 'light', keep = false, tab = '' } = {}) {
   const context = await browser.newContext({ viewport: size, colorScheme: mode, acceptDownloads: true });
-  if (!keep) await context.addInitScript(([v, m]) => { try { if (!sessionStorage.getItem('charts-test-init')) { sessionStorage.setItem('charts-test-init', '1'); localStorage.setItem('io-diagnostics.chart-view', v); localStorage.setItem('io-diagnostics.mode', m); if (!tab) localStorage.setItem('io-diagnostics.detail-layout', 'd4'); } } catch (_) { /* private mode */ } }, [view, mode]);
+  if (!keep) await context.addInitScript(([v, m, pinned]) => { try { if (!sessionStorage.getItem('charts-test-init')) { sessionStorage.setItem('charts-test-init', '1'); localStorage.setItem('io-diagnostics.chart-view', v); localStorage.setItem('io-diagnostics.mode', m); if (pinned) { localStorage.setItem('io-diagnostics.detail-layout', 'd4'); localStorage.setItem('io-diagnostics.page-layout', 'l0'); } } } catch (_) { /* private mode */ } }, [view, mode, !tab]);
   const page = await context.newPage();
   const errors = [];
   page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
