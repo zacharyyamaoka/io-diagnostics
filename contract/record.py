@@ -105,7 +105,7 @@ STANDARD_ACTIONS = {
     "set_id": "Change CAN id…",
     "open_console": "Open console",
     "identify": "Identify",
-    # v0.2: the Configuration tab's three writes (docs/state-config-v1.md section 9), driven by its edit session, not by a menu
+    # v0.2: the Configuration tab's three writes (docs/state-config-v1.md section 8), driven by its edit session, not by a menu
     "set_config": "Set configuration…",
     "persist_config": "Save configuration to the board…",
     "reset_config": "Reset configuration…",
@@ -265,7 +265,7 @@ class Config:
     expected_source: str = ""
     stamp: float | None = None  # when the driver read it
     source: str = ""
-    # v0.2, editing (docs/state-config-v1.md section 9): ``value`` is what the board runs now (live); ``stored`` is what it keeps
+    # v0.2, editing (docs/state-config-v1.md section 8): ``value`` is what the board runs now (live); ``stored`` is what it keeps
     # across a restart (a different value = "not saved"); the rest tells a page how to offer an edit and a reset
     writable: bool = False
     type: str = ""  # int | float | bool | enum | string
