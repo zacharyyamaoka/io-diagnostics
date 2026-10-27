@@ -411,9 +411,9 @@ on today's page (a write, §6), linked from Explore ("Open on the classic page" 
 
 | KPI | Today's page | The new page | Target | How |
 |---|---|---|---|---|
-| K2 bytes, requests per s, idle (Explore, nothing selected) | 54.7-57.6 KB/s, 2.1-2.3 req/s | **26.0-27.6 KB/s, 0.73-0.75 req/s** | ≤ 8 KB/s, ≤ 1 req/s | the same host, the same run, 15 s each (`tests/test_dx_page.js`); `/state` on SSE ticks (≥ 2 s) instead of a 1 s timer. The rest needs a host delta feed |
-| K5 scrub: last seek → every panel of the entity drawn at t | n/a | **10-269 ms** end to end in 7 runs (FAIL at 50 ms in 6 of 7); 8-13 ms per seek once paused, every panel's own draw 0.5-3 ms | ≤ 50 ms | the test's own listeners on the clock and `data-views-live`; the slow part is the first frame after leaving live and frame scheduling in headless software rendering on a loaded machine, not the views' JavaScript (no long tasks seen) |
-| K7 cold load → the tree drawn | not measured | **124-173 ms** | ≤ 1.5 s | an in-page 10 ms timer from navigation start |
+| K2 bytes, requests per s, idle (Explore, nothing selected) | 54.7-57.9 KB/s, 2.1-2.3 req/s | **26.0-27.6 KB/s, 0.73-0.75 req/s** | ≤ 8 KB/s, ≤ 1 req/s | the same host, the same run, 15 s each (`tests/test_dx_page.js`); `/state` on SSE ticks (≥ 2 s) instead of a 1 s timer. The rest needs a host delta feed |
+| K5 scrub: last seek → every panel of the entity drawn at t | n/a | **10-269 ms** end to end in 10 runs (FAIL at 50 ms in 9 of 10); 8-13 ms per seek once paused, every panel's own draw 0.5-3 ms | ≤ 50 ms | the test's own listeners on the clock and `data-views-live`; the slow part is the first frame after leaving live and frame scheduling in headless software rendering on a loaded machine, not the views' JavaScript (no long tasks seen) |
+| K7 cold load → the tree drawn | not measured | **120-221 ms** (221 inside the full suite run) | ≤ 1.5 s | an in-page 10 ms timer from navigation start |
 | Page weight (Explore) | 592 KB gz | **216 KB gz** (data-ui core 103, live views 30, kpi 14, table 12, dashboard 15, the page 30) | — | gzip -9 of each file the page loads |
 
 Not measured in this phase: K1 (receive → drawn), K3 (host CPU per page), K4 (main thread with 20 series), K6 (heap at full
