@@ -4,8 +4,10 @@
    is LIVE data … at any moment you can just kinda like 'rewind'". So the host stays as it is and this file turns what
    it serves into datasets that are still growing: data-ui draws them as of the clock's t, and rewinding is a query.
 
-     shared, always fed   entities summary attention runs (GET /state), events faults (GET /activity, SSE /events)
-     per watched entity   checks config (GET /node), levels (GET /history), samples (GET /history + /values)
+     shared, always fed   entities summary attention runs (SSE /live: a snapshot of /state, then only what changed; GET
+                          /state on an older host), events faults (GET /activity, SSE /events)
+     per watched entity   checks config (GET /node), levels (GET /history), samples (GET /history + /values for the backlog,
+                          then /live's samples; /values polled on an older host)
 
    A watched entity (PEP §12.1) is one a view on screen needs: use(kind, path) / release(kind, path), counted; its
    polls start with the first use and stop 10 s after the last release. Nothing polls while the tab is hidden (the SSE
@@ -31,6 +33,9 @@ const VALUES_LIVE_MS = 250;      // while the watch runs (today's d6.js)
 const VALUES_IDLE_MS = 1000;
 const FAULTS_EVERY_MS = 4000;
 const LINGER_MS = 10000;         // an entity's polls outlive its last view this long (a tab switch does not restart them)
+const LIVE_FIRST_MS = 8000;      // /live must send its snapshot within this, or the page polls /state (an older host, a 404)
+// with /live on, an entity's /node and /history are read when its tree row changes (a report arrived) and on a slow beat
+const NODE_ON_CHANGE_MS = 1000, NODE_LIVE_EVERY_MS = 10000, HISTORY_ON_CHANGE_MS = 2000, HISTORY_LIVE_EVERY_MS = 15000;
 
 // WHY a shape and a word, nothing for OK (E9, Zach's rule): a level is never only a colour, and OK is quiet
 export const health = (level) => MARK[level] || '';
@@ -97,6 +102,13 @@ export class RobotDxFeed extends EventTarget {
     this._faultUses = 0;
     this.host = { now: null, offset: 0, fixture: null, window: 900, ok: false };
     this._timer = null;
+    this.mode = null;                // 'live' (GET /api/v1/live) or 'poll' (GET /state; an older host)
+    this._mirror = null;             // /live: {tree: Map(path -> node with child paths), state: {section: value}}
+    this._anchor = null;             // {now: the host's seconds, at: performance.now()} (time is not diffed: PEP §14)
+    this._liveQueue = [];            // /live events that came before the datasets existed
+    this._liveReady = false;
+    this._flushTimer = null;
+    this._touched = new Set();
     this._onVisible = () => { if (!hidden()) { this._state.wanted = true; this._kick(); } };
     this.addEventListener('watch', (e) => { const ent = this._entities.get(e.detail.path); if (ent) ent.watch = e.detail.watch; });
   }
@@ -176,18 +188,27 @@ export class RobotDxFeed extends EventTarget {
   // ---------------------------------------------------------------- start / stop
 
   async start() {
-    // WHY all at once: the tree is drawn from the first /state, so nothing it does not need waits in front of it (K7)
+    // WHY all at once: the tree is drawn from the first snapshot, so nothing it does not need waits in front of it (K7)
     const schemas = Promise.all(KINDS.map(async (kind) => {
       try { this.schemas[kind] = await (await fetch(new URL(`${kind}.json`, this.schemaBase))).json(); } catch (_) { this.schemas[kind] = { properties: {} }; }
     }));
     const settings = this._get('/settings').catch(() => null);
-    const state = this._get('/state').then((s) => s, () => null);
+    const live = this._openLive();
     this._state.inFlight = true;
     await schemas;
     const s = await settings;
     if (s && s.history_window_s) this.host.window = s.history_window_s;
     for (const kind of ['entities', 'summary', 'attention', 'runs', 'events', 'faults', 'checks', 'config']) this.dataset(kind);
-    this._applyState(await state);
+    this._liveReady = true;
+    for (const [type, data] of this._liveQueue.splice(0)) this._liveEvent(type, data);
+    if ((await live) === 'live') this.mode = 'live';
+    else {
+      // an older host (no /api/v1/live: 404) or a feed that never sent its snapshot: phase 3's /state poll
+      this.mode = 'poll';
+      let st = null;
+      try { st = await this._get('/state'); } catch (_) { /* reconnecting */ }
+      this._applyState(st);
+    }
     // the event backlog, then the stream (an SSE event older than the backlog would otherwise go in first)
     this._readActivity(true).then(() => this._connectEvents());
     document.addEventListener('visibilitychange', this._onVisible);
@@ -197,6 +218,7 @@ export class RobotDxFeed extends EventTarget {
   stop() {
     clearTimeout(this._timer);
     if (this._es) this._es.close();
+    if (this._live) this._live.close();
     document.removeEventListener('visibilitychange', this._onVisible);
   }
 
@@ -228,12 +250,99 @@ export class RobotDxFeed extends EventTarget {
     if (hidden()) return;
     const now = Date.now();
     const st = this._state;
-    if (!st.inFlight && ((st.wanted && now - st.at >= STATE_EVERY_MS) || now - st.at >= STATE_IDLE_MS)) this._readState();
+    if (this.mode === 'poll' && !st.inFlight && ((st.wanted && now - st.at >= STATE_EVERY_MS) || now - st.at >= STATE_IDLE_MS)) this._readState();
     if (this._faultUses > 0 && now - this._faultsAt >= FAULTS_EVERY_MS) this._readActivity(false);
     for (const e of this._entities.values()) e.tick(now);
   }
 
   _kick() { if (!hidden()) this._loop(); }
+
+  // ---------------------------------------------------------------- GET /api/v1/live: /state as a change-only stream
+
+  /** The host's clock now: the snapshot's (or a samples event's) `now`, advanced by the page's own clock since. */
+  hostNow() { return this._anchor ? this._anchor.now + (performance.now() - this._anchor.at) / 1000 : this.host.now; }
+
+  /** Open the feed; resolves 'live' at its first snapshot, 'poll' when it closes before one (a 404) or never sends one. */
+  _openLive() {
+    return new Promise((resolve) => {
+      if (typeof EventSource === 'undefined') { resolve('poll'); return; }
+      const es = new EventSource(`${this.api}/live`);
+      this._live = es;
+      const s = this._stats['/live'] || (this._stats['/live'] = { requests: 0, bytes: 0 });
+      s.requests += 1;
+      let settled = false;
+      const settle = (how) => { if (settled) return; settled = true; clearTimeout(timer); if (how === 'poll') es.close(); resolve(how); };
+      const timer = setTimeout(() => settle('poll'), LIVE_FIRST_MS);
+      for (const type of ['snapshot', 'upsert', 'remove', 'samples']) {
+        es.addEventListener(type, (m) => {
+          s.bytes += m.data.length;
+          let data;
+          try { data = JSON.parse(m.data); } catch (_) { return; }
+          if (this._liveReady) this._liveEvent(type, data); else this._liveQueue.push([type, data]);
+          if (type === 'snapshot') settle('live');
+        });
+      }
+      es.onerror = () => {
+        if (es.readyState === EventSource.CLOSED) {
+          // closed for good: before a snapshot it is an older host (a 404); after one, the host is gone or lost the feed
+          if (!settled) settle('poll');
+          else if (this.mode === 'live') { this.mode = 'poll'; this._state.wanted = true; this._kick(); }
+        } else if (settled && this.mode === 'live') {
+          // the browser retries with Last-Event-ID; the host replays what was missed, or sends a fresh snapshot
+          this._state.tries += 1;
+          this.host.ok = false;
+          this._status('reconnecting');
+        }
+      };
+    });
+  }
+
+  _liveEvent(type, data) {
+    if (type === 'snapshot') {
+      // a snapshot replaces everything the page holds (a first connect, or a resume the host could not serve)
+      this._mirror = { tree: new Map(), state: {} };
+      for (const [k, v] of Object.entries(data)) if (k !== 'tree') this._mirror.state[k] = v;
+      const walk = (n) => { this._mirror.tree.set(n.path, { ...n, children: (n.children || []).map((c) => c.path) }); for (const c of n.children || []) walk(c); };
+      if (data.tree) walk(data.tree);
+      if (data.clock && Number.isFinite(data.clock.now)) this._anchor = { now: data.clock.now, at: performance.now() };
+      this._applyState(data);
+      return;
+    }
+    if (!this._mirror) return;
+    if (type === 'upsert') {
+      if (data.table === 'tree') { this._mirror.tree.set(data.id, data.row); this._touched.add(data.id); } else this._mirror.state[data.id] = data.row;
+      // a clock section sent for another reason carries the host's now: anchor to it
+      if (data.table === 'state' && data.id === 'clock' && data.row && Number.isFinite(data.row.now)) this._anchor = { now: data.row.now, at: performance.now() };
+      this._flushSoon();
+    } else if (type === 'remove') {
+      if (data.table === 'tree') this._mirror.tree.delete(data.id); else delete this._mirror.state[data.id];
+      this._flushSoon();
+    } else if (type === 'samples') {
+      if (Number.isFinite(data.now)) this._anchor = { now: data.now, at: performance.now() };
+      const e = this._entities.get(data.path);
+      if (e) e.ingest(data);
+    }
+  }
+
+  /** One tick's events are one apply (the host sends them together): the mirror back into /state's shape, diffed by row. */
+  _flushSoon() {
+    if (this._flushTimer) return;
+    this._flushTimer = setTimeout(() => {
+      this._flushTimer = null;
+      const m = this._mirror;
+      if (!m) return;
+      const root = [...m.tree.values()].find((n) => !n.parent) || m.tree.get('host');
+      const nest = (n, seen = new Set()) => {
+        if (!n || seen.has(n.path)) return null;
+        seen.add(n.path);
+        return { ...n, children: (n.children || []).map((p) => nest(m.tree.get(p), seen)).filter(Boolean) };
+      };
+      const clock = { ...(m.state.clock || {}), now: this.hostNow() };
+      this._applyState({ ...m.state, clock, tree: root ? nest(root) : { path: 'host', children: [] } });
+      for (const path of this._touched) { const e = this._entities.get(path); if (e) e.rowChanged(); }
+      this._touched.clear();
+    }, 0);
+  }
 
   // ---------------------------------------------------------------- /state: the tree, the summary, what needs you, runs
 
@@ -380,19 +489,37 @@ class EntityFeed {
 
   use(kind) { this.uses[kind] += 1; }
   release(kind) { this.uses[kind] = Math.max(0, this.uses[kind] - 1); if (!this.uses[kind]) this.released[kind] = Date.now(); }
+  _want(k, now = Date.now()) { return this.uses[k] > 0 || now - this.released[k] <= LINGER_MS; }
+
+  /** /live upserted this entity's tree row: a report arrived, so its checks, settings and levels are read again soon. */
+  rowChanged() { this.nodeDue = true; this.historyDue = true; }
 
   tick(now) {
     // WHY linger: Explore's detail is rebuilt on a selection and a dashboard on a reload; its polls must not restart
-    const want = (k) => this.uses[k] > 0 || now - this.released[k] <= LINGER_MS;
+    const want = (k) => this._want(k, now);
     if (!['checks', 'config', 'levels', 'samples', 'peek'].some(want)) return;
-    if (!this.busy.node && now - this.nodeAt >= NODE_EVERY_MS) this._node();
+    const live = this.feed.mode === 'live';
+    // WHY on a change with /live: a row is upserted when a report arrives, so a rig that reports every 30 s is read every 30 s,
+    // not every 2 s; the slow beat catches what changes with no arrival (a check going stale)
+    const nodeDue = !this.nodeOk || (live ? (this.nodeDue && now - this.nodeAt >= NODE_ON_CHANGE_MS) || now - this.nodeAt >= NODE_LIVE_EVERY_MS : now - this.nodeAt >= NODE_EVERY_MS);
+    if (!this.busy.node && nodeDue) { this.nodeDue = false; this._node(); }
     if (!this.nodeOk) return;
     // the host's level history: the health strips (levels), and once, the checks' own past (so Diagnostics rewinds too)
-    if ((want('levels') || (want('checks') && !this.checksBack)) && !this.busy.history && now - this.historyAt >= HISTORY_EVERY_MS) this._history();
+    const historyDue = !this.historyAt || (live ? (this.historyDue && now - this.historyAt >= HISTORY_ON_CHANGE_MS) || now - this.historyAt >= HISTORY_LIVE_EVERY_MS : now - this.historyAt >= HISTORY_EVERY_MS);
+    if ((want('levels') || (want('checks') && !this.checksBack)) && !this.busy.history && historyDue) { this.historyDue = false; this._history(); }
     if ((want('samples') || want('peek')) && this.watchSupported && !this.busy.values) {
+      // with /live, only the backlog is read here; what comes after arrives as the feed's samples (ingest)
       const every = this.watch && this.watch.state === 'running' ? VALUES_LIVE_MS : VALUES_IDLE_MS;
-      if (this.cursor === null || now - this.valuesAt >= every) this._values();
+      if (this.cursor === null || (!live && now - this.valuesAt >= every)) this._values();
     }
+  }
+
+  /** /live's samples for this entity (the /values?since= shape): appended once its backlog is in, while a view wants them. */
+  ingest(v) {
+    if (this.cursor === null || !(this._want('samples') || this._want('peek'))) return;
+    if (v.watch) this.watch = v.watch;
+    this.cursor = Math.max(this.cursor, v.cursor || 0);
+    this._appendValues(v, null);
   }
 
   async _node() {
@@ -502,6 +629,11 @@ class EntityFeed {
     if (!backlog && v.cursor < this.cursor) this.lastPoint.clear();   // the host restarted: its serial numbers began again
     this.cursor = v.cursor;
     if (v.watch) this.watch = v.watch;
+    this._appendValues(v, h);
+  }
+
+  /** Points of a /values answer (the backlog with `h`, the host's 1 Hz history before its ring) into the samples dataset. */
+  _appendValues(v, h) {
     const ds = this.feed.dataset('samples', this.path);
     const byKey = new Map();
     const unitOf = new Map();

@@ -97,3 +97,7 @@ data-dashboard[data-arranging] .dd-panel.grid-stack-item:not([gs-h]) { height: v
 /* WHY: data-ui's levels card writes "No levels in this window yet" before its first strips and does not take it away
    when they arrive (levels.js manages only its rows); hide it beside strips (data-ui follow-up, reported) */
 .dv-levels-empty:not(:only-child) { display: none; }
+
+/* a save the host refused: a conflict (412), the size cap (413), an error; the reader chooses what happens next */
+.dx-conflict { margin: 8px 12px 0; padding: 8px 12px; border: 1px solid var(--dv-warn); border-radius: var(--dv-radius); color: var(--dv-fg); font-size: 13px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.dx-conflict[hidden] { display: none; }

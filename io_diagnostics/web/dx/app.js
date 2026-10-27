@@ -295,11 +295,13 @@ async function mountExplore(root, params) {
     // WHY hidden where the detail has its own playback card: one time bar on screen, never two
     showTimeBar(!hasPlayback(parseBase(text)));
   }
-  keep.addEventListener('click', () => {
+  keep.addEventListener('click', async () => {
     if (!current.path || !window.__dxBoards) return;
     const e = feed.dataset('entities').latestAt(Infinity, current.path);
-    const id = window.__dxBoards.create({ title: `Explore · ${(e && e.name) || current.path}`, text: detail.layoutText ? detail.layoutText() : current.text });
-    go('dashboards', { board: id });
+    try {
+      const id = await window.__dxBoards.create({ title: `Explore ${(e && e.name) || current.path}`, text: detail.layoutText ? detail.layoutText() : current.text });
+      go('dashboards', { board: id });
+    } catch (err) { crumbs.textContent = `Not kept: ${err.message}`; }
   });
   await select(params.sel);
   return {

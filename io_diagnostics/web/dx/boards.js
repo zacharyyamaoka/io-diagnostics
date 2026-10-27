@@ -1,11 +1,14 @@
-/* Dashboards: the starters (dashboards/*.base, listed in dashboards/index.json) and your own (docs/peps/0001-robotdx-on-data-ui.md §12.3).
+/* Dashboards: the starters (dashboards/*.base, listed in dashboards/index.json) and your own (docs/peps/0001-robotdx-on-data-ui.md
+   §12.3, §14).
 
-   A dashboard is a data-ui .base with layout: (PEP 0004 / 0005 grammar), drawn by a stock <data-dashboard> over the
-   page's live datasets (app.js openBase). Yours live in this browser (localStorage robotdx.dx.boards, every access in
-   try/catch) until the host has a place for them: there is no /api/v1/dashboards (asked of the RobotDx session), so
-   Save as file downloads the .base and Load .base reads one back (a picked file or one dropped on the page).
-   WHY a store with one shape ({id, title, text, updated}): a server endpoint can take the same list later and nothing
-   else changes (the reversible default, PEP §12.3).
+   A dashboard is a data-ui .base with layout: (PEP 0004 / 0005 grammar), drawn by a stock <data-dashboard> over the page's
+   live datasets (app.js openBase). Yours are files on the host (GET /api/v1/dashboards, GET | PUT | DELETE
+   /api/v1/dashboards/<name>.base; the host keeps the text byte for byte and never parses it). Every change is one PUT of
+   the whole text with If-Match, so two tabs never write over each other: a 412 is shown as a conflict, never retried.
+   On an older host (404) or one with no config dir (503) they stay in this browser (localStorage robotdx.dx.boards), and
+   a dashboard left there moves to the host on its first save there. Save as file and Load .base (picker, drop) always work.
+   WHY one store interface ({list, read, write, remove, create}) with two backends: the host's store slots in where the
+   browser's was, and nothing above it changes (PEP §12.3's reversible default, now taken).
 
    Make one: New (an empty dashboard with the time bar), Add panel (a plot, levels, KPI cards or a table of one entity,
    or the playback card), Edit .base (the text itself), Arrange (data-ui's: drag and resize; the arrangement is written
@@ -14,8 +17,10 @@
 import { esc, slug } from '../vendor/data-ui/data-ui.js';
 
 const KEY = 'robotdx.dx.boards';
+const API = '/api/v1/dashboards';
+const NAME = /^[A-Za-z0-9][A-Za-z0-9 _.-]{0,79}$/;   // the host's rule (docs/api-v1.md "Dashboards as files")
 const NEW_TEXT = `# A dashboard of your own (RobotDx on data-ui). Add panel puts views here, Edit .base changes this text, and
-# Arrange drags and resizes the panels. It lives in this browser until you Save as file (a .base anyone can load).
+# Arrange drags and resizes the panels. Save as file gives you the .base to keep or share.
 datasets:
   summary:
     data: "../datasets/summary.json"
@@ -32,45 +37,130 @@ views:
 `;
 const LEVELS = { state: 'level', label: 'message', order: ['ok', 'warn', 'unknown', 'stale', 'error'], tones: { ok: 'good', warn: 'warn', unknown: 'muted', stale: 'muted', error: 'bad' }, bar: 3 };
 
-export class BoardStore {
-  list() {
+/** A title as a name the host takes: other characters become a dash; never empty, never a starter's id. */
+export function nameFor(title, taken = new Set()) {
+  let base = String(title || 'Untitled dashboard').replace(/[^A-Za-z0-9 _.-]+/g, '-').replace(/-{2,}/g, '-').replace(/^[^A-Za-z0-9]+/, '').trim().slice(0, 72) || 'Dashboard';
+  if (!NAME.test(base)) base = 'Dashboard';
+  let name = base;
+  for (let n = 2; taken.has(name.toLowerCase()); n += 1) name = `${base} ${n}`;
+  return name;
+}
+
+// ---- this browser's store (phase 3; an older host's) --------------------------------------------------------------------------
+export class LocalStore {
+  get kind() { return 'local'; }
+  all() {
     try { const v = JSON.parse(localStorage.getItem(KEY) || '[]'); return Array.isArray(v) ? v.filter((b) => b && b.id && typeof b.text === 'string') : []; } catch (_) { return this._memory || []; }
   }
-  _write(list) {
+  _put(list) {
     this._memory = list;
-    try { localStorage.setItem(KEY, JSON.stringify(list)); } catch (_) { /* private window: this visit only */ }
+    try { if (list.length) localStorage.setItem(KEY, JSON.stringify(list)); else localStorage.removeItem(KEY); } catch (_) { /* private window: this visit only */ }
   }
-  get(id) { return this.list().find((b) => b.id === id) || null; }
-  save(board) {
-    const list = this.list().filter((b) => b.id !== board.id);
-    list.push({ ...board, updated: new Date().toISOString() });
-    this._write(list);
+  async list() { return this.all().map((b) => ({ id: b.id, title: b.title, updated: b.updated })); }
+  async read(id) { const b = this.all().find((x) => x.id === id); return b ? { text: b.text, title: b.title, etag: null } : null; }
+  async write(id, text) {
+    const list = this.all();
+    const b = list.find((x) => x.id === id);
+    this._put([...list.filter((x) => x.id !== id), { ...(b || { id, title: id }), text, updated: new Date().toISOString() }]);
+    return { ok: true, id, etag: null };
   }
-  remove(id) { this._write(this.list().filter((b) => b.id !== id)); }
-  /** A new dashboard of yours; returns its id. */
-  create({ title, text }) {
+  async remove(id) { this._put(this.all().filter((b) => b.id !== id)); return { ok: true }; }
+  async create({ title, text }) {
     let id = `my-${slug(title || 'dashboard') || 'dashboard'}`;
-    const taken = new Set(this.list().map((b) => b.id));
+    const taken = new Set(this.all().map((b) => b.id));
     for (let n = 2; taken.has(id); n += 1) id = `my-${slug(title || 'dashboard')}-${n}`;
-    this.save({ id, title: title || 'Untitled dashboard', text });
+    this._put([...this.all(), { id, title: title || 'Untitled dashboard', text, updated: new Date().toISOString() }]);
     return id;
   }
 }
 
-const boards = new BoardStore();
-window.__dxBoards = boards;
+// ---- the host's store: files under its config dir -------------------------------------------------------------------------------
+const fileUrl = (name) => `${API}/${encodeURIComponent(name)}.base`;
+// WHY these headers: a write is the page's own (server.py _from_page: its header; the browser adds Sec-Fetch-Site and Origin)
+const WRITE_HEADERS = { 'X-IO-Diagnostics': 'ui', 'Content-Type': 'text/plain; charset=utf-8' };
+const quoted = (etag) => (etag ? `"${String(etag).replace(/^"|"$/g, '')}"` : null);
+
+export class HostStore {
+  constructor(starterIds = []) { this.starters = new Set(starterIds.map((s) => s.toLowerCase())); this.files = []; }
+  get kind() { return 'host'; }
+  async list() {
+    const res = await fetch(API, { cache: 'no-store' });
+    if (!res.ok) throw new Error(`${res.status} ${API}`);
+    const body = await res.json();
+    this.files = Array.isArray(body.files) ? body.files : [];
+    return this.files.map((f) => ({ id: f.name, title: f.name, updated: new Date(f.mtime * 1000).toISOString(), etag: f.etag, size: f.size }));
+  }
+  taken() { return new Set([...this.starters, ...this.files.map((f) => f.name.toLowerCase())]); }
+  async read(name) {
+    const res = await fetch(fileUrl(name), { cache: 'no-store' });
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`${res.status} reading ${name}.base`);
+    return { text: await res.text(), title: name, etag: (res.headers.get('ETag') || '').replace(/^"|"$/g, '') || null };
+  }
+  /** One PUT of the whole text; `etag` null for a new file. {ok, etag} | {conflict, etag} | {tooLarge} | {error}. */
+  async write(name, text, etag) {
+    const headers = { ...WRITE_HEADERS };
+    if (etag) headers['If-Match'] = quoted(etag);
+    let res;
+    try { res = await fetch(fileUrl(name), { method: 'PUT', headers, body: text, cache: 'no-store' }); } catch (err) { return { error: `the host did not answer (${err.message})` }; }
+    const body = await res.json().catch(() => ({}));
+    if (res.ok) return { ok: true, id: name, etag: body.etag || (res.headers.get('ETag') || '').replace(/^"|"$/g, '') };
+    if (res.status === 412) return { conflict: true, etag: body.etag ?? null };
+    if (res.status === 413) return { tooLarge: true };
+    return { error: body.error || `${res.status}` };
+  }
+  async remove(name, etag) {
+    const headers = { 'X-IO-Diagnostics': 'ui' };
+    if (etag) headers['If-Match'] = quoted(etag);
+    const res = await fetch(fileUrl(name), { method: 'DELETE', headers, cache: 'no-store' });
+    const body = await res.json().catch(() => ({}));
+    if (res.ok) return { ok: true, trashed: body.trashed };
+    if (res.status === 412) return { conflict: true };
+    return { error: body.error || `${res.status}` };
+  }
+  /** A new file under a free name from `title`; returns its name, or throws. */
+  async create({ title, text }) {
+    await this.list().catch(() => {});
+    const name = nameFor(title, this.taken());
+    const r = await this.write(name, text, null);
+    if (!r.ok) throw new Error(r.tooLarge ? 'over the host\'s 1 MB' : r.error || 'the host refused it');
+    this.files.push({ name, etag: r.etag, mtime: Date.now() / 1000 });
+    return name;
+  }
+}
+
+/** The host's store when it answers GET /api/v1/dashboards with {files}; this browser's when it 404s (older) or 503s (no config dir). */
+export async function storeFor(starterIds) {
+  try {
+    const res = await fetch(API, { cache: 'no-store' });
+    if (res.ok) {
+      const body = await res.json();
+      if (body && Array.isArray(body.files)) { const host = new HostStore(starterIds); host.files = body.files; return host; }
+    }
+  } catch (_) { /* below */ }
+  return new LocalStore();
+}
+
+const local = new LocalStore();
+let store = null;   // the one the page uses, found on first need
+async function theStore(BOARDS) {
+  if (!store) store = await storeFor((await starters(BOARDS)).map((s) => s.id));
+  return store;
+}
+// Explore's "Keep as a dashboard" and the checks reach the store here
+window.__dxBoards = { create: async (b) => (await theStore(new URL('dashboards/', import.meta.url).href)).create(b), kind: () => (store ? store.kind : null) };
 
 async function starters(BOARDS) {
   try { return await (await fetch(new URL('index.json', BOARDS), { cache: 'no-store' })).json(); } catch (_) { return []; }
 }
 
 /** Read .base files (picked or dropped) into your dashboards; returns how many went in, or throws the first error. */
-async function loadFiles(files, parseBase) {
+async function loadFiles(files, parseBase, s) {
   let n = 0;
   for (const file of files) {
     const text = await file.text();
     parseBase(text);   // WHY first: a file that does not parse is refused with its error, never stored half-read
-    boards.create({ title: file.name.replace(/\.base$/i, ''), text });
+    await s.create({ title: file.name.replace(/\.base$/i, ''), text });
     n += 1;
   }
   return n;
@@ -88,6 +178,7 @@ function download(name, text) {
 export async function mountDashboards(root, params, { openBase, go, showTimeBar, BOARDS, feed }) {
   const { parseBase, stringifyBase } = window.robotdx;
   const list = await starters(BOARDS);
+  const s = await theStore(BOARDS);
   // a .base dropped anywhere on the destination becomes one of yours (the list redraws to show it)
   const onDrag = (e) => { if ([...(e.dataTransfer?.types || [])].includes('Files')) { e.preventDefault(); root.classList.add('dx-drop'); } };
   const onLeave = () => root.classList.remove('dx-drop');
@@ -96,7 +187,7 @@ export async function mountDashboards(root, params, { openBase, go, showTimeBar,
     if (!files.length) return;
     e.preventDefault();
     root.classList.remove('dx-drop');
-    try { await loadFiles(files, parseBase); } catch (err) { alertIn(root, `That file is not a .base this page can read: ${err.message}`); return; }
+    try { await loadFiles(files, parseBase, s); } catch (err) { alertIn(root, `That file is not a .base this page can keep: ${err.message}`); return; }
     if (params.board) go('dashboards'); else drawList();
   };
   root.addEventListener('dragenter', onDrag);
@@ -105,23 +196,30 @@ export async function mountDashboards(root, params, { openBase, go, showTimeBar,
   root.addEventListener('drop', onDrop);
   const off = () => { root.removeEventListener('dragenter', onDrag); root.removeEventListener('dragover', onDrag); root.removeEventListener('dragleave', onLeave); root.removeEventListener('drop', onDrop); };
 
-  function drawList() {
-    const mine = boards.list().sort((a, b) => String(b.updated).localeCompare(String(a.updated)));
+  async function drawList() {
+    let mine = [];
+    let note = '';
+    try { mine = await s.list(); } catch (err) { note = `The host's dashboards could not be read (${esc(err.message)}).`; }
+    // drafts: dashboards this browser kept before the host had a place for them (phase 3); each moves on its first save
+    const drafts = s.kind === 'host' ? local.all() : [];
+    const where = s.kind === 'host' ? 'on the host' : 'in this browser';
     root.innerHTML = `<div class="dx-boards">
-      <div class="dx-bar"><h1>Dashboards</h1><span class="dx-grow"></span>
+      <div class="dx-bar"><h1>Dashboards</h1><span class="dx-note">yours are kept ${where}</span><span class="dx-grow"></span>
         <button type="button" class="dx-btn dx-primary" data-board-act="new">New dashboard</button>
         <button type="button" class="dx-btn" data-board-act="load">Load .base…</button>
         <input type="file" id="dx-load-input" accept=".base,text/plain" multiple hidden>
       </div>
-      <section><h2>Starters</h2><ul class="dx-board-list">${list.map((s) => `<li><a href="?go=dashboards&board=${esc(s.id)}" data-board-id="${esc(s.id)}" data-board-kind="starter"><b>${esc(s.title)}</b><small>${esc(s.about || s.file)}</small></a></li>`).join('')}</ul></section>
-      <section><h2>Yours</h2>${mine.length ? `<ul class="dx-board-list">${mine.map((b) => `<li><a href="?go=dashboards&board=${esc(b.id)}" data-board-id="${esc(b.id)}" data-board-kind="mine"><b>${esc(b.title)}</b><small>in this browser · ${esc(String(b.updated || '').replace('T', ' ').slice(0, 16))}</small></a></li>`).join('')}</ul>`
+      <section><h2>Starters</h2><ul class="dx-board-list">${list.map((st) => `<li><a href="?go=dashboards&board=${encodeURIComponent(st.id)}" data-board-id="${esc(st.id)}" data-board-kind="starter"><b>${esc(st.title)}</b><small>${esc(st.about || st.file)}</small></a></li>`).join('')}</ul></section>
+      <section><h2>Yours</h2>${note ? `<p class="dx-error">${note}</p>` : ''}${mine.length || drafts.length ? `<ul class="dx-board-list">${mine.map((b) => `<li><a href="?go=dashboards&board=${encodeURIComponent(b.id)}" data-board-id="${esc(b.id)}" data-board-kind="mine"><b>${esc(b.title)}</b><small>${esc(where)} · ${esc(String(b.updated || '').replace('T', ' ').slice(0, 16))}</small></a></li>`).join('')}${drafts.map((b) => `<li><a href="?go=dashboards&board=${encodeURIComponent(`draft:${b.id}`)}" data-board-id="${esc(`draft:${b.id}`)}" data-board-kind="draft"><b>${esc(b.title)}</b><small>in this browser · moves to the host on its first save</small></a></li>`).join('')}</ul>`
         : '<p class="dx-empty" style="padding:0">None yet: New dashboard, or Load .base (or drop a .base file on this page).</p>'}</section>
     </div>`;
-    root.querySelector('[data-board-act="new"]').addEventListener('click', () => go('dashboards', { board: boards.create({ title: 'Untitled dashboard', text: NEW_TEXT }) }));
+    root.querySelector('[data-board-act="new"]').addEventListener('click', async () => {
+      try { go('dashboards', { board: await s.create({ title: 'Untitled dashboard', text: NEW_TEXT }) }); } catch (err) { alertIn(root, `No new dashboard: ${err.message}`); }
+    });
     const input = root.querySelector('#dx-load-input');
     root.querySelector('[data-board-act="load"]').addEventListener('click', () => input.click());
     input.addEventListener('change', async () => {
-      try { await loadFiles([...input.files], parseBase); } catch (err) { alertIn(root, `That file is not a .base this page can read: ${err.message}`); return; }
+      try { await loadFiles([...input.files], parseBase, s); } catch (err) { alertIn(root, `That file is not a .base this page can keep: ${err.message}`); return; }
       drawList();
     });
     for (const a of root.querySelectorAll('[data-board-id]')) {
@@ -131,34 +229,47 @@ export async function mountDashboards(root, params, { openBase, go, showTimeBar,
   }
 
   if (!params.board) {
-    drawList();
+    await drawList();
     return { update: (p) => (p.board ? false : (drawList(), null)), unmount: off };
   }
 
   // ---- one dashboard ------------------------------------------------------------------------------------------------------
-  const starter = list.find((s) => s.id === params.board);
-  const own = starter ? null : boards.get(params.board);
+  const starter = list.find((st) => st.id === params.board);
+  const draftId = params.board.startsWith('draft:') ? params.board.slice(6) : null;
+  let own = null;      // {id, title, text, etag, draft}
+  if (!starter) {
+    try {
+      if (draftId) { const d = await local.read(draftId); if (d) own = { id: params.board, title: d.title, text: d.text, etag: null, draft: draftId }; }
+      else { const r = await s.read(params.board); if (r) own = { id: params.board, title: r.title, text: r.text, etag: r.etag, draft: null }; }
+    } catch (err) {
+      root.innerHTML = `<p class="dx-empty dx-error">This dashboard could not be read: ${esc(err.message)}. <a class="dx-link" href="?go=dashboards">All dashboards</a></p>`;
+      return { update: () => false, unmount: off };
+    }
+  }
   if (!starter && !own) {
-    root.innerHTML = `<p class="dx-empty">No dashboard “${esc(params.board)}” here (yours live in the browser that made them). <a class="dx-link" href="?go=dashboards">All dashboards</a></p>`;
+    root.innerHTML = `<p class="dx-empty">No dashboard “${esc(params.board)}” here. <a class="dx-link" href="?go=dashboards">All dashboards</a></p>`;
     return { update: () => false, unmount: off };
   }
   const title = starter ? starter.title : own.title;
   let text = starter ? await (await fetch(new URL(starter.file, BOARDS), { cache: 'no-store' })).text() : own.text;
+  const kindNote = starter ? `starter · ${esc(starter.file)}` : own.draft ? 'in this browser · moves to the host on its first save' : s.kind === 'host' ? `yours · on the host (${esc(params.board)}.base)` : 'yours · in this browser';
   root.innerHTML = `<div class="dx-board-view">
     <div class="dx-bar"><a class="dx-link" href="?go=dashboards" data-back>‹ Dashboards</a><h1>${esc(title)}</h1>
-      <span class="dx-note">${starter ? `starter · ${esc(starter.file)}` : 'yours · in this browser'}</span><span class="dx-grow"></span>
+      <span class="dx-note" id="dx-board-note">${kindNote}</span><span class="dx-grow"></span>
       ${starter ? '<button type="button" class="dx-btn" data-board-act="duplicate" title="Make a copy of your own to change">Duplicate</button>'
         : '<button type="button" class="dx-btn" data-board-act="add">Add panel</button><button type="button" class="dx-btn" data-board-act="edit">Edit .base</button>'}
       <button type="button" class="dx-btn" data-board-act="save" title="Download this dashboard as a .base file (the arrangement is its layout:)">Save as file</button>
       <button type="button" class="dx-btn" data-board-act="copy" title="Put the .base text on the clipboard">Copy .base</button>
-      ${own ? '<button type="button" class="dx-btn" data-board-act="delete" title="Delete this dashboard from this browser">Delete</button>' : ''}
+      ${own ? '<button type="button" class="dx-btn" data-board-act="delete" title="Delete this dashboard (the host keeps it in its .trash/ folder)">Delete</button>' : ''}
     </div>
-    <data-dashboard class="dx-board" id="dx-board-${esc(params.board)}"></data-dashboard>
+    <div class="dx-conflict" data-board-conflict role="alert" hidden></div>
+    <data-dashboard class="dx-board" id="dx-board-${esc(slug(params.board) || 'board')}"></data-dashboard>
     <p class="dx-error" id="dx-board-error" hidden></p>
   </div>`;
   root.querySelector('[data-back]').addEventListener('click', (e) => { e.preventDefault(); go('dashboards'); });
   const el = root.querySelector('data-dashboard');
   const errorBox = root.querySelector('#dx-board-error');
+  const conflictBox = root.querySelector('[data-board-conflict]');
   let opened = null;
   async function draw(t) {
     let next;
@@ -175,40 +286,72 @@ export async function mountDashboards(root, params, { openBase, go, showTimeBar,
   }
   await draw(text);
 
+  /** Keep `next` as this dashboard's text: a draft's first save moves it to the host; a host file is one PUT with If-Match. */
+  async function keep(next) {
+    if (!own) return false;
+    if (own.draft && s.kind === 'host') {
+      try {
+        const name = await s.create({ title: own.title, text: next });
+        await local.remove(own.draft);
+        text = next;
+        go('dashboards', { board: name }, { replace: true });
+        return true;
+      } catch (err) { showProblem(`Not saved to the host: ${err.message}`); return false; }
+    }
+    const r = await (own.draft ? local.write(own.draft, next) : s.write(own.id, next, own.etag));
+    if (r.ok) { text = next; own.etag = r.etag; conflictBox.hidden = true; return true; }
+    if (r.conflict) {
+      // WHY never retried: another tab or person saved since this page read it; theirs stays, and the choice is the reader's
+      conflictBox.hidden = false;
+      conflictBox.innerHTML = `<b>Not saved: this dashboard changed since you opened it</b> (another tab or person saved it). Your change is not on the host.
+        <button type="button" class="dx-btn" data-conflict="reload">Reload theirs</button><button type="button" class="dx-btn" data-conflict="copy">Save mine as a copy</button>`;
+      conflictBox.querySelector('[data-conflict="reload"]').addEventListener('click', () => location.reload());
+      conflictBox.querySelector('[data-conflict="copy"]').addEventListener('click', async () => {
+        try { go('dashboards', { board: await s.create({ title: `${own.title} copy`, text: next }) }); } catch (err) { showProblem(`No copy: ${err.message}`); }
+      });
+      return false;
+    }
+    if (r.tooLarge) { showProblem('Not saved: the text is over the host\'s 1 MB. Save as file keeps it.'); return false; }
+    showProblem(`Not saved: ${r.error}`);
+    return false;
+  }
+  function showProblem(message) { conflictBox.hidden = false; conflictBox.textContent = message; }
+
   // Arrange (data-ui's) writes your arrangement back into your text, so Save as file carries it
-  el.addEventListener('data-dashboard-layout', (e) => {
+  el.addEventListener('data-dashboard-layout', async (e) => {
     if (!own) return;
-    text = e.detail.text;
-    boards.save({ ...boards.get(own.id), text });
-    // WHY forget data-ui's own copy of the arrangement: the text holds it now, and a later Edit .base must win
-    try { for (const k of Object.keys(localStorage)) if (k.startsWith('data-ui/dash-layout:') && k.endsWith(`/${el.id}`)) localStorage.removeItem(k); } catch (_) { /* nothing stored */ }
+    if (await keep(e.detail.text)) {
+      // WHY forget data-ui's own copy of the arrangement: the text holds it now, and a later Edit .base must win
+      try { for (const k of Object.keys(localStorage)) if (k.startsWith('data-ui/dash-layout:') && k.endsWith(`/${el.id}`)) localStorage.removeItem(k); } catch (_) { /* nothing stored */ }
+    }
   });
   const textNow = () => (own ? text : (el.layoutText ? el.layoutText() : text));
-  root.querySelector('[data-board-act="save"]').addEventListener('click', () => download(`${params.board}.base`, textNow()));
+  root.querySelector('[data-board-act="save"]').addEventListener('click', () => download(`${nameFor(title)}.base`, textNow()));
   root.querySelector('[data-board-act="copy"]').addEventListener('click', (e) => {
     navigator.clipboard?.writeText(textNow()).then(() => { e.target.textContent = 'Copied'; }, () => { e.target.textContent = 'Copy failed'; });
   });
   if (starter) {
-    root.querySelector('[data-board-act="duplicate"]').addEventListener('click', () => go('dashboards', { board: boards.create({ title: `${title} (copy)`, text: textNow() }) }));
+    root.querySelector('[data-board-act="duplicate"]').addEventListener('click', async () => {
+      try { go('dashboards', { board: await s.create({ title: `${title} copy`, text: textNow() }) }); } catch (err) { showProblem(`No copy: ${err.message}`); }
+    });
   } else {
-    root.querySelector('[data-board-act="delete"]').addEventListener('click', () => {
-      if (!confirm(`Delete “${title}” from this browser? (Save as file first to keep a copy.)`)) return;
-      boards.remove(own.id);
+    root.querySelector('[data-board-act="delete"]').addEventListener('click', async () => {
+      if (!confirm(`Delete “${title}”? ${own.draft || s.kind !== 'host' ? 'It is only in this browser.' : 'The host keeps it in its .trash/ folder.'}`)) return;
+      const r = own.draft ? await local.remove(own.draft) : await s.remove(own.id, own.etag);
+      if (r.conflict) { showProblem('Not deleted: it changed since you opened it (another tab or person). Reload to see theirs.'); return; }
+      if (r.error) { showProblem(`Not deleted: ${r.error}`); return; }
       go('dashboards');
     });
     root.querySelector('[data-board-act="edit"]').addEventListener('click', () => editDialog(root, text, async (next) => {
       try { parseBase(next); } catch (err) { return err.message; }
       if (!(await draw(next))) return errorBox.textContent;
-      text = next;
-      boards.save({ ...boards.get(own.id), text });
+      if (!(await keep(next))) return 'Not saved (see the note above the dashboard)';
       return null;
     }));
     root.querySelector('[data-board-act="add"]').addEventListener('click', () => addDialog(root, feed, async (panel) => {
-      const base = parseBase(text);
-      const next = stringifyBase(withPanel(base, panel));
+      const next = stringifyBase(withPanel(parseBase(text), panel));
       if (!(await draw(next))) return;
-      text = next;
-      boards.save({ ...boards.get(own.id), text });
+      await keep(next);
     }));
   }
   return { update: (p) => (p.board === params.board ? null : false), unmount() { off(); if (opened) opened.release(); } };
