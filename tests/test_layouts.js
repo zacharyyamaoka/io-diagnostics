@@ -16,6 +16,10 @@
 //               and comes back; every other boundary the layout draws moves by the arrow keys and is remembered too
 //   scroll      no horizontal scroll at 1280x720 and 1400x900
 //   clean       switching through all five and back leaves one layout root, one search box, no leftover style or overlay
+//   sidebar     L1's three ribbon styles (View options > Sidebar; sidebarStyles() below), measured with getBoundingClientRect: the rail's
+//               width per style, Figma's label centred under its icon, Shopify's label right of its icon, no label past the rail, badges
+//               visible in every style, the choice kept across a reload, the toggle (edge, collapse button, Ctrl+Alt+R) returning to
+//               the LAST open style. Stills: reports/media/sidebar-styles-2026-10-26/{collapsed,figma,wide}.png (IO_DIAG_SIDEBAR_SHOTS)
 //   errors      no page errors, no console errors
 // Static: the layouts' CSS carries no colour literal and names no status token (warn / error / stale / unknown colours belong
 // to diagnostics, drawn by the page's own shapes). Screenshots: reports/media/layouts/<id>-check.png. Exits 1 on any failure.
@@ -33,6 +37,8 @@ const UV = '/home/bam/.local/bin/uv';
 const SHOTS = path.join(ROOT, 'reports', 'media', 'layouts');
 const LAYOUTS = ['l1', 'l2', 'l3', 'l4', 'l5'];
 const PICK = 'io-diagnostics.page-layout';
+const SIDEBAR_SHOTS = process.env.IO_DIAG_SIDEBAR_SHOTS || path.join(ROOT, 'reports', 'media', 'sidebar-styles-2026-10-26');
+const SIDEBAR_KEY = 'io-diagnostics.lx.sidebar';
 const RUN = process.env.IO_DIAG_LAYOUTS ? process.env.IO_DIAG_LAYOUTS.split(',') : LAYOUTS; // a subset while iterating
 
 let passed = 0;
@@ -251,6 +257,188 @@ const BEHAVIOURS = {
   },
 };
 
+// ---- L1's three ribbon styles (View options > Sidebar), each measured on the page ----
+async function sidebarStyles(browser, base, errors) {
+  fs.mkdirSync(SIDEBAR_SHOTS, { recursive: true });
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: 'light' });
+  const page = await context.newPage();
+  page.on('pageerror', (error) => errors.push(`sidebar: ${error}`));
+  page.on('console', (message) => { if (message.type() === 'error') errors.push(`sidebar: console ${message.text()}`); });
+  await open(page, base, 'l1');
+  const mode = () => page.evaluate(() => document.querySelector('.l1-ribbon').dataset.railMode);
+  const railWidth = async () => (await rectOf(page, '.l1-ribbon')).w;
+  // the Settings choice: the gear opens View options, the Sidebar select picks, Escape closes
+  const choose = async (value) => {
+    await page.click('.l1-ribbon [title^="Settings"]');
+    await page.waitForTimeout(200);
+    await page.selectOption('#sidebar-style', value);
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(250);
+  };
+  // every labelled ribbon button: its icon, label and button boxes, and the rail's
+  const geometry = () => page.evaluate(() => {
+    const box = (el) => { const r = el.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, cx: r.left + r.width / 2, cy: r.top + r.height / 2, width: r.width, height: r.height }; };
+    const rows = [...document.querySelectorAll('.l1-ribbon .lx-ib')].filter((button) => button.querySelector('.l1-label') && button.getBoundingClientRect().width > 0).map((button) => {
+      const label = button.querySelector('.l1-label');
+      return {
+        text: label.textContent, title: button.title, icon: box(button.querySelector('svg')), label: box(label), button: box(button),
+        clipped: label.scrollHeight > label.clientHeight + 1 || label.scrollWidth > label.clientWidth + 1,
+        shown: getComputedStyle(label).display !== 'none' && label.getBoundingClientRect().width > 0,
+      };
+    });
+    return { rail: box(document.querySelector('.l1-ribbon')), rows };
+  });
+  const worst = (values) => Math.max(...values, 0);
+  // before a still: focus off the rail and the pointer parked, so no focus ring or hover shows
+  const settle = async () => { await page.evaluate(() => document.activeElement && document.activeElement.blur()); await page.mouse.move(1000, 600); await page.waitForTimeout(250); };
+  // a badge, driven through the layout's own update() the way a running utility would
+  const badges = async (tag) => {
+    await page.evaluate(() => { window.lxRunsCount = IOLayoutHost.ctx.runs.count; IOLayoutHost.ctx.runs.count = () => 3; IOLayoutHost.update(); });
+    const found = await page.evaluate(() => {
+      const badge = document.querySelector('.l1-ribbon [data-l1="runs"] .badge');
+      const rail = document.querySelector('.l1-ribbon').getBoundingClientRect();
+      const button = badge.closest('button').getBoundingClientRect();
+      const r = badge.getBoundingClientRect();
+      return {
+        text: badge.textContent, shown: !badge.hidden && r.width > 0 && r.height > 0 && getComputedStyle(badge).display !== 'none',
+        inButton: r.left >= button.left - 0.5 && r.right <= button.right + 0.5 && r.top >= button.top - 0.5 && r.bottom <= button.bottom + 0.5,
+        inRail: r.left >= rail.left - 0.5 && r.right <= rail.right + 0.5,
+      };
+    });
+    check(`sidebar ${tag}: the Runs badge is visible, inside its button and the rail`, found.shown && found.inButton && found.inRail && found.text === '3', found);
+    await page.evaluate(() => { IOLayoutHost.ctx.runs.count = window.lxRunsCount; IOLayoutHost.update(); });
+  };
+
+  // collapsed: today's 44px icon rail, the default
+  check('sidebar: the default is collapsed, 44px', (await mode()) === 'collapsed' && Math.abs((await railWidth()) - 44) <= 0.5, { mode: await mode(), width: await railWidth() });
+  let g = await geometry();
+  check('sidebar collapsed: no label is drawn', g.rows.length > 0 && g.rows.every((row) => !row.shown), g.rows.map((row) => row.text));
+  check('sidebar: Settings > Sidebar offers the three styles', await page.evaluate(() => [...document.querySelectorAll('#sidebar-style option')].map((o) => o.textContent).join('|')) === 'Icons only|Icon + label (Figma)|Wide list (Shopify)');
+  await badges('collapsed');
+  await settle();
+  await page.screenshot({ path: path.join(SIDEBAR_SHOTS, 'collapsed.png') });
+
+  // expanded (Figma)
+  await choose('expanded');
+  check('sidebar: picking Icon + label (Figma) in Settings switches the rail', (await mode()) === 'expanded' && await page.evaluate((key) => localStorage.getItem(key), SIDEBAR_KEY) === 'expanded');
+  check('sidebar figma: the rail is 72px', Math.abs((await railWidth()) - 72) <= 0.5, await railWidth());
+  g = await geometry();
+  check('sidebar figma: every ribbon button draws its label', g.rows.length >= 7 && g.rows.every((row) => row.shown), g.rows.map((row) => row.text));
+  const figmaDx = worst(g.rows.map((row) => Math.abs(row.label.cx - row.icon.cx)));
+  check(`sidebar figma: each label is centred under its icon (worst ${figmaDx.toFixed(2)}px)`, figmaDx <= 1);
+  check('sidebar figma: each label sits below its icon, inside its button', g.rows.every((row) => row.label.top >= row.icon.bottom - 1 && row.label.bottom <= row.button.bottom + 0.5));
+  check('sidebar figma: no label overflows the rail or its two lines', g.rows.every((row) => !row.clipped && row.label.left >= g.rail.left - 0.5 && row.label.right <= g.rail.right + 0.5));
+  check('sidebar figma: every button keeps its full name in its title', g.rows.every((row) => row.title));
+  // a long name wraps at word and camelCase seams, never mid-word, and stays inside the rail
+  const wrapped = await page.evaluate(() => {
+    const rail = document.querySelector('.l1-ribbon');
+    const out = [];
+    for (const name of ['ClaudeParty', 'RobotDxDashboard']) {
+      const button = document.querySelector('.l1-ribbon [data-l1="table"]').cloneNode(true);
+      const label = button.querySelector('.l1-label');
+      label.innerHTML = IOLayouts.l1.labelHtml(name, IOLayoutHost.ctx.esc);
+      rail.insertBefore(button, rail.querySelector('.gap'));
+      const lines = [];
+      const chars = [];
+      const walker = document.createTreeWalker(label, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        for (let index = 0; index < node.length; index += 1) {
+          const range = document.createRange();
+          range.setStart(node, index);
+          range.setEnd(node, index + 1);
+          chars.push([Math.round(range.getBoundingClientRect().top), node.data[index]]);
+        }
+      }
+      chars.forEach(([top, char], index) => { if (index === 0 || top !== chars[index - 1][0]) lines.push(''); lines[lines.length - 1] += char; });
+      const r = label.getBoundingClientRect();
+      const bounds = rail.getBoundingClientRect();
+      out.push({ name, lines: lines.map((line) => line.trim()), inside: r.left >= bounds.left && r.right <= bounds.right, clipped: label.scrollHeight > label.clientHeight + 1 });
+      button.remove();
+    }
+    return out;
+  });
+  const midWord = (lines) => lines.slice(1).some((line, index) => /[a-z]$/.test(lines[index]) && /^[a-z]/.test(line));
+  check(`sidebar figma: long names wrap at word / camelCase seams, two lines at most, inside the rail (${wrapped.map((w) => w.lines.join(' / ')).join(' ; ')})`,
+    wrapped.every((w) => w.lines.length <= 2 && !midWord(w.lines) && w.inside && !w.clipped) && wrapped[0].lines.join('/') === 'Claude/Party', wrapped);
+  await badges('figma');
+  await settle();
+  await page.screenshot({ path: path.join(SIDEBAR_SHOTS, 'figma.png') });
+
+  // wide (Shopify)
+  await choose('wide');
+  check('sidebar: picking Wide list (Shopify) in Settings switches the rail', (await mode()) === 'wide');
+  const wideWidth = await railWidth();
+  check(`sidebar wide: the rail is 238-242px (${wideWidth})`, wideWidth >= 238 && wideWidth <= 242);
+  g = await geometry();
+  const names = g.rows.map((row) => row.text);
+  check(`sidebar wide: Devices, Table, Activity, Runs and Settings are rows (${names.join(', ')})`, ['Devices', 'Table', 'Activity', 'Runs', 'Settings'].every((name) => names.includes(name)));
+  check(`sidebar wide: every label is right of its icon (min gap ${Math.min(...g.rows.map((row) => row.label.left - row.icon.right)).toFixed(1)}px)`, g.rows.every((row) => row.shown && row.label.left - row.icon.right > 0));
+  const wideDy = worst(g.rows.map((row) => Math.abs(row.label.cy - row.icon.cy)));
+  check(`sidebar wide: each label shares its icon's centre line (worst ${wideDy.toFixed(2)}px)`, wideDy <= 0.5);
+  check('sidebar wide: no label overflows the rail', g.rows.every((row) => !row.clipped && row.label.right <= g.rail.right + 0.5 && row.label.left >= g.rail.left));
+  const settings = g.rows.find((row) => row.text === 'Settings');
+  check('sidebar wide: Settings is the foot of the list', settings.button.top > Math.max(...g.rows.filter((row) => row !== settings).map((row) => row.button.top)) && g.rail.bottom - settings.button.bottom <= 16, { settings: settings.button, railBottom: g.rail.bottom });
+  const head = await page.evaluate(() => {
+    const title = document.querySelector('.l1-rail-title');
+    const collapse = document.querySelector('.l1-rail-head .lx-ib').getBoundingClientRect();
+    return { text: title.textContent, titleRight: title.getBoundingClientRect().right, collapseLeft: collapse.left, collapseWidth: collapse.width };
+  });
+  check(`sidebar wide: the logo row shows "${head.text}" with the collapse button right of it`, head.text.length > 0 && head.collapseWidth > 0 && head.collapseLeft >= head.titleRight - 0.5, head);
+  await badges('wide');
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.waitForTimeout(300);
+  const scroll = await noScroll(page);
+  check('sidebar wide: no horizontal scroll at 1280x720', scroll.doc <= 0 && scroll.body <= 0 && scroll.root <= 0, scroll);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.waitForTimeout(300);
+  await settle();
+  await page.screenshot({ path: path.join(SIDEBAR_SHOTS, 'wide.png') });
+
+  // the choice survives a reload
+  await page.reload();
+  await ready(page);
+  check('sidebar: the wide list survives a reload (rail 240px, Settings shows it)', (await mode()) === 'wide' && Math.abs((await railWidth()) - 240) <= 2
+    && await page.evaluate(() => document.getElementById('sidebar-style').value) === 'wide', { mode: await mode(), width: await railWidth() });
+
+  // the toggle: collapse button, Ctrl+Alt+R, the rail's edge; each returns to the LAST open style
+  await page.click('.l1-rail-head .lx-ib');
+  await page.waitForTimeout(250);
+  check('sidebar toggle: the collapse button collapses (44px)', (await mode()) === 'collapsed' && Math.abs((await railWidth()) - 44) <= 0.5);
+  await page.keyboard.press('Control+Alt+r');
+  await page.waitForTimeout(250);
+  check('sidebar toggle: Ctrl+Alt+R re-opens the WIDE list, not Figma', (await mode()) === 'wide' && Math.abs((await railWidth()) - 240) <= 2, await mode());
+  await choose('expanded');
+  await page.click('.l1-rail-edge');
+  await page.waitForTimeout(250);
+  check('sidebar toggle: the rail edge collapses', (await mode()) === 'collapsed');
+  await page.click('.l1-rail-edge');
+  await page.waitForTimeout(250);
+  check('sidebar toggle: the rail edge re-opens Figma, the style last open', (await mode()) === 'expanded' && Math.abs((await railWidth()) - 72) <= 0.5, await mode());
+  await choose('wide');
+  await page.keyboard.press('Control+Alt+r');
+  await page.waitForTimeout(250);
+  await page.reload();
+  await ready(page);
+  check('sidebar toggle: collapsed survives a reload', (await mode()) === 'collapsed' && Math.abs((await railWidth()) - 44) <= 0.5, await mode());
+  await page.keyboard.press('Control+Alt+r');
+  await page.waitForTimeout(250);
+  check('sidebar toggle: the last open style (wide) survives a reload while collapsed', (await mode()) === 'wide', await mode());
+  await page.evaluate((key) => localStorage.setItem(key, 'sideways'), SIDEBAR_KEY);
+  await page.reload();
+  await ready(page);
+  check('sidebar: an unknown stored value falls back to collapsed', (await mode()) === 'collapsed');
+
+  // another layout does not carry the row, and L1 keeps the choice when it comes back
+  await choose('expanded');
+  await page.selectOption('#layout-pick', 'l4');
+  await page.waitForTimeout(500);
+  check('sidebar: the Sidebar row belongs to L1 (hidden in L4)', await page.evaluate(() => document.getElementById('sidebar-switch').hidden));
+  await page.selectOption('#layout-pick', 'l1');
+  await page.waitForTimeout(500);
+  check('sidebar: back in L1 the chosen style is still on', (await mode()) === 'expanded' && await page.evaluate(() => !document.getElementById('sidebar-switch').hidden));
+  await context.close();
+}
+
 async function main() {
   fs.mkdirSync(SHOTS, { recursive: true });
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'layouts-'));
@@ -444,6 +632,7 @@ async function main() {
       }
       await context.close();
     }
+    if (RUN.includes('l1')) await sidebarStyles(browser, base, errors);
     check('no page errors, no console errors', errors.length === 0, errors.slice(0, 5));
   } finally {
     await browser.close();

@@ -105,6 +105,8 @@
         <div class="vo-row" id="depth-range-switch" title="With equalization off, the colours span this distance range" hidden><span class="vo-label">Depth range</span>
           <span class="vo-range"><input type="number" id="depth-min" min="0" max="16" step="0.1" aria-label="Depth range minimum, metres"><span class="vo-unit">to</span><input type="number" id="depth-max" min="0" max="16" step="0.1" aria-label="Depth range maximum, metres"><span class="vo-unit">m</span></span>
         </div>
+        <!-- Sidebar (L1's ribbon style): shown while L1 is the layout; layouts/l1.js owns it. WHY Zach, 2026-10-26: "show it with the text and without text. or with the icon and text center (figma style) ... similar to how shopify does it" -->
+        <label class="vo-row" id="sidebar-switch" title="Sidebar: icons only, each icon with its label under it (Figma), or a wide list of icon and label rows (Shopify)" hidden><span class="vo-label">Sidebar</span><select id="sidebar-style" aria-label="Sidebar"></select></label>
         <label class="vo-row" id="skin-switch" title="Skin"><span class="vo-label">Skin</span><select id="skin" aria-label="Skin"></select></label>
         <div class="vo-row"><span class="vo-label">Mode</span>
           <div class="ctl-seg" id="mode-switch" role="radiogroup" aria-label="Light or dark">
