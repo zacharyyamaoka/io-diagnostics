@@ -264,9 +264,9 @@ function addDialog(root, feed, onAdd) {
     const path = entity.value;
     if (!path) return;
     // the entity's State keys: watched for a moment (its feed reads /node, then /values), let go at once
-    feed.use('samples', path);
+    feed.use('peek', path);
     const e = await feed.whenReady(path, 2000);
-    feed.release('samples', path);
+    feed.release('peek', path);
     if (entity.value !== path) return;
     for (const [key, info] of (e && e.keys) || []) field.insertAdjacentHTML('beforeend', `<option value="${esc(key)}" data-unit="${esc(info.unit || '')}">${esc(info.unit ? `${key} (${info.unit})` : key)}</option>`);
   }

@@ -21,7 +21,8 @@ const MARK = { warn: '▲ warn', unknown: '? unknown', stale: '◷ stale', error
 const RANK = { ok: 0, warn: 1, unknown: 2, stale: 3, error: 4 };
 const KINDS = ['entities', 'summary', 'attention', 'runs', 'events', 'faults', 'checks', 'config', 'levels', 'samples'];
 const PER_ENTITY = new Set(['levels', 'samples']);       // one dataset per entity
-const WATCHED = new Set(['checks', 'config', 'levels', 'samples']);   // a binding with ?path= makes the entity watched
+const WATCHED = new Set(['checks', 'config', 'levels', 'samples', 'peek']);   // a binding with ?path= makes the entity watched
+// 'peek' reads an entity's /node and /values (what it has: its State keys, its settings) and is never State on screen: no heartbeat
 const STATE_EVERY_MS = 2000;     // /state at most this often (a tick asks sooner than that only once)
 const STATE_IDLE_MS = 5000;      // and this often with no tick at all
 const NODE_EVERY_MS = 2000;
@@ -358,8 +359,8 @@ class EntityFeed {
   constructor(feed, path) {
     this.feed = feed;
     this.path = path;
-    this.uses = { checks: 0, config: 0, levels: 0, samples: 0 };
-    this.released = { checks: 0, config: 0, levels: 0, samples: 0 };   // when each kind's last view left
+    this.uses = { checks: 0, config: 0, levels: 0, samples: 0, peek: 0 };
+    this.released = { checks: 0, config: 0, levels: 0, samples: 0, peek: 0 };   // when each kind's last view left
     this.nodeAt = 0;
     this.historyAt = 0;
     this.valuesAt = 0;
@@ -382,12 +383,12 @@ class EntityFeed {
   tick(now) {
     // WHY linger: Explore's detail is rebuilt on a selection and a dashboard on a reload; its polls must not restart
     const want = (k) => this.uses[k] > 0 || now - this.released[k] <= LINGER_MS;
-    if (!['checks', 'config', 'levels', 'samples'].some(want)) return;
+    if (!['checks', 'config', 'levels', 'samples', 'peek'].some(want)) return;
     if (!this.busy.node && now - this.nodeAt >= NODE_EVERY_MS) this._node();
     if (!this.nodeOk) return;
     // the host's level history: the health strips (levels), and once, the checks' own past (so Diagnostics rewinds too)
     if ((want('levels') || (want('checks') && !this.checksBack)) && !this.busy.history && now - this.historyAt >= HISTORY_EVERY_MS) this._history();
-    if (want('samples') && this.watchSupported && !this.busy.values) {
+    if ((want('samples') || want('peek')) && this.watchSupported && !this.busy.values) {
       const every = this.watch && this.watch.state === 'running' ? VALUES_LIVE_MS : VALUES_IDLE_MS;
       if (this.cursor === null || now - this.valuesAt >= every) this._values();
     }

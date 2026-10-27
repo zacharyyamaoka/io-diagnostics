@@ -139,13 +139,20 @@ export async function openBase(el, text, baseUrl, { keepState = false } = {}) {
   const datasets = {};
   const used = [];
   const closers = [];
-  for (const [name, d] of Object.entries(declared(base))) {
+  // WHY only what a panel draws: a binding's polls (and, for State, the device's watch) run for a view on screen, never
+  // for a dataset a .base merely declares (PEP §12.2)
+  const all = declared(base);
+  const viewsByName = new Map((base.views || []).map((v) => [v.name, v]));
+  const panels = (base.layout && base.layout.panels) || [];
+  const drawn = panels.length ? panels.flatMap((p) => (p.views || (p.view ? [p.view] : [])).map((n) => viewsByName.get(n)).filter(Boolean)) : (base.views || []);
+  const fallback = base.data ? Object.keys(all).find((n) => all[n].data === base.data) || stem(base.data) : null;
+  const shown = new Set(drawn.map((v) => v.from || fallback).filter(Boolean));
+  for (const [name, d] of Object.entries(all)) {
     const href = new URL(d.data, baseUrl).href;
     const b = bindingOf(href);
     if (b) {
       datasets[name] = feed.dataset(b.kind, b.path);
-      feed.use(b.kind, b.path);
-      used.push(b);
+      if (shown.has(name)) { feed.use(b.kind, b.path); used.push(b); }
     } else {
       try { datasets[name] = await plainDataset(href, d.live, closers); } catch (err) { datasets[name] = { properties: {}, rows: [], url: href, error: err.message }; }
     }
@@ -264,7 +271,7 @@ async function mountExplore(root, params) {
     let text, url = BOARDS;
     if (path) {
       // the entity's feeds start now; the panels' own bindings take them over (counted), and these let go after
-      const kinds = ['checks', 'config', 'levels', 'samples'];
+      const kinds = ['checks', 'config', 'levels', 'peek'];
       for (const k of kinds) feed.use(k, path);
       templateText = templateText || await template('explore.base');
       const entity = await feed.whenReady(path);
