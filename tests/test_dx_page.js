@@ -134,12 +134,12 @@ async function dragBy(page, handleRect, dx, dy = 0, y = null) {
     const page = await context.newPage();
     const watch = H.watchErrors(page, base);
     everyRequest.push(recorder(page, base));
-    const t0 = Date.now();
     await page.goto(`${base}${DX}`);
     await ready(page);
-    const drawn = await H.waitFor(async () => (await treeRows(page)).length >= 10, 15000, 50);
-    const coldMs = Date.now() - t0;
-    check('K7: cold load to the tree drawn ≤ 1.5 s', drawn && coldMs <= 1500, `${coldMs} ms`);
+    // measured in the page, from its navigation start (performance.now()'s origin), at the first frame the tree has rows
+    const drawn = await page.waitForFunction(() => { const el = document.querySelector('#dx-tree'); return el && el.model && el.model.rows.length >= 10 && el.querySelector('tbody tr[data-id]') ? performance.now() : false; }, null, { timeout: 15000, polling: 'raf' }).then((h) => h.jsonValue(), () => null);
+    const coldMs = drawn === null ? null : Math.round(drawn);
+    check('K7: cold load to the tree drawn ≤ 1.5 s (from navigation start)', coldMs !== null && coldMs <= 1500, `${coldMs} ms`);
     check('the page opens on Explore', (await dest(page)) === 'explore', await dest(page));
 
     // ---- explorer: the tree is the host's tree ---------------------------------------------------------------------------------------
@@ -212,17 +212,21 @@ async function dragBy(page, handleRect, dx, dy = 0, y = null) {
     check('State shows one card per value of the entity', ['position', 'velocity', 'torque'].every((k) => cardsLive.some((c) => c.label.includes(k))), cardsLive.map((c) => c.label));
 
     // ---- rewind: scrub back, the views show t, data keeps arriving --------------------------------------------------------------
+    // the target lies inside the entity's State (it starts when this host started; the event backlog reaches further back)
+    const stateSpan = await page.evaluate((p) => { const d = window.robotdx.feed.dataset('samples', p); return { start: d.start, end: d.end }; }, BOARD);
     const span = await clockState(page);
-    const target = span.start + 0.6 * (span.end - span.start);
+    const target = stateSpan.start + 0.6 * (stateSpan.end - stateSpan.start);
+    const trackBefore = await rect(page, '#dx-time .dv-pb-track');
+    const xTarget = trackBefore.x + trackBefore.w * ((target - span.start) / (span.end - span.start));
     // K5: from the clock's last seek of the drag to the last live draw of a detail panel at that t, with the test's own listeners
     await page.evaluate(() => {
       window.__k5 = { times: [], draws: [] };
       window.robotdx.clock.addEventListener('time', (e) => window.__k5.times.push({ at: performance.now(), t: e.detail.t, source: e.detail.source }));
       document.addEventListener('data-views-live', (e) => window.__k5.draws.push({ at: performance.now(), t: e.detail.t, following: e.detail.following, id: e.target.id }), true);
     });
-    await page.mouse.move(track.x + track.w - 1, track.y + track.h / 2);
+    await page.mouse.move(trackBefore.x + trackBefore.w - 1, trackBefore.y + trackBefore.h / 2);
     await page.mouse.down();
-    await page.mouse.move(track.x + 0.6 * track.w, track.y + track.h / 2, { steps: 6 });
+    await page.mouse.move(xTarget, trackBefore.y + trackBefore.h / 2, { steps: 6 });
     await page.mouse.up();
     await page.waitForTimeout(500);
     const k5 = await page.evaluate(() => {
@@ -234,7 +238,12 @@ async function dragBy(page, handleRect, dx, dy = 0, y = null) {
     });
     const scrubMs = k5 && k5.ms;
     const paused = await clockState(page);
-    check('scrubbing the time bar pauses at the scrubbed t', !paused.following && Math.abs(paused.t - target) <= Math.max(1, 0.03 * (span.end - span.start)), { t: paused.t, target, span: span.end - span.start });
+    // the oracle is the card's own geometry at the drag's end: the pointer's place on the track, over the span the clock holds
+    const trackAfter = await rect(page, '#dx-time .dv-pb-track');
+    const expected = paused.start + ((xTarget - trackAfter.x) / trackAfter.w) * (paused.end - paused.start);
+    check('scrubbing the time bar pauses at the scrubbed t', !paused.following && Math.abs(paused.t - expected) <= Math.max(0.5, 0.002 * (paused.end - paused.start)), { t: paused.t, expected, target });
+    check('the track did not move under the pointer (the LIVE pill keeps its width)', Math.abs(trackAfter.x - trackBefore.x) <= 1 && Math.abs(trackAfter.w - trackBefore.w) <= 1, { before: trackBefore, after: trackAfter });
+    check('the scrubbed t lies inside the entity\'s State', paused.t > stateSpan.start && paused.t < stateSpan.end, { t: paused.t, state: stateSpan });
     const liveBtn = await page.evaluate(() => { const b = document.querySelector('#dx-time .dv-pb-live'); return b ? { pressed: b.getAttribute('aria-pressed'), text: b.textContent } : null; });
     check('LIVE says paused, with how far behind', liveBtn && liveBtn.pressed === 'false' && /−|-/.test(liveBtn.text), liveBtn);
     check('K5: the last seek to every live panel of the detail drawn at t ≤ 50 ms', typeof scrubMs === 'number' && scrubMs <= 50 && k5.panels.length >= 3, k5);
@@ -406,7 +415,10 @@ async function dragBy(page, handleRect, dx, dy = 0, y = null) {
     const w0 = (await rect(page, plotPanel)).w;
     await page.click('data-dashboard.dx-board .dd-act[data-act="arrange"]');
     await page.waitForSelector('data-dashboard.dx-board[data-arranging] .grid-stack-item', { timeout: 10000 });
-    const handle = await rect(page, `${plotPanel} .ui-resizable-se, data-dashboard.dx-board .grid-stack-item[gs-id] .ui-resizable-se`);
+    // gridstack shows a panel's resize handle only under the pointer (ui-resizable-autohide): hover the panel first
+    await page.hover(plotPanel);
+    await page.waitForTimeout(150);
+    const handle = await rect(page, `${plotPanel} .ui-resizable-se`);
     if (handle) await dragBy(page, handle, -Math.round(w0 / 2));
     await page.click('data-dashboard.dx-board .dd-act[data-act="arrange"]');
     await page.waitForTimeout(800);
