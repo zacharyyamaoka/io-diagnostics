@@ -31,6 +31,7 @@ from io_diagnostics import eventlog as eventlog_module
 from io_diagnostics import entity_state
 from io_diagnostics.arrangements import ARRANGEMENTS_FILE, Arrangements
 from io_diagnostics.dashboards import DASHBOARDS_DIR, DashboardStore
+from io_diagnostics.live import LiveFeed
 from io_diagnostics.config_edit import ConfigEditor
 from io_diagnostics import expected as expected_module
 from io_diagnostics import history as history_module
@@ -566,6 +567,7 @@ class Host:
         self.changes = threading.Condition()
         self.revision = 0
         self.change_reason = ""
+        self.feed = LiveFeed(self)  # GET /api/v1/live: one change-only diff of state() for every client (live.py)
         self._wake = threading.Event()
         self.faults = Faults()
         # the host's events on disk (docs/activity-log-v1.md): ``event_log_dir`` None keeps the same history in memory
@@ -2646,6 +2648,16 @@ class Host:
         return {"path": path, "now": now, "cursor": cursor, "groups": groups, "streams": streams,
                 "heard": {"received": heard, "age_s": round(now - heard, 3) if heard is not None else None},
                 "watch": self.watch_json(job, rel)}
+
+    def series_paths(self) -> list[str]:
+        """The entities (absolute paths) whose plugin holds State points: where ``values_json`` can answer with data."""
+
+        with self.lock:
+            paths = set()
+            for job in self.jobs.values():
+                device_path = self.layer.device_paths.get(str(job.device.get("id")), job.device_path)
+                paths.update(f"{device_path}/{rel}" if rel else device_path for rel, _group, _key in list(job.cache.series))
+        return sorted(paths)
 
     def frame_file(self, path: str, stream: str) -> tuple[bytes, dict] | None:
         """The latest image of a declared stream: ``(bytes, meta)`` or None. The file is the plugin's own, in the frame

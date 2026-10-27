@@ -10,7 +10,8 @@ window, written to settings.toml) likewise, and ``POST /api/v1/watch`` (the enti
 write the person's dashboard files under the same page-only rule (docs/api-v1.md "Dashboards as files"). Every other
 POST / PUT / DELETE / PATCH is 405. Binds to 127.0.0.1 by
 default; the page polls ``/api/v1/state`` once a second, and may listen to ``GET /api/v1/events`` (Server-Sent
-Events: each new or changed activity event, and a tick per change) so a plug shows without waiting for the poll. Run by the release-channels runtime as Preview or an agent's
+Events: each new or changed activity event, and a tick per change) so a plug shows without waiting for the poll; ``GET /api/v1/live`` is
+the poll as a change-only SSE feed (a snapshot, then the rows that changed: live.py, docs/api-v1.md "Live"). Run by the release-channels runtime as Preview or an agent's
 lane, it also answers ``/__sps/*`` for the Stable / Preview chip (release_channels.py, docs/release-channels.md).
 """
 
@@ -20,6 +21,8 @@ import base64
 import json
 import re
 import secrets
+import select
+import socket
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -33,6 +36,7 @@ from io_diagnostics.dashboards import MAX_BYTES as MAX_DASHBOARD
 from io_diagnostics.dashboards import DashboardError
 from io_diagnostics.history import MAX_BINS
 from io_diagnostics.host import Host
+from io_diagnostics.live import FeedClosed
 from io_diagnostics.settings import SettingsError
 from io_diagnostics.terminal import KEEPALIVE_S, RunError
 
@@ -63,6 +67,8 @@ MAX_TERMINAL = 500  # columns or rows a resize may ask for
 EVENTS_KEEPALIVE_S = 15.0  # an SSE comment this often while nothing changes, so a dead client is noticed
 EVENTS_COALESCE_S = 0.1  # a burst of changes (a plug's ~30 udev blocks) is one diff
 EVENTS_WINDOW = 200  # the newest events each diff compares
+LIVE_KEEPALIVE_S = 15.0  # GET /api/v1/live: a heartbeat comment this often while nothing changes
+LIVE_POLL_S = 1.0  # how often a /live handler looks up from waiting to see whether its client has left (a quiet feed writes nothing)
 
 
 def _types(query: dict) -> tuple[str, ...] | None:
@@ -158,6 +164,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({"error": str(error)}, 400)
             if parsed.path == "/api/v1/events":
                 return self._events(query)
+            if parsed.path == "/api/v1/live":
+                return self._live()
             if parsed.path == "/api/v1/records":
                 return self._json(self.host.records())
             if parsed.path == "/api/v1/plugins":
@@ -264,6 +272,52 @@ class Handler(BaseHTTPRequestHandler):
                 self._sse("tick", {"revision": revision, "reason": reason, "now": current["clock"]["now"]})
         except (BrokenPipeError, ConnectionResetError, OSError):
             return  # the client left
+
+    # --- GET /api/v1/live: the change-only feed (docs/api-v1.md "Live", live.py) -------------------------------------------
+    def _live(self):
+        """A ``snapshot`` (or, after ``Last-Event-ID``, the events missed), then ``upsert`` / ``remove`` / ``samples`` as the host's one shared
+        diff makes them, until the client leaves or the host stops. Read-only and same-origin like ``/events``."""
+
+        feed = self.host.feed
+        try:
+            sub, first = feed.subscribe(self.headers.get("Last-Event-ID"))
+        except FeedClosed:
+            return self._json({"error": "the host is stopping"}, 503)
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+            self.wfile.write(b"retry: 2000\n" + (b"".join(first) if first else b"\n"))
+            self.wfile.flush()
+            quiet_since = time.monotonic()
+            while True:
+                frames = feed.wait(sub, LIVE_POLL_S)
+                if frames:
+                    self.wfile.write(b"".join(frames))
+                    self.wfile.flush()
+                    quiet_since = time.monotonic()
+                elif self._client_left():
+                    return
+                elif time.monotonic() - quiet_since >= LIVE_KEEPALIVE_S:
+                    self.wfile.write(b": keepalive\n\n")
+                    self.wfile.flush()
+                    quiet_since = time.monotonic()
+        except (FeedClosed, BrokenPipeError, ConnectionResetError, OSError):
+            return  # the host stopped, or the client left
+        finally:
+            feed.unsubscribe(sub)
+
+    def _client_left(self) -> bool:
+        """Whether the peer has closed its end (EOF), so a quiet stream frees its client without waiting for a failed write."""
+
+        try:
+            if not select.select([self.connection], [], [], 0)[0]:
+                return False
+            return self.connection.recv(1, socket.MSG_PEEK) == b""
+        except OSError:
+            return True
 
     def _sse(self, name: str, data: dict, *, event_id: str | None = None, retry_ms: int | None = None) -> None:
         lines = [f"retry: {retry_ms}"] if retry_ms else []

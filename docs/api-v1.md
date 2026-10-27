@@ -24,6 +24,7 @@ uv run --project /home/bam/io-diagnostics python /home/bam/io-diagnostics/io_dia
 | `GET /api/v1/node?path=<entity path>` | The detail panel of one row: its checks, values, measurements, actions with gate state, faults, events | on select, then 1-2 s |
 | `GET /api/v1/activity[?limit=N][&types=usb,driver][&fold=1&...]` | Activity log (all events, newest first, typed), faults, link-health rows | 2-5 s |
 | `GET /api/v1/events[?types=...]` | Server-Sent Events: each new or changed activity event (a provisional plug, then the same id confirmed) and a `tick` per change | stream |
+| `GET /api/v1/live` | Server-Sent Events, change-only: a `snapshot` (the body of `/state`), then an `upsert` for each row that changed, a `remove` for each that left, and `samples` for the State points that arrived; `Last-Event-ID` resumes. Replaces the 1 s `/state` poll; `/state` is unchanged | stream |
 | `GET /api/v1/records` | The raw v0 records the host holds (entities, statuses with `received`, events, faults) | rarely |
 | `GET /api/v1/plugins` | Plugin registry: loaded `plugins.d/*.toml`, matched devices, last run per device | rarely |
 | `GET /api/v1/health` | `{"ok": true, ...}` liveness | — |
@@ -893,6 +894,59 @@ The health bar (rqt_robot_monitor's timeline) of one entity and of each of its c
   `X-IO-Diagnostics: ui` header, `Sec-Fetch-Site: same-origin`, a JSON body, else **403** (`NotFromPage`,
   `NotSameOrigin`, `NotJson`). A value outside 1 min .. 24 h, or an unknown setting → **400** `BadSetting`. Answers
   the settings as above.
+
+## `GET /api/v1/live` (Server-Sent Events, change-only)
+
+The page's 1 s `GET /state` poll (the same ~70 KB of tree every second, mostly unchanged) as one stream. `/state` stays exactly as it
+is, and so do `/events` and `/values`: a page that wants a whole state, or a script, keeps polling. Same-origin and read-only
+like `/events` (no CORS header). Every event has an `id:` that rises by one per event, across every client of this host.
+
+```
+retry: 2000
+id: 8
+event: snapshot
+data: {"api": "io-diagnostics/1", "...": "exactly what GET /api/v1/state returns"}
+
+id: 9
+event: upsert
+data: {"table": "tree", "id": "host/usb1/port-1-3/usb-1-3/can/1/motor", "row": {"path": "host/usb1/port-1-3/usb-1-3/can/1/motor", "level": "ok", "...": "the node as in /state", "children": []}}
+
+id: 10
+event: upsert
+data: {"table": "state", "id": "summary", "row": {"level": "error", "counts": {"error": 2, "warn": 3}, "...": "..."}}
+
+id: 11
+event: remove
+data: {"table": "tree", "id": "host/usb1/port-1-4"}
+
+id: 12
+event: samples
+data: {"path": "host/usb1/port-1-3/usb-1-3/can/1/driver", "now": 1792790150.0, "cursor": 412, "groups": [{"name": "...", "rows": [{"key": "voltage", "points": [[1792790150.0, 36.6]], "...": "..."}], "...": "..."}], "streams": [], "heard": {"...": "..."}, "watch": {"...": "..."}}
+```
+
+- **`snapshot`**: the first event of a connection (and the only one a client gets when it cannot resume), the body `GET /state` returns,
+  as of the host's last tick, with the `id` of that tick. Samples are not in it: ask `GET /values?path=&since=0` for an entity's history.
+- **`upsert`** `{table, id, row}`: a row whose JSON changed since the last tick, in tree order (a parent before its children). Two tables:
+  `"tree"`, one node of `/state`'s tree keyed by its `path`, with `children` a **list of the child paths** instead of nested nodes (re-nest
+  from them; a parent is upserted when a child is added or removed), and `"state"`, each other top-level key of `/state` (`clock`, `summary`,
+  `chip`, `recent`, `expected_setup`, `composition`, `runs`, ...) keyed by its name, `row` its whole value. A client that applies the snapshot
+  and every event in order holds `/state` as of the last tick. A row is sent whole, never as a patch.
+- **`remove`** `{table, id}`: that row is gone (a device unplugged, a rig edited). Its parent is upserted in the same tick.
+- **`samples`**: State points appended since the last tick for one entity, the answer `GET /api/v1/values?path=<path>&since=<its cursor>` gives
+  (same fields), with `groups` cut to the groups and rows that have new `points`. One event per entity per tick.
+- **Time is not a change.** Pure functions of the host clock are not compared, or every row with records would change every tick: a row's
+  `age_s` and `presence.age_s`, and `clock.now` / `iso` / `time`. A row that is sent for any other reason carries the age it has at that moment;
+  a page that wants it now computes `clock.now` (as of the snapshot, then the time since) minus the row's `last_received`.
+- **Resuming**: the browser's `EventSource` sends `Last-Event-ID` on reconnect, and the host replays only the events after it from a ring of
+  its last 2000 events or 60 s (the ring is shared by every client). An id older than the ring, one this feed never gave (including after the
+  feed stopped with no client for 60 s, or the host restarted), or one that is not a number, gets a fresh `snapshot` instead, so a client
+  needs no rule of its own: `snapshot` replaces everything it holds.
+- **Cost**: one thread serves every client; it wakes on the host's own change tick (the one `/events` waits on: every refresh, ~2 s, and each
+  udev or plugin change), builds `state()` once and diffs it by row. It starts with the first client and stops 60 s after the last one leaves.
+- `: keepalive` comment every 15 s while nothing changes; a client that closes is dropped within a second. The stream ends when the host stops
+  (a client that connects to a stopping host gets **503**).
+- Measured on `serve --fixture F1` (a replay in which every plugin record is received again each ~2 s tick, so most rows change every tick): 1.6 MB a
+  minute for `/live`, snapshot included, against 4.0 MB a minute for `/state` polled at 1 Hz. A rig whose records come every 30 s or more sends far less.
 
 ## Dashboards as files: `GET /api/v1/dashboards`, `GET | PUT | DELETE /api/v1/dashboards/<name>.base`
 
