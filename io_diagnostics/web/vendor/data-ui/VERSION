@@ -1,8 +1,8 @@
-data-ui 0.1.0, vendored 2026-10-27 15:54 PDT by tools/vendor_data_ui.py
+data-ui 0.1.0, vendored 2026-10-27 16:33 PDT by tools/vendor_data_ui.py
 tree      /tmp/claude-1000/-home-bam-zach-brain--claude-worktrees-robotics-component-library-4a5d75/09ec7f28-61d8-4e9c-a0d1-69e79cf76516/scratchpad/robotdx/rebuild/dui
-commit    5fb655fb691c23c55bdaeebb1952b7839f45bd8a
+commit    7f2b620c44a8b9917902ef920484d002713cdb4f
 a merge of:
-  4a49b6f2938e9eb3002157ae8638f973d05b1fe6  lane/live  live: display: age, a time-derived cell (a8): "2.4 s ago" grows with no new row, and holds
+  bfc632f55291a84d28ab30dc70a6e1ef097c2baf  lane/live  bench: the probe arrays record only while measuring (the 10-minute heap grew with them); P
   e1dc0b9461ebd9ce095b20d92240fc2c3862d4c5  lane/app-rail  rail: <data-rail>, the app rail in three styles (icons only, labels under icons, wide list
 views     table, list, cards, kpi, live, playback, record, chart, media
 
