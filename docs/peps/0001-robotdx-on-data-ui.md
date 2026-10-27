@@ -299,9 +299,9 @@ binding loads as data-ui loads it.
 | `summary` | keyed | `host` | `level health needs errors warns unknowns stales devices entities chip` | `GET /state` `summary`, `chip` | as `entities` |
 | `attention` | keyed | `path` | `path name device level health rank message` | `GET /state` `summary.attention` | as `entities` |
 | `runs` | keyed | `id` | `id label state active started elapsed exit_code` | `GET /state` `runs.items` | as `entities` |
-| `events` | append, stream `id` | `id` | `id severity type code kind message path name port source count` | `GET /activity?limit=500` once, then SSE `/events` `activity` (a changed event is a newer row of its stream; views read it with `at: latest`, so one fact is one row) | pushed |
+| `events` | append | `id` | `id time severity type code kind message path name port source count` | `GET /activity?limit=500` once (the events inside the host's window), then SSE `/events` `activity`; a provisional plug is left out and its confirmation kept (an append dataset cannot replace a row, and one fact stays one row) | pushed |
 | `faults` | keyed | `id` (`path#code`) | `path name code severity status active count first last message` | `GET /activity` `faults` | on a `tick`, at most every 4 s |
-| `checks` | keyed | `id` (`path#name`) | `path entity name health level said rank message code received period source why` | `GET /node?path=` of each watched entity | 2 s while watched |
+| `checks` | keyed | `id` (`path#name`) | `path entity name health level said rank message code received period source why` | `GET /node?path=` of each watched entity; once, its past from `GET /history` level spans (level, message, code; no-data spans as removals) | 2 s while watched |
 | `config` | keyed | `id` (`path#key`) | `path key value unit expected differs source stored unsaved writable` | `GET /node?path=` | as `checks` |
 | `levels?path=P` | append, stream `check` | `check` | `check level health code message` | `GET /history?path=P` (the window, then `window=60s`; a row per level span, `null` = no data) | 4 s while watched |
 | `samples?path=P` | append, stream `key` | `key` | `key value unit meaning group` | `GET /history?path=P` State series (1 Hz, the window) as the backlog, then `GET /values?path=P&since=<cursor>` | 250 ms while the watch runs, 1 s otherwise |
@@ -309,7 +309,7 @@ binding loads as data-ui loads it.
 - `health` is a shape and a word for warn / unknown / stale / error (`▲ warn`, `? unknown`, `◷ stale`, `✖ error`) and
   empty for OK and for nothing reported (E9: a shape only for a problem); `rank` orders `ok 0 < warn 1 < unknown 2 <
   stale 3 < error 4`, `-1` for no level; `presence` is a neutral word (`heard`, `last heard 6 min ago`, `streaming`).
-- **Watched entity** (word coined here): the entity Explore shows, and every `?path=` of the open dashboard. Its feeds
+- **Watched entity** (word coined here): the entity Explore shows, and every `?path=` a panel of the open dashboard draws (a dataset a `.base` declares but no panel reads is not watched). A **peek** (`use('peek', path)`) reads an entity's `/node` and `/values` to learn what it has (its State keys, its settings) and never sends the heartbeat. Its feeds
   start when the first view needs it and stop 10 s after the last one leaves; nothing polls while the tab is hidden
   (SSE stays open). `/state` is re-read on a `tick`, not on a 1 s timer (today's 82 % of the bytes, §8).
 - Retention: the page's buffer is data-ui's (256 MB); `samples` keep 15 min (`age`), the keyed ones their newest
@@ -360,3 +360,89 @@ the tree drawn), measured by the page's checks in headless Chrome on fixture F1 
 
 Every write (utilities, configuration edits, expected setup, settings, run input): today's page. Host-stored
 dashboards (`/api/v1/dashboards` does not exist; the RobotDx session was asked). The runs terminal (xterm). Frame history.
+
+## 13. Phase 3 as built (2026-10-27): dropped / deferred, measured, asks
+
+The page is `web/dx/` (§12), on `lane/robotdx-data-ui`, not merged; today's page is untouched and keeps every write. Its
+checks are `tests/test_dx_page.js` (58, measured), its media `docs/record_dx.js`, its launcher `tools/dx_demo.py`.
+
+### Dropped / deferred
+
+By element (§3). **Built** = on the new page; **deferred** = not in this phase, with what it waits for; **classic** = stays
+on today's page (a write, §6), linked from Explore ("Open on the classic page" for the entity on screen).
+
+| E | Fate on the new page | Why / waits for |
+|---|---|---|
+| E1 | Built: the connection line says "Live · replay of F1 (recorded) · N sources · last data N s ago"; the time readout is the host's clock. **Deferred:** the skipped OS sources (`host.sources`). | A small summary panel; not asked for this phase |
+| E2 | Built: Overview (counts, what needs you worst first, faults, newest events) as Explore's empty state and a starter. **Deferred:** a click on a count filters; counts in increasing severity with zeros hidden. | data-ui `select:` on a KPI card |
+| E3 | Unchanged (the tray, outside the page). | — |
+| E4 | Built: destinations, selection and dashboards in the URL, each a history entry; Tree / Table as view tabs. | — |
+| E5 | Built: data-ui's search on the tree. **Not verified:** that a match keeps its ancestors visible in a tree view. | a check in data-ui's tree search |
+| E6 | Partly: data-ui's group and sort menus on the tree. **Deferred:** structures p1 Physical and p7 Type as saved views. | the host to send one parent column per structure |
+| E7 | Built: `<data-rail>` (three styles, Ctrl+Alt+R, resizable wide) and the tree pane (drags, remembers, resets, folds), both measured. **Deferred:** the Ctrl-K palette. | the rail's `data-rail-search` event is there to hang it on |
+| E8 | Built: "last data N s ago" (a summary version per `/state` answer), "Reconnecting · try N". | — |
+| E9 | Built: the nested tree, a shape and a word for warn / unknown / stale / error and nothing for OK, Below (the host's hint), ID, model, presence as a word. **Deferred:** icons, knock-on rows subdued, expansion kept across reloads, header counts, the row menu (classic: writes). | data-ui level display (b2) and presence dot (b4) |
+| E10 | **Deferred:** step into, only inside. | data-ui b7 |
+| E11 | Built: unclaimed rows hidden unless they report a problem (a view filter). **Deferred:** "Show N hidden"; acknowledge (classic: a write). | data-ui b7 |
+| E12 | Built: the Table tab (name, health, message, ID, rate, last heard, checks, faults). | — |
+| E13 | Built where the host nests (the tree's `parent`). **Not verified** on a composite (the dx fixture has none). **Deferred:** `↳ CAN 13` source links. | a composite fixture in the dx checks |
+| E14 | Built: the Entity panel as of t (name, health, message, below, model, ID, firmware, USB version, presence, last heard as a clock time). **Deferred:** the ticking "heard N s ago", the badge, banners. | data-ui's new `display: age` measures against the browser's clock and reads 6 days on a replayed fixture (ask below) |
+| E15 | Changed: the entity's sections are panels side by side, not tabs; State and Signals have view tabs. **Deferred:** tab badges, the tab remembered per entity kind, keys 1-9. | — |
+| E16 | Built: Diagnostics worst first, rewindable over the host's window. **Deferred:** dot folders, pins, the level-strip cell (the Health card shows the same history beside it). | data-ui b1, b7 |
+| E17 | Built: the `levels` card, one strip per check, worst level per bin, no data an empty outline. | — |
+| E18 | **Deferred:** children with mini health bars. | a level-strip cell in a table (b1) |
+| E19 | Partly: faults (Activity, Overview), what to check (a Diagnostics column). **Deferred:** link health, the rollup and connection sections. | — |
+| E20 | Classic (writes the rig file). | §6 |
+| E21 | Built: State as KPI cards (value, 30 s spark, "as of" t) and a State table (latest per key with its meaning). **Deferred:** "last values 40 s ago" on a stale group. | — |
+| E22 | **Deferred:** the live note ("paused: tview has the port"); the feed reads the watch state. | a small panel or the connection line per entity |
+| E23 | **Deferred:** image tiles (MJPEG). `/api/v1/frames/stream` is outside this phase's request list. | data-ui's `image` card takes the URL; add it with the frames endpoint to §12.2 |
+| E24 | Partly: the Signals plot (drag to zoom the window, click to seek, rewind). "Keep as a dashboard" and Add panel are the pin. **Deferred:** CSV, the focus page. | data-ui's interactive timeseries (dc-plot) |
+| E25 | Built: Dashboards, yours in this browser and as `.base` files. **Deferred:** stored on the host (follows the person). | `/api/v1/dashboards` (ask below) |
+| E26 | Built: the read side (dot-notation folders, value, expected, differs, source, not saved). Editing: classic. | §6 |
+| E27 | Built: the Log panel (the entity and everything below it), rewindable. **Deferred:** rows naming its hardware id, the Raw channel, fault ↔ Diagnostics links. | data-ui b6 |
+| E28 | Classic (utilities: dry run, confirm, tokens). | §6 |
+| E29 | **Deferred:** driver tabs (Processes). | the host to send rows instead of TSV in a status value |
+| E30 | Runs as a read-only table; the terminal and Stop: classic. | §6, xterm |
+| E31 | Built: the event log as a live tail ("N new · Resume") with a rail (severity, type, entity), faults and what needs you, rewindable. **Deferred:** folded rows (`fold=1` badges and members), the volume strip with a time brush, the Raw channel, run output, the boot's history beyond the host's window. | data-ui b5; a row that replaces by id in an append dataset |
+| E32 | The window shown (Settings). Edits: classic. | §6 |
+| E33 | Dropped (as §6). | — |
+
+### Measured (fixture F1, headless Chrome 1400×900, this PC under other agents' load)
+
+| KPI | Today's page | The new page | Target | How |
+|---|---|---|---|---|
+| K2 bytes, requests per s, idle (Explore, nothing selected) | 54.7-57.6 KB/s, 2.1-2.3 req/s | **26.0-27.6 KB/s, 0.73-0.75 req/s** | ≤ 8 KB/s, ≤ 1 req/s | the same host, the same run, 15 s each (`tests/test_dx_page.js`); `/state` on SSE ticks (≥ 2 s) instead of a 1 s timer. The rest needs a host delta feed |
+| K5 scrub: last seek → every panel of the entity drawn at t | n/a | **10-269 ms** end to end in 7 runs (FAIL at 50 ms in 6 of 7); 8-13 ms per seek once paused, every panel's own draw 0.5-3 ms | ≤ 50 ms | the test's own listeners on the clock and `data-views-live`; the slow part is the first frame after leaving live and frame scheduling in headless software rendering on a loaded machine, not the views' JavaScript (no long tasks seen) |
+| K7 cold load → the tree drawn | not measured | **124-173 ms** | ≤ 1.5 s | an in-page 10 ms timer from navigation start |
+| Page weight (Explore) | 592 KB gz | **216 KB gz** (data-ui core 103, live views 30, kpi 14, table 12, dashboard 15, the page 30) | — | gzip -9 of each file the page loads |
+
+Not measured in this phase: K1 (receive → drawn), K3 (host CPU per page), K4 (main thread with 20 series), K6 (heap at full
+retention).
+
+### Asks of the RobotDx session (the frozen `/api/v1`; nothing here was edited)
+
+1. A delta feed for the tree (K2 ≤ 8 KB/s): rows of the entities that changed (and removals) on the existing SSE stream,
+   so `/state` is read once and not on every tick.
+2. `GET /api/v1/dashboards` / `PUT` (a list of `{id, title, text}`), so a dashboard follows the person; the page's store has
+   that shape.
+3. The tree's row states over the host's window (step B), so the tree rewinds before the page opened.
+4. `/events` honouring `Last-Event-ID` (a reconnect replays what it missed instead of a re-read).
+5. One answer with the latest checks of every entity (a Diagnostics table across a rack without one `/node` per entity).
+6. Serving: `/dx/` answers with `dx/index.html` (today only `/` maps to an index), and `.base` as `text/plain`.
+
+### Asks of data-ui (follow-ups found by this page; the page works around the first three in `dx.css`)
+
+1. Playback card: the ● LIVE pill changes width ("LIVE" → "LIVE −396 s") and moves the track under the pointer during
+   a drag, so a scrub lands at another t. Keep one width.
+2. Arrange: a one-row panel (`h: 1`, gridstack writes no `gs-h`) collapses to 0 px (`height: auto`).
+3. `levels`: "No levels in this window yet" stays above the strips once they arrive.
+4. `display: age` while following measures against `Date.now()`: wrong for a host on its own clock (a replayed fixture
+   reads days); measure against the newest data's time plus the time since it arrived.
+5. `plot` and `levels` draw every stream of a dataset and take no filters, so the page keeps one dataset per entity;
+   `only:` on `levels` (or filters on the native cards) would let one dataset serve a rack.
+6. An append dataset that replaces a row by id (a provisional plug, then its confirmation): the page drops the
+   provisional row instead.
+7. K5: the first frame after leaving live is the slow one; worth a line in `bench/live.py`.
+8. `<data-dashboard>` without `src`: its arrangement is kept under the element's id, so a host that draws several
+   dashboards in one element must change the id per dashboard (the page does); and a dashboard handed a clock before
+   `load()` writes no `#t` (the page writes it). Worth a sentence in CONTRACT §17 / §21.

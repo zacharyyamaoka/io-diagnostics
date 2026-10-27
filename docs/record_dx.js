@@ -25,6 +25,21 @@ async function shot(page, name) {
 const settle = (page, ms = 1200) => page.waitForTimeout(ms);
 const ready = (page) => page.waitForFunction(() => window.robotdx && window.robotdx.clock && document.querySelector('#dx-main'), null, { timeout: 30000 });
 
+/** The time bar's fraction for a moment `at` of the entity's State (0 its first sample, 1 its newest), so a scrub lands
+    where the host has data (the clock's span also holds the older event backlog). */
+const stateFraction = (page, at) => page.evaluate(([p, a]) => {
+  const c = window.robotdx.clock, d = window.robotdx.feed.dataset('samples', p);
+  const t = d.start + a * (d.end - d.start);
+  return Math.max(0, Math.min(1, (t - c.start) / (c.end - c.start)));
+}, [BOARD, at]);
+
+/** The fraction for a moment `at` of the page's own lifetime (0 when it opened, 1 now): the tree is known there too. */
+const pageFraction = (page, at) => page.evaluate((a) => {
+  const c = window.robotdx.clock, e = window.robotdx.feed.dataset('entities');
+  const t = e.start + a * (c.end - e.start);
+  return Math.max(0, Math.min(1, (t - c.start) / (c.end - c.start)));
+}, at);
+
 async function scrubTo(page, fraction, steps = 6, stepMs = 0) {
   const track = await page.evaluate(() => { const r = document.querySelector('#dx-time .dv-pb-track').getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; });
   await page.mouse.move(track.x + track.w - 1, track.y + track.h / 2);
@@ -40,6 +55,7 @@ async function scrubTo(page, fraction, steps = 6, stepMs = 0) {
   fs.mkdirSync(OUT, { recursive: true });
   const main = await H.fixtureHost('F1');
   const { base } = main;
+  await new Promise((r) => setTimeout(r, 30000));   // the host's own history grows a little (State, levels) before the first shot
   const browser = await chromium.launch({ executablePath: H.CHROME, headless: true });
   try {
     for (const scheme of ['light', 'dark']) {
@@ -61,9 +77,15 @@ async function scrubTo(page, fraction, steps = 6, stepMs = 0) {
       await ready(page);
       await settle(page, 6000);
       await shot(page, `after-explore-${scheme}`);
-      await scrubTo(page, 0.75);
+      await scrubTo(page, await pageFraction(page, 0.4));
       await settle(page, 2500);
       await shot(page, `after-paused-${scheme}`);
+      await page.click('#dx-time .dv-pb-live');
+      await settle(page, 1000);
+      // further back than the page knows: the host's own history (checks, State, health), the tree not yet (step B)
+      await scrubTo(page, await stateFraction(page, 0.45));
+      await settle(page, 2500);
+      await shot(page, `after-paused-before-${scheme}`);
       await page.click('#dx-time .dv-pb-live');
       await page.goto(`${base}${DX}?go=dashboards&board=joint`);
       await ready(page);
@@ -119,8 +141,8 @@ async function scrubTo(page, fraction, steps = 6, stepMs = 0) {
     const vpage = await vctx.newPage();
     await vpage.goto(`${base}${DX}?go=explore&sel=${sel}`);
     await ready(vpage);
-    await settle(vpage, 5000);                     // streaming, following live
-    await scrubTo(vpage, 0.55, 30, 60);            // a slow scrub back (~2 s)
+    await settle(vpage, 8000);                     // streaming, following live
+    await scrubTo(vpage, await pageFraction(vpage, 0.35), 30, 60);   // a slow scrub back (~2 s), inside what the page has seen
     await settle(vpage, 4500);                     // paused at t: the views hold, LIVE says how far behind, data keeps arriving
     const live = await vpage.evaluate(() => { const r = document.querySelector('#dx-time .dv-pb-live').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
     await vpage.mouse.move(live.x, live.y, { steps: 10 });
