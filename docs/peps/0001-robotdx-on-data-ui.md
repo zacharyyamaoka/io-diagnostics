@@ -446,3 +446,33 @@ retention).
 8. `<data-dashboard>` without `src`: its arrangement is kept under the element's id, so a host that draws several
    dashboards in one element must change the id per dashboard (the page does); and a dashboard handed a clock before
    `load()` writes no `#t` (the page writes it). Worth a sentence in CONTRACT §17 / §21.
+
+## 14. Phase 3b: the host's live feed and its dashboard files (contract, before the code)
+
+*2026-10-27, after main gained `GET /api/v1/live` (bbc3e00) and dashboards as files (7e2e789, d0b9223); shapes in
+docs/api-v1.md. One seam each, in the page's adapter and its board store; what the views read does not change.*
+
+- **Live** (`dx/feed.js`): the page opens `GET /api/v1/live` and applies `snapshot` (the `/state` body: everything it holds
+  is replaced), `upsert` (`{table: "tree", id: path, row}` with `children` as paths, or `{table: "state", id: section, row}`),
+  `remove` and `samples` (the `/values?since=` shape, taken for an entity whose State the page watches, after its backlog) to
+  the same datasets as before (§12.1); the browser's `EventSource` resumes with `Last-Event-ID`. **Time is not diffed** by the
+  host: a version's time is `clock.now` of the snapshot advanced by the page's own clock since (re-anchored on each `samples`
+  event's `now`), and an age is derived from `last_received`, never read from `age_s`. With the feed on, nothing polls `/state`,
+  `/values` (after a backlog) or `/events` ticks for it; `/node` (checks, settings) is read when the entity's tree row changes
+  (at most once a second) and every 10 s, `/history` (levels) when its row changes (at most every 2 s) and every 15 s.
+  **Fallback:** an `EventSource` that closes before its first event (a 404 on an older host) makes the page poll `/state`
+  exactly as in phase 3. `robotdx.feed.mode` is `"live"` or `"poll"`.
+- **Dashboards** (`dx/boards.js`): `GET /api/v1/dashboards` answering `{files}` puts the store on the host: the list is the
+  files (a name is its id: `^[A-Za-z0-9][A-Za-z0-9 _.-]{0,79}$`; a starter's id is never taken), a dashboard is read with
+  `GET …/<name>.base` (its `ETag` kept), every change is a `PUT` of the whole text with `If-Match` (none for a new file),
+  Delete is a `DELETE` with `If-Match` (the host moves the file to `.trash/`). **412** shows a conflict
+  (`[data-board-conflict]`: reload theirs, or save yours as a copy); nothing is overwritten. **413** says the text is over the
+  host's 1 MB and offers Save as file. A dashboard still in this browser from phase 3 is listed as a **draft**
+  (`[data-board-kind=draft]`) and moves to the host on its first save (a free name from its title; the browser copy is then
+  removed). Save as file and Load .base (picker, drop) stay; a loaded file becomes a host file. **Fallback:** a 404 (an older
+  host) or 503 (a host with no config dir) keeps phase 3's store in this browser. The writes carry the page-only header.
+- **Requests** (§12.2) gain `GET /api/v1/live`, `GET /api/v1/dashboards` and `GET /api/v1/dashboards/<name>.base`; `PUT` and
+  `DELETE /api/v1/dashboards/<name>.base` are the page's second and third writes (a file under the host's config dir; no
+  device). The checks allow them only while the saving checks run, against the fixture host's scratch config dir
+  (`IO_DIAGNOSTICS_CONFIG_DIR`; the host's own rule: that variable, else `$XDG_CONFIG_HOME/io-diagnostics`, else
+  `~/.config/io-diagnostics`).

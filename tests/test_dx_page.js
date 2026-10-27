@@ -30,18 +30,28 @@ const { chromium } = require(H.PLAYWRIGHT);
 const { check, BOARD, fs, os, path } = H;
 
 const DX = '/dx/index.html';
+const BROWSER_ARGS = ['--no-first-run', '--disable-extensions', '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
+  '--disable-backgrounding-occluded-windows'];
+const GPU_ARGS = ['--use-angle=vulkan', '--enable-features=Vulkan', '--enable-gpu', '--ignore-gpu-blocklist'];
+const RENDERER_JS = () => { const gl = document.createElement('canvas').getContext('webgl2') || document.createElement('canvas').getContext('webgl'); if (!gl) return null; const ext = gl.getExtension('WEBGL_debug_renderer_info'); return String(gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER)); };
+const SOFTWARE = /swiftshader|llvmpipe|softpipe|software|basic render/i;
 const IDLE_S = Number(process.env.DX_IDLE_S || 15);
 const RAIL_WIDTHS = { collapsed: 48, expanded: 72, wide: 240 };
 const STARTERS_MIN = 2;
 
-// ---- the request allow-list (PEP 0001 §12.2) ------------------------------------------------------------------------------------
-const GET_OK = [/^\/dx\//, /^\/vendor\/data-ui\//, /^\/usb\.js$/, /^\/api\/v1\/(state|node|values|history|activity|events|settings|health)(\?|$)/];
+// ---- the request allow-list (PEP 0001 §12.2, §14) -------------------------------------------------------------------------------
+const GET_OK = [/^\/dx\//, /^\/vendor\/data-ui\//, /^\/usb\.js$/, /^\/api\/v1\/(state|node|values|history|activity|events|settings|health|live)(\?|$)/,
+  /^\/api\/v1\/dashboards(\/[^/?]+\.base)?$/];
+const DASHBOARD_FILE = /^\/api\/v1\/dashboards\/[^/?]+\.base$/;
+// the dashboard writes (PUT, DELETE) are allowed only while the saving checks run, against this fixture host's own config dir
+const phase = { saving: false };
 function onList(request) {
   const url = request.url;
   if (request.method === 'GET') return GET_OK.some((re) => re.test(url));
   if (request.method === 'POST' && url === '/api/v1/watch') {
     try { const body = JSON.parse(request.body || ''); return typeof body.path === 'string' && body.path.length > 0 && Object.keys(body).length === 1; } catch (_) { return false; }
   }
+  if ((request.method === 'PUT' || request.method === 'DELETE') && DASHBOARD_FILE.test(url)) return request.saving === true;
   return false;
 }
 function recorder(page, base) {
@@ -49,24 +59,30 @@ function recorder(page, base) {
   page.on('request', (r) => {
     const u = new URL(r.url());
     if (u.protocol === 'data:' || u.protocol === 'blob:') return;
-    seen.push({ method: r.method(), url: u.origin === base ? `${u.pathname}${u.search}` : r.url(), body: r.postData(), at: Date.now() });
+    seen.push({ method: r.method(), url: u.origin === base ? `${u.pathname}${u.search}` : r.url(), body: r.postData(), headers: r.headers(), at: Date.now(), saving: phase.saving });
   });
   return seen;
 }
-// bytes and requests of /api/ per second over `seconds`, from the responses' own bodies (an SSE stream counts as one request)
-async function traffic(page, base, seconds) {
+// every byte the page receives from /api/, streams included (CDP Network.dataReceived), counted from before its first navigation:
+// a Server-Sent Events stream opened at load (/live, /events) counts by what it delivers, not as one request
+async function meter(page, base) {
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Network.enable');
+  const urls = new Map();
   const tally = { requests: 0, bytes: 0 };
-  const onResponse = async (response) => {
-    const u = new URL(response.url());
-    if (u.origin !== base || !u.pathname.startsWith('/api/')) return;
-    tally.requests += 1;
-    if (u.pathname === '/api/v1/events') return;
-    try { tally.bytes += (await response.body()).length; } catch (_) { /* a stream or an aborted read */ }
-  };
-  page.on('response', onResponse);
+  cdp.on('Network.requestWillBeSent', (e) => {
+    const u = new URL(e.request.url);
+    if (u.origin === base && u.pathname.startsWith('/api/')) { urls.set(e.requestId, u.pathname); tally.requests += 1; }
+  });
+  cdp.on('Network.dataReceived', (e) => { if (urls.has(e.requestId)) tally.bytes += e.dataLength; });
+  return tally;
+}
+// bytes and requests of /api/ per second over the next `seconds`
+async function traffic(tally, page, seconds) {
+  const r0 = tally.requests, b0 = tally.bytes;
   await page.waitForTimeout(seconds * 1000);
-  page.off('response', onResponse);
-  return { rps: +(tally.requests / seconds).toFixed(2), kbps: +(tally.bytes / 1024 / seconds).toFixed(1) };
+  const bytes = tally.bytes - b0;
+  return { rps: +((tally.requests - r0) / seconds).toFixed(2), kbps: +(bytes / 1024 / seconds).toFixed(1), kb_per_min: Math.round(bytes / 1024 / seconds * 60) };
 }
 
 // ---- the page --------------------------------------------------------------------------------------------------------------------
@@ -100,6 +116,35 @@ function hostValueAt(history, values, key, t) {
   return best;
 }
 
+// Scrub the time bar from its right end (following) to 60 % of the entity's State span, and measure K5: the clock's last seek of the
+// drag to the last live draw of a detail panel at that t, with the test's own listeners. The target lies inside the entity's
+// State (it starts when this host started; the event backlog reaches further back).
+async function scrubBack(page) {
+  const stateSpan = await page.evaluate((p) => { const d = window.robotdx.feed.dataset('samples', p); return { start: d.start, end: d.end }; }, BOARD);
+  const span = await clockState(page);
+  const target = stateSpan.start + 0.6 * (stateSpan.end - stateSpan.start);
+  const trackBefore = await rect(page, '#dx-time .dv-pb-track');
+  const xTarget = trackBefore.x + trackBefore.w * ((target - span.start) / (span.end - span.start));
+  await page.evaluate(() => {
+    window.__k5 = { times: [], draws: [] };
+    window.robotdx.clock.addEventListener('time', (e) => window.__k5.times.push({ at: performance.now(), t: e.detail.t, source: e.detail.source }));
+    document.addEventListener('data-views-live', (e) => window.__k5.draws.push({ at: performance.now(), t: e.detail.t, following: e.detail.following, id: e.target.id }), true);
+  });
+  await page.mouse.move(trackBefore.x + trackBefore.w - 1, trackBefore.y + trackBefore.h / 2);
+  await page.mouse.down();
+  await page.mouse.move(xTarget, trackBefore.y + trackBefore.h / 2, { steps: 6 });
+  await page.mouse.up();
+  await page.waitForTimeout(500);
+  const k5 = await page.evaluate(() => {
+    const seeks = window.__k5.times.filter((x) => x.source !== 'live' && x.source !== 'play');
+    const last = seeks[seeks.length - 1];
+    if (!last) return null;
+    const at = window.__k5.draws.filter((d) => d.t === last.t && !d.following && d.id.startsWith('dx-detail-'));
+    return at.length ? { ms: Math.max(...at.map((d) => d.at)) - last.at, panels: [...new Set(at.map((d) => d.id))] } : { ms: null, panels: [] };
+  });
+  return { stateSpan, span, target, trackBefore, xTarget, k5 };
+}
+
 async function dragBy(page, handleRect, dx, dy = 0, y = null) {
   const sx = handleRect.x + handleRect.w / 2, sy = y ?? handleRect.y + handleRect.h / 2;
   await page.mouse.move(sx, sy);
@@ -111,7 +156,9 @@ async function dragBy(page, handleRect, dx, dy = 0, y = null) {
 
 (async () => {
   let main;
-  const browser = await chromium.launch({ executablePath: H.CHROME, headless: true });
+  // WHY these flags: data-ui's bench (bench/runner.py BROWSER_ARGS) runs headless without timer and renderer backgrounding, so
+  // frame times are the page's and not a throttled background tab's
+  const browser = await chromium.launch({ executablePath: H.CHROME, headless: true, args: BROWSER_ARGS });
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'dx-page-'));
   const everyRequest = [];
   try {
@@ -123,10 +170,11 @@ async function dragBy(page, handleRect, dx, dy = 0, y = null) {
     // ---- K2 before: today's page on the same host, idle, for the comparison ------------------------------------------------------
     const oldContext = await H.newContext(browser, 'light');
     const oldPage = await oldContext.newPage();
+    const oldMeter = await meter(oldPage, base);
     await oldPage.route('**/*', (route) => (route.request().method() === 'GET' ? route.continue() : route.abort()));  // GET only, as §11
     await oldPage.goto(`${base}/`);
     await oldPage.waitForTimeout(3000);
-    const before = await traffic(oldPage, base, IDLE_S);
+    const before = await traffic(oldMeter, oldPage, IDLE_S);
     await oldContext.close();
 
     // ---- K7: cold load to the tree drawn --------------------------------------------------------------------------------------------
@@ -134,6 +182,7 @@ async function dragBy(page, handleRect, dx, dy = 0, y = null) {
     const page = await context.newPage();
     const watch = H.watchErrors(page, base);
     everyRequest.push(recorder(page, base));
+    const pageMeter = await meter(page, base);
     // measured in the page from its navigation start (performance.now()'s origin), by a 10 ms timer started before any script
     // runs: the first moment the tree has its rows drawn (a raf poll stalls once nothing animates, and a MutationObserver can
     // fire before the element's model is set)
@@ -149,6 +198,12 @@ async function dragBy(page, handleRect, dx, dy = 0, y = null) {
     const coldMs = drawn ? Math.round(drawn) : null;
     check('K7: cold load to the tree drawn ≤ 1.5 s (from navigation start)', coldMs !== null && coldMs <= 1500, `${coldMs} ms`);
     check('the page opens on Explore', (await dest(page)) === 'explore', await dest(page));
+    // the live feed (GET /api/v1/live, PEP 0001 §14) in place of the /state poll: one stream, no /state request
+    await page.waitForTimeout(5000);
+    const firstReqs = everyRequest[0];
+    const liveFeed = { mode: await page.evaluate(() => window.robotdx.feed.mode), live: firstReqs.filter((r) => r.method === 'GET' && r.url === '/api/v1/live').length,
+      state: firstReqs.filter((r) => r.url === '/api/v1/state').length };
+    check('the page reads the host through GET /api/v1/live: one stream, no /state poll', liveFeed.mode === 'live' && liveFeed.live === 1 && liveFeed.state === 0, liveFeed);
 
     // ---- explorer: the tree is the host's tree ---------------------------------------------------------------------------------------
     const state = await H.getJson(base, '/api/v1/state');
@@ -220,30 +275,8 @@ async function dragBy(page, handleRect, dx, dy = 0, y = null) {
     check('State shows one card per value of the entity', ['position', 'velocity', 'torque'].every((k) => cardsLive.some((c) => c.label.includes(k))), cardsLive.map((c) => c.label));
 
     // ---- rewind: scrub back, the views show t, data keeps arriving --------------------------------------------------------------
-    // the target lies inside the entity's State (it starts when this host started; the event backlog reaches further back)
-    const stateSpan = await page.evaluate((p) => { const d = window.robotdx.feed.dataset('samples', p); return { start: d.start, end: d.end }; }, BOARD);
-    const span = await clockState(page);
-    const target = stateSpan.start + 0.6 * (stateSpan.end - stateSpan.start);
-    const trackBefore = await rect(page, '#dx-time .dv-pb-track');
-    const xTarget = trackBefore.x + trackBefore.w * ((target - span.start) / (span.end - span.start));
-    // K5: from the clock's last seek of the drag to the last live draw of a detail panel at that t, with the test's own listeners
-    await page.evaluate(() => {
-      window.__k5 = { times: [], draws: [] };
-      window.robotdx.clock.addEventListener('time', (e) => window.__k5.times.push({ at: performance.now(), t: e.detail.t, source: e.detail.source }));
-      document.addEventListener('data-views-live', (e) => window.__k5.draws.push({ at: performance.now(), t: e.detail.t, following: e.detail.following, id: e.target.id }), true);
-    });
-    await page.mouse.move(trackBefore.x + trackBefore.w - 1, trackBefore.y + trackBefore.h / 2);
-    await page.mouse.down();
-    await page.mouse.move(xTarget, trackBefore.y + trackBefore.h / 2, { steps: 6 });
-    await page.mouse.up();
-    await page.waitForTimeout(500);
-    const k5 = await page.evaluate(() => {
-      const seeks = window.__k5.times.filter((x) => x.source !== 'live' && x.source !== 'play');
-      const last = seeks[seeks.length - 1];
-      if (!last) return null;
-      const at = window.__k5.draws.filter((d) => d.t === last.t && !d.following && d.id.startsWith('dx-detail-'));
-      return at.length ? { ms: Math.max(...at.map((d) => d.at)) - last.at, panels: [...new Set(at.map((d) => d.id))] } : { ms: null, panels: [] };
-    });
+    const scrub = await scrubBack(page);
+    const { stateSpan, target, trackBefore, xTarget, k5 } = scrub;
     const scrubMs = k5 && k5.ms;
     const paused = await clockState(page);
     // the oracle is the card's own geometry at the drag's end: the pointer's place on the track, over the span the clock holds
@@ -316,7 +349,7 @@ async function dragBy(page, handleRect, dx, dy = 0, y = null) {
     await page.goto(`${base}${DX}?go=explore`);
     await ready(page);
     await page.waitForTimeout(3000);
-    const after = await traffic(page, base, IDLE_S);
+    const after = await traffic(pageMeter, page, IDLE_S);
     check('K2: idle, the new page costs fewer bytes per second than today\'s', after.kbps < before.kbps, { new: after, today: before });
 
     // ---- the rail: three styles, measured --------------------------------------------------------------------------------------------
@@ -404,12 +437,43 @@ async function dragBy(page, handleRect, dx, dy = 0, y = null) {
     const points = await H.waitFor(() => page.evaluate(() => { const p = document.querySelector('data-dashboard.dx-board [data-points]'); return p && Number(p.dataset.points) > 0 ? Number(p.dataset.points) : null; }), 12000);
     check('its live plot draws points and follows', Boolean(points) && (await clockState(page)).following, { points });
 
+    // ---- your own, on the host (GET | PUT | DELETE /api/v1/dashboards/<name>.base, PEP 0001 §14): files in THIS fixture host's config
+    // dir (the harness gives it IO_DIAGNOSTICS_CONFIG_DIR under its scratch root), never Zach's ~/.config/io-diagnostics
+    const hostDir = path.join(main.root, 'config', 'dashboards');
+    const realDir = path.join(os.homedir(), '.config', 'io-diagnostics', 'dashboards');
+    const realBefore = fs.existsSync(realDir) ? fs.readdirSync(realDir).sort().join('|') : null;
+    const fileOf = (name) => path.join(hostDir, `${name}.base`);
+    const readHost = (name) => (fs.existsSync(fileOf(name)) ? fs.readFileSync(fileOf(name), 'utf8') : null);
+    phase.saving = true;
+    // a draft left in this browser by phase 3 (localStorage) moves to the host on its first save
+    await page.goto(`${base}${DX}?go=dashboards`);
+    await ready(page);
+    await page.evaluate((text) => localStorage.setItem('robotdx.dx.boards', JSON.stringify([{ id: 'my-old-draft', title: 'Old draft', text, updated: '2026-10-27T12:00:00Z' }])),
+      'datasets:\n  summary:\n    data: "../datasets/summary.json"\nlayout:\n  columns: 12\n  panels:\n    - { view: Time, w: 12, h: 1 }\nviews:\n  - type: playback\n    name: Time\n    from: summary\n');
+    await page.reload();
+    await ready(page);
+    const draft = await page.waitForFunction(() => { const a = document.querySelector('#dx-main [data-board-kind="draft"]'); return a ? a.dataset.boardId : null; }, null, { timeout: 8000 }).then((h) => h.jsonValue(), () => null);
+    check('a dashboard left in this browser is listed as a draft', Boolean(draft), draft);
+    if (draft) {
+      await page.click(`#dx-main [data-board-id="${draft}"]`);
+      await page.waitForFunction(() => { const d = document.querySelector('data-dashboard.dx-board'); return d && d.dash; }, null, { timeout: 10000 });
+      await page.click('#dx-main [data-board-act="add"]');
+      await page.waitForSelector('#dx-add-panel[open]', { timeout: 5000 });
+      await page.selectOption('#dx-add-panel [name="type"]', 'levels');
+      await page.selectOption('#dx-add-panel [name="entity"]', BOARD);
+      await page.click('#dx-add-panel [data-add-panel="ok"]');
+      await H.waitFor(() => readHost('Old draft'), 8000);
+    }
+    const moved = { host: readHost('Old draft'), local: await page.evaluate(() => localStorage.getItem('robotdx.dx.boards')), url: await page.evaluate(() => new URLSearchParams(location.search).get('board')) };
+    check('its first save writes it to the host and takes it out of this browser', moved.host !== null && /type: levels/.test(moved.host) && !/my-old-draft/.test(moved.local || '') && moved.url === 'Old draft',
+      { host: moved.host && moved.host.length, local: moved.local, url: moved.url });
+
     // make one: New, Add panel (a plot of the board's position), Arrange (resize it), Done
     await page.goto(`${base}${DX}?go=dashboards`);
     await ready(page);
     await page.click('#dx-main [data-board-act="new"]');
     const mine = await page.waitForFunction(() => { const id = new URLSearchParams(location.search).get('board'); const d = document.querySelector('data-dashboard.dx-board'); return id && d && d.dash ? id : null; }, null, { timeout: 10000 }).then((h) => h.jsonValue(), () => null);
-    check('New makes a dashboard of your own and opens it', Boolean(mine), mine);
+    check('New makes a dashboard of your own on the host and opens it', Boolean(mine) && readHost(mine) !== null && /type: playback/.test(readHost(mine)), { mine, file: mine && fileOf(mine) });
     await page.click('#dx-main [data-board-act="add"]');
     await page.waitForSelector('#dx-add-panel[open]', { timeout: 5000 });
     await page.selectOption('#dx-add-panel [name="type"]', 'plot');
@@ -418,7 +482,10 @@ async function dragBy(page, handleRect, dx, dy = 0, y = null) {
     await page.selectOption('#dx-add-panel [name="field"]', 'position').catch(() => {});
     await page.click('#dx-add-panel [data-add-panel="ok"]');
     const added = await page.waitForFunction(() => { const d = document.querySelector('data-dashboard.dx-board'); return d && [...d.querySelectorAll('.dd-panel')].some((p) => p.dataset.type === 'plot'); }, null, { timeout: 10000 }).then(() => true, () => false);
-    check('Add panel puts a plot of the entity on it', added);
+    await H.waitFor(() => /type: plot/.test(readHost(mine) || ''), 8000);
+    check('Add panel puts a plot of the entity on it, and the host file has it', added && /type: plot/.test(readHost(mine) || '') && (readHost(mine) || '').includes(`samples.json?path=${BOARD}`));
+    const puts = everyRequest[0].filter((r) => r.method === 'PUT' && r.url === `/api/v1/dashboards/${encodeURIComponent(mine).replace(/%20/g, '%20')}.base`);
+    check('a save of an existing file sends If-Match (the etag the page last saw)', puts.length >= 2 && puts.slice(1).every((r) => r.headers['if-match']), puts.map((r) => r.headers['if-match'] || '(none)'));
     const plotPanel = 'data-dashboard.dx-board .dd-panel[data-type="plot"]';
     const w0 = (await rect(page, plotPanel)).w;
     await page.click('data-dashboard.dx-board .dd-act[data-act="arrange"]');
@@ -429,53 +496,82 @@ async function dragBy(page, handleRect, dx, dy = 0, y = null) {
     const handle = await rect(page, `${plotPanel} .ui-resizable-se`);
     if (handle) await dragBy(page, handle, -Math.round(w0 / 2));
     await page.click('data-dashboard.dx-board .dd-act[data-act="arrange"]');
-    await page.waitForTimeout(800);
-    const arranged = await page.evaluate((s) => [...document.querySelectorAll('data-dashboard.dx-board .dd-panel')].map((p) => { const r = p.getBoundingClientRect(); return { key: p.dataset.panel, x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; }), plotPanel);
+    await page.waitForTimeout(1200);
+    const arranged = await page.evaluate(() => [...document.querySelectorAll('data-dashboard.dx-board .dd-panel')].map((p) => { const r = p.getBoundingClientRect(); return { key: p.dataset.panel, x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; }));
     const w1 = (await rect(page, plotPanel)).w;
     check('Arrange resizes the panel (measured)', handle && w1 < w0 * 0.75, { before: w0, after: w1 });
-    const stored = await page.evaluate((id) => { try { return (JSON.parse(localStorage.getItem('robotdx.dx.boards') || '[]').find((b) => b.id === id) || {}).text || ''; } catch (_) { return ''; } }, mine);
-    check('your dashboard is saved in this browser as .base text, the arrangement in its layout:', /layout:/.test(stored) && /type: plot/.test(stored) && stored.includes(`samples.json?path=${BOARD}`), stored.slice(0, 160));
+    const stored = readHost(mine) || '';
+    const storedBase = await page.evaluate((text) => { try { return window.robotdx.parseBase(text); } catch (e) { return null; } }, stored);
+    const plotEntry = storedBase && (storedBase.layout.panels || []).find((p) => (storedBase.views || []).some((v) => v.type === 'plot' && v.name === p.view));
+    check('the arrangement is written into the host file\'s layout:', plotEntry && Number(plotEntry.w) <= 7, { panel: plotEntry });
     await page.reload();
     await ready(page);
     await page.waitForFunction(() => { const d = document.querySelector('data-dashboard.dx-board'); return d && d.dash && d.querySelectorAll('.dd-panel').length; }, null, { timeout: 15000 });
     await page.waitForTimeout(800);
     const reloaded = await page.evaluate(() => [...document.querySelectorAll('data-dashboard.dx-board .dd-panel')].map((p) => { const r = p.getBoundingClientRect(); return { key: p.dataset.panel, x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; }));
     const same = arranged.length === reloaded.length && arranged.every((a, i) => ['x', 'y', 'w', 'h'].every((k) => Math.abs(a[k] - reloaded[i][k]) <= 2));
-    check('after a reload it opens with the same panels in the same places', same, { arranged, reloaded });
+    const readBack = everyRequest[0].some((r) => r.method === 'GET' && r.url.startsWith('/api/v1/dashboards/') && r.url.endsWith('.base'));
+    check('after a reload it is read back from the host with the same panels in the same places', same && readBack, { arranged, reloaded, readBack });
+    // a conflict: another tab saves first; this tab's next save is refused (412) and shown, never written over
+    const tab2 = await context.newPage();
+    everyRequest.push(recorder(tab2, base));
+    await tab2.goto(`${base}${DX}?go=dashboards&board=${encodeURIComponent(mine)}`);
+    await ready(tab2);
+    await tab2.waitForFunction(() => { const d = document.querySelector('data-dashboard.dx-board'); return d && d.dash; }, null, { timeout: 10000 });
+    await tab2.click('#dx-main [data-board-act="add"]');
+    await tab2.waitForSelector('#dx-add-panel[open]', { timeout: 5000 });
+    await tab2.selectOption('#dx-add-panel [name="type"]', 'table');
+    await tab2.selectOption('#dx-add-panel [name="entity"]', BOARD);
+    await tab2.click('#dx-add-panel [data-add-panel="ok"]');
+    await H.waitFor(() => /type: table/.test(readHost(mine) || ''), 8000);
+    const theirs = readHost(mine);
+    await page.click('#dx-main [data-board-act="add"]');
+    await page.waitForSelector('#dx-add-panel[open]', { timeout: 5000 });
+    await page.selectOption('#dx-add-panel [name="type"]', 'kpi');
+    await page.selectOption('#dx-add-panel [name="entity"]', BOARD);
+    await page.click('#dx-add-panel [data-add-panel="ok"]');
+    const conflict = await page.waitForFunction(() => { const c = document.querySelector('#dx-main [data-board-conflict]'); return c && !c.hidden && c.getBoundingClientRect().height > 0 ? c.textContent : null; }, null, { timeout: 8000 }).then((h) => h.jsonValue(), () => null);
+    const refused = everyRequest[0].some((r) => r.method === 'PUT' && r.at > Date.now() - 9000) ;
+    check('a save over a newer version is refused (412) and shown as a conflict; the host keeps the other tab\'s text', Boolean(conflict) && readHost(mine) === theirs && refused && !/type: kpi/.test(readHost(mine) || ''), { conflict: conflict && conflict.slice(0, 120) });
+    await tab2.close();
     // Save as file: the download is the .base, and it parses back
     const [download] = await Promise.all([page.waitForEvent('download', { timeout: 8000 }).catch(() => null), page.click('#dx-main [data-board-act="save"]')]);
     const saved = download ? fs.readFileSync(await download.path(), 'utf8') : '';
     const parsed = await page.evaluate((text) => { try { const b = window.robotdx.parseBase(text); return { panels: (b.layout && b.layout.panels || []).length, views: (b.views || []).map((v) => v.type) }; } catch (e) { return { error: e.message }; } }, saved);
     check('Save as file downloads the .base, and it parses back with its panels', download && /\.base$/.test(download.suggestedFilename()) && parsed.panels >= 1 && parsed.views.includes('plot'), { name: download && download.suggestedFilename(), parsed });
-    // Load .base: from the picker, and dropped on the page
+    // Load .base: from the picker, and dropped on the page; each becomes a host file
     const file = path.join(scratch, 'from-a-file.base');
     fs.writeFileSync(file, saved || 'layout:\n  panels: []\n');
     await page.goto(`${base}${DX}?go=dashboards`);
     await ready(page);
     await page.setInputFiles('#dx-load-input', file);
     const picked = await page.waitForFunction(() => [...document.querySelectorAll('#dx-main [data-board-id][data-board-kind="mine"]')].some((a) => /from-a-file/.test(a.textContent)), null, { timeout: 8000 }).then(() => true, () => false);
-    check('Load .base: a picked file becomes one of yours', picked);
+    check('Load .base: a picked file becomes one of yours, on the host', picked && readHost('from-a-file') !== null);
     const dropped = await page.evaluate(async (text) => {
-      const before = document.querySelectorAll('#dx-main [data-board-kind="mine"]').length;
       const dt = new DataTransfer();
       dt.items.add(new File([text], 'dropped-board.base', { type: 'text/plain' }));
       const target = document.querySelector('#dx-main');
       for (const type of ['dragenter', 'dragover', 'drop']) target.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt }));
-      for (let i = 0; i < 40; i += 1) { await new Promise((r) => setTimeout(r, 100)); if ([...document.querySelectorAll('#dx-main [data-board-kind="mine"]')].some((a) => /dropped-board/.test(a.textContent))) return { before, ok: true }; }
-      return { before, ok: false };
+      for (let i = 0; i < 40; i += 1) { await new Promise((r) => setTimeout(r, 100)); if ([...document.querySelectorAll('#dx-main [data-board-kind="mine"]')].some((a) => /dropped-board/.test(a.textContent))) return { ok: true }; }
+      return { ok: false };
     }, saved);
-    check('Load .base: a file dropped on the page becomes one of yours', dropped.ok, dropped);
-    // Delete: gone from the list, and still gone after a reload
+    check('Load .base: a file dropped on the page becomes one of yours, on the host', dropped.ok && readHost('dropped-board') !== null, dropped);
+    // Delete: moved to the host's .trash/, gone from the list (after a reload too)
     await page.click(`#dx-main [data-board-id="${mine}"]`);
     await page.waitForFunction((id) => new URLSearchParams(location.search).get('board') === id, mine, { timeout: 8000 });
     page.once('dialog', (d) => d.accept());
     await page.click('#dx-main [data-board-act="delete"]');
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(800);
     await page.goto(`${base}${DX}?go=dashboards`);
     await ready(page);
     await page.waitForTimeout(500);
     const gone = await page.evaluate((id) => !document.querySelector(`#dx-main [data-board-id="${id}"]`), mine);
-    check('Delete removes your dashboard (after a reload too)', gone);
+    const trash = path.join(hostDir, '.trash');
+    const trashed = fs.existsSync(trash) && fs.readdirSync(trash).some((f) => f.startsWith(`${mine}.`) && f.endsWith('.base'));
+    check('Delete moves it to the host\'s .trash/ and takes it off the list (after a reload too)', gone && trashed && readHost(mine) === null, { gone, trashed });
+    phase.saving = false;
+    const realAfter = fs.existsSync(realDir) ? fs.readdirSync(realDir).sort().join('|') : null;
+    check('every write landed in the fixture host\'s scratch config dir; ~/.config/io-diagnostics/dashboards is untouched', realAfter === realBefore && hostDir.startsWith(main.root), { realDir, unchanged: realAfter === realBefore });
 
     // ---- dark: the page and a dashboard draw dark --------------------------------------------------------------------------------
     const dark = await H.newContext(browser, 'dark');
@@ -493,6 +589,44 @@ async function dragBy(page, handleRect, dx, dy = 0, y = null) {
     check('dark: the page and its panels are dark', lum.body < 0.2 && (lum.panel === null || lum.panel < 0.25), lum);
     await dark.close();
 
+    // ---- an older host: no /api/v1/live, no /api/v1/dashboards (404) -> the /state poll and this browser's own store -----------------
+    const older = await H.newContext(browser, 'light');
+    await older.route('**/api/v1/live', (route) => route.fulfill({ status: 404, contentType: 'application/json', body: '{"error": "no endpoint \'/api/v1/live\'"}' }));
+    await older.route(/\/api\/v1\/dashboards(\/.*)?$/, (route) => route.fulfill({ status: 404, contentType: 'application/json', body: '{"error": "no endpoint"}' }));
+    const oldHostPage = await older.newPage();
+    everyRequest.push(recorder(oldHostPage, base));
+    const oldHostMeter = await meter(oldHostPage, base);
+    await oldHostPage.goto(`${base}${DX}?go=explore`);
+    await ready(oldHostPage);
+    const polled = await H.waitFor(async () => (await treeRows(oldHostPage)).length >= 10 && everyRequest[everyRequest.length - 1].filter((r) => r.url === '/api/v1/state').length >= 2, 15000);
+    const pollMode = await oldHostPage.evaluate(() => window.robotdx.feed.mode);
+    check('with no /api/v1/live (404) the page polls /state instead, and draws the same tree', Boolean(polled) && pollMode === 'poll', { mode: pollMode });
+    const polling = await traffic(oldHostMeter, oldHostPage, IDLE_S);
+    await oldHostPage.goto(`${base}${DX}?go=dashboards`);
+    await ready(oldHostPage);
+    await oldHostPage.click('#dx-main [data-board-act="new"]');
+    const localId = await oldHostPage.waitForFunction(() => new URLSearchParams(location.search).get('board'), null, { timeout: 8000 }).then((h) => h.jsonValue(), () => null);
+    const localText = await oldHostPage.evaluate((id) => { try { return (JSON.parse(localStorage.getItem('robotdx.dx.boards') || '[]').find((b) => b.id === id) || {}).text || ''; } catch (_) { return ''; } }, localId);
+    const localPuts = everyRequest[everyRequest.length - 1].filter((r) => r.method === 'PUT' || r.method === 'DELETE').length;
+    check('with no /api/v1/dashboards (404) a new dashboard lives in this browser, and nothing is written to the host', /type: playback/.test(localText) && localPuts === 0, { localId, localPuts });
+    await older.close();
+
+    // ---- K5 again in a GPU browser (data-ui bench/runner.py GPU_ARGS: ANGLE on Vulkan), its renderer checked --------------------------
+    let gpu = { renderer: null, k5: null };
+    const gpuBrowser = await chromium.launch({ executablePath: H.CHROME, headless: true, args: [...BROWSER_ARGS, ...GPU_ARGS] }).catch(() => null);
+    if (gpuBrowser) {
+      const gpage = await (await H.newContext(gpuBrowser, 'light')).newPage();
+      everyRequest.push(recorder(gpage, base));
+      await gpage.goto(`${base}${DX}?go=explore&sel=${encodeURIComponent(BOARD)}`);
+      await ready(gpage);
+      gpu.renderer = await gpage.evaluate(RENDERER_JS).catch(() => null);
+      await gpage.waitForFunction((p) => { const d = window.robotdx.feed.dataset('samples', p); return d && d.end && d.start && d.end - d.start > 10; }, BOARD, { timeout: 30000 }).catch(() => {});
+      gpu.k5 = (await scrubBack(gpage)).k5;
+      await gpuBrowser.close();
+    }
+    const gpuKind = gpu.renderer ? (SOFTWARE.test(gpu.renderer) ? 'software' : 'gpu') : 'none';
+    check(`K5 in the GPU browser (${gpuKind}): the last seek to every live panel drawn at t ≤ 50 ms`, gpu.k5 && typeof gpu.k5.ms === 'number' && gpu.k5.ms <= 50 && gpu.k5.panels.length >= 3, { renderer: gpu.renderer, k5: gpu.k5 });
+
     // ---- every request, every page ------------------------------------------------------------------------------------------------
     const all = everyRequest.flat();
     const off = all.filter((r) => !onList(r));
@@ -500,7 +634,8 @@ async function dragBy(page, handleRect, dx, dy = 0, y = null) {
     const posts = all.filter((r) => r.method === 'POST');
     check('the only write is the watch heartbeat, and only for the entity on screen', posts.length > 0 && posts.every((r) => JSON.parse(r.body).path === BOARD), { posts: posts.length });
     check('no page errors, no console errors, no failed request', watch.errors.length === 0, watch.errors.slice(0, 5));
-    console.log(`\nKPIs  K2 idle: new ${after.kbps} KB/s ${after.rps} req/s · today ${before.kbps} KB/s ${before.rps} req/s   K5 scrub: ${typeof scrubMs === 'number' ? Math.round(scrubMs) + ' ms' : 'n/a'}   K7 cold load: ${coldMs} ms`);
+    console.log(`\nKPIs  K2 idle: live feed ${after.kbps} KB/s (${after.kb_per_min} KB/min, ${after.rps} req/s) · /state polling fallback ${polling.kbps} KB/s (${polling.kb_per_min} KB/min) · today's page ${before.kbps} KB/s (${before.kb_per_min} KB/min)` +
+      `   K5 scrub: ${typeof scrubMs === 'number' ? Math.round(scrubMs) + ' ms' : 'n/a'} software, ${gpu.k5 && typeof gpu.k5.ms === 'number' ? Math.round(gpu.k5.ms) + ' ms' : 'n/a'} ${gpuKind} (${gpu.renderer || 'no renderer'})   K7 cold load: ${coldMs} ms`);
   } catch (error) {
     check('the run finished', false, String(error && error.stack || error));
   } finally {
