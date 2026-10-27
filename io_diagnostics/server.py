@@ -6,7 +6,9 @@ page"). Every click is a dry run first; a real run needs that dry run's token an
 setup card's ``POST /api/v1/expect | forget | retire`` rewrite the person's rig file under the same page-only rule
 (no device is touched, so no dry run and no token), and ``POST /api/v1/settings`` (the View options: the history
 window, written to settings.toml) likewise, and ``POST /api/v1/watch`` (the entity page's heartbeat: it keeps the plugin's
-``watch`` running while the page looks at an entity, docs/state-config-v1.md). Every other POST / PUT / DELETE / PATCH is 405. Binds to 127.0.0.1 by
+``watch`` running while the page looks at an entity, docs/state-config-v1.md). ``PUT`` / ``DELETE /api/v1/dashboards/<name>.base``
+write the person's dashboard files under the same page-only rule (docs/api-v1.md "Dashboards as files"). Every other
+POST / PUT / DELETE / PATCH is 405. Binds to 127.0.0.1 by
 default; the page polls ``/api/v1/state`` once a second, and may listen to ``GET /api/v1/events`` (Server-Sent
 Events: each new or changed activity event, and a tick per change) so a plug shows without waiting for the poll. Run by the release-channels runtime as Preview or an agent's
 lane, it also answers ``/__sps/*`` for the Stable / Preview chip (release_channels.py, docs/release-channels.md).
@@ -21,12 +23,14 @@ import secrets
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from io_diagnostics import WEB
 from io_diagnostics import host_utilities, release_channels
 from io_diagnostics.arrangements import ArrangementError
 from io_diagnostics.composition import BATCH_PREFIX
+from io_diagnostics.dashboards import MAX_BYTES as MAX_DASHBOARD
+from io_diagnostics.dashboards import DashboardError
 from io_diagnostics.history import MAX_BINS
 from io_diagnostics.host import Host
 from io_diagnostics.settings import SettingsError
@@ -52,6 +56,9 @@ MJPEG_POLL_S = 0.04  # how often an MJPEG stream looks for a newer frame
 MJPEG_MAX_FPS = 30.0
 RUN_PATH = re.compile(r"^/api/v1/runs/([0-9A-Za-z_-]+)(?:/(stream|cast|input|signal|resize))?$")
 RUN_WRITES = ("input", "signal", "resize")
+# WHY the whole tail, not [^/]+: a name with a (decoded or raw) separator in it is answered 400 BadName, not a quiet 404
+DASHBOARD_PATH = re.compile(r"^/api/v1/dashboards(?:/(.*))?$")
+FILE_WRITES = ("PUT", "DELETE")  # the write methods the dashboard files take; the allowlist beside do_POST's endpoints
 MAX_TERMINAL = 500  # columns or rows a resize may ask for
 EVENTS_KEEPALIVE_S = 15.0  # an SSE comment this often while nothing changes, so a dead client is noticed
 EVENTS_COALESCE_S = 0.1  # a burst of changes (a plug's ~30 udev blocks) is one diff
@@ -161,6 +168,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(self.host.runs_json())
             if parsed.path == "/api/v1/values":
                 return self._values(query)
+            if DASHBOARD_PATH.match(parsed.path):
+                return self._dashboard("GET", DASHBOARD_PATH.match(parsed.path)[1])
             if parsed.path == "/api/v1/arrangements":
                 return self._json(self.host.arrangements.json())
             if parsed.path in ("/api/v1/frames", "/api/v1/frames/stream"):
@@ -336,6 +345,43 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True, "cols": cols, "rows": rows})
         except RunError as error:
             return self._json({"refused": error.code, "error": str(error)}, error.status)
+
+    # --- dashboards as files (docs/api-v1.md "Dashboards as files"): opaque text under <config dir>/dashboards/ ----------
+    def _file_write(self, method: str):
+        found = DASHBOARD_PATH.match(urlparse(self.path).path)
+        if method not in FILE_WRITES or not found or not found[1]:
+            return self._refuse()
+        try:
+            return self._dashboard(method, found[1])
+        except Exception as error:  # noqa: BLE001 - show the failure, keep serving
+            return self._json({"error": f"{type(error).__name__}: {error}"}, 500)
+
+    def _dashboard(self, method: str, tail: str | None):
+        store = self.host.dashboards
+        if store is None:
+            return self._json({"error": "this host has no config directory, so it keeps no dashboard files"}, 503)
+        try:
+            if not tail:
+                return self._json(store.list())
+            file = unquote(tail)  # WHY decoded first: %2e%2e and %2F must meet the name rule as the characters they are
+            if method == "GET":
+                data, entry = store.read(file)
+                return self._send(200, data, "text/plain; charset=utf-8", {"ETag": f'"{entry["etag"]}"'})
+            refused, reason = self._from_page(json_body=False)
+            if refused:
+                return self._json({"refused": refused, "error": reason}, 403)
+            if_match = self.headers.get("If-Match")
+            if method == "DELETE":
+                return self._json({"ok": True, **store.delete(file, if_match)})
+            length = self.headers.get("Content-Length")
+            if length is None or not length.isdigit():
+                return self._json({"refused": "LengthRequired", "error": "a Content-Length (the raw text, not chunked) is required"}, 411)
+            if int(length) > MAX_DASHBOARD:
+                return self._json({"refused": "TooLarge", "error": f"a dashboard is at most {MAX_DASHBOARD} bytes, got {length}"}, 413)
+            entry, created = store.write(file, self.rfile.read(int(length)), if_match)
+            return self._json({"ok": True, **entry}, 201 if created else 200, {"ETag": f'"{entry["etag"]}"'})
+        except DashboardError as error:
+            return self._json({"refused": error.code, "error": str(error), **error.extra}, error.status)
 
     # --- the Stable / Preview chip, under the release-channels runtime only (release_channels.py) -------------------
     def _sps(self, method: str):
@@ -521,12 +567,14 @@ class Handler(BaseHTTPRequestHandler):
         return self._json(result, 200 if result["ok"] else 400)
 
     # --- the one write: a utility from the page ------------------------------------------------------------------
-    def _from_page(self) -> tuple[str, str]:
+    def _from_page(self, json_body: bool = True) -> tuple[str, str]:
         """``("", "")`` when the request is the page's own fetch, else ``(code, reason)``.
 
         WHY these three: a browser sets ``Sec-Fetch-Site`` itself and no page can forge it; another origin's page
         cannot add a custom header without a CORS preflight this server never answers; and a JSON body forces that
-        preflight too. A command-line client can forge all of it, which is why agents are told never to call it."""
+        preflight too. A command-line client can forge all of it, which is why agents are told never to call it.
+        ``json_body=False`` (a dashboard file's raw text) skips the last check: the custom header and a PUT / DELETE's own
+        preflight already keep another origin out."""
 
         if self.headers.get(UI_HEADER, "") != UI_HEADER_VALUE:
             return "NotFromPage", f"only the IO diagnostics page runs actions (the {UI_HEADER}: {UI_HEADER_VALUE} header is missing)"
@@ -538,7 +586,7 @@ class Handler(BaseHTTPRequestHandler):
         # with Host rewritten to this port (release_channels.page_origins, docs/release-channels.md)
         if origin and origin != f"http://{self.headers.get('Host', '')}" and origin not in release_channels.page_origins():
             return "NotSameOrigin", f"the request comes from {origin}, not from this page"
-        if not (self.headers.get("Content-Type") or "").startswith("application/json"):
+        if json_body and not (self.headers.get("Content-Type") or "").startswith("application/json"):
             return "NotJson", "the body must be JSON (Content-Type: application/json)"
         return "", ""
 
@@ -607,7 +655,13 @@ class Handler(BaseHTTPRequestHandler):
     def _refuse(self):
         self._json({"error": NO_ACTIONS}, 405, extra={"Allow": "GET"})
 
-    do_PUT = do_DELETE = do_PATCH = _refuse  # noqa: N815
+    do_PATCH = _refuse  # noqa: N815
+
+    def do_PUT(self):  # noqa: N802 - http.server's name
+        return self._file_write("PUT")
+
+    def do_DELETE(self):  # noqa: N802 - http.server's name
+        return self._file_write("DELETE")
 
     def _json(self, payload: dict, code: int = 200, extra: dict | None = None):
         self._send(code, json.dumps(payload, default=str, ensure_ascii=False).encode(), "application/json; charset=utf-8", extra)

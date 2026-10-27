@@ -30,6 +30,7 @@ from io_diagnostics import composition as composition_module
 from io_diagnostics import eventlog as eventlog_module
 from io_diagnostics import entity_state
 from io_diagnostics.arrangements import ARRANGEMENTS_FILE, Arrangements
+from io_diagnostics.dashboards import DASHBOARDS_DIR, DashboardStore
 from io_diagnostics.config_edit import ConfigEditor
 from io_diagnostics import expected as expected_module
 from io_diagnostics import history as history_module
@@ -559,6 +560,8 @@ class Host:
         # person's pins / order / folded folders (arrangements.py: beside settings.toml; memory only without one)
         self.config_editor = ConfigEditor(self, self.watch_grace_s)
         self.arrangements = Arrangements(Path(settings_file).parent / ARRANGEMENTS_FILE if settings_file else None)
+        # the person's dashboards as files (dashboards.py), beside settings.toml; none without one (a host built by hand)
+        self.dashboards = DashboardStore(Path(settings_file).parent / DASHBOARDS_DIR) if settings_file else None
         # every change a page could see (a refresh, a udev event, a plugin's records): /api/v1/events waits on it
         self.changes = threading.Condition()
         self.revision = 0

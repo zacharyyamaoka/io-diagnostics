@@ -71,7 +71,7 @@ def test_every_documented_endpoint_answers(server):
     endpoints = re.findall(r"^\| `GET (/api/v1/[a-z]+)", DOC, re.M)
     assert endpoints == ["/api/v1/state", "/api/v1/node", "/api/v1/activity", "/api/v1/events", "/api/v1/records", "/api/v1/plugins",
                          "/api/v1/health", "/api/v1/history", "/api/v1/history", "/api/v1/settings", "/api/v1/runs", "/api/v1/values",
-                         "/api/v1/frames", "/api/v1/arrangements"]  # history and history/bar (2026-10-23); values, frames and arrangements (2026-10-24)
+                         "/api/v1/frames", "/api/v1/arrangements", "/api/v1/dashboards"]  # history and history/bar (2026-10-23); values, frames, arrangements and dashboards (2026-10-24)
     for endpoint in endpoints:
         query = "?path=host" if endpoint in ("/api/v1/node", "/api/v1/history") else ""
         if endpoint == "/api/v1/events":  # a stream: its status and first message, then hang up

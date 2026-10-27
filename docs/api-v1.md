@@ -8,7 +8,8 @@ Every endpoint is `GET` and returns JSON (`Content-Type: application/json`, `Cac
 page's writes: `POST /api/v1/act`, the Utilities panel (see "Actions from the page" below), and `POST
 /api/v1/expect | forget | retire`, the Expected setup card (host-side writes of the person's rig file, never a
 device; "Editing the expected setup" below), and `POST /api/v1/settings`, the View options (the history window,
-written to the person's settings file; "Settings" below). Any other method or path returns **405**. **Agents never call `POST /api/v1/act`**: they dry-run with `io-diagnostics act --dry-run`; a real
+written to the person's settings file; "Settings" below), and `PUT | DELETE /api/v1/dashboards/<name>.base`, the person's dashboard
+files ("Dashboards as files" below). Any other method or path returns **405**. **Agents never call `POST /api/v1/act`**: they dry-run with `io-diagnostics act --dry-run`; a real
 action runs only from a person's click on the page (or `io-diagnostics act` typed by a person at a TTY). The record contract underneath is `contract/record.py`
 (`SCHEMA = "diagnostics-record/0"`, `RECORD_VERSION = "0.2"`); `docs/diagnostics-record-v0.md` explains every rule
 this API applies.
@@ -35,6 +36,7 @@ uv run --project /home/bam/io-diagnostics python /home/bam/io-diagnostics/io_dia
 | `POST /api/v1/watch` | The entity page's heartbeat ONLY: keeps the plugin's `watch` running while a page looks at the entity | 3 s while shown |
 | `POST /api/v1/config/edit`, `/config/set`, `/config/persist`, `/config/reset` | The Configuration tab's edit session and its live writes ONLY, each with the session's token (docs/state-config-v1.md section 8) | on click / 3 s heartbeat |
 | `GET /api/v1/arrangements`, `POST /api/v1/arrangements` | Pinned rows, manual order, folded folders and the sort, per entity kind and section; the POST is the page's ONLY (section 9) | on load / on change |
+| `GET /api/v1/dashboards`, `GET`, `PUT`, `DELETE /api/v1/dashboards/<name>.base` | The person's dashboards as files (data-ui's `.base` text, opaque to the host) under the config directory: list, read, write (atomic, optional `If-Match`) and move to `.trash/`; the PUT and DELETE are the page's ONLY | on load / on save |
 | `POST /api/v1/act` | The Utilities panel ONLY: a dry run, then a person's confirmed run with the dry run's token | on click |
 | `POST /api/v1/expect`, `/forget`, `/retire` | The Expected setup card ONLY: one edit of the rig file after a person's confirm | on click |
 | `GET /`, `/<file>` | The page in `io_diagnostics/web/` | — |
@@ -891,6 +893,47 @@ The health bar (rqt_robot_monitor's timeline) of one entity and of each of its c
   `X-IO-Diagnostics: ui` header, `Sec-Fetch-Site: same-origin`, a JSON body, else **403** (`NotFromPage`,
   `NotSameOrigin`, `NotJson`). A value outside 1 min .. 24 h, or an unknown setting → **400** `BadSetting`. Answers
   the settings as above.
+
+## Dashboards as files: `GET /api/v1/dashboards`, `GET | PUT | DELETE /api/v1/dashboards/<name>.base`
+
+A person's dashboards are plain files in `<config dir>/dashboards/` (`$IO_DIAGNOSTICS_CONFIG_DIR`, else
+`$XDG_CONFIG_HOME/io-diagnostics`, else `~/.config/io-diagnostics`: the folder `settings.toml` is in). The format is the page's
+(data-ui's `.base`); **the host never parses it**: it keeps and returns the text byte for byte and enforces only the file
+store's own rules below. The folder is created by the first `PUT`, not by a read.
+
+```json
+{"files": [{"name": "Servos", "file": "Servos.base", "size": 1342, "mtime": 1792790150.5,
+            "etag": "9f2c0b7e5c1d4a3b8e6f0a1b2c3d4e5f60718293a4b5c6d7e8f9012345678901"}]}
+```
+
+- `GET /api/v1/dashboards` lists them as an object with a **`files`** key, newest `mtime` first. `name` is the file's name
+  without `.base`, `file` the name to put in the URL, `etag` the SHA-256 (hex) of the content. A file that breaks the name rule,
+  is a link, or is over the cap is left out. (WHY an object, not a bare list: the unmerged branch `lane/dashboard-views`
+  has its own `GET /api/v1/dashboards`, the dashboard proposals' boards, whose reply is separate from this file store; a
+  `files` key lets both live in one reply later, and a page must ignore keys it does not know.)
+- `GET /api/v1/dashboards/<name>.base` returns the raw text (`Content-Type: text/plain; charset=utf-8`) and the
+  header `ETag: "<etag>"`. **404** `NoSuchDashboard`; **422** `NotUtf8` for a file somebody put there by hand that is not text.
+- `PUT /api/v1/dashboards/<name>.base` writes the body (the raw text, any `Content-Type`; a `Content-Length` is required).
+  **201** when it created the file, **200** when it replaced one; the answer is `{"ok": true, "name", "file", "size", "mtime",
+  "etag"}` and the `ETag` header. The write is atomic (a temp file in the same folder, fsync, `os.replace`): a reader sees the
+  old text or the new, never half.
+- `DELETE /api/v1/dashboards/<name>.base` moves the file to `.trash/<name>.<UTC stamp>.base` in the same folder and answers
+  `{"ok": true, "name", "file", "trashed": ".trash/Servos.20261027T180000.base", "etag"}`. Nothing is removed (put it back
+  by moving it); a second delete of the same name lands beside the first. **404** `NoSuchDashboard`.
+- **Names**: `<name>` matches `^[A-Za-z0-9][A-Za-z0-9 _.-]{0,79}$` and the file ends in `.base`. The name is URL-decoded first,
+  so `..%2fx.base`, `%2e%2e/x.base`, a `/` or `\` anywhere, or `..` are the characters they are and fail the rule: **400**
+  `BadName`, for every method, and nothing is read or written outside the folder. A link inside the folder is never followed.
+- **Size and encoding**: at most 1 048 576 bytes (**413** `TooLarge`, answered from the `Content-Length` before the body is
+  read) and valid UTF-8 (**400** `NotUtf8`); a missing `Content-Length` is **411** `LengthRequired`.
+- **`If-Match`** (optional, on `PUT` and `DELETE`): the etag (quoted or bare, a comma list, or `*` for "any existing file") the
+  client last saw. A different one, or any `If-Match` for a file that is not there, is **412** `EtagMismatch` with the current
+  `"etag"` (null if none) and nothing changes, so two tabs cannot silently overwrite each other. Without it the last write wins.
+- **Page-only writes**, the same rule as `POST /api/v1/act`: the page's `X-IO-Diagnostics: ui` header, `Sec-Fetch-Site:
+  same-origin`, and an `Origin` (if sent) that is this page's, else **403** `NotFromPage` / `NotSameOrigin`. The body is the
+  file's text, so the JSON `Content-Type` check does not apply (a `PUT` with a custom header is preflighted by every
+  browser, and this server never answers a preflight). No dry run and no token: no hardware is involved. `GET`s need no header.
+  A host with no config directory (one built by hand) answers **503** to all of them. Every other `PUT` or `DELETE`
+  (another path, or `/dashboards` itself) is still **405**.
 
 ## What a page must NOT assume
 
