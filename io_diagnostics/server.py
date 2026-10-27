@@ -431,6 +431,18 @@ class Handler(BaseHTTPRequestHandler):
             if length is None or not length.isdigit():
                 return self._json({"refused": "LengthRequired", "error": "a Content-Length (the raw text, not chunked) is required"}, 411)
             if int(length) > MAX_DASHBOARD:
+                # WHY: a 413 sent while the client is still uploading reaches it as a broken pipe, not as the 413 (seen
+                # under load, 2026-10-27); a modestly oversized body is read and dropped first so the page always gets the
+                # reason, and a huge declared length is refused unread with the connection closed.
+                if int(length) <= 4 * MAX_DASHBOARD:
+                    remaining = int(length)
+                    while remaining > 0:
+                        chunk = self.rfile.read(min(remaining, 65536))
+                        if not chunk:
+                            break
+                        remaining -= len(chunk)
+                else:
+                    self.close_connection = True
                 return self._json({"refused": "TooLarge", "error": f"a dashboard is at most {MAX_DASHBOARD} bytes, got {length}"}, 413)
             entry, created = store.write(file, self.rfile.read(int(length)), if_match)
             return self._json({"ok": True, **entry}, 201 if created else 200, {"ETag": f'"{entry["etag"]}"'})
