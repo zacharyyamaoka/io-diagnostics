@@ -338,11 +338,18 @@ binding loads as data-ui loads it.
 
 ### 12.4 The page's test surface
 
-`<data-rail id="dx-rail">`, `main#dx-main[data-dest=<destination>]`, `#dx-tree`, `#dx-tree-pane` (the side pane:
-`data-resizable="right"`, key `dx-tree`, fold button `#dx-tree-fold`), `#dx-detail`, `#dx-board`, `#dx-time`,
-`#dx-status`, the Dashboards bar's buttons `[data-board-act=new|add|edit|save|copy|load|delete|duplicate]`, and
-`window.robotdx = {clock, feed, boards, version}` (read-only handles: `feed.datasets()`, `feed.dataset(kind, path)`,
-`feed.stats()` counts requests and bytes per endpoint).
+`<data-rail id="dx-rail">`, `main#dx-main[data-dest=<destination>]`, `#dx-tree` (rows carry `data-id` = the path), `#dx-tree-pane`
+(the side pane: `data-resizable="right"`, key `dx-tree`) and its fold button `#dx-tree-fold` (outside the pane, so it can bring
+it back), `data-dashboard#dx-detail` (Explore's entity; each panel's `<data-views>` is `#dx-detail-<panel key>`:
+`diagnostics`, `configuration`, `signals`, …), the open dashboard `data-dashboard.dx-board` (`id="dx-board-<board id>"`, so
+data-ui keeps each dashboard's own arrangement), `#dx-time`, `#dx-status`; on Dashboards the list items
+`[data-board-id][data-board-kind=starter|mine]`, the bar's buttons `[data-board-act=new|duplicate|add|edit|save|copy|load|delete]`,
+the file input `#dx-load-input` (the page also takes a `.base` dropped on `#dx-main`), and the Add panel form
+`dialog#dx-add-panel` (`select[name=type]`: plot, levels, kpi, table, playback; `select[name=entity]`: entity paths;
+`select[name=field]`: that entity's State keys; `[data-add-panel=ok]`); on Settings `select[data-setting=rail]` (the
+sidebar style, `bindRailSelect`) and `select[data-setting=theme]`. `window.robotdx = {clock, feed, boards, parseBase,
+version}`: read-only handles (`feed.datasets()`, `feed.dataset(kind, path)`, `feed.stats()` counts requests and bytes per
+endpoint). Delete asks with the browser's `confirm()`.
 
 ### 12.5 Performance (the §8 KPIs this page is measured on)
 
