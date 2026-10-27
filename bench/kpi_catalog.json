@@ -1,0 +1,184 @@
+{
+ "schema": "vt-kpi-catalog/1",
+ "unit_of_iteration": "run",
+ "title": "RobotDx page speed (the data-ui page, web/dx/)",
+ "producer": {
+  "name": "RobotDx tools/bench_robotdx.py (bench/robotdx_driver.js in headless Chrome; bench/robotdx_stub.py for rates no fixture reaches)",
+  "bench_version": "robotdx-bench/1",
+  "repo": "/home/bam/io-diagnostics",
+  "doc": "bench/KPIS.md"
+ },
+ "gates": [
+  {
+   "id": "no_page_errors",
+   "title": "Every phase healthy: no page error, no phase that failed",
+   "bound": {
+    "op": "==",
+    "value": 0
+   },
+   "applies_to": "page_errors",
+   "description": "Every phase (the fixture host, each sweep point, the heap run) loads the page and measures with no uncaught exception and no console error. Pass/fail, never averaged."
+  }
+ ],
+ "marks": {
+  "shape_by": "lane",
+  "hollow_by": {
+   "label": "trust",
+   "values": [
+    "noisy"
+   ]
+  },
+  "legend": {
+   "filled": "quiet machine",
+   "hollow": "noisy machine (load or slow calibration): read with care"
+  }
+ },
+ "kpis": [
+  {
+   "id": "first_paint_ms",
+   "title": "Cold load to the tree drawn (p95)",
+   "unit": "ms",
+   "direction": "lower",
+   "level": 0,
+   "parent": null,
+   "target": 1500,
+   "computed_from": "runs",
+   "scale": "linear",
+   "description": "Navigation start to the first moment the entity tree has its rows drawn (an in-page 10 ms timer started before any of the page's code), in a new browser context, on the fixture host (F1). 95th percentile of the cold loads.",
+   "formula": "p95 over cold loads of (tree drawn - navigation start)",
+   "facets": [],
+   "reference_lines": [
+    {
+     "value": 1500,
+     "label": "1.5 s: PEP 0001 K7"
+    }
+   ]
+  },
+  {
+   "id": "ingest_to_pixel_ms",
+   "title": "Ingest to pixel (p95)",
+   "unit": "ms",
+   "direction": "lower",
+   "level": 0,
+   "parent": null,
+   "target": 30,
+   "computed_from": "runs",
+   "scale": "linear",
+   "description": "A samples batch's stamp to the first plot drawn at its newest sample. The headline is the stub's 6,000 samples/s into 6 plots, stamped at the host's emit (the stub's wall clock, the browser's too); slices: every sweep point, and the fixture host stamped at the adapter's receive (its replay clock is not the browser's; its own ~1 s change ticks are not in it). labels.stamp says which.",
+   "formula": "p95 over batches of (first following plot draw with t >= the batch's newest sample - the batch's stamp)",
+   "facets": [
+    "sweep",
+    "source",
+    "stat"
+   ],
+   "reference_lines": [
+    {
+     "value": 30,
+     "label": "30 ms: log to render (prior art)"
+    }
+   ]
+  },
+  {
+   "id": "frame_time_ms",
+   "title": "Frame time while streaming (p95)",
+   "unit": "ms",
+   "direction": "lower",
+   "level": 0,
+   "parent": null,
+   "target": 16.7,
+   "computed_from": "runs",
+   "scale": "linear",
+   "description": "The interval between animation frames while the stub streams N samples/s into M live plot panels (5 keys each), after a 3 s warm-up. Headline: 6,000 samples/s into 6 plots; slices: 600 x 2, 6,000 x 6, 24,000 x 12. 16.7 ms is 60 frames a second.",
+   "formula": "p95 over requestAnimationFrame intervals while streaming",
+   "facets": [
+    "sweep"
+   ],
+   "reference_lines": [
+    {
+     "value": 16.7,
+     "label": "60 fps"
+    }
+   ]
+  },
+  {
+   "id": "heap_mb",
+   "title": "JS heap at the retention cap",
+   "unit": "MB",
+   "direction": "lower",
+   "level": 0,
+   "parent": null,
+   "target": null,
+   "computed_from": "runs",
+   "scale": "linear",
+   "description": "The page's JS heap after a forced GC once the live store has streamed into its byte cap: --long runs 10 minutes at the page's 256 MB cap; a default run uses a 64 MB cap for 90 s and says so in labels.window. Diagnostic: the cap is the budget, the heap should sit near it, not past it.",
+   "formula": "CDP Runtime.getHeapUsage usedSize after HeapProfiler.collectGarbage",
+   "facets": [
+    "window"
+   ]
+  },
+  {
+   "id": "scrub_ms",
+   "title": "Scrub to every panel drawn (p95)",
+   "unit": "ms",
+   "direction": "lower",
+   "level": 0,
+   "parent": null,
+   "target": 50,
+   "computed_from": "runs",
+   "scale": "linear",
+   "description": "clock.seek(t) inside the entity's State on Explore (the fixture's joint, seven live panels), to the last panel's first draw at t. 30 seeks. A panel's later draws at the same t (a new version arriving) are not counted.",
+   "formula": "p95 over seeks of (max over panels of the first draw at t - the seek)",
+   "facets": [
+    "stat"
+   ],
+   "reference_lines": [
+    {
+     "value": 50,
+     "label": "50 ms: PEP 0001 K5"
+    }
+   ]
+  },
+  {
+   "id": "back_to_live_ms",
+   "title": "Back to live (p95)",
+   "unit": "ms",
+   "direction": "lower",
+   "level": 0,
+   "parent": null,
+   "target": 100,
+   "computed_from": "runs",
+   "scale": "linear",
+   "description": "After a 2 s pause 5 s behind, clock.goLive() to the last panel's first following draw at the newest data, on Explore. 10 times.",
+   "formula": "p95 over go-lives of (max over panels of the first following draw - goLive)",
+   "facets": [
+    "stat"
+   ],
+   "reference_lines": [
+    {
+     "value": 100,
+     "label": "100 ms"
+    }
+   ]
+  },
+  {
+   "id": "idle_traffic_kb_s",
+   "title": "Idle traffic",
+   "unit": "KB/s",
+   "direction": "lower",
+   "level": 0,
+   "parent": null,
+   "target": 8,
+   "computed_from": "runs",
+   "scale": "linear",
+   "description": "Every byte the page receives from /api/ (streams included: CDP Network.dataReceived) over 30 s on Explore with nothing selected, on the fixture host (F1 replays every record each ~2 s, so most tree rows change every tick; a real rig sends far less).",
+   "formula": "bytes received from /api/ / seconds",
+   "facets": [],
+   "reference_lines": [
+    {
+     "value": 8,
+     "label": "8 KB/s: PEP 0001 K2"
+    }
+   ]
+  }
+ ]
+}
