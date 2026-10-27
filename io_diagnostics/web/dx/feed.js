@@ -375,6 +375,7 @@ class EntityFeed {
     this.nodeOk = false;
     this.valuesOk = false;
     this.keys = new Map();       // State key -> {unit, meaning, group}
+    this.keyOrder = new Map();   // State key -> its place in the host's list
   }
 
   use(kind) { this.uses[kind] += 1; }
@@ -525,6 +526,11 @@ class EntityFeed {
         }
       }
     }
+    // WHY a fixed order per key (the host's own list, first seen first): the State cards group by key in the order rows
+    // come, and rows interleave, so without it the cards changed places as samples streamed in
+    for (const key of [...(v.groups || []).flatMap((g) => (g.rows || []).map((r) => r.key)), ...byKey.keys()]) {
+      if (!this.keyOrder.has(key)) this.keyOrder.set(key, this.keyOrder.size);
+    }
     const rows = [];
     for (const [key, points] of byKey) {
       const after = this.lastPoint.get(key) ?? -Infinity;
@@ -533,7 +539,7 @@ class EntityFeed {
       for (const [t, value] of points) {
         if (t <= after) continue;
         rows.push({ t, key, label: info.unit ? `${key} (${info.unit})` : key, value: typeof value === 'number' ? value : typeof value === 'boolean' ? Number(value) : null,
-          unit: info.unit, meaning: info.meaning, group: info.group });
+          unit: info.unit, meaning: info.meaning, group: info.group, order: this.keyOrder.get(key) });
       }
       if (points.length) this.lastPoint.set(key, Math.max(after, points[points.length - 1][0]));
     }

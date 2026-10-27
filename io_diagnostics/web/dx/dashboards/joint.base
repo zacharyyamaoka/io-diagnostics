@@ -37,6 +37,8 @@ views:
     at: 60s
     filters: 'key == "temperature" || key == "voltage"'
     groupBy: { property: label }
+    sort:
+      - { property: order, direction: ASC }
     kpi: { value: { property: value } }
   - type: levels
     name: Health

@@ -35,6 +35,11 @@
    "type": "text",
    "label": "Key",
    "note": "The stream: one per value of the entity's State."
+  },
+  "order": {
+   "type": "number",
+   "label": "Order",
+   "note": "The value's place in the host's own list: State cards and tables keep it."
   }
  },
  "rows": []

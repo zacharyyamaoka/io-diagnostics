@@ -50,12 +50,16 @@ views:
     from: samples
     at: 30s
     groupBy: { property: label }
+    sort:
+      - { property: order, direction: ASC }
     kpi: { value: { property: value }, spark: { x: t, y: value } }
   - type: table
     name: State table
     from: samples
     at: latest
     order: [label, value, meaning, group, t]
+    sort:
+      - { property: order, direction: ASC }
   - type: table
     name: Configuration
     from: config
