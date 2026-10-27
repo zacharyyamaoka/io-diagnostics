@@ -134,11 +134,19 @@ async function dragBy(page, handleRect, dx, dy = 0, y = null) {
     const page = await context.newPage();
     const watch = H.watchErrors(page, base);
     everyRequest.push(recorder(page, base));
+    // measured in the page from its navigation start (performance.now()'s origin), by a 10 ms timer started before any script
+    // runs: the first moment the tree has its rows drawn (a raf poll stalls once nothing animates, and a MutationObserver can
+    // fire before the element's model is set)
+    await page.addInitScript(() => {
+      window.__k7 = null;
+      const done = () => { const el = document.querySelector('#dx-tree'); return el && el.model && el.model.rows.length >= 10 && el.querySelector('tbody tr[data-id]'); };
+      const poll = () => { if (done()) window.__k7 = performance.now(); else if (performance.now() < 15000) setTimeout(poll, 10); };
+      poll();
+    });
     await page.goto(`${base}${DX}`);
     await ready(page);
-    // measured in the page, from its navigation start (performance.now()'s origin), at the first frame the tree has rows
-    const drawn = await page.waitForFunction(() => { const el = document.querySelector('#dx-tree'); return el && el.model && el.model.rows.length >= 10 && el.querySelector('tbody tr[data-id]') ? performance.now() : false; }, null, { timeout: 15000, polling: 'raf' }).then((h) => h.jsonValue(), () => null);
-    const coldMs = drawn === null ? null : Math.round(drawn);
+    const drawn = await H.waitFor(() => page.evaluate(() => window.__k7), 15000, 100);
+    const coldMs = drawn ? Math.round(drawn) : null;
     check('K7: cold load to the tree drawn ≤ 1.5 s (from navigation start)', coldMs !== null && coldMs <= 1500, `${coldMs} ms`);
     check('the page opens on Explore', (await dest(page)) === 'explore', await dest(page));
 
