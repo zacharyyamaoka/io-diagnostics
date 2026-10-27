@@ -135,12 +135,15 @@ async function scrubBack(page) {
   await page.mouse.move(xTarget, trackBefore.y + trackBefore.h / 2, { steps: 6 });
   await page.mouse.up();
   await page.waitForTimeout(500);
+  // each panel's FIRST draw at t after the seek: a keyed panel draws again at the same t whenever a new version arrives (even
+  // one after t), and those later draws are not the scrub's
   const k5 = await page.evaluate(() => {
     const seeks = window.__k5.times.filter((x) => x.source !== 'live' && x.source !== 'play');
     const last = seeks[seeks.length - 1];
     if (!last) return null;
-    const at = window.__k5.draws.filter((d) => d.t === last.t && !d.following && d.id.startsWith('dx-detail-'));
-    return at.length ? { ms: Math.max(...at.map((d) => d.at)) - last.at, panels: [...new Set(at.map((d) => d.id))] } : { ms: null, panels: [] };
+    const first = new Map();
+    for (const d of window.__k5.draws) if (d.t === last.t && !d.following && d.at >= last.at && d.id.startsWith('dx-detail-') && !first.has(d.id)) first.set(d.id, d.at);
+    return first.size ? { ms: Math.max(...first.values()) - last.at, panels: [...first.keys()] } : { ms: null, panels: [] };
   });
   return { stateSpan, span, target, trackBefore, xTarget, k5 };
 }
@@ -633,7 +636,10 @@ async function dragBy(page, handleRect, dx, dy = 0, y = null) {
     check('every request is on the allow-list (§12.2): GETs of the page and the read endpoints, POST /api/v1/watch only', off.length === 0, off.slice(0, 6).map((r) => `${r.method} ${r.url}`));
     const posts = all.filter((r) => r.method === 'POST');
     check('the only write is the watch heartbeat, and only for the entity on screen', posts.length > 0 && posts.every((r) => JSON.parse(r.body).path === BOARD), { posts: posts.length });
-    check('no page errors, no console errors, no failed request', watch.errors.length === 0, watch.errors.slice(0, 5));
+    // the conflict check's own 412 (and the console line Chrome writes for it) is the answer that check asks for
+    const expected412 = (e) => /412/.test(e) && (/\/api\/v1\/dashboards\//.test(e) || /Precondition Failed/.test(e));
+    const unexpected = watch.errors.filter((e) => !expected412(e));
+    check('no page errors, no console errors, no failed request (the conflict check\'s own 412 aside)', unexpected.length === 0 && watch.errors.filter(expected412).length <= 2, unexpected.slice(0, 5));
     console.log(`\nKPIs  K2 idle: live feed ${after.kbps} KB/s (${after.kb_per_min} KB/min, ${after.rps} req/s) · /state polling fallback ${polling.kbps} KB/s (${polling.kb_per_min} KB/min) · today's page ${before.kbps} KB/s (${before.kb_per_min} KB/min)` +
       `   K5 scrub: ${typeof scrubMs === 'number' ? Math.round(scrubMs) + ' ms' : 'n/a'} software, ${gpu.k5 && typeof gpu.k5.ms === 'number' ? Math.round(gpu.k5.ms) + ' ms' : 'n/a'} ${gpuKind} (${gpu.renderer || 'no renderer'})   K7 cold load: ${coldMs} ms`);
   } catch (error) {
