@@ -1,0 +1,44 @@
+{
+ "id": "attention",
+ "title": "What needs you",
+ "titleProperty": "name",
+ "properties": {
+  "t": {
+   "type": "number",
+   "unit": "s",
+   "label": "Seen",
+   "display": "clock"
+  },
+  "health": {
+   "type": "text",
+   "label": "Health",
+   "note": "A shape and a word for warn, unknown, stale and error; empty for OK and for nothing reported."
+  },
+  "name": {
+   "type": "text",
+   "label": "Name"
+  },
+  "device": {
+   "type": "text",
+   "label": "On"
+  },
+  "message": {
+   "type": "text",
+   "label": "Message"
+  },
+  "level": {
+   "type": "text",
+   "label": "Level"
+  },
+  "rank": {
+   "type": "number",
+   "label": "Rank",
+   "note": "ok 0 < warn 1 < unknown 2 < stale 3 < error 4; -1 when nothing reports (sorting worst first)."
+  },
+  "path": {
+   "type": "text",
+   "label": "Path"
+  }
+ },
+ "rows": []
+}

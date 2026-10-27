@@ -1,0 +1,66 @@
+{
+ "id": "config",
+ "title": "Configuration",
+ "titleProperty": "key",
+ "properties": {
+  "t": {
+   "type": "number",
+   "unit": "s",
+   "label": "Read",
+   "display": "clock"
+  },
+  "key": {
+   "type": "text",
+   "label": "Setting"
+  },
+  "value": {
+   "type": "text",
+   "label": "Value"
+  },
+  "unit": {
+   "type": "text",
+   "label": "Unit"
+  },
+  "expected": {
+   "type": "text",
+   "label": "Expected"
+  },
+  "differs": {
+   "type": "boolean",
+   "label": "Differs",
+   "note": "The read value is not the expected one."
+  },
+  "source": {
+   "type": "text",
+   "label": "Expected by"
+  },
+  "stored": {
+   "type": "text",
+   "label": "Stored"
+  },
+  "unsaved": {
+   "type": "boolean",
+   "label": "Not saved",
+   "note": "Live in RAM, not written to the board."
+  },
+  "writable": {
+   "type": "boolean",
+   "label": "Writable"
+  },
+  "stamp": {
+   "type": "number",
+   "unit": "s",
+   "label": "Read at",
+   "display": "clock"
+  },
+  "path": {
+   "type": "text",
+   "label": "Path"
+  },
+  "id": {
+   "type": "text",
+   "label": "Id"
+  }
+ },
+ "rows": []
+}

@@ -1,0 +1,78 @@
+{
+ "id": "checks",
+ "title": "Diagnostics",
+ "titleProperty": "name",
+ "properties": {
+  "t": {
+   "type": "number",
+   "unit": "s",
+   "label": "Seen",
+   "display": "clock"
+  },
+  "name": {
+   "type": "text",
+   "label": "Check"
+  },
+  "health": {
+   "type": "text",
+   "label": "Health",
+   "note": "A shape and a word for warn, unknown, stale and error; empty for OK and for nothing reported."
+  },
+  "message": {
+   "type": "text",
+   "label": "Message"
+  },
+  "code": {
+   "type": "text",
+   "label": "Code"
+  },
+  "why": {
+   "type": "text",
+   "label": "What to check",
+   "note": "As authored, in order."
+  },
+  "received": {
+   "type": "number",
+   "unit": "s",
+   "label": "Received",
+   "display": "clock"
+  },
+  "period": {
+   "type": "number",
+   "label": "Every",
+   "unit": "s"
+  },
+  "level": {
+   "type": "text",
+   "label": "Level",
+   "note": "What to act on now (stale once overdue)."
+  },
+  "said": {
+   "type": "text",
+   "label": "Said",
+   "note": "What the producer said."
+  },
+  "rank": {
+   "type": "number",
+   "label": "Rank",
+   "note": "ok 0 < warn 1 < unknown 2 < stale 3 < error 4; -1 when nothing reports (sorting worst first)."
+  },
+  "source": {
+   "type": "text",
+   "label": "Source"
+  },
+  "entity": {
+   "type": "text",
+   "label": "Entity"
+  },
+  "path": {
+   "type": "text",
+   "label": "Path"
+  },
+  "id": {
+   "type": "text",
+   "label": "Id"
+  }
+ },
+ "rows": []
+}

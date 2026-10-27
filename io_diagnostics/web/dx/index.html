@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RobotDx</title>
+<link rel="icon" href="data:,">
+<script>
+  // before the first paint: the stored theme (Settings), so a dark choice never flashes light
+  (function () { var t = null; try { t = localStorage.getItem('robotdx.dx.theme'); } catch (_) {} if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; })();
+</script>
+<!-- data-ui, vendored by tools/vendor_data_ui.py (vendor/data-ui/VERSION names the source commits); the page's own styles after it -->
+<link rel="stylesheet" href="../vendor/data-ui/data-ui.css">
+<link rel="stylesheet" href="dx.css">
+<!-- the one USB naming (web/usb.js, window.IOUsb): "USB 2.1", never "480 Mb/s" (Zach, 2026-10-24) -->
+<script src="../usb.js"></script>
+<script type="module" src="app.js"></script>
+</head>
+<body class="data-ui">
+<div id="dx-app">
+  <!-- The app rail (data-ui CONTRACT §22): the links are the no-JS truth; app.js routes them in the page. Its style
+       (icons, Figma's labels under icons, Shopify's wide list) is a person's choice in Settings, Ctrl+Alt+R folds it. -->
+  <data-rail id="dx-rail" brand="RobotDx" storage-key="dx-rail" mode="expanded" open-mode="expanded" label="RobotDx" current="explore">
+    <span data-brand-icon><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/><path d="M8 11h2l1-2 2 4 1-2h2"/></svg></span>
+    <a href="?go=explore" data-id="explore" data-group="Look"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h6M4 12h6M4 19h6"/><path d="M14 5h6M17 9v8M14 19h6M17 12h3"/></svg>Explore</a>
+    <a href="?go=activity" data-id="activity" data-group="Look"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>Activity</a>
+    <a href="?go=dashboards" data-id="dashboards" data-group="Look"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>Dashboards</a>
+    <a href="?go=runs" data-id="runs" data-group="Look"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 9 3 3-3 3M11 15h5"/></svg>Runs</a>
+    <a href="?go=settings" data-id="settings" data-end><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.2 2h-.4a2 2 0 0 0-2 2v.2a2 2 0 0 1-1 1.7l-.4.3a2 2 0 0 1-2 0l-.2-.1a2 2 0 0 0-2.7.7l-.2.4a2 2 0 0 0 .7 2.7l.2.1a2 2 0 0 1 1 1.7v.6a2 2 0 0 1-1 1.7l-.2.1a2 2 0 0 0-.7 2.7l.2.4a2 2 0 0 0 2.7.7l.2-.1a2 2 0 0 1 2 0l.4.3a2 2 0 0 1 1 1.7v.2a2 2 0 0 0 2 2h.4a2 2 0 0 0 2-2v-.2a2 2 0 0 1 1-1.7l.4-.3a2 2 0 0 1 2 0l.2.1a2 2 0 0 0 2.7-.7l.2-.4a2 2 0 0 0-.7-2.7l-.2-.1a2 2 0 0 1-1-1.7v-.6a2 2 0 0 1 1-1.7l.2-.1a2 2 0 0 0 .7-2.7l-.2-.4a2 2 0 0 0-2.7-.7l-.2.1a2 2 0 0 1-2 0l-.4-.3a2 2 0 0 1-1-1.7V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>Settings</a>
+    <a href="/" data-id="classic" data-end><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>Classic page</a>
+  </data-rail>
+  <div class="dx-column">
+    <main id="dx-main" data-dest="" tabindex="-1"><p class="dx-loading">Connecting to the host…</p></main>
+    <footer class="dx-foot">
+      <!-- the page's one time bar (Rerun's time panel): a playback card on the page clock; hidden where a dashboard has its own -->
+      <data-views id="dx-time" toolbar="none" no-url aria-label="Time"></data-views>
+      <data-live-status id="dx-status" for="dx-app"></data-live-status>
+    </footer>
+  </div>
+</div>
+</body>
+</html>

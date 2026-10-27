@@ -1,0 +1,88 @@
+/* RobotDx on data-ui: the shell only (docs/peps/0001-robotdx-on-data-ui.md §12). Every colour is a data-ui token
+   (--dv-*, resolved on body.data-ui, light and dark: vendor/data-ui/data-ui.css), so stock shadcn names drive it
+   (Zach, 2026-10-23: "just use stock shadcn"). No status colour here: levels are drawn by data-ui's views. */
+
+html, body { height: 100%; margin: 0; }
+body.data-ui { background: var(--dv-bg); color: var(--dv-fg); font: 14px/1.45 var(--dv-font); overflow: hidden; }
+#dx-app { display: flex; height: 100vh; min-height: 0; }
+#dx-rail { height: 100vh; }
+.dx-column { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+#dx-main { flex: 1 1 auto; min-height: 0; overflow: auto; outline: none; position: relative; }
+.dx-loading, .dx-empty { color: var(--dv-muted); padding: 24px; margin: 0; }
+.dx-foot { flex: none; display: flex; align-items: center; gap: 12px; border-top: 1px solid var(--dv-border); padding: 4px 12px 4px 4px; min-height: 0; background: var(--dv-bg); }
+#dx-time { flex: 1 1 auto; min-width: 0; --dv-height: auto; }
+#dx-time[hidden] { display: none; }
+.dx-foot:has(#dx-time[hidden]) { justify-content: flex-end; }
+#dx-status { flex: none; color: var(--dv-muted); font-size: 12px; white-space: nowrap; max-width: 52ch; overflow: hidden; text-overflow: ellipsis; }
+/* the time bar reads no rows: its row count would only say "0 of 0 rows" */
+#dx-time .dv-status { display: none; }
+
+/* a bar of plain controls: the destination's title and its actions */
+.dx-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 12px; border-bottom: 1px solid var(--dv-border); min-height: 44px; box-sizing: border-box; }
+.dx-bar h1 { font-size: 15px; font-weight: 600; margin: 0 8px 0 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 48ch; }
+.dx-bar .dx-grow { flex: 1 1 auto; }
+.dx-bar .dx-note { color: var(--dv-muted); font-size: 12px; }
+.dx-btn { font: inherit; font-size: 13px; padding: 4px 10px; border: 1px solid var(--dv-border); border-radius: var(--dv-radius); background: var(--dv-bg); color: var(--dv-fg); cursor: pointer; white-space: nowrap; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
+.dx-btn:hover { background: var(--dv-hover); }
+.dx-btn:focus-visible { outline: 2px solid var(--dv-accent); outline-offset: 1px; }
+.dx-btn[aria-pressed="true"] { background: var(--dv-subtle); }
+.dx-btn.dx-primary { background: var(--dv-accent); color: var(--dv-on-accent); border-color: var(--dv-accent); }
+.dx-btn[hidden] { display: none; }
+.dx-link { color: var(--dv-accent); text-decoration: none; font-size: 13px; }
+.dx-link:hover { text-decoration: underline; }
+.dx-crumbs { color: var(--dv-muted); font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dx-crumbs b { color: var(--dv-fg); font-weight: 600; }
+
+/* Explore: the tree pane (a side panel: drags, remembers, resets, folds) beside the selected entity */
+.dx-explore { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.dx-explore-body { flex: 1 1 auto; min-height: 0; display: flex; position: relative; }
+#dx-tree-pane { flex: none; width: var(--data-panel-width, 380px); min-width: 0; border-right: 1px solid var(--dv-border); display: flex; flex-direction: column; min-height: 0; }
+#dx-tree-pane[hidden] { display: none; }
+#dx-tree { flex: 1 1 auto; min-height: 0; --dv-height: 100%; }
+.dx-detail-wrap { flex: 1 1 auto; min-width: 0; overflow: auto; padding: 0 0 12px; position: relative; }
+.dx-note-box { margin: 12px; padding: 10px 12px; border: 1px dashed var(--dv-border); border-radius: var(--dv-radius); color: var(--dv-muted); font-size: 13px; }
+#dx-tree-fold svg { width: 16px; height: 16px; }
+
+/* Dashboards: the list, and one open */
+.dx-boards { padding: 0 0 24px; }
+.dx-boards section { padding: 8px 16px; }
+.dx-boards h2 { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--dv-muted); margin: 12px 0 8px; }
+.dx-board-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+.dx-board-list a { display: block; padding: 12px 14px; border: 1px solid var(--dv-border); border-radius: calc(var(--dv-radius) + 2px); color: var(--dv-fg); text-decoration: none; background: var(--dv-bg); min-height: 64px; box-sizing: border-box; }
+.dx-board-list a:hover { background: var(--dv-hover); }
+.dx-board-list b { display: block; font-weight: 600; margin-bottom: 4px; }
+.dx-board-list small { color: var(--dv-muted); font-size: 12px; display: block; }
+.dx-drop { outline: 2px dashed var(--dv-accent); outline-offset: -8px; }
+.dx-board-view { display: flex; flex-direction: column; min-height: 100%; }
+.dx-board-view data-dashboard { flex: 1 1 auto; padding: 8px 12px; }
+.dx-error { color: var(--dv-warn); font-size: 13px; white-space: pre-wrap; }
+
+/* the dialogs: Add panel, Edit .base */
+dialog.dx-dialog { border: 1px solid var(--dv-border); border-radius: calc(var(--dv-radius) + 2px); background: var(--dv-bg); color: var(--dv-fg); padding: 16px; min-width: min(460px, 92vw); max-width: 92vw; }
+dialog.dx-dialog::backdrop { background: color-mix(in srgb, #000 30%, transparent); }
+dialog.dx-dialog h2 { font-size: 15px; margin: 0 0 12px; }
+dialog.dx-dialog label { display: grid; gap: 4px; margin: 0 0 10px; font-size: 13px; color: var(--dv-muted); }
+dialog.dx-dialog select, dialog.dx-dialog input, dialog.dx-dialog textarea { font: inherit; font-size: 13px; color: var(--dv-fg); background: var(--dv-bg); border: 1px solid var(--dv-border); border-radius: var(--dv-radius); padding: 5px 8px; }
+dialog.dx-dialog textarea { font-family: var(--dv-mono); font-size: 12px; width: min(820px, 86vw); height: 60vh; resize: vertical; }
+dialog.dx-dialog .dx-row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+
+/* Settings */
+.dx-settings { padding: 8px 16px 24px; max-width: 720px; }
+.dx-settings label { display: grid; grid-template-columns: 200px 1fr; align-items: center; gap: 12px; margin: 12px 0; }
+.dx-settings select { font: inherit; font-size: 13px; padding: 4px 8px; border: 1px solid var(--dv-border); border-radius: var(--dv-radius); background: var(--dv-bg); color: var(--dv-fg); max-width: 320px; }
+.dx-settings p { color: var(--dv-muted); font-size: 13px; }
+.dx-settings dl { display: grid; grid-template-columns: 200px 1fr; gap: 6px 12px; font-size: 13px; }
+.dx-settings dt { color: var(--dv-muted); }
+.dx-settings dd { margin: 0; }
+.dx-settings pre { font-family: var(--dv-mono); font-size: 11px; color: var(--dv-muted); white-space: pre-wrap; margin: 0; }
+
+/* one connection line on the page (the footer's); a dashboard's own copy in its bar would say it twice */
+data-dashboard .dd-live-status { display: none; }
+
+/* WHY a fixed width for the LIVE pill: "LIVE" and "LIVE −396 s" must take the same room, or the track beside it moves
+   under the pointer in the middle of a drag and the scrub lands at another t (data-ui follow-up, reported) */
+#dx-time .dv-pb-live, data-dashboard .dv-pb-live { min-width: 9.5em; justify-content: center; }
+
+/* WHY: data-ui's Arrange sets every panel to height: auto and leaves a one-row panel (gs-h absent, gridstack's default
+   h = 1) with no height at all, so it collapses to 0 px while arranging; give it gridstack's one cell (data-ui follow-up) */
+data-dashboard[data-arranging] .dd-panel.grid-stack-item:not([gs-h]) { height: var(--gs-cell-height); }

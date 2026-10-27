@@ -1,0 +1,67 @@
+{
+ "id": "faults",
+ "title": "Faults",
+ "titleProperty": "code",
+ "properties": {
+  "t": {
+   "type": "number",
+   "unit": "s",
+   "label": "Seen",
+   "display": "clock"
+  },
+  "health": {
+   "type": "text",
+   "label": "Health",
+   "note": "A shape and a word for warn, unknown, stale and error; empty for OK and for nothing reported."
+  },
+  "name": {
+   "type": "text",
+   "label": "Entity"
+  },
+  "code": {
+   "type": "text",
+   "label": "Fault"
+  },
+  "status": {
+   "type": "text",
+   "label": "Status"
+  },
+  "message": {
+   "type": "text",
+   "label": "Message"
+  },
+  "count": {
+   "type": "number",
+   "label": "Times"
+  },
+  "first": {
+   "type": "number",
+   "unit": "s",
+   "label": "First",
+   "display": "clock"
+  },
+  "last": {
+   "type": "number",
+   "unit": "s",
+   "label": "Last",
+   "display": "clock"
+  },
+  "active": {
+   "type": "boolean",
+   "label": "Active"
+  },
+  "severity": {
+   "type": "text",
+   "label": "Severity"
+  },
+  "path": {
+   "type": "text",
+   "label": "Path"
+  },
+  "id": {
+   "type": "text",
+   "label": "Id"
+  }
+ },
+ "rows": []
+}

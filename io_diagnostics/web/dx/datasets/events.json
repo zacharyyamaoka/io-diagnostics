@@ -1,0 +1,64 @@
+{
+ "id": "events",
+ "title": "Activity",
+ "titleProperty": "message",
+ "properties": {
+  "t": {
+   "type": "number",
+   "unit": "s",
+   "label": "Received",
+   "display": "clock",
+   "note": "When the host first saw it (its clock)."
+  },
+  "severity": {
+   "type": "text",
+   "label": "Severity"
+  },
+  "message": {
+   "type": "text",
+   "label": "Message"
+  },
+  "name": {
+   "type": "text",
+   "label": "Entity"
+  },
+  "type": {
+   "type": "text",
+   "label": "Type"
+  },
+  "code": {
+   "type": "text",
+   "label": "Code"
+  },
+  "kind": {
+   "type": "text",
+   "label": "Kind"
+  },
+  "time": {
+   "type": "text",
+   "label": "At (source)",
+   "note": "The source's own clock."
+  },
+  "port": {
+   "type": "text",
+   "label": "Port"
+  },
+  "source": {
+   "type": "text",
+   "label": "Source"
+  },
+  "count": {
+   "type": "number",
+   "label": "Count"
+  },
+  "path": {
+   "type": "text",
+   "label": "Path"
+  },
+  "id": {
+   "type": "text",
+   "label": "Id"
+  }
+ },
+ "rows": []
+}

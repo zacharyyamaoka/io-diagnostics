@@ -1,0 +1,46 @@
+# Rack health: the level history of the fixture's adapter, its joint and its camera side by side, and what needs you.
+# A bar is the worst level held in its bin; an empty outline is no data, never a level (PEP 0001 E17).
+datasets:
+  adapter:
+    data: "../datasets/levels.json?path=host/usb1/port-1-3/usb-1-3"
+  joint:
+    data: "../datasets/levels.json?path=host/usb1/port-1-3/usb-1-3/can/1"
+  camera:
+    data: "../datasets/levels.json?path=host/usb6/port-6-1/usb-6-1"
+  attention:
+    data: "../datasets/attention.json"
+clock: { rate: 1 }
+layout:
+  columns: 12
+  rowHeight: 96
+  panels:
+    - { view: Adapter, w: 6, h: 2 }
+    - { view: Joint, w: 6, h: 2 }
+    - { view: Camera, w: 6, h: 3 }
+    - { view: What needs you, w: 6, h: 3 }
+    - { view: Time, w: 12, h: 1 }
+views:
+  - type: levels
+    name: Adapter
+    from: adapter
+    at: 5m
+    levels: { state: level, label: message, order: [ok, warn, unknown, stale, error], tones: { ok: good, warn: warn, unknown: muted, stale: muted, error: bad }, bar: 3 }
+  - type: levels
+    name: Joint
+    from: joint
+    at: 5m
+    levels: { state: level, label: message, order: [ok, warn, unknown, stale, error], tones: { ok: good, warn: warn, unknown: muted, stale: muted, error: bad }, bar: 3 }
+  - type: levels
+    name: Camera
+    from: camera
+    at: 5m
+    levels: { state: level, label: message, order: [ok, warn, unknown, stale, error], tones: { ok: good, warn: warn, unknown: muted, stale: muted, error: bad }, bar: 3 }
+  - type: table
+    name: What needs you
+    from: attention
+    order: [health, name, device, message]
+    sort:
+      - { property: rank, direction: DESC }
+  - type: playback
+    name: Time
+    from: attention

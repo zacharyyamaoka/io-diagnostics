@@ -1,0 +1,36 @@
+{
+ "id": "levels",
+ "title": "Health history",
+ "titleProperty": "check",
+ "properties": {
+  "t": {
+   "type": "number",
+   "unit": "s",
+   "label": "From",
+   "display": "clock",
+   "note": "A level holds from here until the next row (the host's spans; empty level = no data)."
+  },
+  "check": {
+   "type": "text",
+   "label": "Check"
+  },
+  "level": {
+   "type": "text",
+   "label": "Level"
+  },
+  "health": {
+   "type": "text",
+   "label": "Health",
+   "note": "A shape and a word for warn, unknown, stale and error; empty for OK and for nothing reported."
+  },
+  "code": {
+   "type": "text",
+   "label": "Code"
+  },
+  "message": {
+   "type": "text",
+   "label": "Message"
+  }
+ },
+ "rows": []
+}

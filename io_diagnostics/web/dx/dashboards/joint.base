@@ -1,0 +1,55 @@
+# One joint, live: CAN 1 on the fdcanusb in port 1-3 (the fixture's joint; on the rack, the board at the same path).
+# Its State at 10 Hz while this is open (the page sends the watch heartbeat), its health and its checks.
+datasets:
+  joint:
+    data: "../datasets/samples.json?path=host/usb1/port-1-3/usb-1-3/can/1"
+  health:
+    data: "../datasets/levels.json?path=host/usb1/port-1-3/usb-1-3/can/1"
+  checks:
+    data: "../datasets/checks.json?path=host/usb1/port-1-3/usb-1-3/can/1"
+clock: { rate: 1 }
+style:
+  numbers: { digits: 4 }
+layout:
+  columns: 12
+  rowHeight: 96
+  panels:
+    - { view: Position, w: 8, h: 3 }
+    - { view: Temperature and voltage, w: 4, h: 3 }
+    - { view: Velocity and torque, w: 8, h: 3 }
+    - { view: Health, w: 4, h: 3 }
+    - { view: Checks, w: 12, h: 2 }
+    - { view: Time, w: 12, h: 1 }
+views:
+  - type: plot
+    name: Position
+    from: joint
+    at: 30s
+    plot: { y: [value], series: key, only: [position], unit: rev }
+  - type: plot
+    name: Velocity and torque
+    from: joint
+    at: 30s
+    plot: { y: [value], series: key, only: [velocity, torque] }
+  - type: kpi
+    name: Temperature and voltage
+    from: joint
+    at: 60s
+    filters: 'key == "temperature" || key == "voltage"'
+    groupBy: { property: label }
+    kpi: { value: { property: value }, spark: { x: t, y: value } }
+  - type: levels
+    name: Health
+    from: health
+    at: 2m
+    levels: { state: level, label: message, order: [ok, warn, unknown, stale, error], tones: { ok: good, warn: warn, unknown: muted, stale: muted, error: bad }, bar: 3 }
+  - type: table
+    name: Checks
+    from: checks
+    filters: 'path == "host/usb1/port-1-3/usb-1-3/can/1"'
+    order: [name, health, message, code, received]
+    sort:
+      - { property: rank, direction: DESC }
+  - type: playback
+    name: Time
+    from: joint

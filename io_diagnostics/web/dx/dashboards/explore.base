@@ -1,0 +1,72 @@
+# Explore: one entity as of the clock's t (RobotDx on data-ui, docs/peps/0001-robotdx-on-data-ui.md §12).
+# The page fills in {path} (the entity the tree selects), puts one Signals tab per State value in the signals panel,
+# and leaves out a panel with nothing to show (no State, no settings). Keep as a dashboard copies the filled-in text.
+datasets:
+  entity:
+    data: "../datasets/entities.json"
+  checks:
+    data: "../datasets/checks.json?path={path}"
+  levels:
+    data: "../datasets/levels.json?path={path}"
+  samples:
+    data: "../datasets/samples.json?path={path}"
+  config:
+    data: "../datasets/config.json?path={path}"
+  events:
+    data: "../datasets/events.json"
+style:
+  numbers: { digits: 4 }
+layout:
+  columns: 12
+  rowHeight: 56
+  panels:
+    - { view: Entity, w: 12, h: 2, key: entity, style: { title: none } }
+    - { view: Diagnostics, w: 7, h: 5 }
+    - { view: Health, w: 5, h: 5 }
+    - { views: [State, State table], w: 12, h: 4, key: state, title: State }
+    - { views: [], w: 12, h: 5, key: signals, title: Signals }
+    - { view: Configuration, w: 6, h: 7 }
+    - { view: Log, w: 6, h: 7 }
+views:
+  - type: table
+    name: Entity
+    from: entity
+    filters: 'path == "{path}"'
+    order: [name, health, message, below, model, id_text, firmware, link, presence, heard, rate]
+  - type: table
+    name: Diagnostics
+    from: checks
+    filters: 'path == "{path}"'
+    order: [name, health, message, code, why, received]
+    sort:
+      - { property: rank, direction: DESC }
+  - type: levels
+    name: Health
+    from: levels
+    at: 5m
+    levels: { state: level, label: message, order: [ok, warn, unknown, stale, error], tones: { ok: good, warn: warn, unknown: muted, stale: muted, error: bad }, bar: 3 }
+  - type: kpi
+    name: State
+    from: samples
+    at: 30s
+    groupBy: { property: label }
+    kpi: { value: { property: value }, spark: { x: t, y: value } }
+  - type: table
+    name: State table
+    from: samples
+    at: latest
+    order: [label, value, meaning, group, t]
+  - type: table
+    name: Configuration
+    from: config
+    filters: 'path == "{path}"'
+    tree: { path: key, separator: "." }
+    order: [key, value, unit, expected, differs, source, unsaved]
+  - type: table
+    name: Log
+    from: events
+    filters: 'path == "{path}" || path.startsWith("{path}/")'
+    order: [t, severity, message, name, code]
+    sort:
+      - { property: t, direction: DESC }
+    limit: 300

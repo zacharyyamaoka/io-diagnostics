@@ -1,0 +1,63 @@
+# Overview: does anything need me? RobotDx's chip and its popover (PEP 0001 E2) as a dashboard, on any host.
+# The counts are the host's (one cause counted once); scrub the time bar back and every panel shows that moment.
+datasets:
+  summary:
+    data: "../datasets/summary.json"
+  attention:
+    data: "../datasets/attention.json"
+  faults:
+    data: "../datasets/faults.json"
+  events:
+    data: "../datasets/events.json"
+clock: { rate: 1 }
+style:
+  numbers: { digits: 3 }
+layout:
+  columns: 12
+  rowHeight: 104
+  panels:
+    - { view: Need you, w: 3, h: 1, style: { title: none } }
+    - { view: Errors, w: 3, h: 1, style: { title: none } }
+    - { view: Warnings, w: 3, h: 1, style: { title: none } }
+    - { view: Devices, w: 3, h: 1, style: { title: none } }
+    - { view: What needs you, w: 7, h: 3 }
+    - { view: Faults, w: 5, h: 3 }
+    - { view: Recent, w: 12, h: 4 }
+    - { view: Time, w: 12, h: 1 }
+views:
+  - type: kpi
+    name: Need you
+    from: summary
+    kpi: { value: { property: needs }, label: Need you }
+  - type: kpi
+    name: Errors
+    from: summary
+    kpi: { value: { property: errors }, label: Errors }
+  - type: kpi
+    name: Warnings
+    from: summary
+    kpi: { value: { property: warns }, label: Warnings }
+  - type: kpi
+    name: Devices
+    from: summary
+    kpi: { value: { property: devices }, label: Devices }
+  - type: table
+    name: What needs you
+    from: attention
+    order: [health, name, device, message]
+    sort:
+      - { property: rank, direction: DESC }
+  - type: table
+    name: Faults
+    from: faults
+    order: [health, name, code, status, count, last]
+  - type: table
+    name: Recent
+    from: events
+    order: [t, severity, message, name, code]
+    sort:
+      - { property: t, direction: DESC }
+    limit: 200
+  - type: playback
+    name: Time
+    from: summary

@@ -1,0 +1,5 @@
+[
+ {"id": "overview", "title": "Overview", "file": "overview.base", "about": "Does anything need me: the counts, what needs you, the faults and the newest events, on any host."},
+ {"id": "joint", "title": "Joint · CAN 1 live", "file": "joint.base", "about": "One joint's State at 10 Hz (position, velocity, torque, temperature), its health and its checks."},
+ {"id": "health", "title": "Rack health", "file": "health.base", "about": "The level history of an adapter, its joint and a camera side by side."}
+]

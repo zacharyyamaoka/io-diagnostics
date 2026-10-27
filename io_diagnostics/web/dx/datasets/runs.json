@@ -1,0 +1,45 @@
+{
+ "id": "runs",
+ "title": "Runs",
+ "titleProperty": "label",
+ "properties": {
+  "t": {
+   "type": "number",
+   "unit": "s",
+   "label": "Seen",
+   "display": "clock"
+  },
+  "label": {
+   "type": "text",
+   "label": "Run"
+  },
+  "state": {
+   "type": "text",
+   "label": "State"
+  },
+  "active": {
+   "type": "boolean",
+   "label": "Active"
+  },
+  "started": {
+   "type": "number",
+   "unit": "s",
+   "label": "Started",
+   "display": "clock"
+  },
+  "elapsed": {
+   "type": "number",
+   "label": "Elapsed",
+   "unit": "s"
+  },
+  "exit_code": {
+   "type": "number",
+   "label": "Exit code"
+  },
+  "id": {
+   "type": "text",
+   "label": "Id"
+  }
+ },
+ "rows": []
+}

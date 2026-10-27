@@ -1,0 +1,143 @@
+{
+ "id": "entities",
+ "title": "Entities",
+ "titleProperty": "name",
+ "properties": {
+  "t": {
+   "type": "number",
+   "unit": "s",
+   "label": "Seen",
+   "display": "clock",
+   "note": "When the page saw this version of the row (the host's clock)."
+  },
+  "name": {
+   "type": "text",
+   "label": "Name"
+  },
+  "health": {
+   "type": "text",
+   "label": "Health",
+   "note": "A shape and a word for warn, unknown, stale and error; empty for OK and for nothing reported."
+  },
+  "message": {
+   "type": "text",
+   "label": "Message",
+   "note": "The row's own report: a black box speaks for itself; a pure group shows what is worst below it."
+  },
+  "below": {
+   "type": "text",
+   "label": "Below",
+   "note": "Something below this row is worse than its own report (the host's hint)."
+  },
+  "id_text": {
+   "type": "text",
+   "label": "ID"
+  },
+  "model": {
+   "type": "text",
+   "label": "Model"
+  },
+  "serial": {
+   "type": "text",
+   "label": "Serial"
+  },
+  "firmware": {
+   "type": "text",
+   "label": "Firmware"
+  },
+  "model_id": {
+   "type": "text",
+   "label": "Model id"
+  },
+  "presence": {
+   "type": "text",
+   "label": "Presence",
+   "note": "Neutral, never a level: heard, last heard …, streaming."
+  },
+  "link": {
+   "type": "text",
+   "label": "Link",
+   "note": "A USB device's own version (USB 2.1); the raw speed is the host's."
+  },
+  "rate": {
+   "type": "text",
+   "label": "Rate",
+   "note": "Records per second received against what the row promised; a note, never a colour."
+  },
+  "heard": {
+   "type": "number",
+   "unit": "s",
+   "label": "Last heard",
+   "display": "clock"
+  },
+  "kind": {
+   "type": "text",
+   "label": "Kind"
+  },
+  "icon": {
+   "type": "text",
+   "label": "Icon"
+  },
+  "level": {
+   "type": "text",
+   "label": "Level"
+  },
+  "rank": {
+   "type": "number",
+   "label": "Rank",
+   "note": "ok 0 < warn 1 < unknown 2 < stale 3 < error 4; -1 when nothing reports (sorting worst first)."
+  },
+  "checks": {
+   "type": "number",
+   "label": "Checks"
+  },
+  "actions": {
+   "type": "number",
+   "label": "Actions"
+  },
+  "faults": {
+   "type": "number",
+   "label": "Faults"
+  },
+  "path": {
+   "type": "text",
+   "label": "Path",
+   "note": "The entity key: /-separated, rooted at host; it changes when a device moves to another port."
+  },
+  "parent": {
+   "type": "text",
+   "label": "Parent"
+  },
+  "depth": {
+   "type": "number",
+   "label": "Depth"
+  },
+  "hardware_id": {
+   "type": "text",
+   "label": "Hardware id"
+  },
+  "knock_on": {
+   "type": "text",
+   "label": "Knock-on of",
+   "note": "This row's problem is explained by another row (subdued, not counted)."
+  },
+  "connected": {
+   "type": "boolean",
+   "label": "Connected"
+  },
+  "stale": {
+   "type": "boolean",
+   "label": "Stale"
+  },
+  "claimed": {
+   "type": "boolean",
+   "label": "Claimed",
+   "note": "Some driver plugin claims the row (an unclaimed keyboard or mouse stays hidden unless it reports a problem)."
+  },
+  "owner": {
+   "type": "text",
+   "label": "Owner"
+  }
+ },
+ "rows": []
+}

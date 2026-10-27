@@ -1,0 +1,35 @@
+# Activity: the host's event log as a live tail (newest on top; scroll away or open a row and it holds, "N new · Resume"),
+# the faults it remembers and what needs you now. The rail filters the log; the time bar rewinds all three.
+datasets:
+  events:
+    data: "../datasets/events.json"
+    facets: [severity, type, name]
+  faults:
+    data: "../datasets/faults.json"
+  attention:
+    data: "../datasets/attention.json"
+layout:
+  columns: 12
+  rowHeight: 96
+  panels:
+    - { view: Log, w: 12, h: 5 }
+    - { view: Faults, w: 7, h: 3 }
+    - { view: What needs you, w: 5, h: 3 }
+views:
+  - type: table
+    name: Log
+    from: events
+    order: [t, severity, message, name, type, code, source, port]
+    sort:
+      - { property: t, direction: DESC }
+    limit: 2000
+  - type: table
+    name: Faults
+    from: faults
+    order: [health, name, code, status, count, first, last, message]
+  - type: table
+    name: What needs you
+    from: attention
+    order: [health, name, device, message]
+    sort:
+      - { property: rank, direction: DESC }

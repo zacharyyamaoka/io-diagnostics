@@ -1,0 +1,41 @@
+{
+ "id": "samples",
+ "title": "State",
+ "titleProperty": "label",
+ "properties": {
+  "t": {
+   "type": "number",
+   "unit": "s",
+   "label": "Received",
+   "display": "clock"
+  },
+  "label": {
+   "type": "text",
+   "label": "Value",
+   "note": "The value's key and its unit: position (rev)."
+  },
+  "value": {
+   "type": "number",
+   "label": "Reading"
+  },
+  "meaning": {
+   "type": "text",
+   "label": "Meaning",
+   "note": "The human reading of a code (33 · motor driver fault on bridge enable)."
+  },
+  "unit": {
+   "type": "text",
+   "label": "Unit"
+  },
+  "group": {
+   "type": "text",
+   "label": "Group"
+  },
+  "key": {
+   "type": "text",
+   "label": "Key",
+   "note": "The stream: one per value of the entity's State."
+  }
+ },
+ "rows": []
+}

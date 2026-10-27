@@ -1,0 +1,17 @@
+# Runs: every utility the host ran on a terminal, newest first (read only here; the terminal and Stop are on the
+# classic page: PEP 0001 §12.6).
+datasets:
+  runs:
+    data: "../datasets/runs.json"
+layout:
+  columns: 12
+  rowHeight: 96
+  panels:
+    - { view: Runs, w: 12, h: 6 }
+views:
+  - type: table
+    name: Runs
+    from: runs
+    order: [label, state, started, elapsed, exit_code, id]
+    sort:
+      - { property: started, direction: DESC }

@@ -1,0 +1,61 @@
+{
+ "id": "summary",
+ "title": "Summary",
+ "titleProperty": "chip",
+ "properties": {
+  "t": {
+   "type": "number",
+   "unit": "s",
+   "label": "Seen",
+   "display": "clock"
+  },
+  "chip": {
+   "type": "text",
+   "label": "Chip",
+   "note": "The top bar's label."
+  },
+  "health": {
+   "type": "text",
+   "label": "Health",
+   "note": "A shape and a word for warn, unknown, stale and error; empty for OK and for nothing reported."
+  },
+  "level": {
+   "type": "text",
+   "label": "Level"
+  },
+  "needs": {
+   "type": "number",
+   "label": "Need you",
+   "unit": "Independent causes that are not OK (one cause counted once)."
+  },
+  "errors": {
+   "type": "number",
+   "label": "Errors"
+  },
+  "warns": {
+   "type": "number",
+   "label": "Warnings"
+  },
+  "unknowns": {
+   "type": "number",
+   "label": "Unknown"
+  },
+  "stales": {
+   "type": "number",
+   "label": "Stale"
+  },
+  "devices": {
+   "type": "number",
+   "label": "Devices"
+  },
+  "entities": {
+   "type": "number",
+   "label": "Entities"
+  },
+  "host": {
+   "type": "text",
+   "label": "Host"
+  }
+ },
+ "rows": []
+}
