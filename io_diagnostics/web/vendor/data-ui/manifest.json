@@ -1,0 +1,330 @@
+{
+ "name": "data-ui",
+ "version": "0.1.0",
+ "views": [
+  {
+   "type": "calendar",
+   "folder": "calendar",
+   "status": "built"
+  },
+  {
+   "type": "cards",
+   "folder": "cards",
+   "status": "built"
+  },
+  {
+   "type": "chart",
+   "folder": "chart",
+   "status": "built"
+  },
+  {
+   "type": "timeseries",
+   "folder": "chart",
+   "status": "built"
+  },
+  {
+   "type": "trajectory",
+   "folder": "chart",
+   "status": "built"
+  },
+  {
+   "type": "compare",
+   "folder": "compare",
+   "status": "built"
+  },
+  {
+   "type": "graph",
+   "folder": "graph",
+   "status": "built"
+  },
+  {
+   "type": "kanban",
+   "folder": "kanban",
+   "status": "built"
+  },
+  {
+   "type": "kpi",
+   "folder": "kpi",
+   "status": "built"
+  },
+  {
+   "type": "gauge",
+   "folder": "kpi",
+   "status": "built"
+  },
+  {
+   "type": "bullet",
+   "folder": "kpi",
+   "status": "built"
+  },
+  {
+   "type": "barlist",
+   "folder": "kpi",
+   "status": "built"
+  },
+  {
+   "type": "status",
+   "folder": "kpi",
+   "status": "built"
+  },
+  {
+   "type": "list",
+   "folder": "list",
+   "status": "built"
+  },
+  {
+   "type": "plot",
+   "folder": "live",
+   "status": "built"
+  },
+  {
+   "type": "levels",
+   "folder": "live",
+   "status": "built"
+  },
+  {
+   "type": "map",
+   "folder": "map",
+   "status": "built"
+  },
+  {
+   "type": "video",
+   "folder": "media",
+   "status": "built"
+  },
+  {
+   "type": "video-compare",
+   "folder": "media",
+   "status": "built"
+  },
+  {
+   "type": "image",
+   "folder": "media",
+   "status": "built"
+  },
+  {
+   "type": "playback",
+   "folder": "playback",
+   "status": "built"
+  },
+  {
+   "type": "record",
+   "folder": "record",
+   "status": "built"
+  },
+  {
+   "type": "scene3d",
+   "folder": "scene3d",
+   "status": "built"
+  },
+  {
+   "type": "table",
+   "folder": "table",
+   "status": "built"
+  },
+  {
+   "type": "pivot",
+   "folder": "table",
+   "status": "built"
+  },
+  {
+   "type": "timeline",
+   "folder": "timeline",
+   "status": "built"
+  }
+ ],
+ "files": {
+  "LICENSES.md": {
+   "bytes": 124677,
+   "sha256": "97c23b94b2fcdfe0c7061f6f8d9d4c8e648fec52dacbdabde3febcf052214707"
+  },
+  "dashboard-arrange.js": {
+   "bytes": 101729,
+   "sha256": "68f5e910388b5e8178e65340e173567b2d6cfeba11d420caca285fadb3941361"
+  },
+  "dashboard-arrange.js.map": {
+   "bytes": 487864,
+   "sha256": "5be75df390201ca87e8f361cd63322d7cc46c155f36efd283941c6e53aef2004"
+  },
+  "dashboard.js": {
+   "bytes": 44516,
+   "sha256": "b406c39a1d9621481b5c8651c86d2dfd823161f07b971f8335ace42030071097"
+  },
+  "dashboard.js.map": {
+   "bytes": 127604,
+   "sha256": "f684c1663000d9d2f51e48680bd5a87bfd290c12772a0fa8754bf4018e268ab5"
+  },
+  "data-ui.css": {
+   "bytes": 47208,
+   "sha256": "a6fe008105f1afe6af598ddcdd4dcc665ca42614f4ba72c41f003819fa8fd361"
+  },
+  "data-ui.js": {
+   "bytes": 320971,
+   "sha256": "2e26153f57abb07b44b40eb7f3b1518633ea56e634c864b92e039dc463be1cb4"
+  },
+  "data-ui.js.map": {
+   "bytes": 1278282,
+   "sha256": "dc06ee7d4c4151c0bfaf0bc0c1fd059d70e242779cf7f9dcd44200694bc2053d"
+  },
+  "python/data_ui_base.py": {
+   "bytes": 17698,
+   "sha256": "39dfd03d3294716daf4767a0236bfba082914865097dbbb02815ce019efb0588"
+  },
+  "resize.js": {
+   "bytes": 5583,
+   "sha256": "16e34c260f1e4453a20c4af03d092fa7a2fabe06e17e6de4ab08af535e7c2b38"
+  },
+  "resize.js.map": {
+   "bytes": 17325,
+   "sha256": "01d6031f79876a79ab5cd4da7e43d448a5752951a9f87c9064c9932b7a4fa57a"
+  },
+  "rowmodel-worker.js": {
+   "bytes": 80941,
+   "sha256": "65ac649e19d1b8ea5914e3737807860c4e892b33d78cdc208614456fd20e67b8"
+  },
+  "rowmodel-worker.js.map": {
+   "bytes": 463386,
+   "sha256": "e31373df0a21d9cb5a8b05b39093a4c4799d75fea81d652c2b1e9db8df055cda"
+  },
+  "views/calendar.js": {
+   "bytes": 158056,
+   "sha256": "4d90fce71e374c547d5d30169ceb19a95b9dfbaa2f70a1b5aa637b6e89f9fdb6"
+  },
+  "views/calendar.js.map": {
+   "bytes": 37410,
+   "sha256": "0e69f809b416fc47dfe03e0b3452ce5bcee2caa4da86015af59c7b764f73f365"
+  },
+  "views/cards-lightbox-ETKV2GH7.js": {
+   "bytes": 67965,
+   "sha256": "0aacc2d817a3340d29c20bb56c3054fadc3593ca47d92e84dc23b1a8ae52a514"
+  },
+  "views/cards-lightbox-ETKV2GH7.js.map": {
+   "bytes": 306212,
+   "sha256": "db325f295dbe82783d91f6b6e0b405cec195f02a26026b1534aa0a1e4d00215f"
+  },
+  "views/cards.js": {
+   "bytes": 15442,
+   "sha256": "2b84d8da34b5eb88d9c143d1b0e0c5c59e06c8867ca915d02f77c4b54ae2f2a4"
+  },
+  "views/cards.js.map": {
+   "bytes": 38847,
+   "sha256": "3999242a38241d08a3db0d1583472c8d198000f79ed9b3d83603a119721931f8"
+  },
+  "views/chart.js": {
+   "bytes": 903470,
+   "sha256": "7e78ab832ccf24287ed732fcaf5f24ee331195e3566bd3ad9f48f6019c1af7e0"
+  },
+  "views/chart.js.map": {
+   "bytes": 4631652,
+   "sha256": "fa1d6ea1c1d37f4b9d05261e5727f3103a492a8978bbdb28394ab1f551c3a468"
+  },
+  "views/compare.js": {
+   "bytes": 22958,
+   "sha256": "fb7ab1ba30368a09e66a885ee0c8de6de9d1a45db10efab8a6fa79319c4c9463"
+  },
+  "views/compare.js.map": {
+   "bytes": 58354,
+   "sha256": "bc2b42a572c8d902c55fc8780748c02bcc6102d11c9a84cbb630519f738ac401"
+  },
+  "views/graph.js": {
+   "bytes": 482046,
+   "sha256": "7800cce94f1c23450d072ce596b5d4973cd7d942669a754e5944a7803c093875"
+  },
+  "views/graph.js.map": {
+   "bytes": 2255117,
+   "sha256": "aa12245de232ba538694b5bed019d7f4754ea1c75ac0ee3caceb5626be06736f"
+  },
+  "views/kanban.js": {
+   "bytes": 40661,
+   "sha256": "4cdf94854a6bfe06009efb0a81d97e5e7b1864ba66ae17dee6a58e8aa2698ff1"
+  },
+  "views/kanban.js.map": {
+   "bytes": 173666,
+   "sha256": "19685c6068c9e2ee823e9dd62b6f3c3509d6d556e67fc8bc7eac307a1acd7b2d"
+  },
+  "views/kpi.js": {
+   "bytes": 43371,
+   "sha256": "fbec3d61f559ee7dfecdd44fd2f893e0e723e6bf40123fa10b6a2e0be9119630"
+  },
+  "views/kpi.js.map": {
+   "bytes": 119662,
+   "sha256": "e18646cfa2eac0fd65e0e3c70692161998118769d62a8afa50ce62b77dbc95ce"
+  },
+  "views/list.js": {
+   "bytes": 12008,
+   "sha256": "40537a9fffa417c69e73b7a9a1c588594c23e353d82c972123a88520b057e73b"
+  },
+  "views/list.js.map": {
+   "bytes": 29114,
+   "sha256": "5338cd0689f2fad4ffba4a1cef942e49c6ce3e750b4ec66dbf926dfdb615d197"
+  },
+  "views/live.js": {
+   "bytes": 71874,
+   "sha256": "b75c818595ce37b7a02bbf5591b651934a5d5a7044c714e64ee3aa78eeef7888"
+  },
+  "views/live.js.map": {
+   "bytes": 340615,
+   "sha256": "9fe87734d7245f57b836e20549313c84a1e837ecddfba61c06f73efca429d70d"
+  },
+  "views/map.js": {
+   "bytes": 1333100,
+   "sha256": "e007a1b7d1411aa3e77095ce7e754f944224e898155605cab15140dfb89913be"
+  },
+  "views/map.js.map": {
+   "bytes": 6191413,
+   "sha256": "07f1d416db001ebd6686ad7c5615b073c7452ad74eb545f5feaec2606654d4d6"
+  },
+  "views/maplibre-gl-worker.mjs": {
+   "bytes": 519372,
+   "sha256": "0bf06492bdb7ba3d4132b78e435621bfba60d5250967991c02b1a73affea8cd5"
+  },
+  "views/media.js": {
+   "bytes": 23624,
+   "sha256": "b389bbedbcab99737abb539748474d8592ddc2535371c9448287f4d5636c7c51"
+  },
+  "views/media.js.map": {
+   "bytes": 54807,
+   "sha256": "f7a7daad1cc7c9d68bcb571f771b6765333b634a5fb7ae1e244025275cf23ba9"
+  },
+  "views/playback.js": {
+   "bytes": 13973,
+   "sha256": "bae8edc6b81faf72f86cb4bb416a7d1d814cd67b9cc66fb732ace89b973a1314"
+  },
+  "views/playback.js.map": {
+   "bytes": 29624,
+   "sha256": "f5f03643911221f7bc0a847d72afd3835da73f6ae51816c88398a14223b59649"
+  },
+  "views/record.js": {
+   "bytes": 11714,
+   "sha256": "05186d2064458538a8d2b8b954ac13ad1e7b74775ca9e1dc1085c8a90ad0de93"
+  },
+  "views/record.js.map": {
+   "bytes": 26478,
+   "sha256": "4acac30b66c58a6f0bdf5d4192ec9cee4cc139063e98c4b00f670b349ec4d586"
+  },
+  "views/scene3d.js": {
+   "bytes": 605128,
+   "sha256": "1a3aaa3918c36b5f1fa828ce0811286f935d5f4e789015bf4d43d6b1f64aef45"
+  },
+  "views/scene3d.js.map": {
+   "bytes": 3070947,
+   "sha256": "1c8f753e46b4e4aeb687cdaae0c95783b7c71f8c958485f1c3957244ccb23173"
+  },
+  "views/table.js": {
+   "bytes": 33295,
+   "sha256": "ffa195bcfd7804d8dd222b3e56412e2da0e6d6a7f1b2d2dea85470b24d05bfbb"
+  },
+  "views/table.js.map": {
+   "bytes": 96745,
+   "sha256": "3da98f9fb485116058dbdac6d314832932b29692576e049bc1cf6a734efa00d2"
+  },
+  "views/timeline.js": {
+   "bytes": 596853,
+   "sha256": "a51a1bd75a749143ec638f6a0720a333d8ab6fbe4d55582f4011b184895a50e5"
+  },
+  "views/timeline.js.map": {
+   "bytes": 2309051,
+   "sha256": "f1b23ad96094594fcc32b967d306df3491c363ee75d4f4f56691df5984f5610f"
+  }
+ }
+}
