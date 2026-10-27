@@ -9,7 +9,7 @@
    Read-only by construction: the only request that is not a GET is watch.js's heartbeat (PEP §12.2). Every write the
    host offers (utilities, configuration, the expected setup, settings) stays on the classic page, linked per entity. */
 
-import { LiveClock, LiveDataset, parseBase, stringifyBase, loadDataset, connectSSE, connectPoll, makeResizable, bindRailSelect, esc } from '../vendor/data-ui/data-ui.js';
+import { LiveClock, LiveDataset, parseBase, stringifyBase, loadDataset, connectSSE, connectPoll, makeResizable, bindRailSelect, esc, fmtTime } from '../vendor/data-ui/data-ui.js';
 import '../vendor/data-ui/dashboard.js';
 import { RobotDxFeed, bindingOf } from './feed.js';
 import { startHeartbeat } from './watch.js';
@@ -69,6 +69,22 @@ function writeT() {
 }
 clock.addEventListener('state', () => writeT());
 clock.addEventListener('time', (e) => { if (!clock.following && e.detail.source !== 'play') writeT(); });
+
+// ---- before the page knew: say so, never an empty page that looks like a dead host ------------------------------------------
+// WHY: the host keeps checks' levels, State and events for its window, but not the tree, the counts or the settings at a
+// past time (PEP 0001 §5c4, step B); the page has those from the moment it opened. Scrubbed back before that, the tree is
+// empty on purpose, and this line says why (and from when it has them).
+const before = document.getElementById('dx-before');
+let beforeAt = 0;
+function sayBefore() {
+  const entities = feed.dataset('entities');
+  const from = entities && entities.start;
+  const show = !clock.following && from !== null && Number.isFinite(clock.t) && clock.t < from;
+  if (show) before.textContent = `Before ${fmtTime(from)} the page has no tree, counts or settings (it opened then; the host keeps no history of them). Checks, State, health and events go back further.`;
+  before.hidden = !show;
+}
+clock.addEventListener('time', () => { if (performance.now() - beforeAt > 100) { beforeAt = performance.now(); sayBefore(); } });
+clock.addEventListener('state', sayBefore);
 
 // ---- the clock's keys outside a dashboard (a dashboard handles its own: data-ui CONTRACT §18, §21) ------------------------
 document.addEventListener('keydown', (e) => {

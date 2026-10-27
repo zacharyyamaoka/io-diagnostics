@@ -16,6 +16,7 @@ layout:
   columns: 12
   rowHeight: 104
   panels:
+    - { view: Time, w: 12, h: 1 }
     - { view: Need you, w: 3, h: 1, style: { title: none } }
     - { view: Errors, w: 3, h: 1, style: { title: none } }
     - { view: Warnings, w: 3, h: 1, style: { title: none } }
@@ -23,7 +24,6 @@ layout:
     - { view: What needs you, w: 7, h: 3 }
     - { view: Faults, w: 5, h: 3 }
     - { view: Recent, w: 12, h: 4 }
-    - { view: Time, w: 12, h: 1 }
 views:
   - type: kpi
     name: Need you

@@ -14,12 +14,12 @@ layout:
   columns: 12
   rowHeight: 96
   panels:
-    - { view: Position, w: 8, h: 3 }
-    - { view: Temperature and voltage, w: 4, h: 3 }
-    - { view: Velocity and torque, w: 8, h: 3 }
-    - { view: Health, w: 4, h: 3 }
-    - { view: Checks, w: 12, h: 2 }
     - { view: Time, w: 12, h: 1 }
+    - { view: Position, w: 8, h: 3 }
+    - { view: Health, w: 4, h: 3 }
+    - { view: Velocity and torque, w: 8, h: 3 }
+    - { view: Temperature and voltage, w: 4, h: 3 }
+    - { view: Checks, w: 12, h: 2 }
 views:
   - type: plot
     name: Position
@@ -37,7 +37,7 @@ views:
     at: 60s
     filters: 'key == "temperature" || key == "voltage"'
     groupBy: { property: label }
-    kpi: { value: { property: value }, spark: { x: t, y: value } }
+    kpi: { value: { property: value } }
   - type: levels
     name: Health
     from: health

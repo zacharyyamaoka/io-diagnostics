@@ -385,7 +385,8 @@ class EntityFeed {
     if (!['checks', 'config', 'levels', 'samples'].some(want)) return;
     if (!this.busy.node && now - this.nodeAt >= NODE_EVERY_MS) this._node();
     if (!this.nodeOk) return;
-    if (want('levels') && !this.busy.history && now - this.historyAt >= HISTORY_EVERY_MS) this._history();
+    // the host's level history: the health strips (levels), and once, the checks' own past (so Diagnostics rewinds too)
+    if ((want('levels') || (want('checks') && !this.checksBack)) && !this.busy.history && now - this.historyAt >= HISTORY_EVERY_MS) this._history();
     if (want('samples') && this.watchSupported && !this.busy.values) {
       const every = this.watch && this.watch.state === 'running' ? VALUES_LIVE_MS : VALUES_IDLE_MS;
       if (this.cursor === null || now - this.valuesAt >= every) this._values();
@@ -445,6 +446,8 @@ class EntityFeed {
     let h;
     try { h = await this.feed._get(`/history?path=${encodeURIComponent(this.path)}${first ? '' : '&window=60s'}`); } catch (_) { this.busy.history = false; return; }
     this.busy.history = false;
+    if (!this.checksBack) this._checksBack(h);
+    if (!(this.uses.levels > 0 || Date.now() - this.released.levels <= LINGER_MS)) return;
     const ds = this.feed.dataset('levels', this.path);
     const rows = [];
     for (const s of h.statuses || []) {
@@ -459,6 +462,28 @@ class EntityFeed {
     }
     if (rows.length) ds.append(rows.sort((a, b) => a.t - b.t));
     this._history0 = this._history0 || h;
+  }
+
+  /** The checks' past from the host's level spans (its 15 min window): a version per span at its start, the no-data
+      spans as removals. WHY: the host keeps each check's level and message per span (PEP §5c4), so Diagnostics can show
+      a moment before this page opened; what_to_check and the receive times are not kept, so those cells are empty then.
+      From each check's newest report on, /node's own version (which has them) is the one shown. */
+  _checksBack(h) {
+    this.checksBack = true;
+    const name = usb((this.node && this.node.node && this.node.node.name) || this.path);
+    const versions = [], removals = [];
+    for (const s of h.statuses || []) {
+      if (s.state) continue;
+      const id = `${this.path}#${s.name}`;
+      for (const span of s.levels || []) {
+        if (span.level === null || span.level === undefined) { removals.push([id, span.from]); continue; }
+        versions.push({ id, path: this.path, entity: name, name: s.name, health: health(span.level), level: span.level, said: span.level, rank: rank(span.level),
+          message: span.message || '', code: span.code || '', received: null, period: s.expected_period_s ?? null, source: '', why: '', t: span.from });
+      }
+    }
+    const checks = this.feed.dataset('checks');
+    if (versions.length) checks.upsert(versions.sort((a, b) => a.t - b.t));
+    for (const [id, t] of removals.sort((a, b) => a[1] - b[1])) checks.remove([id], t);
   }
 
   async _values() {

@@ -14,11 +14,11 @@ layout:
   columns: 12
   rowHeight: 96
   panels:
+    - { view: Time, w: 12, h: 1 }
     - { view: Adapter, w: 6, h: 2 }
     - { view: Joint, w: 6, h: 2 }
     - { view: Camera, w: 6, h: 3 }
     - { view: What needs you, w: 6, h: 3 }
-    - { view: Time, w: 12, h: 1 }
 views:
   - type: levels
     name: Adapter
