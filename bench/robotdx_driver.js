@@ -156,13 +156,9 @@ async function ingestFixture(browser, base, board, seconds) {
     const es = window.robotdx.feed._live;
     const batches = [], draws = [];
     const onSamples = (m) => {
-      try {
-        const d = JSON.parse(m.data);
-        if (d.path !== board) return;
-        let newest = -Infinity;
-        for (const g of d.groups || []) for (const r of g.rows || []) for (const p of r.points || []) newest = Math.max(newest, p[0]);
-        batches.push({ at: performance.now(), newest });
-      } catch (_) { /* not ours */ }
+      if (!m.data.includes(`"path": "${board}"`) && !m.data.includes(`"path":"${board}"`)) return;
+      const ds = window.robotdx.feed._sets.get(`samples:${board}`);
+      if (ds) batches.push({ at: performance.now(), newest: ds.end });
     };
     const onDraw = (e) => { if (e.target.id === 'dx-detail-signals' && e.detail.following) draws.push({ at: performance.now(), t: e.detail.t }); };
     if (es) es.addEventListener('samples', onSamples);
@@ -195,15 +191,17 @@ async function sweep(browser, base, seconds) {
     const longs = [];
     const po = new PerformanceObserver((l) => { for (const e of l.getEntries()) longs.push(e.duration); });
     po.observe({ type: 'longtask' });
+    // WHY no JSON.parse here: the page's own handler (added first, so it ran first) has parsed and appended the batch; a
+    // second parse per event would bill the page for the bench's work. The stamp and the path are read with a regex, the
+    // batch's newest sample from the dataset the page just appended it to.
     const onSamples = (m) => {
       const got = performance.timeOrigin + performance.now();
-      try {
-        const d = JSON.parse(m.data);
-        let newest = -Infinity, n = 0;
-        for (const g of d.groups || []) for (const r of g.rows || []) for (const p of r.points || []) { newest = Math.max(newest, p[0]); n += 1; }
-        // the stub's `now` is its wall clock at emit, the clock the browser reads too (one machine)
-        batches.push({ emit: d.now * 1000, got, newest, n, path: d.path });
-      } catch (_) { /* not ours */ }
+      const path = (/"path":"([^"]+)"/.exec(m.data) || [])[1];
+      const now = Number((/"now":([0-9.eE+-]+)/.exec(m.data) || [])[1]);
+      const ds = path && window.robotdx.feed._sets.get(`samples:${path}`);
+      if (!ds || !Number.isFinite(now)) return;
+      // the stub's `now` is its wall clock at emit, the clock the browser reads too (one machine)
+      batches.push({ emit: now * 1000, got, newest: ds.end, n: (m.data.match(/\[\d+\.\d+,/g) || []).length, path });
     };
     const onDraw = (e) => { if (e.detail.following && e.target.closest('data-dashboard')) draws.push({ at: performance.timeOrigin + performance.now(), t: e.detail.t, id: e.target.id }); };
     es.addEventListener('samples', onSamples);
