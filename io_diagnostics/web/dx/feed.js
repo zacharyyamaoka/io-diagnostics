@@ -526,8 +526,8 @@ class EntityFeed {
         }
       }
     }
-    // WHY a fixed order per key (the host's own list, first seen first): the State cards group by key in the order rows
-    // come, and rows interleave, so without it the cards changed places as samples streamed in
+    // WHY a fixed order per key (the host's own list, first seen first): the State table sorts by it; the State cards
+    // keep the same order because one sample of every key arrives together (one time) and their window is not capped
     for (const key of [...(v.groups || []).flatMap((g) => (g.rows || []).map((r) => r.key)), ...byKey.keys()]) {
       if (!this.keyOrder.has(key)) this.keyOrder.set(key, this.keyOrder.size);
     }

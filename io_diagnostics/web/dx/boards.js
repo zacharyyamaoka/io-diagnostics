@@ -234,7 +234,9 @@ export function withPanel(base, { type, path, name, field, unit }) {
   for (let n = 2; taken.has(viewName); n += 1) viewName = `${name} ${n}`;
   const view = { type, name: viewName, from };
   if (type === 'plot') Object.assign(view, { at: '30s', plot: { y: ['value'], series: 'key', ...(field ? { only: [field] } : {}), ...(unit ? { unit } : {}) } });
-  if (type === 'kpi') Object.assign(view, { at: '30s', groupBy: { property: 'label' }, sort: [{ property: 'order', direction: 'ASC' }], ...(field ? { filters: `key == "${field}"` } : {}), kpi: { value: { property: 'value' }, spark: { x: 't', y: 'value' } } });
+  // WHY limit 4000: KPI cards are grouped in the order their rows first come, and a capped window (2,000 rows by default)
+  // starts in the middle of one sample of every key, so the cards would change places; under the cap they keep the host's order
+  if (type === 'kpi') Object.assign(view, { at: '20s', limit: 4000, groupBy: { property: 'label' }, ...(field ? { filters: `key == "${field}"` } : {}), kpi: { value: { property: 'value' }, spark: { x: 't', y: 'value' } } });
   if (type === 'levels') Object.assign(view, { at: '5m', levels: LEVELS });
   if (type === 'table') Object.assign(view, { filters: `path == "${path}"`, order: ['name', 'health', 'message', 'code', 'received'], sort: [{ property: 'rank', direction: 'DESC' }] });
   out.views.push(view);

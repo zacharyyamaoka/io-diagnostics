@@ -45,13 +45,14 @@ views:
     from: levels
     at: 5m
     levels: { state: level, label: message, order: [ok, warn, unknown, stale, error], tones: { ok: good, warn: warn, unknown: muted, stale: muted, error: bad }, bar: 3 }
+  # limit 4000: the cards come in the order their rows first appear; one sample of every key arrives together, so an
+  # uncapped window keeps the host's order (a 2,000-row cap would cut a sample in two and move the cards around)
   - type: kpi
     name: State
     from: samples
-    at: 30s
+    at: 20s
+    limit: 4000
     groupBy: { property: label }
-    sort:
-      - { property: order, direction: ASC }
     kpi: { value: { property: value }, spark: { x: t, y: value } }
   - type: table
     name: State table
