@@ -254,3 +254,102 @@ The note and this section must answer:
   `cli.py serve --fixture F1 --plugins tests/fixtures/plugins-state --port 5491 --no-udev`; `/api/v1/*` sampled with GETs; the page
   loaded in headless Chrome (Playwright) for 20–30 s per view with every non-GET request aborted (none was attempted); host CPU from
   `/proc`; the server stopped by its recorded PID. Not observed: a real rack's row count, a running watch, cold-load time.
+
+## 12. Phase 3: the page on data-ui (`web/dx/`), its contract
+
+*2026-10-27, lane/robotdx-data-ui. Written before the code (the lane's rule: contract, then acceptance checks, then code).
+It builds on data-ui's live tier (CONTRACT §21, PEP 0008) and app rail (§22, PEP 0009), vendored from lane/live with
+lane/app-rail merged in; nothing here changes `/api/v1` or record v0.2.*
+
+**What it is.** A second page on the same host, `/dx/index.html` (today's page at `/` gets no edits; default: both
+ship, Zach decides later whether it replaces the old one). It only reads: every write the host offers (§6) stays on
+today's page, which the new one links to for the entity on screen.
+
+| Part | What it is | Stock part |
+|---|---|---|
+| Shell | `<data-rail id="dx-rail">` (three styles, setting in Settings, Ctrl+Alt+R) beside the destination; the time bar and the connection line along the bottom | `<data-rail>`, `bindRailSelect` |
+| **Explore** (`?go=explore[&sel=<path>]`) | the entity tree (`<data-views id="dx-tree">`: a `table` with `tree: {parent}`, search on top, a side pane that drags, remembers, resets and folds) and the selected entity as a dashboard (`<data-dashboard id="dx-detail">` from `dx/explore.base` with `{path}` filled in) | `<data-views>`, `<data-dashboard>`, `makeResizable` |
+| **Activity** (`?go=activity`) | `dx/activity.base`: the event log as a live tail, the faults, what needs you | `<data-dashboard>`, the tail |
+| **Dashboards** (`?go=dashboards[&board=<id>]`) | the starter dashboards (`dx/dashboards/*.base`, listed in `dx/dashboards/index.json`) and your own; New, Add panel, Edit .base, Arrange, Save as file, Copy layout, Load .base (picker or drag and drop), Delete | `<data-dashboard>`, Arrange (gridstack) |
+| **Runs** (`?go=runs`) | the host's runs as a table (no terminal: §12.6) | `<data-views>` |
+| **Settings** (`?go=settings`) | the sidebar style, light / dark / system, the host's history window (read only) | `bindRailSelect` |
+
+**One clock for the page** (Rerun has one time panel). `window.robotdx.clock` is a `LiveClock`, bound to every live
+dataset the page holds; it sits on the app element (`#dx-app.clock`) so every `<data-views>` finds it with `clockFor`,
+and every `<data-dashboard>` the page opens is given it (`dash.clock = clock` before `load()`). Rewinding in Explore and
+opening a dashboard shows the same t. The time bar `#dx-time` (a `<data-views>` holding one `playback` view) shows
+unless the open dashboard has a `playback` panel of its own; `data-live-status#dx-status` is the connection line. Keys
+outside a dashboard are the dashboard's: Space, End and Ctrl/Cmd+Shift+→ (go live), Home and Ctrl/Cmd+Shift+←, ← / →.
+The URL is `/dx/index.html?go=<destination>[&sel=<path>][&board=<id>]#t=live|<seconds>`: a destination or a selection
+is a history entry (Back and Forward walk them, E4); t is replaced in place.
+
+### 12.1 Datasets: what the adapter (`dx/feed.js`) makes of `/api/v1`
+
+Every row's time `t` is the **host's** clock (§5c8), never the page's. Schemas (properties, labels, units) are the
+files `dx/datasets/<name>.json` (rows empty), so a `.base` names them like any data file. **A binding** (word coined
+here) is how a `.base` dataset reaches the adapter: its `data:` file name says the kind and its query says the entity
+(`datasets/samples.json?path=host/usb1/port-1-3/usb-1-3/can/1`). The static server ignores the query, so the file still
+loads as a plain schema; the page hands `<data-dashboard>.load()` the adapter's own `LiveDataset` for it, one per kind and
+entity, shared by every view on the page (so history survives switching destinations). A `.base` dataset that is not a
+binding loads as data-ui loads it.
+
+| Dataset | Kind (§21) | Key / stream | Fields | Fed by | How often |
+|---|---|---|---|---|---|
+| `entities` | keyed | `path` | `path parent name kind icon depth health level rank message below kind model serial firmware model_id id_text hardware_id presence link rate heard checks actions faults knock_on connected stale claimed owner` | `GET /state` (the tree, flattened); a version only when a row changed; a row that left is removed | on each SSE `tick`, at most every 2 s, and every 5 s without one |
+| `summary` | keyed | `host` | `level health needs errors warns unknowns stales devices entities chip` | `GET /state` `summary`, `chip` | as `entities` |
+| `attention` | keyed | `path` | `path name device level health rank message` | `GET /state` `summary.attention` | as `entities` |
+| `runs` | keyed | `id` | `id label state active started elapsed exit_code` | `GET /state` `runs.items` | as `entities` |
+| `events` | append, stream `id` | `id` | `id severity type code kind message path name port source count` | `GET /activity?limit=500` once, then SSE `/events` `activity` (a changed event is a newer row of its stream; views read it with `at: latest`, so one fact is one row) | pushed |
+| `faults` | keyed | `id` (`path#code`) | `path name code severity status active count first last message` | `GET /activity` `faults` | on a `tick`, at most every 4 s |
+| `checks` | keyed | `id` (`path#name`) | `path entity name health level said rank message code received period source why` | `GET /node?path=` of each watched entity | 2 s while watched |
+| `config` | keyed | `id` (`path#key`) | `path key value unit expected differs source stored unsaved writable` | `GET /node?path=` | as `checks` |
+| `levels?path=P` | append, stream `check` | `check` | `check level health code message` | `GET /history?path=P` (the window, then `window=60s`; a row per level span, `null` = no data) | 4 s while watched |
+| `samples?path=P` | append, stream `key` | `key` | `key value unit meaning group` | `GET /history?path=P` State series (1 Hz, the window) as the backlog, then `GET /values?path=P&since=<cursor>` | 250 ms while the watch runs, 1 s otherwise |
+
+- `health` is a shape and a word for warn / unknown / stale / error (`▲ warn`, `? unknown`, `◷ stale`, `✖ error`) and
+  empty for OK and for nothing reported (E9: a shape only for a problem); `rank` orders `ok 0 < warn 1 < unknown 2 <
+  stale 3 < error 4`, `-1` for no level; `presence` is a neutral word (`heard`, `last heard 6 min ago`, `streaming`).
+- **Watched entity** (word coined here): the entity Explore shows, and every `?path=` of the open dashboard. Its feeds
+  start when the first view needs it and stop 10 s after the last one leaves; nothing polls while the tab is hidden
+  (SSE stays open). `/state` is re-read on a `tick`, not on a 1 s timer (today's 82 % of the bytes, §8).
+- Retention: the page's buffer is data-ui's (256 MB); `samples` keep 15 min (`age`), the keyed ones their newest
+  version per key and 15 min of history. Staleness stays the host's call: the datasets carry `stale: 0` and the page
+  sets their connection state (`live`, `reconnecting` while the host is unreachable, the fixture's name as the detail).
+
+### 12.2 Requests (checked: every request a test sees is matched against this list)
+
+- `GET` the page's own files (`/dx/**`, `/vendor/data-ui/**`, `/usb.js`) and `/api/v1/state`, `/node`, `/values`,
+  `/history`, `/activity`, `/events` (SSE), `/settings`, `/health`.
+- **`POST /api/v1/watch {path}`, the only write**, for an entity whose State is drawn by a panel on screen while the
+  page is visible, every 3 s (today's State tab heartbeat; the host stops the watch 10 s after the last one). `dx/watch.js`
+  is the only code that sends it. Nothing else is ever sent: no `/act`, `/config/*`, `/runs/*/input|signal|resize`,
+  `/settings`, `/expect|forget|retire`, `/arrangements`.
+
+### 12.3 Dashboards: files, your own, saving
+
+- A dashboard is a data-ui `.base` with `layout:` (PEP 0004/0005 grammar: `layout`, panels, `clock:`, the `playback`
+  card, `plot`, `levels`, `kpi`, tables). Starters are files; yours live in this browser (`localStorage`
+  `robotdx.dx.boards`: `[{id, title, text, updated}]`, every access in try/catch) until the host has a place for them
+  (§12.6). **Save as file** downloads the `.base` text (with the arrangement as its `layout:`), **Copy layout** puts the
+  same text on the clipboard, **Load .base** reads a file you pick or drop on the page and adds it to yours.
+- New dashboard starts from a starter or empty; **Add panel** appends a view and a layout panel to the text (a plot,
+  levels, KPI cards or a table of one entity, or the playback card); **Edit .base** is the text itself, applied when it
+  parses. Arrange (data-ui's) writes the arrangement back into your dashboard's text.
+
+### 12.4 The page's test surface
+
+`<data-rail id="dx-rail">`, `main#dx-main[data-dest=<destination>]`, `#dx-tree`, `#dx-tree-pane` (the side pane:
+`data-resizable="right"`, key `dx-tree`, fold button `#dx-tree-fold`), `#dx-detail`, `#dx-board`, `#dx-time`,
+`#dx-status`, the Dashboards bar's buttons `[data-board-act=new|add|edit|save|copy|load|delete|duplicate]`, and
+`window.robotdx = {clock, feed, boards, version}` (read-only handles: `feed.datasets()`, `feed.dataset(kind, path)`,
+`feed.stats()` counts requests and bytes per endpoint).
+
+### 12.5 Performance (the §8 KPIs this page is measured on)
+
+K2 (bytes and requests per second, one idle page), K4 (main-thread busy, steady), K5 (scrub to drawn), K7 (cold load to
+the tree drawn), measured by the page's checks in headless Chrome on fixture F1 and reported beside today's page.
+
+### 12.6 Not in this phase (the full list by E-number is "Dropped / deferred" below, once built)
+
+Every write (utilities, configuration edits, expected setup, settings, run input): today's page. Host-stored
+dashboards (`/api/v1/dashboards` does not exist; the RobotDx session was asked). The runs terminal (xterm). Frame history.
