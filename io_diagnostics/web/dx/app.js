@@ -27,6 +27,10 @@ const DESTS = ['explore', 'activity', 'dashboards', 'runs', 'settings'];
 // the page reads this one; each <data-dashboard> is handed it before load() (PEP §12, "One clock for the page")
 const clock = new LiveClock({ loop: false });
 app.clock = clock;
+// WHY moved in place: <data-live-status for="dx-app"> connected when data-ui's module ran (before this line), found no clock on
+// #dx-app and looks again only at its 1 s tick; a move re-runs its connect, so the line reads the page clock from the start
+const statusLine = document.getElementById('dx-status');
+if (statusLine && statusLine.parentNode) statusLine.parentNode.insertBefore(statusLine, statusLine.nextSibling);
 const feed = new RobotDxFeed({ clock });
 window.robotdx = Object.freeze({ clock, feed, parseBase, stringifyBase, version: 'dx 1 (PEP 0001 §12)', get boards() { return window.__dxBoards || null; } });
 

@@ -13,7 +13,10 @@ body.data-ui { background: var(--dv-bg); color: var(--dv-fg); font: 14px/1.45 va
 #dx-time { flex: 1 1 auto; min-width: 0; --dv-height: auto; }
 #dx-time[hidden] { display: none; }
 .dx-foot:has(#dx-time[hidden]) { justify-content: flex-end; }
-#dx-status { flex: none; color: var(--dv-muted); font-size: 12px; white-space: nowrap; max-width: 52ch; overflow: hidden; text-overflow: ellipsis; }
+/* WHY a fixed width: the line's text comes ~a frame after load and its "last data N s ago" changes length every second; a width
+   that followed it moved and resized the time bar's track under a scrub (PEP 0001 §15.1). The full text is its title */
+#dx-status { flex: none; color: var(--dv-muted); font-size: 12px; white-space: nowrap; width: min(52ch, 40vw); overflow: hidden; text-overflow: ellipsis; }
+#dx-status[hidden] { display: block; visibility: hidden; }   /* nothing to say yet: its room stays, the track does not move */
 /* WHY over the bar and not in it: in the row it would narrow the track the moment a scrub crosses the page's first
    moment, and the track must never move under the pointer */
 .dx-foot { position: relative; }
