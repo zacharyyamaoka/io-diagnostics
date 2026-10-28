@@ -517,3 +517,53 @@ trust quiet: load 12.6-13.1 on 24 CPUs, calibration 389-418 ms against a best of
 **Ask of data-ui:** a paused keyed view redraws whenever a version arrives, even one after its t (the `change` event
 carries `from`; an upsert newer than t changes nothing the view shows). It cost K5's first measurement its meaning and
 costs a paused page work it does not need.
+
+## 15. Phase 3c: the host's four answers, and a frame-time pass (contract, before the code)
+
+*2026-10-27, after main gained the asks of §13 and §14.1 (5cc429f, 5cdb4b9, 63019fb, 4e2ec56; shapes in docs/api-v1.md). The
+branch is rebased onto main 4e2ec56. Each answer is one seam in the adapter; each keeps a fallback for a host without it.*
+
+- **State at the watch's rate** (5cc429f: a watched entity's `samples` come as its points arrive, one event per entity per
+  100 ms at most). The page tells the two kinds of host apart by the feed's own pace, per watched entity, and needs no flag:
+  1. *Cadence*: while the entity's watch runs, three of its `samples` events in a row, each less than 500 ms after the one
+     before (timed by their `emitted`, else by the page's clock), say the feed keeps up.
+  2. *Who comes first* (a watch slower than 2 Hz never shows that cadence): twelve polls in a row that brought no point the
+     feed had not already brought, while the feed brought points first, say the same.
+  Until then, and for good on a host whose samples wait for its ~1-2 s change tick, the page polls
+  `GET /values?since=<cursor>` every 250 ms while the watch runs (phase 3's rate; a point arrives once, by whichever read it
+  first: the page keeps the newest time per key). Once the feed keeps up, that entity's poll stops. A new `snapshot` (a
+  reconnect, perhaps to another host) forgets what the page learned. `robotdx.feed.entity(path).feedKeepsUp` says which.
+- **`emitted`** (5cdb4b9: every `/live` event's host wall clock, unix ms). In a `snapshot` it is a top-level key beside
+  `/state`'s; the page leaves it out of the state sections it keeps (the mirror holds `/state`'s sections only). The page
+  reads it for the cadence rule; the bench times `ingest_to_pixel_ms` from it, on the stub and on a fixture host, and records
+  on every point which stamp it used (`emitted`, else the stub's `now`, else the adapter's receive). A resumed connection's
+  replayed events keep the stamp they first left with, so the bench counts reconnects in its sweep and says so.
+- **The tree's past** (63019fb, `GET /api/v1/history/tree?bins=N`): read once, after the first snapshot (or the first
+  `/state`), with `bins` = the host's window over 2 s (at most 1,000) and the host's window. Each row's bar becomes versions
+  of that row in `entities` before the moment the page opened: a version at a bin's start whenever the level changes,
+  carrying today's row (its name, its place in the tree, its identity) with that bin's level (`health`, `rank`, `stale`) and
+  nothing else of the row (message, what is below it, presence, rate, counts: empty). The note before the page opened
+  (`#dx-before`) says so, with the bin. A 404 (a host before 63019fb) keeps phase 3's empty tree and its note.
+- **Every check in one answer** (63019fb, `GET /api/v1/checks`). A `checks` binding with no `?path=` (every entity's
+  checks) is read with one `GET /api/v1/checks`: when the view opens, when a tree row changes (at most once a second) and
+  every 10 s on `/live`, every 2 s on the `/state` poll. Its rows are those a per-entity `/node` makes (§12.1), and both
+  readers share one map of what was last written, so one check is one row whoever read it. A new starter, **Diagnostics**
+  (`dashboards/diagnostics.base`), is every check on the rack, worst first. Explore keeps reading `/node` for its one entity
+  (the same answer has its settings and its watch). On a host before 63019fb the board shows the checks of the entities the
+  page watches.
+- **`/dx/`** (4e2ec56): the page's address is `/dx/`; the launcher prints it and the checks and the bench open it. `.base` is
+  served as `text/plain`; the page had no workaround for it.
+- **Requests** (§12.2) gain `GET /api/v1/history/tree` and `GET /api/v1/checks`.
+- **The stub** (`bench/robotdx_stub.py`, test-only) speaks the new feed: a watched entity (a `POST /watch` in the last 10 s)
+  gets one `samples` event per 100 ms (`--coalesce`) as its points come, the others wait for the 1 s tick (`--tick`); every
+  event has `emitted`, the snapshot as a top-level key; `GET /api/v1/checks` and `/history/tree` answer. Points come at the
+  rate asked, exactly (a slow rate is slow). `--coalesce 0` is a host before 5cc429f; `--coalesce 0.0167` is phase 3b's sweep
+  (an event per entity every frame).
+- **One frame-time pass.** One profile of the 6,000×6 sweep (Chrome's trace and V8's sampling profiler, 6 s, the bench's
+  `--profile`) splits the main thread's time into the `/live` handler (parse, the adapter's rows, the store's append), the
+  frame loop's publish and clock, the views' draw (data-ui's reads and uPlot, the canvas calls apart), style / layout / paint,
+  and GC. If the handler is the larger part and the feed brings more than one event per stream per frame, the adapter queues
+  parsed events and applies them once per animation frame (one append per stream); if the draw is, nothing changes here or in
+  data-ui, and the fix is named for the live lane. Before and after from the same bench on the same renderer:
+  `frame_time_ms` (the three N×M), `ingest_to_pixel_ms` p50 / p95, `scrub_ms`, `back_to_live_ms`. The sweep now runs at the
+  host's cadence (100 ms); each point says so (`feed: watch 100 ms`), since phase 3b's points were taken at a frame's.
