@@ -17,7 +17,7 @@ const { BOARD, fs, path } = H;
 const OUT = path.resolve(process.argv[2] || path.join(H.ROOT, 'reports', 'media', 'dx'));
 // --after-only keeps the before shots already in OUT (today's page, the comparison) and re-shoots the new page
 const AFTER_ONLY = process.argv.includes('--after-only');
-const DX = '/dx/index.html';
+const DX = '/dx/';   // 4e2ec56: a path ending in / is its index.html
 const sel = encodeURIComponent(BOARD);
 
 async function shot(page, name) {

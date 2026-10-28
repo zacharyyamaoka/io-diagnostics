@@ -22,7 +22,7 @@ const BROWSER_ARGS = ['--no-first-run', '--disable-extensions', '--disable-backg
   '--disable-backgrounding-occluded-windows'];
 const GPU_ARGS = ['--use-angle=vulkan', '--enable-features=Vulkan', '--enable-gpu', '--ignore-gpu-blocklist'];
 const SOFTWARE = /swiftshader|llvmpipe|softpipe|software|basic render/i;
-const DX = '/dx/index.html';
+const DX = '/dx/';   // 4e2ec56: a path ending in / is its index.html
 
 const cfg = JSON.parse(process.argv[2] || '{}');
 const pct = (xs, p) => { const v = xs.filter((x) => typeof x === 'number' && Number.isFinite(x)).sort((a, b) => a - b); return v.length ? v[Math.max(1, Math.ceil((p / 100) * v.length)) - 1] : null; };

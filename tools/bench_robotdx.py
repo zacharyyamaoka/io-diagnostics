@@ -148,7 +148,7 @@ def run(args) -> dict:
     try:
         # ---- the fixture host: first paint, idle traffic, scrub, back to live, ingest (adapter receive) ----------------------------
         demo = Process([PYTHON, str(DEMO), "--port", str(free_port()), "--state", str(scratch / "fixture"), "--quiet"],
-                       r"RobotDx on data-ui: (http://\S+?)/dx/index\.html", scratch / "fixture.log")
+                       r"RobotDx on data-ui: (http://\S+?)/dx/", scratch / "fixture.log")
         procs.append(demo)
         with urllib.request.urlopen(f"{demo.url}/api/v1/plugins", timeout=10) as answer:
             plugins = json.load(answer)

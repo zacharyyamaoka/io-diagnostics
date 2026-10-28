@@ -30,6 +30,13 @@ app.clock = clock;
 const feed = new RobotDxFeed({ clock });
 window.robotdx = Object.freeze({ clock, feed, parseBase, stringifyBase, version: 'dx 1 (PEP 0001 §12)', get boards() { return window.__dxBoards || null; } });
 
+// WHY bound again after every dashboard binds: data-ui's <data-dashboard> binds the clock to its own datasets and lets go of
+// every other one (dashboard/src/live.js bindLive takes the clock for its own). This page's clock is the page's: the tree, the
+// time bar and the other views read the page's datasets, and a view whose dataset the clock let go of shows its newest rows
+// whatever t is (the tree did not rewind). So every dataset the page holds goes back on it (PEP 0001 §15.1; asked of data-ui)
+function rebind() { for (const ds of Object.values(feed.datasets())) clock.bind(ds); }
+document.addEventListener('data-dashboard-live', rebind, true);   // capture: the event does not bubble
+
 // ---- the URL: ?go=<destination>&sel=<path>&board=<id>#t=live|<seconds> -----------------------------------------------------
 export function readUrl() {
   const q = new URLSearchParams(location.search);
@@ -71,20 +78,38 @@ clock.addEventListener('state', () => writeT());
 clock.addEventListener('time', (e) => { if (!clock.following && e.detail.source !== 'play') writeT(); });
 
 // ---- before the page knew: say so, never an empty page that looks like a dead host ------------------------------------------
-// WHY: the host keeps checks' levels, State and events for its window, but not the tree, the counts or the settings at a
-// past time (PEP 0001 §5c4, step B); the page has those from the moment it opened. Scrubbed back before that, the tree is
-// empty on purpose, and this line says why (and from when it has them).
+// WHY: the host keeps checks' levels, State and events for its window, and each tree row's health (GET /history/tree), but not
+// the tree's messages, counts or settings at a past time (PEP 0001 §5c4, §15); the page has those from the moment it opened.
+// Scrubbed back before that, the tree is today's rows with the health the host kept, and this line says so (on a host without
+// /history/tree the tree is empty then, and the line says why).
 const before = document.getElementById('dx-before');
 let beforeAt = 0;
+const binText = (s) => `${+Number(s).toFixed(1)} s`;
 function sayBefore() {
-  const entities = feed.dataset('entities');
-  const from = entities && entities.start;
-  const show = !clock.following && from !== null && Number.isFinite(clock.t) && clock.t < from;
-  if (show) before.textContent = `Before ${fmtTime(from)} the page has no tree, counts or settings (it opened then; the host keeps no history of them). Checks, State, health and events go back further.`;
+  const opened = feed.openedAt;
+  const show = !clock.following && Number.isFinite(opened) && Number.isFinite(clock.t) && clock.t < opened;
+  if (show) {
+    const back = feed.treeBack;
+    const from = back && back.supported && Number.isFinite(back.from) ? back.from : null;
+    before.textContent = from !== null && clock.t >= from
+      ? `Before ${fmtTime(opened)} (when this page opened) the tree is today's rows, each with the worst health the host kept for it in each ${binText(back.bin_s)}; what is below a row, presence, counts and settings start at ${fmtTime(opened)}.`
+      : from !== null
+        ? `Before ${fmtTime(from)} the host kept no health for the tree (its history starts then); this page opened at ${fmtTime(opened)}.`
+        : `Before ${fmtTime(opened)} the page has no tree, counts or settings (it opened then; the host keeps no history of them). Checks, State, health and events go back further.`;
+  }
   before.hidden = !show;
 }
-clock.addEventListener('time', () => { if (performance.now() - beforeAt > 100) { beforeAt = performance.now(); sayBefore(); } });
-clock.addEventListener('state', sayBefore);
+// WHY the last call always runs: a seek's own `time` often comes within 100 ms of the one before it (following moves t each
+// frame), and a throttle that drops it left the line hidden after a scrub ('state' fires before t moves)
+let beforeTimer = null;
+function sayBeforeSoon() {
+  const wait = 100 - (performance.now() - beforeAt);
+  if (wait <= 0) { beforeAt = performance.now(); sayBefore(); return; }
+  if (!beforeTimer) beforeTimer = setTimeout(() => { beforeTimer = null; beforeAt = performance.now(); sayBefore(); }, wait);
+}
+clock.addEventListener('time', sayBeforeSoon);
+clock.addEventListener('state', sayBeforeSoon);
+feed.addEventListener('tree-back', sayBefore);
 
 // ---- the clock's keys outside a dashboard (a dashboard handles its own: data-ui CONTRACT §18, §21) ------------------------
 document.addEventListener('keydown', (e) => {
@@ -160,6 +185,7 @@ export async function openBase(el, text, baseUrl, { keepState = false } = {}) {
   el.clock = clock;
   el.baseText = text;
   el.load(base, datasets, { keepState });
+  rebind();   // a dashboard with no live dataset sends no data-dashboard-live, and still let go of the page's
   return {
     base,
     release() { for (const b of used) feed.release(b.kind, b.path); for (const c of closers) c.close(); used.length = 0; closers.length = 0; },
@@ -260,7 +286,9 @@ async function mountExplore(root, params) {
   const mark = document.createElement('style');
   root.append(mark);
 
-  let current = { path: null, release: null, seq: 0 };
+  let current = { path: null, release: null, seq: 0, hold: null, sig: '' };
+  // what decides Explore's panels for an entity: its State keys (in order) and whether it has settings
+  const sigOf = (entity) => (entity ? `${[...entity.keys.keys()].join(',')}|${Boolean(entity.node && (entity.node.config || []).length)}` : '');
   async function select(path) {
     const seq = ++current.seq;
     mark.textContent = path ? `#dx-tree tr[data-id="${CSS.escape(path)}"] { background: var(--dv-hover); box-shadow: inset 3px 0 0 var(--dv-accent); }` : '';
@@ -270,19 +298,21 @@ async function mountExplore(root, params) {
     keep.hidden = !path;
     let text, url = BOARDS;
     if (path) {
-      // the entity's feeds start now; the panels' own bindings take them over (counted), and these let go after
-      const kinds = ['checks', 'config', 'levels', 'peek'];
-      for (const k of kinds) feed.use(k, path);
+      // the entity's feeds start now; the panels' own bindings take them over (counted), and these let go after. 'peek' stays
+      // while the entity is selected: its State and its settings may come after the selection (refresh, below)
+      const kinds = ['checks', 'config', 'levels'];
+      for (const k of [...kinds, 'peek']) feed.use(k, path);
       templateText = templateText || await template('explore.base');
       const entity = await feed.whenReady(path);
-      if (seq !== current.seq) { for (const k of kinds) feed.release(k, path); return; }
+      if (seq !== current.seq) { for (const k of [...kinds, 'peek']) feed.release(k, path); return; }
       text = exploreText(templateText, path, entity);
       const was = current.release;
       current.release = null;
       const opened = await openBase(detail, text, url);
       if (was) was();
       for (const k of kinds) feed.release(k, path);
-      current = { ...current, path, release: () => opened.release(), text };
+      const hold = { panels: opened };
+      current = { ...current, path, hold, sig: sigOf(entity), release: () => { hold.panels.release(); feed.release('peek', path); }, text };
     } else {
       // nothing picked: the Overview starter, without its own time bar (Explore's is the page's)
       text = withoutPlayback(await template('overview.base'));
@@ -290,11 +320,37 @@ async function mountExplore(root, params) {
       const was = current.release;
       const opened = await openBase(detail, text, url);
       if (was) was();
-      current = { ...current, path: null, release: () => opened.release(), text };
+      current = { ...current, path: null, hold: null, sig: '', release: () => opened.release(), text };
     }
     // WHY hidden where the detail has its own playback card: one time bar on screen, never two
     showTimeBar(!hasPlayback(parseBase(text)));
   }
+  // WHY: an entity can have no State or settings yet when it is selected (a device whose first point comes seconds later), and
+  // exploreText leaves an empty panel out; when they come, the panels are added without a new selection (the reader's t and
+  // tabs kept)
+  let refreshing = false;
+  async function refresh(e) {
+    if (refreshing || !current.path || !current.hold || (e && e.detail && e.detail.path !== current.path)) return;
+    const entity = feed.entity(current.path);
+    const sig = sigOf(entity);
+    if (sig === current.sig) return;
+    const text = exploreText(templateText, current.path, entity);
+    current.sig = sig;
+    if (text === current.text) return;
+    refreshing = true;
+    const { hold, seq } = current;
+    try {
+      const opened = await openBase(detail, text, BOARDS, { keepState: true });
+      if (seq !== current.seq) { opened.release(); return; }
+      const old = hold.panels;
+      hold.panels = opened;
+      old.release();
+      current.text = text;
+      showTimeBar(!hasPlayback(parseBase(text)));
+    } finally { refreshing = false; }
+  }
+  feed.addEventListener('values', refresh);
+  feed.addEventListener('node', refresh);
   keep.addEventListener('click', async () => {
     if (!current.path || !window.__dxBoards) return;
     const e = feed.dataset('entities').latestAt(Infinity, current.path);
@@ -306,7 +362,7 @@ async function mountExplore(root, params) {
   await select(params.sel);
   return {
     update(p) { if (p.sel !== (current.path || '')) return select(p.sel); return null; },
-    unmount() { if (current.release) current.release(); current.seq += 1; if (sizer) sizer.destroy(); },
+    unmount() { feed.removeEventListener('values', refresh); feed.removeEventListener('node', refresh); if (current.release) current.release(); current.seq += 1; if (sizer) sizer.destroy(); },
   };
 }
 

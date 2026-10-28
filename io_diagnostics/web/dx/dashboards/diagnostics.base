@@ -1,0 +1,32 @@
+# Diagnostics: every check of every entity on the rack, worst first. One request for the whole rack (GET /api/v1/checks),
+# not one /node per entity (docs/peps/0001-robotdx-on-data-ui.md §15). Scrub the time bar back and the table is that moment
+# (from when the page opened; an entity you open in Explore brings its checks' past from the host's history).
+datasets:
+  checks:
+    data: "../datasets/checks.json"
+  attention:
+    data: "../datasets/attention.json"
+clock: { rate: 1 }
+layout:
+  columns: 12
+  rowHeight: 96
+  panels:
+    - { view: Time, w: 12, h: 1 }
+    - { view: Checks, w: 8, h: 6, key: checks }
+    - { view: What needs you, w: 4, h: 6 }
+views:
+  - type: table
+    name: Checks
+    from: checks
+    order: [health, entity, name, message, code, why, received]
+    sort:
+      - { property: rank, direction: DESC }
+  - type: table
+    name: What needs you
+    from: attention
+    order: [health, name, device, message]
+    sort:
+      - { property: rank, direction: DESC }
+  - type: playback
+    name: Time
+    from: checks

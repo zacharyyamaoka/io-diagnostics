@@ -7,7 +7,9 @@
      shared, always fed   entities summary attention runs (SSE /live: a snapshot of /state, then only what changed; GET
                           /state on an older host), events faults (GET /activity, SSE /events)
      per watched entity   checks config (GET /node), levels (GET /history), samples (GET /history + /values for the backlog,
-                          then /live's samples; /values polled on an older host)
+                          then /live's samples; /values polled while the feed lags the watch: an older host)
+     the rack, on demand  checks of every entity (GET /checks) for a checks binding with no ?path=; the tree's past (GET
+                          /history/tree, once, when the page opens)
 
    A watched entity (PEP §12.1) is one a view on screen needs: use(kind, path) / release(kind, path), counted; its
    polls start with the first use and stop 10 s after the last release. Nothing polls while the tab is hidden (the SSE
@@ -36,6 +38,14 @@ const LINGER_MS = 10000;         // an entity's polls outlive its last view this
 const LIVE_FIRST_MS = 8000;      // /live must send its snapshot within this, or the page polls /state (an older host, a 404)
 // with /live on, an entity's /node and /history are read when its tree row changes (a report arrived) and on a slow beat
 const NODE_ON_CHANGE_MS = 1000, NODE_LIVE_EVERY_MS = 10000, HISTORY_ON_CHANGE_MS = 2000, HISTORY_LIVE_EVERY_MS = 15000;
+// every check of the rack (GET /checks): as /node's, on a row change and a slow beat with /live, every 2 s on the /state poll
+const CHECKS_EVERY_MS = 2000, CHECKS_ON_CHANGE_MS = 1000, CHECKS_LIVE_EVERY_MS = 10000;
+// the feed's pace while a watch runs (PEP 0001 §15): CADENCE_RUN samples events in a row under CADENCE_GAP_MS apart, or
+// FIRST_POLLS polls in a row the feed beat, and the /values poll beside the feed stops
+const CADENCE_GAP_MS = 500, CADENCE_RUN = 3, FIRST_POLLS = 12;
+const TREE_BIN_S = 2;            // the tree's past (GET /history/tree): bins of about this, over the host's window
+// a past version of a tree row (from /history/tree) has today's identity and place, its level then, and nothing else
+const PAST_BLANK = { message: '', below: '', presence: '', rate: '', heard: null, checks: null, actions: null, faults: null, knock_on: '' };
 
 // WHY a shape and a word, nothing for OK (E9, Zach's rule): a level is never only a colour, and OK is quiet
 export const health = (level) => MARK[level] || '';
@@ -81,6 +91,30 @@ function entityRow(n) {
   };
 }
 
+/** One check as the checks dataset holds it (from /node's `checks` or /checks' lists: the same check_json). */
+function checkRow(path, entity, c) {
+  const level = c.effective_level || c.level;
+  return { id: `${path}#${c.name}`, path, entity, name: c.name, health: health(level), level, said: c.level, rank: rank(level),
+    message: c.message || '', code: c.code || '', received: c.received ?? null, period: c.expected_period_s ?? null, source: c.source || '',
+    why: (c.values || []).filter((v) => v.key === 'what_to_check' || v.key === 'fault_meaning').map((v) => v.value).join(' · ') };
+}
+
+/** Upsert the checks that changed (a new report at its receive time; a change with no arrival, going stale, at the host's now)
+    and remove those of `scope` that left. WHY one `seen` for every reader (a /node per entity, /checks for the rack): one check
+    is then one row whoever read it, and reading it twice is not a second version. */
+function diffChecks(seen, now, ds, nowHost, scope) {
+  const up = [];
+  for (const [k, r] of now) {
+    const was = seen.get(k);
+    if (!same(was, r)) { seen.set(k, r); up.push({ ...r, t: was && was.received === r.received ? nowHost : r.received ?? nowHost }); }
+  }
+  const gone = [...seen.keys()].filter((k) => scope(seen.get(k)) && !now.has(k));
+  for (const k of gone) seen.delete(k);
+  // the store wants each key's versions in time order; a version older than the key's newest goes in at its place
+  if (up.length) ds.upsert(up.sort((a, b) => a.t - b.t));
+  if (gone.length) ds.remove(gone, nowHost);
+}
+
 export class RobotDxFeed extends EventTarget {
   constructor({ clock, api = API, schemas = 'datasets/' } = {}) {
     super();
@@ -109,6 +143,10 @@ export class RobotDxFeed extends EventTarget {
     this._liveReady = false;
     this._flushTimer = null;
     this._touched = new Set();
+    this.openedAt = null;            // the host's time of the first /state the page applied: the page opened then
+    this.treeBack = null;            // the tree's past: {supported, from, bin_s} once GET /history/tree answered
+    this._seenChecks = new Map();    // checks: id -> the row last written, shared by every reader (diffChecks)
+    this._allChecks = { uses: 0, released: 0, at: 0, busy: false, due: true, supported: null };   // GET /checks (no ?path=)
     this._onVisible = () => { if (!hidden()) { this._state.wanted = true; this._kick(); } };
     this.addEventListener('watch', (e) => { const ent = this._entities.get(e.detail.path); if (ent) ent.watch = e.detail.watch; });
   }
@@ -116,7 +154,7 @@ export class RobotDxFeed extends EventTarget {
   /** What the page knows of an entity now: {node, keys: Map(key -> {unit, meaning, group}), watchSupported, ready}. */
   entity(path) {
     const e = this._entities.get(path);
-    return e ? { node: e.node || null, keys: e.keys, watchSupported: e.watchSupported, ready: e.nodeOk && (!e.watchSupported || e.valuesOk) } : null;
+    return e ? { node: e.node || null, keys: e.keys, watchSupported: e.watchSupported, ready: e.nodeOk && (!e.watchSupported || e.valuesOk), feedKeepsUp: e.feedKeepsUp } : null;
   }
 
   /** Resolves once the entity's first /node (and, when it has State, its first /values) answered; at most `ms`. */
@@ -164,6 +202,8 @@ export class RobotDxFeed extends EventTarget {
   /** A view needs this kind of data (of this entity): start (or keep) its polls. */
   use(kind, path) {
     if (kind === 'faults') { this._faultUses += 1; this._kick(); return; }
+    // a checks binding with no ?path= is every entity's checks: one GET /checks for the rack (PEP 0001 §15)
+    if (kind === 'checks' && !path) { this._allChecks.uses += 1; this._allChecks.due = true; this._kick(); return; }
     if (!WATCHED.has(kind) || !path) return;
     let e = this._entities.get(path);
     if (!e) { e = new EntityFeed(this, path); this._entities.set(path, e); }
@@ -173,6 +213,7 @@ export class RobotDxFeed extends EventTarget {
 
   release(kind, path) {
     if (kind === 'faults') { this._faultUses = Math.max(0, this._faultUses - 1); return; }
+    if (kind === 'checks' && !path) { const a = this._allChecks; a.uses = Math.max(0, a.uses - 1); if (!a.uses) a.released = Date.now(); return; }
     const e = this._entities.get(path);
     if (e) e.release(kind);
   }
@@ -252,6 +293,11 @@ export class RobotDxFeed extends EventTarget {
     const st = this._state;
     if (this.mode === 'poll' && !st.inFlight && ((st.wanted && now - st.at >= STATE_EVERY_MS) || now - st.at >= STATE_IDLE_MS)) this._readState();
     if (this._faultUses > 0 && now - this._faultsAt >= FAULTS_EVERY_MS) this._readActivity(false);
+    const a = this._allChecks;
+    if ((a.uses > 0 || now - a.released <= LINGER_MS) && !a.busy && a.supported !== false) {
+      const live = this.mode === 'live';
+      if (!a.at || (live ? (a.due && now - a.at >= CHECKS_ON_CHANGE_MS) || now - a.at >= CHECKS_LIVE_EVERY_MS : now - a.at >= CHECKS_EVERY_MS)) { a.due = false; this._readChecks(); }
+    }
     for (const e of this._entities.values()) e.tick(now);
   }
 
@@ -301,7 +347,10 @@ export class RobotDxFeed extends EventTarget {
     if (type === 'snapshot') {
       // a snapshot replaces everything the page holds (a first connect, or a resume the host could not serve)
       this._mirror = { tree: new Map(), state: {} };
-      for (const [k, v] of Object.entries(data)) if (k !== 'tree') this._mirror.state[k] = v;
+      // WHY not `emitted` (5cdb4b9): it is the event's own stamp, beside /state's keys in a snapshot, not a state section
+      for (const [k, v] of Object.entries(data)) if (k !== 'tree' && k !== 'emitted') this._mirror.state[k] = v;
+      // a snapshot may be another host (a restart, an upgrade): what the page learned of the feed's pace starts again
+      for (const e of this._entities.values()) e.forgetPace();
       const walk = (n) => { this._mirror.tree.set(n.path, { ...n, children: (n.children || []).map((c) => c.path) }); for (const c of n.children || []) walk(c); };
       if (data.tree) walk(data.tree);
       if (data.clock && Number.isFinite(data.clock.now)) this._anchor = { now: data.clock.now, at: performance.now() };
@@ -340,6 +389,7 @@ export class RobotDxFeed extends EventTarget {
       const clock = { ...(m.state.clock || {}), now: this.hostNow() };
       this._applyState({ ...m.state, clock, tree: root ? nest(root) : { path: 'host', children: [] } });
       for (const path of this._touched) { const e = this._entities.get(path); if (e) e.rowChanged(); }
+      if (this._touched.size) this._allChecks.due = true;
       this._touched.clear();
     }, 0);
   }
@@ -366,6 +416,8 @@ export class RobotDxFeed extends EventTarget {
     }
     if (st.tries || !this.host.ok) { st.tries = 0; this.host.ok = true; this.host.fixture = s.fixture || null; this._status('live'); }
     const t = s.clock.now;
+    const first = this.openedAt === null;
+    if (first) this.openedAt = t;
     this.host.now = t;
     this.host.offset = t - Date.now() / 1000;
     this.host.rank = s.clock.rank;
@@ -400,6 +452,70 @@ export class RobotDxFeed extends EventTarget {
       active: !!r.active, started: r.started ?? null, elapsed: r.elapsed_s ?? null, exit_code: r.exit_code ?? null }]));
     this._diff(this._seenRuns, runs, this.dataset('runs'), t);
     this.dispatchEvent(new CustomEvent('state', { detail: { t, fixture: this.host.fixture } }));
+    if (first) this._treeBack();
+  }
+
+  /** The tree's past (GET /history/tree, PEP 0001 §15), read once when the page opens: each row's health bar becomes versions of
+      today's row before that moment, a version at a bin's start whenever its level changes. WHY today's row with only the level:
+      the host keeps each row's statuses over its window, not the row's name, place, message or counts then; so the past tree is
+      the rows of now, each with the worst level it held in each bin, and the rest of the row is empty (the note says so). */
+  async _treeBack() {
+    const bins = Math.min(1000, Math.max(1, Math.ceil((this.host.window || 900) / TREE_BIN_S)));
+    let h;
+    try { h = await this._get(`/history/tree?bins=${bins}`); } catch (err) {
+      // the host away for a moment as the page opened: once more, 5 s later
+      if (!(err && err.status) && !this._treeRetried) { this._treeRetried = true; setTimeout(() => this._treeBack(), 5000); return; }
+      // a host before 63019fb (a 404): the tree before the page opened stays empty, and the note says why
+      this.treeBack = { supported: false };
+      this.dispatchEvent(new CustomEvent('tree-back', { detail: this.treeBack }));
+      return;
+    }
+    const rows = h.rows || [];
+    // the host's history starts at the first bin any row has a level in: before it the host knew nothing, and nothing is drawn
+    const starts = rows.map((r) => (r.bar || []).findIndex((x) => x !== null && x !== undefined)).filter((i) => i >= 0);
+    const first = starts.length ? Math.min(...starts) : -1;
+    const versions = [];
+    for (const row of first < 0 ? [] : rows) {
+      const today = this._seen.get(row.path);
+      if (!today) continue;   // a row the page does not hold (it left as the page opened)
+      let last;
+      for (let i = first; i < row.bar.length; i += 1) {
+        const t = h.from + i * h.bin_s;
+        if (t >= this.openedAt) break;
+        const level = row.bar[i] ?? null;
+        if (i > first && level === last) continue;
+        last = level;
+        versions.push({ ...today, ...PAST_BLANK, health: health(level), level, rank: rank(level), stale: level === 'stale', t });
+      }
+    }
+    if (versions.length) this.dataset('entities').upsert(versions.sort((a, b) => a.t - b.t));
+    this.treeBack = { supported: true, from: first < 0 ? null : h.from + first * h.bin_s, bin_s: h.bin_s, versions: versions.length };
+    this.dispatchEvent(new CustomEvent('tree-back', { detail: this.treeBack }));
+  }
+
+  /** Every check of the rack in one answer (GET /checks, PEP 0001 §15), for a checks binding with no ?path=. */
+  async _readChecks() {
+    const a = this._allChecks;
+    a.busy = true;
+    a.at = Date.now();
+    let answer;
+    try { answer = await this._get('/checks'); } catch (err) {
+      a.busy = false;
+      // WHY no fallback of N /node reads: that is what /checks replaces. On a host before 63019fb the checks of the entities the
+      // page watches are what the rack's view shows (their /node fills the same dataset)
+      if (err && err.status === 404) a.supported = false;
+      return;
+    }
+    a.busy = false;
+    a.supported = true;
+    const nowHost = answer.clock && Number.isFinite(answer.clock.now) ? answer.clock.now : this.hostNow();
+    const rows = new Map();
+    for (const [path, list] of Object.entries(answer.checks || {})) {
+      const entity = (this._seen.get(path) || {}).name || usb(path);
+      for (const c of list || []) { const r = checkRow(path, entity, c); rows.set(r.id, r); }
+    }
+    diffChecks(this._seenChecks, rows, this.dataset('checks'), nowHost, () => true);
+    this.dispatchEvent(new CustomEvent('checks', { detail: { at: nowHost, checks: rows.size } }));
   }
 
   /** Upsert what changed in `now` against `seen`, remove what left. */
@@ -477,7 +593,6 @@ class EntityFeed {
     this.watchSupported = false;
     this.watch = null;
     this.cursor = null;          // /values' serial cursor; null until the backlog is in
-    this.seenChecks = new Map();
     this.seenConfig = new Map();
     this.lastLevel = new Map();  // check -> {from, level}
     this.lastPoint = new Map();  // key -> t of the newest point appended
@@ -485,7 +600,19 @@ class EntityFeed {
     this.valuesOk = false;
     this.keys = new Map();       // State key -> {unit, meaning, group}
     this.keyOrder = new Map();   // State key -> its place in the host's list
+    this.forgetPace();
   }
+
+  /** What the page knows of the feed's pace for this entity (PEP 0001 §15); a new snapshot starts it again. */
+  forgetPace() {
+    this.feedKeepsUp = false;    // the feed brings this entity's State at the watch's rate: no /values poll beside it
+    this.paceAt = null;          // the last samples event's stamp while the watch runs (emitted, else the page's clock)
+    this.paceRun = 0;            // samples events in a row under CADENCE_GAP_MS after the one before
+    this.idlePolls = 0;          // polls in a row that brought no point the feed had not already brought
+    this.feedFirst = 0;          // samples events that brought points first since the last poll that did
+  }
+
+  _running() { return Boolean(this.watch && this.watch.state === 'running'); }
 
   use(kind) { this.uses[kind] += 1; }
   release(kind) { this.uses[kind] = Math.max(0, this.uses[kind] - 1); if (!this.uses[kind]) this.released[kind] = Date.now(); }
@@ -508,9 +635,12 @@ class EntityFeed {
     const historyDue = !this.historyAt || (live ? (this.historyDue && now - this.historyAt >= HISTORY_ON_CHANGE_MS) || now - this.historyAt >= HISTORY_LIVE_EVERY_MS : now - this.historyAt >= HISTORY_EVERY_MS);
     if ((want('levels') || (want('checks') && !this.checksBack)) && !this.busy.history && historyDue) { this.historyDue = false; this._history(); }
     if ((want('samples') || want('peek')) && this.watchSupported && !this.busy.values) {
-      // with /live, only the backlog is read here; what comes after arrives as the feed's samples (ingest)
-      const every = this.watch && this.watch.state === 'running' ? VALUES_LIVE_MS : VALUES_IDLE_MS;
-      if (this.cursor === null || (!live && now - this.valuesAt >= every)) this._values();
+      // with /live, the backlog is read here and what comes after arrives as the feed's samples (ingest).
+      // WHY a poll beside the feed while the watch runs, until the feed shows the watch's pace: a host before 5cc429f sends a
+      // watched entity's samples only with its ~1-2 s change tick, and State would move in steps of a second (PEP 0001 §15)
+      const running = this._running();
+      const poll = !live || (running && !this.feedKeepsUp);
+      if (this.cursor === null || (poll && now - this.valuesAt >= (running ? VALUES_LIVE_MS : VALUES_IDLE_MS))) this._values();
     }
   }
 
@@ -519,7 +649,14 @@ class EntityFeed {
     if (this.cursor === null || !(this._want('samples') || this._want('peek'))) return;
     if (v.watch) this.watch = v.watch;
     this.cursor = Math.max(this.cursor, v.cursor || 0);
-    this._appendValues(v, null);
+    const brought = this._appendValues(v, null);
+    // the cadence rule: CADENCE_RUN events in a row, each under CADENCE_GAP_MS after the one before, while the watch runs
+    if (this.feedKeepsUp || !this._running()) { this.paceAt = null; this.paceRun = 0; return; }
+    const at = Number.isFinite(v.emitted) ? v.emitted : performance.now();
+    this.paceRun = this.paceAt !== null && at - this.paceAt < CADENCE_GAP_MS ? this.paceRun + 1 : 0;
+    this.paceAt = at;
+    if (brought > 0) this.feedFirst += 1;
+    if (this.paceRun >= CADENCE_RUN) this.feedKeepsUp = true;
   }
 
   async _node() {
@@ -533,18 +670,10 @@ class EntityFeed {
     this.watch = n.watch || null;
     this.node = n;
     const name = usb((n.node && n.node.name) || this.path);
-    const checks = new Map();
-    for (const c of n.checks || []) {
-      const id = `${this.path}#${c.name}`;
-      const level = c.effective_level || c.level;
-      checks.set(id, { id, path: this.path, entity: name, name: c.name, health: health(level), level, said: c.level, rank: rank(level),
-        message: c.message || '', code: c.code || '', received: c.received ?? null, period: c.expected_period_s ?? null, source: c.source || '',
-        why: (c.values || []).filter((v) => v.key === 'what_to_check' || v.key === 'fault_meaning').map((v) => v.value).join(' · ') });
-    }
-    // a version's time: a new report at its receive time, a change with no arrival (going stale) at the host's now
-    const at = (r) => (r.received !== null && r.received !== undefined ? r.received : this.feed.host.now);
+    const checks = new Map((n.checks || []).map((c) => { const r = checkRow(this.path, name, c); return [r.id, r]; }));
     const nowHost = (n.heard && n.heard.received !== null && n.heard.age_s !== null) ? n.heard.received + n.heard.age_s : this.feed.host.now;
-    this._diff(this.seenChecks, checks, this.feed.dataset('checks'), (r, was) => (was && was.received === r.received ? nowHost : at(r)), nowHost);
+    // the rack's /checks may hold the same checks: one map of what was written, this entity's part of it
+    diffChecks(this.feed._seenChecks, checks, this.feed.dataset('checks'), nowHost, (r) => r && r.path === this.path);
     const config = new Map();
     for (const c of n.config || []) {
       const id = `${this.path}#${c.key}`;
@@ -629,7 +758,13 @@ class EntityFeed {
     if (!backlog && v.cursor < this.cursor) this.lastPoint.clear();   // the host restarted: its serial numbers began again
     this.cursor = v.cursor;
     if (v.watch) this.watch = v.watch;
-    this._appendValues(v, h);
+    const brought = this._appendValues(v, h);
+    // the "who comes first" rule, for a watch too slow for the cadence rule: FIRST_POLLS polls in a row that brought nothing the
+    // feed had not, while the feed brought points first, and the poll stops
+    if (backlog || this.feed.mode !== 'live' || !this._running() || this.feedKeepsUp) return;
+    if (brought > 0) { this.idlePolls = 0; this.feedFirst = 0; return; }
+    this.idlePolls += 1;
+    if (this.idlePolls >= FIRST_POLLS && this.feedFirst >= 2) this.feedKeepsUp = true;
   }
 
   /** Points of a /values answer (the backlog with `h`, the host's 1 Hz history before its ring) into the samples dataset. */
@@ -679,5 +814,6 @@ class EntityFeed {
     for (const [key, info] of unitOf) this.keys.set(key, info);
     this.valuesOk = true;
     this.feed.dispatchEvent(new CustomEvent('values', { detail: { path: this.path, watch: this.watch, streams: v.streams || [] } }));
+    return rows.length;
   }
 }

@@ -35,7 +35,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "tests" / "fixtures" / "plugins-state"
 FIXTURE_PLUGINS = {"state_joint", "state_camera", "state_arm"}
-PAGE = "dx/index.html"
+PAGE = "dx/"   # 4e2ec56: the host serves a path ending in / as its index.html
 
 
 def free_port(first: int, last: int, bind: str) -> int:
