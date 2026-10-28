@@ -818,6 +818,44 @@ const keepsUpSoon = (ms) => (p) => H.waitFor(() => p.evaluate(() => { const e = 
     check('stub, an older host (samples only with its 1 s tick): the page polls /values about every 250 ms and State moves faster than the tick', atTick.beat && atTick.keepsUp === false && atTick.polls_s >= 3 && atTick.max_gap_ms !== null && atTick.max_gap_ms <= 600, atTick);
     const slow = await stubCadence(browser, ['--rate', '5', '--entities', '1', '--keys', '5', '--coalesce', '0.1'], { settle: keepsUpSoon(10000) }, stubSink);
     check('stub, a slow watch (1 point a second each): the polls that bring nothing first stop, the feed keeps up', slow.beat && slow.keepsUp === true && slow.polls === 0, slow);
+    // the tree's past where it differs from now (F1's rows hold one level for the whole run, so there the levels cannot tell past from
+    // present): the stub's /history/tree says stub/0 and the host were ▲ warn for the stub's first 6 s; both are OK now
+    {
+      const stub = await startStub(['--rate', '50', '--entities', '2', '--keys', '5', '--past-warn', '6']);
+      const ctx = await H.newContext(browser, 'light');
+      try {
+        await H.wait(11000);
+        const p = await ctx.newPage();
+        stubSink.requests.push(recorder(p, stub.base));
+        const errs = H.watchErrors(p, stub.base);
+        await p.goto(`${stub.base}${DX}?go=explore`);
+        await ready(p);
+        await H.waitFor(() => p.evaluate(() => Boolean(window.robotdx.feed.treeBack)), 10000);
+        const opened = await p.evaluate(() => window.robotdx.feed.openedAt);
+        const bars = await H.getJson(stub.base, '/api/v1/history/tree?bins=450');
+        const bar = (bars.rows.find((r) => r.path === 'stub/0') || { bar: [] }).bar;
+        const warnBins = bar.map((x, i) => (x === 'warn' ? i : -1)).filter((i) => i >= 0);
+        const tWarn = bars.from + (warnBins[Math.floor(warnBins.length / 2)] + 0.5) * bars.bin_s;
+        const tOk = bars.from + (warnBins[warnBins.length - 1] + 2.5) * bars.bin_s;
+        const at = async (t) => {
+          await p.evaluate((x) => window.robotdx.clock.seek(x), t);
+          await p.waitForTimeout(500);
+          const r = await treeRows(p);
+          const text = await p.evaluate(() => { const row = document.querySelector('#dx-tree [data-id="stub/0"]'); return row ? row.textContent : null; });
+          return { t: await p.evaluate(() => window.robotdx.clock.t), stub0: (r.find((x) => x.id === 'stub/0') || {}).level, host: (r.find((x) => x.id === 'host') || {}).level, text };
+        };
+        const thenWarn = await at(tWarn);
+        const thenOk = await at(tOk);
+        await p.evaluate(() => window.robotdx.clock.goLive());
+        await p.waitForTimeout(500);
+        const nowRows = await treeRows(p);
+        stubSink.errors.push(...errs.errors);
+        check('the tree\'s past is the host\'s, where it differs from now: stub/0 and the host ▲ warn then, OK a few seconds later and now',
+          warnBins.length >= 2 && tWarn < opened && tOk < opened && thenWarn.stub0 === 'warn' && thenWarn.host === 'warn' && /▲ warn/.test(thenWarn.text || '') && thenOk.stub0 === 'ok'
+            && (nowRows.find((x) => x.id === 'stub/0') || {}).level === 'ok',
+          { opened, warn: thenWarn, ok: thenOk, warn_bins: warnBins.length });
+      } finally { await ctx.close().catch(() => {}); H.stopServer(stub.child); }
+    }
     // an entity selected before it has any State (a device whose first point comes a few seconds later) gets its State panels when
     // the point comes, without a new selection: the stub's first point 5 s after it starts (1 sample/s over 5 keys)
     {

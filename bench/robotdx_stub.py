@@ -12,6 +12,8 @@ synthetic /api/v1 whose GET /api/v1/live speaks the real feed's shape (docs/api-
               entity's points are sent as they arrive, at most one event per entity per 100 ms). 0 is a host before 5cc429f
               (watched entities wait for the tick too); 0.0167 is phase 3b's sweep (an event per entity every frame)
   --tick      seconds between the change ticks that send every other entity's new points (the host's ~1 s)
+  --past-warn seconds: in /history/tree, stub/0 (and the host row above it) was "warn" for this long after the stub
+              started, and is OK since (a past that differs from now, for the tree's rewind check; 0, the default: OK)
 
 An entity is watched for 10 s after a POST /api/v1/watch {path} (the page's heartbeat, every 3 s while its State is on
 screen), as the host's watch is. Every event carries `emitted` (5cdb4b9: the stub's wall clock at send, unix ms; in the
@@ -49,7 +51,7 @@ class Stream:
 
     RING_S = 2.0   # /values' backlog: the last 2 s of points per entity
 
-    def __init__(self, entities: int, keys: int, rate: float, tick: float, coalesce: float):
+    def __init__(self, entities: int, keys: int, rate: float, tick: float, coalesce: float, past_warn: float = 0.0):
         self.paths = [f"stub/{i}" for i in range(entities)]
         self.keys = [f"s{k}" for k in range(keys)]
         self.rate, self.tick, self.coalesce = rate, tick, coalesce
@@ -60,6 +62,7 @@ class Stream:
         self.t0 = time.time()
         self.next_t = {p: self.t0 + self.period for p in self.paths}   # every key of an entity takes a point at the same t
         self.watched: dict[str, float] = {}   # path -> until (a heartbeat holds the watch 10 s, as the host's grace_s)
+        self.past_warn = past_warn
 
     def is_watched(self, path: str, now: float) -> bool:
         return self.watched.get(path, 0.0) > now
@@ -114,9 +117,16 @@ class Stream:
     def tree_bar_json(self, now: float, bins: int, window: float) -> dict:
         start = now - window
         bin_s = window / bins
-        bar = [("ok" if start + (i + 1) * bin_s > self.t0 else None) for i in range(bins)]
-        rows = [{"path": "host", "name": "bench stub (synthetic)", "depth": 0, "basis": "below", "statuses": len(self.paths), "bar": bar}]
-        rows += [{"path": p, "name": f"Stub {i}", "depth": 1, "basis": "own", "statuses": 1, "bar": list(bar)} for i, p in enumerate(self.paths)]
+        def level(i: int, warned: bool) -> str | None:
+            lo, hi = start + i * bin_s, start + (i + 1) * bin_s
+            if hi <= self.t0:
+                return None
+            # the worst level held in the bin, as the host's bar: a bin that overlaps the warn span is "warn"
+            return "warn" if warned and lo < self.t0 + self.past_warn else "ok"
+        rows = [{"path": "host", "name": "bench stub (synthetic)", "depth": 0, "basis": "below", "statuses": len(self.paths),
+                 "bar": [level(i, True) for i in range(bins)]}]
+        rows += [{"path": p, "name": f"Stub {i}", "depth": 1, "basis": "own", "statuses": 1, "bar": [level(i, i_ == 0) for i in range(bins)]}
+                 for i_, p in enumerate(self.paths)]
         return {"path": "host", "window_s": window, "from": start, "to": now, "bins": bins, "bin_s": bin_s, "rows": rows}
 
 
@@ -364,9 +374,10 @@ def main(argv=None) -> int:
     ap.add_argument("--keys", type=int, default=5)
     ap.add_argument("--tick", type=float, default=1.0, help="seconds between change ticks (every unwatched entity's points)")
     ap.add_argument("--coalesce", type=float, default=0.1, help="seconds between a watched entity's samples events (0: they wait for the tick)")
+    ap.add_argument("--past-warn", type=float, default=0.0, help="seconds stub/0 was warn after the start, in /history/tree")
     ap.add_argument("--window", default="10s", help="each plot's at: window")
     args = ap.parse_args(argv)
-    stream = Stream(args.entities, args.keys, args.rate, args.tick, args.coalesce)
+    stream = Stream(args.entities, args.keys, args.rate, args.tick, args.coalesce, args.past_warn)
     feed = Feed(stream)
     server = ThreadingHTTPServer((args.bind, args.port), handler(stream, feed, bench_base(stream, args.window)))
     server.daemon_threads = True
