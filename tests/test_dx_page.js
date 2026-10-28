@@ -147,9 +147,16 @@ async function scrubBack(page) {
     const seeks = window.__k5.times.filter((x) => x.source !== 'live' && x.source !== 'play');
     const last = seeks[seeks.length - 1];
     if (!last) return null;
-    const first = new Map();
-    for (const d of window.__k5.draws) if (d.t === last.t && !d.following && d.at >= last.at && d.id.startsWith('dx-detail-') && !first.has(d.id)) first.set(d.id, d.at);
-    return first.size ? { ms: Math.max(...first.values()) - last.at, panels: [...first.keys()] } : { ms: null, panels: [] };
+    const first = new Map(), lastDraw = new Map();
+    let redraws = 0;
+    for (const d of window.__k5.draws) {
+      if (d.t !== last.t || d.following || d.at < last.at || !d.id.startsWith('dx-detail-')) continue;
+      if (!first.has(d.id)) first.set(d.id, d.at); else redraws += 1;
+      lastDraw.set(d.id, d.at);
+    }
+    // two readings (data-ui 3289ab5): the first draw of each panel at t (879cade's), and every draw at t in the 500 ms after the
+    // seek (phase 3's first reading, which a paused keyed panel's redraws for news after t inflated); with the fix they agree
+    return first.size ? { ms: Math.max(...first.values()) - last.at, every_ms: Math.max(...lastDraw.values()) - last.at, redraws, panels: [...first.keys()] } : { ms: null, every_ms: null, redraws, panels: [] };
   });
   return { stateSpan, span, target, trackBefore, xTarget, k5 };
 }
@@ -288,12 +295,19 @@ const keepsUpSoon = (ms) => (p) => H.waitFor(() => p.evaluate(() => { const e = 
     });
     await page.goto(`${base}${DX}`);
     await ready(page);
+    const trackAtLoad = await rect(page, '#dx-time .dv-pb-track');
     const drawn = await H.waitFor(() => page.evaluate(() => window.__k7), 15000, 100);
     const coldMs = drawn ? Math.round(drawn) : null;
     check('K7: cold load to the tree drawn ≤ 1.5 s (from navigation start)', coldMs !== null && coldMs <= 1500, `${coldMs} ms`);
     check('the page opens on Explore', (await dest(page)) === 'explore', await dest(page));
     // the live feed (GET /api/v1/live, PEP 0001 §14) in place of the /state poll: one stream, no /state request
     await page.waitForTimeout(5000);
+    // the time bar's track stays put while the connection line beside it fills in and its "last data" age changes length (a
+    // scrub started in that second pressed past the track's end; PEP 0001 §15.1)
+    const trackLater = await rect(page, '#dx-time .dv-pb-track');
+    const statusText = await page.evaluate(() => (document.querySelector('#dx-status') || {}).textContent || '');
+    check('the time bar\'s track does not move or resize as the connection line fills in', trackAtLoad && trackLater && Math.abs(trackAtLoad.x - trackLater.x) <= 1 && Math.abs(trackAtLoad.w - trackLater.w) <= 1 && statusText.length > 0,
+      { atLoad: trackAtLoad, later: trackLater, status: statusText.slice(0, 80) });
     const firstReqs = everyRequest[0];
     const liveFeed = { mode: await page.evaluate(() => window.robotdx.feed.mode), live: firstReqs.filter((r) => r.method === 'GET' && r.url === '/api/v1/live').length,
       state: firstReqs.filter((r) => r.url === '/api/v1/state').length };
@@ -434,6 +448,7 @@ const keepsUpSoon = (ms) => (p) => H.waitFor(() => p.evaluate(() => { const e = 
     const liveBtn = await page.evaluate(() => { const b = document.querySelector('#dx-time .dv-pb-live'); return b ? { pressed: b.getAttribute('aria-pressed'), text: b.textContent } : null; });
     check('LIVE says paused, with how far behind', liveBtn && liveBtn.pressed === 'false' && /−|-/.test(liveBtn.text), liveBtn);
     check('K5: the last seek to every live panel of the detail drawn at t ≤ 50 ms', typeof scrubMs === 'number' && scrubMs <= 50 && k5.panels.length >= 3, k5);
+    check('K5 read both ways agrees: no panel draws again at t while paused (first draw = every draw, data-ui 3289ab5)', k5 && k5.redraws === 0 && k5.every_ms === k5.ms, k5);
     const history = await H.getJson(base, `/api/v1/history?path=${encodeURIComponent(BOARD)}`);
     const values = await H.getJson(base, `/api/v1/values?path=${encodeURIComponent(BOARD)}`);
     await page.waitForTimeout(400);
@@ -806,6 +821,7 @@ const keepsUpSoon = (ms) => (p) => H.waitFor(() => p.evaluate(() => { const e = 
     }
     const gpuKind = gpu.renderer ? (SOFTWARE.test(gpu.renderer) ? 'software' : 'gpu') : 'none';
     check(`K5 in the GPU browser (${gpuKind}): the last seek to every live panel drawn at t ≤ 50 ms`, gpu.k5 && typeof gpu.k5.ms === 'number' && gpu.k5.ms <= 50 && gpu.k5.panels.length >= 3, { renderer: gpu.renderer, k5: gpu.k5 });
+    check(`K5 in the GPU browser read both ways agrees (no redraw at t while paused)`, gpu.k5 && gpu.k5.redraws === 0 && gpu.k5.every_ms === gpu.k5.ms, gpu.k5);
 
     // ---- State's pace, three hosts (PEP 0001 §15), on the test-only stub (synthetic State, no plugin, no device): 50 samples/s over
     // one entity's 5 keys, 10 points a second each. The page must poll /values exactly when the feed lags the data: never with the
@@ -893,7 +909,7 @@ const keepsUpSoon = (ms) => (p) => H.waitFor(() => p.evaluate(() => { const e = 
     const unexpected = watch.errors.filter((e) => !expected412(e));
     check('no page errors, no console errors, no failed request (the conflict check\'s own 412 aside)', unexpected.length === 0 && watch.errors.filter(expected412).length <= 2, unexpected.slice(0, 5));
     console.log(`\nKPIs  K2 idle: live feed ${after.kbps} KB/s (${after.kb_per_min} KB/min, ${after.rps} req/s) · /state polling fallback ${polling.kbps} KB/s (${polling.kb_per_min} KB/min) · today's page ${before.kbps} KB/s (${before.kb_per_min} KB/min)` +
-      `   K5 scrub: ${typeof scrubMs === 'number' ? Math.round(scrubMs) + ' ms' : 'n/a'} software, ${gpu.k5 && typeof gpu.k5.ms === 'number' ? Math.round(gpu.k5.ms) + ' ms' : 'n/a'} ${gpuKind} (${gpu.renderer || 'no renderer'})   K7 cold load: ${coldMs} ms`);
+      `   K5 scrub (first draw / every draw): ${typeof scrubMs === 'number' ? `${Math.round(scrubMs)} / ${Math.round(k5.every_ms)} ms` : 'n/a'} software, ${gpu.k5 && typeof gpu.k5.ms === 'number' ? `${Math.round(gpu.k5.ms)} / ${Math.round(gpu.k5.every_ms)} ms` : 'n/a'} ${gpuKind} (${gpu.renderer || 'no renderer'})   K7 cold load: ${coldMs} ms`);
   } catch (error) {
     check('the run finished', false, String(error && error.stack || error));
   } finally {
