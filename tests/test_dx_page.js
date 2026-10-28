@@ -27,6 +27,10 @@
 //              /history/tree it is empty with the phase 3 note; State at the watch's rate stops the /values poll (the fixture host,
 //              and the test-only stub at the host's cadence, at an older host's tick and with a slow watch); the Diagnostics starter
 //              is the host's GET /api/v1/checks, worst first, with no per-entity /node; the page's address is /dx/
+//   rework     (§16, Zach 2026-10-28) the tree is the classic page's own (web/tree/v6.js: the same rows, labels, depths, hidden rows and
+//              counts as the classic page on the same host; collapse / expand all, search, Tree | Table) and still rewinds; each entity
+//              has tabs (Overview, Diagnostics, State, Configuration, Log, Utilities; ?page=, Back, remembered per kind, each rewinds);
+//              a bottom-right picker switches the playback bar between today's, Rerun (simple) and Foxglove, live, remembered
 // Exits 1 on any failure.
 'use strict';
 
@@ -45,7 +49,8 @@ const RAIL_WIDTHS = { collapsed: 48, expanded: 72, wide: 240 };
 const STARTERS_MIN = 2;
 
 // ---- the request allow-list (PEP 0001 §12.2, §14) -------------------------------------------------------------------------------
-const GET_OK = [/^\/dx\//, /^\/vendor\/data-ui\//, /^\/usb\.js$/, /^\/api\/v1\/(state|node|values|history|history\/tree|activity|events|settings|health|live|checks)(\?|$)/,
+// the classic page's own tree, reused (PEP 0001 §16): its scripts and styles are GETs of the same web root
+const GET_OK = [/^\/dx\//, /^\/vendor\/data-ui\//, /^\/usb\.js$/, /^\/(tokens\.css|summary\.js|visibility\.js|skins\/[a-z0-9-]+\.css|tree\/v6\.(js|css)|view\/(core|composites)\.js|view\/structure\/p[0-9]+\.js)$/, /^\/api\/v1\/(state|node|values|history|history\/tree|activity|events|settings|health|live|checks)(\?|$)/,
   /^\/api\/v1\/dashboards(\/[^/?]+\.base)?$/];
 const DASHBOARD_FILE = /^\/api\/v1\/dashboards\/[^/?]+\.base$/;
 // the dashboard writes (PUT, DELETE) are allowed only while the saving checks run, against this fixture host's own config dir
@@ -95,17 +100,15 @@ const ready = (page) => page.waitForFunction(() => window.robotdx && window.robo
 const dest = (page) => page.evaluate(() => document.querySelector('#dx-main').dataset.dest);
 const rect = (page, selector) => page.evaluate((s) => { const el = document.querySelector(s); if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; }, selector);
 const clockState = (page) => page.evaluate(() => { const c = window.robotdx.clock; return { following: c.following, t: c.t, liveEnd: c.liveEnd, liveStart: c.liveStart, start: c.start, end: c.end }; });
-// the tree's rows as data-ui's row model has them (the table is virtualized: the DOM holds only what is on screen)
-const treeRows = (page) => page.evaluate(() => {
-  const el = document.querySelector('#dx-tree');
-  const out = [];
-  const of = (o) => ({ name: o.name, level: o.level ?? null, health: o.health || '', claimed: o.claimed !== false });
-  const walk = (rows, depth) => { for (const r of rows || []) { out.push({ id: String(r.id), ...of(r.original || {}), depth }); walk(r.subRows, depth + 1); } };
-  const table = el && el.model && el.model.table;
-  if (table && typeof table.getCoreRowModel === 'function') walk(table.getCoreRowModel().rows, 0);
-  else for (const r of (el && el.model && el.model.rows) || []) out.push({ id: String(r.id), ...of(r), depth: 0 });
-  return out;
+// the tree's rows as the classic tree style draws them (web/tree/v6.js, PEP 0001 §16): every [role=treeitem] in the DOM, in order,
+// with its row key (the entity path), its label, its depth and the health SHAPE at its right (none for OK: rule 3)
+const TREE_ROWS = (sel) => [...document.querySelectorAll(`${sel} [role=treeitem][data-t6-path]`)].map((r) => {
+  const mark = r.querySelector('.t6-st svg.shape, .t6-mark svg.shape');
+  const level = mark ? ([...mark.classList].find((c) => c.startsWith('lv-')) || '').slice(3) : null;
+  return { id: r.getAttribute('data-t6-path'), name: ((r.querySelector('.t6-name') || {}).textContent || '').trim(), depth: Number(r.getAttribute('aria-level')) - 1,
+    level, open: r.getAttribute('aria-expanded'), selected: r.getAttribute('aria-selected') === 'true' };
 });
+const treeRows = (page, sel = '#dx-tree') => page.evaluate(`(${TREE_ROWS})(${JSON.stringify(sel)})`);
 const kpiCards = (page, scope) => page.evaluate((s) => [...document.querySelectorAll(`${s} .dv-kpi-card`)].map((c) => {
   const num = c.querySelector('.dv-kpi-num');
   const exact = num ? (num.dataset.exact || (num.getAttribute('title') || '').split(' ')[0] || num.textContent) : '';
@@ -275,6 +278,9 @@ const keepsUpSoon = (ms) => (p) => H.waitFor(() => p.evaluate(() => { const e = 
     await oldPage.route('**/*', (route) => (route.request().method() === 'GET' ? route.continue() : route.abort()));  // GET only, as §11
     await oldPage.goto(`${base}/`);
     await oldPage.waitForTimeout(3000);
+    // the classic page's own tree, as it draws it with its defaults (structure p6, tree style v6): the oracle for the new page's tree
+    const classicTree = await treeRows(oldPage, '#tree-host');
+    const classicHidden = await oldPage.evaluate(() => [...document.querySelectorAll('#tree-host .t6-bundle')].map((b) => b.textContent.trim()));
     const before = await traffic(oldMeter, oldPage, IDLE_S);
     await oldContext.close();
 
@@ -289,7 +295,7 @@ const keepsUpSoon = (ms) => (p) => H.waitFor(() => p.evaluate(() => { const e = 
     // fire before the element's model is set)
     await page.addInitScript(() => {
       window.__k7 = null;
-      const done = () => { const el = document.querySelector('#dx-tree'); return el && el.model && el.model.rows.length >= 10 && el.querySelector('tbody tr[data-id]'); };
+      const done = () => document.querySelectorAll('#dx-tree [role=treeitem][data-t6-path]').length >= 5;
       const poll = () => { if (done()) window.__k7 = performance.now(); else if (performance.now() < 15000) setTimeout(poll, 10); };
       poll();
     });
@@ -318,37 +324,62 @@ const keepsUpSoon = (ms) => (p) => H.waitFor(() => p.evaluate(() => { const e = 
     check('the host stamps its snapshot with emitted, and the page does not keep it as a state section', snap && Number.isFinite(snap.emitted) && mirror && !mirror.emitted && mirror.keys.includes('clock') && mirror.keys.includes('summary'),
       { host: snap ? { emitted: snap.emitted, keys: Object.keys(snap).length } : null, mirror });
 
-    // ---- explorer: the tree is the host's tree ---------------------------------------------------------------------------------------
+    // ---- explorer: the tree is the classic page's own tree (web/tree/v6.js over web/view's rows; Zach, 2026-10-28: "please switch back
+    // to that old entity tree"; PEP 0001 §16). The oracle is the classic page on the same host, read above
     const state = await H.getJson(base, '/api/v1/state');
-    const hostRows = flatten(state.tree).filter((n) => n.claimed !== false || ['warn', 'unknown', 'stale', 'error'].includes(n.level));
     await page.waitForTimeout(1500);
     const rows = await treeRows(page);
-    const ids = new Set(rows.map((r) => r.id));
-    const missing = hostRows.filter((n) => !ids.has(n.path)).map((n) => n.path);
-    check('the tree holds every entity the host reports (unclaimed quiet rows aside)', missing.length === 0 && rows.length >= hostRows.length, { rows: rows.length, host: hostRows.length, missing: missing.slice(0, 5) });
-    const depthOf = Object.fromEntries(rows.map((r) => [r.id, r.depth]));
-    check('the tree nests as the host does (CAN 1 three levels under its adapter)', depthOf[BOARD] - depthOf[H.ADAPTER] === 2, { board: depthOf[BOARD], adapter: depthOf[H.ADAPTER] });
-    // nesting drawn: the board's name starts right of its adapter's (measured in the DOM, after scrolling it into view)
+    const sameTree = rows.length === classicTree.length && rows.every((r, i) => r.id === classicTree[i].id && r.name === classicTree[i].name && r.depth === classicTree[i].depth);
+    check('the tree is the classic page\'s tree: the same rows, labels, depths and order on the same host', rows.length >= 5 && sameTree,
+      { dx: rows.map((r) => `${r.depth}:${r.name}`).slice(0, 8), classic: classicTree.map((r) => `${r.depth}:${r.name}`).slice(0, 8), n: [rows.length, classicTree.length] });
+    const hiddenRows = await page.evaluate(() => [...document.querySelectorAll('#dx-tree .t6-bundle')].map((b) => b.textContent.trim()));
+    check('…with its "Show N hidden" rows as the classic page has them', JSON.stringify(hiddenRows) === JSON.stringify(classicHidden), { dx: hiddenRows, classic: classicHidden });
+    const counts = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll('#dx-tree [data-t6-count]')].map((c) => [c.getAttribute('data-t6-count'), Number((c.textContent.match(/\d+/) || [0])[0])])));
+    const hostCounts = (state.summary && state.summary.counts) || {};
+    check('…and its header counts are the host\'s (errors, warnings)', ['error', 'warn'].every((l) => (counts[l] || 0) === (hostCounts[l] || 0)) && (counts.error || 0) + (counts.warn || 0) > 0, { dx: counts, host: hostCounts });
+    // the pane's toolbar (the classic Obsidian layout's: Collapse all, Expand all, Show what is hidden) and its search on top
+    const nRows = async () => (await treeRows(page)).length;
+    await page.click('#dx-tree-collapse');
+    await page.waitForTimeout(300);
+    const collapsed = await nRows();
+    await page.click('#dx-tree-expand');
+    await page.waitForTimeout(400);
+    const expanded = await treeRows(page);
+    check('Collapse all and Expand all fold and open the tree (rows counted)', collapsed < expanded.length && expanded.some((r) => r.id === BOARD), { collapsed, expanded: expanded.length });
+    await page.fill('#dx-tree-search', 'ttyACM0');
+    await page.waitForTimeout(500);
+    const found = await treeRows(page);
+    await page.fill('#dx-tree-search', '');
+    await page.waitForTimeout(400);
+    check('the search on top of the tree keeps the rows that match and the rows above them', found.length >= 1 && found.length < expanded.length, { found: found.map((r) => r.name) });
+    // nesting drawn: the board's name starts right of its adapter's (measured, after scrolling it into view)
     const indent = await page.evaluate(([board, adapter]) => {
-      const cellOf = (id) => { const row = document.querySelector(`#dx-tree [data-id="${CSS.escape(id)}"]`); if (!row) return null; row.scrollIntoView({ block: 'center' }); const name = [...row.querySelectorAll('td, [role=cell], [role=gridcell]')].find((c) => c.textContent.trim()); if (!name) return null; const range = document.createRange(); range.selectNodeContents(name); const r = [...range.getClientRects()].find((x) => x.width > 0); return r ? r.left : null; };
-      return { board: cellOf(board), adapter: cellOf(adapter) };
+      const left = (id) => { const n = document.querySelector(`#dx-tree [data-t6-path="${CSS.escape(id)}"] .t6-name`); if (!n) return null; n.scrollIntoView({ block: 'center' }); return n.getBoundingClientRect().left; };
+      return { board: left(board), adapter: left(adapter) };
     }, [BOARD, H.ADAPTER]);
-    check('the nesting is drawn: the board starts right of its adapter', indent.board !== null && indent.adapter !== null && indent.board - indent.adapter >= 16, indent);
+    check('the nesting is drawn: the board starts right of its adapter', indent.board !== null && indent.adapter !== null && indent.board - indent.adapter >= 12, indent);
+    // Tree | Table: the table stays data-ui's (Zach: "the old entity tree for when you are looking at it as a tree")
+    await page.click('#dx-tree-mode [data-mode="table"]');
+    const tableRows = await H.waitFor(() => page.evaluate(() => { const t = document.querySelector('#dx-tree-table'); return t && t.offsetParent && t.model && t.model.rows.length ? t.model.rows.length : null; }), 8000);
+    await page.click('#dx-tree-mode [data-mode="tree"]');
+    await page.waitForTimeout(300);
+    check('Tree | Table: the table is data-ui\'s, the tree comes back as it was', tableRows >= 5 && (await nRows()) === expanded.length, { tableRows });
 
     // a click selects: the URL names it, the detail is that entity's, Back goes to the one before
     const clickRow = async (id) => {
-      await page.evaluate((x) => document.querySelector(`#dx-tree [data-id="${CSS.escape(x)}"]`)?.scrollIntoView({ block: 'center' }), id);
-      const r = await rect(page, `#dx-tree [data-id="${id.replace(/"/g, '\\"')}"]`);
+      await page.evaluate((x) => document.querySelector(`#dx-tree [data-t6-path="${CSS.escape(x)}"]`)?.scrollIntoView({ block: 'center' }), id);
+      const r = await rect(page, `#dx-tree [data-t6-path="${id.replace(/"/g, '\\"')}"] .t6-name`);
       if (!r) return false;
-      await page.mouse.click(r.x + Math.min(120, r.w / 2), r.y + r.h / 2);
+      await page.mouse.click(r.x + Math.min(40, r.w / 2), r.y + r.h / 2);
       return page.waitForFunction((x) => new URLSearchParams(location.search).get('sel') === x, id, { timeout: 8000 }).then(() => true, () => false);
     };
-    const PORT = 'host/usb1/port-1-3';
-    check('a click on a tree row selects it (the URL says sel=)', await clickRow(PORT));
-    check('then another', await clickRow(H.ADAPTER));
+    check('a click on a tree row selects it (the URL says sel=)', await clickRow(H.ADAPTER));
+    check('then another', await clickRow(H.CAMERA));
     await page.goBack();
-    const backTo = await page.waitForFunction((x) => new URLSearchParams(location.search).get('sel') === x, PORT, { timeout: 8000 }).then(() => true, () => false);
+    const backTo = await page.waitForFunction((x) => new URLSearchParams(location.search).get('sel') === x, H.ADAPTER, { timeout: 8000 }).then(() => true, () => false);
     check('Back goes to the selection before (a history entry each)', backTo, await page.evaluate(() => location.search));
+    const marked = await page.evaluate((x) => { const r = document.querySelector(`#dx-tree [data-t6-path="${CSS.escape(x)}"]`); return r ? r.getAttribute('aria-selected') : null; }, H.ADAPTER);
+    check('…and the tree marks the selected row', marked === 'true', marked);
 
     // ---- the tree's past (GET /api/v1/history/tree, PEP 0001 §15): scrubbed back to before the page opened, the tree is today's rows
     // with the health the host kept for each. The oracle is the test's own /history/tree answer, read now; a row is compared where the
@@ -359,31 +390,34 @@ const keepsUpSoon = (ms) => (p) => H.waitFor(() => p.evaluate(() => { const e = 
     const binText = `${+(win / bins).toFixed(1)} s`;
     const oracle = await H.getJson(base, `/api/v1/history/tree?bins=${bins}`);
     const tPast = openedAt - 6;
-    // the tree's own draws (data-views-live): it must draw AT the clock's t, not its newest rows (a view the clock let go of
-    // shows its dataset's end whatever t is)
-    await page.evaluate(() => { window.__treeDraws = []; document.querySelector('#dx-tree').addEventListener('data-views-live', (e) => window.__treeDraws.push({ t: e.detail.t, following: e.detail.following, rows: e.detail.rows })); });
+    // the tree's own draws (dx-tree-draw {t, following, rows}): it must draw AT the clock's t, not its newest rows
+    await page.evaluate(() => { window.__treeDraws = []; document.querySelector('#dx-tree').addEventListener('dx-tree-draw', (e) => window.__treeDraws.push({ t: e.detail.t, following: e.detail.following, rows: e.detail.rows })); });
     await page.evaluate((t) => window.robotdx.clock.seek(t), tPast);
     await page.waitForTimeout(600);
     const pastClock = await clockState(page);
     const treeDraws = await page.evaluate(() => window.__treeDraws);
     const past = await treeRows(page);
     const pastIds = new Set(past.map((r) => r.id));
-    const lostRows = rows.filter((r) => r.claimed && !pastIds.has(r.id)).map((r) => r.id);
+    const lostRows = expanded.filter((r) => !pastIds.has(r.id)).map((r) => r.id);
     check('scrubbed back, the tree draws at the clock\'s t (paused), not its newest rows', treeDraws.some((d) => d.t === pastClock.t && !d.following) && !treeDraws.some((d) => d.t !== pastClock.t),
       { t: pastClock.t, draws: treeDraws.slice(0, 4) });
-    check('scrubbed back before the page opened, the tree is today\'s rows (every claimed row is there)', Number.isFinite(openedAt) && !pastClock.following && pastClock.t < openedAt && past.length >= 10 && lostRows.length === 0,
-      { t: pastClock.t, opened: openedAt, rows: past.length, live: rows.length, lost: lostRows.slice(0, 5) });
+    check('scrubbed back before the page opened, the tree is today\'s rows (every row it drew live is there)', Number.isFinite(openedAt) && !pastClock.following && pastClock.t < openedAt && past.length >= 5 && lostRows.length === 0,
+      { t: pastClock.t, opened: openedAt, rows: past.length, live: expanded.length, lost: lostRows.slice(0, 5) });
     const bin = Math.floor((tPast - oracle.from) / oracle.bin_s);
     let compared = 0;
     const wrong = [];
+    // a leaf row's shape is its own level (an open parent's would be a roll-up); the tree draws a shape for warn, unknown, error only
+    const MARKS = new Set(['warn', 'unknown', 'error']);
+    const leaves = new Set(past.filter((r, i) => !(past[i + 1] && past[i + 1].depth > r.depth)).map((r) => r.id));
     for (const row of oracle.rows || []) {
       const shown = past.find((r) => r.id === row.path);
       const near = row.bar.slice(Math.max(0, bin - 2), bin + 3);
-      if (!shown || near.length < 5 || near.some((x) => x !== near[0])) continue;
+      if (!shown || !leaves.has(row.path) || near.length < 5 || near.some((x) => x !== near[0])) continue;
       compared += 1;
-      if ((shown.level ?? null) !== (near[0] ?? null)) wrong.push({ path: row.path, shown: shown.level, host: near[0] });
+      const want = MARKS.has(near[0]) ? near[0] : null;
+      if ((shown.level ?? null) !== want) wrong.push({ path: row.path, shown: shown.level, host: near[0] });
     }
-    check('…each with the level the host kept for it then (its /history/tree bar, where it holds one level around t)', compared >= 5 && wrong.length === 0, { compared, wrong: wrong.slice(0, 5), bin_s: oracle.bin_s });
+    check('…each leaf with the shape of the level the host kept for it then (its /history/tree bar, where it holds one level around t)', compared >= 3 && wrong.length === 0, { compared, wrong: wrong.slice(0, 5), bin_s: oracle.bin_s });
     const pastNote = await page.evaluate(() => { const n = document.querySelector('#dx-before'); return n && !n.hidden && n.getBoundingClientRect().height > 0 ? n.textContent : null; });
     check(`…and the note says what the tree is then (today's rows, the host's ${binText} bins)`, Boolean(pastNote) && /today/i.test(pastNote) && pastNote.includes(binText), pastNote);
     await page.evaluate(() => window.robotdx.clock.goLive());
@@ -402,6 +436,59 @@ const keepsUpSoon = (ms) => (p) => H.waitFor(() => p.evaluate(() => { const e = 
       return el && el.model && el.model.rows.length ? el.model.rows.map((r) => r.key) : null;
     }), 15000);
     check('Configuration lists the host\'s settings of the entity', shownConfig && node.config.every((c) => shownConfig.includes(c.key)), { shown: shownConfig && shownConfig.length, host: node.config.length });
+
+    // ---- the entity's tabs (Zach, 2026-10-28: "on each entity we had these tabs ... I still want that tabbed model on each entity";
+    // PEP 0001 §16): the overview first, then the classic page's five, each a dashboard of its own panels; the tab is in the URL
+    // (?page=, the classic page's own name for it), each a history entry, and remembered per kind of entity as the classic page does
+    const TABS = ['overview', 'diagnostics', 'state', 'config', 'log', 'utilities'];
+    const tabBar = await page.evaluate(() => [...document.querySelectorAll('#dx-tabs [data-dx-tab]')].map((b) => ({ id: b.dataset.dxTab, text: b.textContent.trim(), on: b.getAttribute('aria-selected') === 'true' })));
+    check('the entity has its tabs: Overview, Diagnostics, State, Configuration, Log, Utilities (the overview first and open)', tabBar.map((t) => t.id).join() === TABS.join() && tabBar[0].on, tabBar);
+    const shownPanels = () => page.evaluate(() => [...document.querySelectorAll('#dx-detail .dd-panel')].filter((x) => x.getBoundingClientRect().height > 20).map((x) => x.dataset.panel));
+    const tabPanels = {};
+    for (const id of TABS.slice(1)) {
+      await page.click(`#dx-tabs [data-dx-tab="${id}"]`);
+      await page.waitForFunction((x) => new URLSearchParams(location.search).get('page') === x, id, { timeout: 8000 }).catch(() => {});
+      await page.waitForFunction((x) => { const b = document.querySelector(`#dx-tabs [data-dx-tab="${x}"]`); const d = document.querySelector('#dx-detail'); return b && b.getAttribute('aria-selected') === 'true' && d && d.dash; }, id, { timeout: 8000 }).catch(() => {});
+      await page.waitForTimeout(800);
+      tabPanels[id] = await shownPanels();
+    }
+    const WANT = { diagnostics: ['diagnostics', 'health'], state: ['state', 'signals'], config: ['configuration'], log: ['log'], utilities: ['utilities'] };
+    check('each tab draws its own panels (measured: on screen, taller than 20 px)', Object.entries(WANT).every(([id, keys]) => keys.every((k) => (tabPanels[id] || []).includes(k))), tabPanels);
+    const utilRows = await H.waitFor(() => page.evaluate(() => { const el = document.querySelector('#dx-detail-utilities'); return el && el.model && el.model.rows.length ? el.model.rows.map((r) => r.name) : null; }), 8000);
+    check('Utilities lists the host\'s utilities of the entity (read here; run on the classic page)', utilRows && (node.actions || []).every((a) => utilRows.includes(a.name)) && utilRows.length === (node.actions || []).length,
+      { shown: utilRows, host: (node.actions || []).map((a) => a.name) });
+    const classicLink = await page.evaluate(() => (document.querySelector('#dx-classic') || {}).getAttribute && document.querySelector('#dx-classic').getAttribute('href'));
+    check('…and "Open on the classic page" opens the same tab there', classicLink === `/?sel=${encodeURIComponent(BOARD)}&page=utilities`, classicLink);
+    await page.goBack();
+    const backTab = await page.waitForFunction(() => new URLSearchParams(location.search).get('page') === 'log', null, { timeout: 8000 }).then(() => true, () => false);
+    const logShown = await page.waitForFunction(() => { const b = document.querySelector('#dx-tabs [data-dx-tab="log"]'); return b && b.getAttribute('aria-selected') === 'true'; }, null, { timeout: 8000 }).then(() => true, () => false);
+    check('Back goes to the tab before (a history entry each)', backTab && logShown, await page.evaluate(() => location.search));
+    // remembered per kind: another entity of the same kind opens on the tab last shown for that kind
+    await page.goto(`${base}${DX}?go=explore&sel=${encodeURIComponent(H.BOARD2)}`);
+    await ready(page);
+    const remembered = await page.waitForFunction(() => { const b = document.querySelector('#dx-tabs [data-dx-tab][aria-selected="true"]'); return b ? b.dataset.dxTab : null; }, null, { timeout: 10000 }).then((h) => h.jsonValue(), () => null);
+    check('another board opens on the tab last shown for its kind (Log)', remembered === 'log', remembered);
+    // a tab rewinds like the overview: the Diagnostics tab's table draws at a scrubbed t
+    await page.goto(`${base}${DX}?go=explore&sel=${encodeURIComponent(BOARD)}&page=diagnostics`);
+    await ready(page);
+    await page.waitForFunction(() => { const el = document.querySelector('#dx-detail-diagnostics'); return el && el.model && el.model.rows.length; }, null, { timeout: 15000 }).catch(() => {});
+    const tabRewind = await page.evaluate(async () => {
+      const draws = [];
+      const on = (e) => { if (e.target.id === 'dx-detail-diagnostics') draws.push({ t: e.detail.t, following: e.detail.following }); };
+      document.addEventListener('data-views-live', on, true);
+      const c = window.robotdx.clock;
+      const t = c.liveEnd - 8;
+      c.seek(t);
+      await new Promise((r) => setTimeout(r, 600));
+      document.removeEventListener('data-views-live', on, true);
+      const out = { t: c.t, draws };
+      c.goLive();
+      return out;
+    });
+    check('a tab rewinds too: the Diagnostics tab\'s table draws at the scrubbed t', tabRewind.draws.some((d) => d.t === tabRewind.t && !d.following), tabRewind);
+    await page.goto(`${base}${DX}?go=explore&sel=${encodeURIComponent(BOARD)}&page=overview`);
+    await ready(page);
+    await page.waitForFunction(() => { const el = document.querySelector('#dx-detail-diagnostics'); return el && el.model && el.model.rows.length; }, null, { timeout: 15000 }).catch(() => {});
 
     // ---- live: the heartbeat, 10 Hz State, the clock following ----------------------------------------------------------------------
     const beat = await H.waitFor(() => everyRequest[0].some((r) => r.method === 'POST' && r.url === '/api/v1/watch' && JSON.parse(r.body || '{}').path === BOARD), 8000);
@@ -487,6 +574,41 @@ const keepsUpSoon = (ms) => (p) => H.waitFor(() => p.evaluate(() => { const e = 
     const cardsAgain = await kpiCards(page, '#dx-detail');
     const posAgain = cardsAgain.find((c) => /position/.test(c.label));
     check('live again, the State card moves on', posAgain && pos && posAgain.exact !== pos.exact, { now: posAgain && posAgain.exact, paused: pos && pos.exact });
+
+    // ---- the playback bar: three to compare (Zach, 2026-10-28: "please give the option to switch between today's bar, rerun simple and
+    // foxglove bar"): a bottom-right picker that switches live and is remembered (no URL flag); each bar seeks, and goes live again
+    const picker = await page.evaluate(() => { const sel = document.querySelector('#dx-playback-variant'); if (!sel) return null; const r = sel.getBoundingClientRect(); return { options: [...sel.options].map((o) => o.value), value: sel.value, right: innerWidth - r.right, bottom: innerHeight - r.bottom, w: r.width }; });
+    check('a bottom-right picker offers the three playback bars: today\'s, Rerun (simple), Foxglove', picker && picker.options.join() === 'bar,rerun,foxglove' && picker.right <= 48 && picker.bottom <= 72 && picker.w > 0, picker);
+    const bars = {};
+    for (const v of ['rerun', 'foxglove', 'bar']) {
+      await page.selectOption('#dx-playback-variant', v);
+      await page.waitForTimeout(500);
+      const root = { bar: '#dx-time .dv-pb-track', rerun: '#dx-time .dv-rr [data-scrub]', foxglove: '#dx-time .dv-fx [data-scrub]' }[v];
+      const scrub = await rect(page, root);
+      const variant = await page.evaluate(() => { const el = document.querySelector('#dx-time [data-variant]'); return el ? el.dataset.variant : null; });
+      let seeked = null, back = null;
+      if (scrub && scrub.w > 40) {
+        await page.mouse.click(scrub.x + scrub.w * 0.4, scrub.y + scrub.h / 2);
+        await page.waitForTimeout(300);
+        seeked = await clockState(page);
+        const live = v === 'bar' ? '#dx-time .dv-pb-live' : '#dx-live';
+        const lr = await rect(page, live);
+        if (lr && lr.w > 0) await page.mouse.click(lr.x + lr.w / 2, lr.y + lr.h / 2);
+        await page.waitForTimeout(300);
+        back = await clockState(page);
+      }
+      bars[v] = { variant, scrub: scrub && Math.round(scrub.w), paused: seeked && !seeked.following && seeked.t < seeked.liveEnd - 0.5, live: back && back.following };
+    }
+    check('each bar draws its own control, its track seeks (paused at the click) and LIVE follows again', ['bar', 'rerun', 'foxglove'].every((v) => bars[v].variant === v && bars[v].paused && bars[v].live), bars);
+    await page.selectOption('#dx-playback-variant', 'foxglove');
+    await page.waitForTimeout(300);
+    await page.reload();
+    await ready(page);
+    await page.waitForTimeout(800);
+    const kept = await page.evaluate(() => ({ picked: (document.querySelector('#dx-playback-variant') || {}).value, variant: (document.querySelector('#dx-time [data-variant]') || { dataset: {} }).dataset.variant }));
+    check('the pick is remembered across a reload (this browser), the bar drawn with it', kept.picked === 'foxglove' && kept.variant === 'foxglove', kept);
+    await page.selectOption('#dx-playback-variant', 'bar');
+    await page.waitForTimeout(300);
 
     // ---- the heartbeat stops when State leaves the screen, and while the tab is hidden -------------------------------------------
     await page.evaluate(() => { Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' }); Object.defineProperty(document, 'hidden', { configurable: true, get: () => true }); document.dispatchEvent(new Event('visibilitychange')); });
@@ -793,12 +915,12 @@ const keepsUpSoon = (ms) => (p) => H.waitFor(() => p.evaluate(() => { const e = 
     const oldHostMeter = await meter(oldHostPage, base);
     await oldHostPage.goto(`${base}${DX}?go=explore`);
     await ready(oldHostPage);
-    const polled = await H.waitFor(async () => (await treeRows(oldHostPage)).length >= 10 && everyRequest[everyRequest.length - 1].filter((r) => r.url === '/api/v1/state').length >= 2, 15000);
+    const polled = await H.waitFor(async () => (await treeRows(oldHostPage)).length >= 5 && everyRequest[everyRequest.length - 1].filter((r) => r.url === '/api/v1/state').length >= 2, 15000);
     const pollMode = await oldHostPage.evaluate(() => window.robotdx.feed.mode);
     check('with no /api/v1/live (404) the page polls /state instead, and draws the same tree', Boolean(polled) && pollMode === 'poll', { mode: pollMode });
     // with no /history/tree (404) the tree before the page opened is empty, and phase 3's note says why
     const oldOpened = await oldHostPage.evaluate(() => window.robotdx.feed.openedAt);
-    await oldHostPage.evaluate(() => { window.__treeDraws = []; document.querySelector('#dx-tree').addEventListener('data-views-live', (e) => window.__treeDraws.push({ t: e.detail.t, following: e.detail.following, rows: e.detail.rows })); });
+    await oldHostPage.evaluate(() => { window.__treeDraws = []; document.querySelector('#dx-tree').addEventListener('dx-tree-draw', (e) => window.__treeDraws.push({ t: e.detail.t, following: e.detail.following, rows: e.detail.rows })); });
     await oldHostPage.evaluate((t) => window.robotdx.clock.seek(t), oldOpened - 5);
     await oldHostPage.waitForTimeout(600);
     const oldPast = { clock: await clockState(oldHostPage), rows: (await treeRows(oldHostPage)).length, draws: await oldHostPage.evaluate(() => window.__treeDraws),
@@ -868,8 +990,7 @@ const keepsUpSoon = (ms) => (p) => H.waitFor(() => p.evaluate(() => { const e = 
           await p.evaluate((x) => window.robotdx.clock.seek(x), t);
           await p.waitForTimeout(500);
           const r = await treeRows(p);
-          const text = await p.evaluate(() => { const row = document.querySelector('#dx-tree [data-id="stub/0"]'); return row ? row.textContent : null; });
-          return { t: await p.evaluate(() => window.robotdx.clock.t), stub0: (r.find((x) => x.id === 'stub/0') || {}).level, host: (r.find((x) => x.id === 'host') || {}).level, text };
+          return { t: await p.evaluate(() => window.robotdx.clock.t), stub0: (r.find((x) => x.id === 'stub/0') || {}).level, stub1: (r.find((x) => x.id === 'stub/1') || {}).level, rows: r.length };
         };
         const thenWarn = await at(tWarn);
         const thenOk = await at(tOk);
@@ -877,9 +998,9 @@ const keepsUpSoon = (ms) => (p) => H.waitFor(() => p.evaluate(() => { const e = 
         await p.waitForTimeout(500);
         const nowRows = await treeRows(p);
         stubSink.errors.push(...errs.errors);
-        check('the tree\'s past is the host\'s, where it differs from now: stub/0 and the host ▲ warn then, OK a few seconds later and now',
-          warnBins.length >= 2 && tWarn < opened && tOk < opened && thenWarn.stub0 === 'warn' && thenWarn.host === 'warn' && /▲ warn/.test(thenWarn.text || '') && thenOk.stub0 === 'ok'
-            && (nowRows.find((x) => x.id === 'stub/0') || {}).level === 'ok',
+        check('the tree\'s past is the host\'s, where it differs from now: stub/0 drawn ▲ warn then (stub/1 not), no mark a few seconds later and now',
+          warnBins.length >= 2 && tWarn < opened && tOk < opened && thenWarn.stub0 === 'warn' && thenWarn.stub1 === null && thenOk.stub0 === null
+            && (nowRows.find((x) => x.id === 'stub/0') || {}).level === null && nowRows.some((x) => x.id === 'stub/0'),
           { opened, warn: thenWarn, ok: thenOk, warn_bins: warnBins.length });
       } finally { await ctx.close().catch(() => {}); H.stopServer(stub.child); }
     }
