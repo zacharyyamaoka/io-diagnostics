@@ -159,12 +159,12 @@
    "sha256": "a6fe008105f1afe6af598ddcdd4dcc665ca42614f4ba72c41f003819fa8fd361"
   },
   "data-ui.js": {
-   "bytes": 321777,
-   "sha256": "54cadca8656f4232b42e6c1fca46ba1651317f0c51c0052dd4c509fb1a9db272"
+   "bytes": 324453,
+   "sha256": "f36507421e08c2694393fd38f9907ade2e781cb564d5d4a287fcaf7bfff4a488"
   },
   "data-ui.js.map": {
-   "bytes": 1280975,
-   "sha256": "c858be740ed0efbc6f90344016f13dded529cfabe8183bf9ac34f83053eb7248"
+   "bytes": 1293764,
+   "sha256": "4a621dfd92fb623e757b1e6609ef0d7b87fe02599b674771b13caa5c79fcc363"
   },
   "python/data_ui_base.py": {
    "bytes": 17698,
