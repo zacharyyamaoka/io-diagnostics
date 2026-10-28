@@ -18,7 +18,10 @@ views:
   - type: table
     name: Checks
     from: checks
-    order: [health, entity, name, message, code, why, received]
+    # WHY the path beside the entity: two entities can have one name (F1: a "CAN 1" on each of two adapters); the path is the
+    # one that tells them apart
+    order: [health, entity, path, name, message, code, why, received]
+    columnSize: { path: 230 }
     sort:
       - { property: rank, direction: DESC }
   - type: table
