@@ -52,6 +52,7 @@ TOKEN_WINDOW_S = 300.0
 CONFIG_WRITES = {"/api/v1/config/edit": "edit", "/api/v1/config/set": "set", "/api/v1/config/persist": "persist",
                  "/api/v1/config/reset": "reset"}
 SETUP_EDITS = {"/api/v1/expect": "expect", "/api/v1/forget": "forget", "/api/v1/retire": "retire"}
+DIAGNOSTICS_CONFIG = "/api/v1/diagnostics/config"  # GET reads an entity's stock diagnostics; POST writes one value (the page's only)
 UI_HEADER = "X-IO-Diagnostics"
 UI_HEADER_VALUE = "ui"
 MAX_BODY = 64 * 1024
@@ -190,6 +191,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._history(parsed.path, query)
             if parsed.path == "/api/v1/checks":
                 return self._json(self.host.checks_json())
+            if parsed.path == "/api/v1/diagnostics":
+                return self._json(self.host.diagnostics_json())
+            if parsed.path == "/api/v1/diagnostics/config":
+                path = (query.get("path") or [""])[0]
+                found = self.host.diagnostics_config_json(path)
+                return self._json(found) if found else self._json({"error": f"no entity {path!r}"}, 404)
             if parsed.path == "/api/v1/settings":
                 return self._json(self.host.settings_json())
             if parsed.path in ("/api/v1/act", "/api/v1/watch") or parsed.path in SETUP_EDITS or parsed.path in CONFIG_WRITES:
@@ -221,7 +228,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._run_write(found[1], found[2])
             except Exception as error:  # noqa: BLE001 - show the failure, keep serving
                 return self._json({"error": f"{type(error).__name__}: {error}"}, 500)
-        if endpoint not in ("/api/v1/act", "/api/v1/settings", "/api/v1/watch", "/api/v1/arrangements", *CONFIG_WRITES, *SETUP_EDITS):
+        if endpoint not in ("/api/v1/act", "/api/v1/settings", "/api/v1/watch", "/api/v1/arrangements", DIAGNOSTICS_CONFIG, *CONFIG_WRITES,
+                            *SETUP_EDITS):
             return self._refuse()
         try:
             if endpoint == "/api/v1/settings":
@@ -232,6 +240,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._arrangements()
             if endpoint in CONFIG_WRITES:
                 return self._config(CONFIG_WRITES[endpoint])
+            if endpoint == DIAGNOSTICS_CONFIG:
+                return self._diagnostics_config()
             return self._act() if endpoint == "/api/v1/act" else self._setup_edit(SETUP_EDITS[endpoint])
         except Exception as error:  # noqa: BLE001 - show the failure, keep serving
             return self._json({"error": f"{type(error).__name__}: {error}"}, 500)
@@ -580,6 +590,17 @@ class Handler(BaseHTTPRequestHandler):
         # missing or dead session (403) and a malformed request (400) are errors of the request itself
         refused = result.get("refused")
         return self._json(result, 403 if refused == "NoEditSession" else 400 if refused == "BadRequest" else 200)
+
+    def _diagnostics_config(self):
+        """One value of a stock diagnostic, from the entity page's drill-in (docs/api-v1.md "Stock diagnostics")."""
+
+        # WHY the same page-only rule as the other config writes, and no edit session, dry run or token: it is the person's own file
+        # (diagnostics.toml), pure software; no device is touched, so a plain Enter on the page is the confirm
+        body, answer = self._body()
+        if body is None:
+            return self._json(*answer)
+        result, code = self.host.set_diagnostic_config(body)
+        return self._json(result, code)
 
     # --- history and settings ------------------------------------------------------------------------------------
     def _history(self, endpoint: str, query: dict):

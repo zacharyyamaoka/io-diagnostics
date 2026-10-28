@@ -3366,6 +3366,55 @@ class Host:
                 "checks": {path: [self.check_json(status, view.now) for status in own]
                            for path, own in view.rows.own.items() if own and path in view.merged.entities}}
 
+    # --- the stock diagnostics' drill-in (docs/api-v1.md "Stock diagnostics") -----------------------------------------------------
+    def diagnostics_json(self) -> dict:
+        """``GET /api/v1/diagnostics``: every diagnostic in the registry (stock and custom), each with its config dataclass as a schema."""
+
+        runner = self.stock_diagnostics
+        runner.reload_if_changed()
+        return {"clock": self.clock_json(self.clock.now()), **runner.about(), "diagnostics": stock_diagnostics_module.registry_json()}
+
+    def diagnostics_config_json(self, path: str) -> dict | None:
+        """``GET /api/v1/diagnostics/config?path=``: the diagnostics configured on one entity, each field's effective value and where it
+        came from (default / toml / edited), and the latest status of each. None: no such entity."""
+
+        view = self.view()
+        entity = view.merged.entities.get(path)
+        if entity is None:
+            return None
+        runner = self.stock_diagnostics
+        runner.reload_if_changed()
+        model_id = str((entity.identity or {}).get("model_id") or "")
+        out = []
+        for binding in runner.bindings_for(path, model_id):
+            status = self.stock_results.get((path, binding.title))
+            out.append({**runner.binding_json(binding),
+                        "status": self.check_json(status, view.now) if status is not None else None,
+                        "window": stock_diagnostics_module.window_of(status) if status is not None else None})
+        return {"clock": self.clock_json(view.now), "path": path, "model_id": model_id, **runner.about(), "diagnostics": out}
+
+    def set_diagnostic_config(self, body: dict) -> tuple[dict, int]:
+        """``POST /api/v1/diagnostics/config`` ``{path, id, field, value}`` (or ``reset: true``): one value of a diagnostic configured on
+        the entity, validated against its dataclass field and the Limits ordering, then written to diagnostics.toml atomically."""
+
+        path, binding_id, field_name = body.get("path"), body.get("id"), body.get("field")
+        reset = body.get("reset") is True
+        if not all(isinstance(item, str) and item for item in (path, binding_id, field_name)) or ("value" not in body and not reset):
+            return {"refused": "BadRequest", "error": "path, id and field are strings; value is the new value (or reset: true)"}, 400
+        view = self.view()
+        entity = view.merged.entities.get(path)
+        if entity is None:
+            return {"refused": "NoSuchEntity", "error": f"no entity {path!r}"}, 404
+        runner = self.stock_diagnostics
+        runner.reload_if_changed()
+        model_id = str((entity.identity or {}).get("model_id") or "")
+        if binding_id not in {binding.id for binding in runner.bindings_for(path, model_id)}:
+            return {"state": "rejected", "ok": False, "refused": "NoSuchDiagnostic", "path": path, "id": binding_id, "field": field_name,
+                    "message": f"{binding_id!r} is not configured on {entity.name or path}"}, 200
+        answer = runner.set_field(binding_id, field_name, body.get("value"), reset=reset)
+        # WHY 200 for a rejection: the host answered the question ("not a number", "warn_high above error_high"), as the config writes do
+        return {**answer, "ok": answer["state"] == "accepted", "path": path}, 200
+
     def settings_json(self) -> dict:
         return self.settings.json()
 

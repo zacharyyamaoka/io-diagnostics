@@ -431,6 +431,27 @@ class StockDiagnostics:
             rows.append({**row, "value": value, "source": source, "editable": editable})
         return rows
 
+    # --- the API's shapes ---------------------------------------------------------------------------------------------
+    def about(self) -> dict:
+        """Where the bindings come from and where a change goes: ``file`` (read), ``writes`` (the person's file, or None), ``problem``."""
+
+        from robotdx.diagnostics._numpy import available
+
+        with self._lock:
+            return {"file": self.source, "writes": str(self.path) if self.path is not None else None, "problem": self.problem,
+                    "defaults": self.defaults, "beat_s": self.beat_s, "numpy": available()}
+
+    def binding_json(self, binding: Binding) -> dict:
+        spec = dx_registry.REGISTRY.get(binding.diagnostic)
+        entry = catalog_entry(binding.id)
+        return {"id": binding.id, "diagnostic": binding.diagnostic, "title": binding.title,
+                "summary": spec.summary if spec else "", "doc": config_doc(spec.config_type) if spec else "",
+                "kind": kind_of(binding.diagnostic), "match": {"path": binding.path, "model_id": binding.model_id},
+                "state": binding.state, "window_s": binding.window_s, "edited": list(binding.edited),
+                "catalog": ({"part": entry.part, "checks": entry.checks, "provenance": entry.prov, "quote": entry.quote, "where": entry.where}
+                            if entry else None),
+                "fields": self.fields_json(binding)}
+
     def set_field(self, binding_id: str, field_name: str, value=None, *, reset: bool = False) -> dict:
         """Validate one field against the dataclass (its type, the Limits ordering, the config's own construction) and write the whole
         file atomically. ``{"state": "accepted", "value": <read back from the file>}`` or ``{"state": "rejected", "message"}``."""
@@ -471,16 +492,49 @@ class StockDiagnostics:
                 edited.append(field_name)
             updated = dataclasses.replace(binding, config=values, edited=tuple(edited))
             bindings = [updated if b.id == binding_id else b for b in self.bindings]
+            saved, note = True, ""
             try:
                 self._write(bindings)
             except OSError as error:
-                return {"state": "rejected", "refused": "NotWritten", "message": f"{self.path}: not written ({type(error).__name__}: {error})"}
-            self._stamp = None
-            self.reload_if_changed()
+                # WHY accepted, not rejected: the value is valid and runs from the next beat, like a setting kept for this run when the
+                # home is read-only (settings.py); the answer says it is not saved, and why
+                saved, note = False, f"{self.path or 'diagnostics.toml'}: not written ({type(error).__name__}: {error})"
+            if saved:
+                self._stamp = None
+                self.reload_if_changed()  # the read-back is the file's, as the host now reads it
+            else:
+                self.bindings = bindings
             back = next((b for b in self.bindings if b.id == binding_id), None)
             read = next((r for r in self.fields_json(back) if r["field"] == field_name), None) if back else None
             return {"state": "accepted", "id": binding_id, "field": field_name, "value": read["value"] if read else None,
-                    "source": read["source"] if read else None, "file": str(self.path), "reset": "default" if reset else None}
+                    "source": read["source"] if read else None, "saved": saved, "note": note,
+                    "file": str(self.path) if saved else None, "reset": "default" if reset else None}
+
+
+def config_doc(config_type: type) -> str:
+    """The config dataclass's own docstring; "" for the signature a dataclass writes when it has none."""
+
+    doc = inspect.getdoc(config_type) or ""
+    return "" if doc.startswith(f"{config_type.__name__}(") else doc
+
+
+def kind_of(name: str) -> str:
+    from robotdx.diagnostics.stock import STOCK
+
+    spec = dx_registry.REGISTRY.get(name)
+    return "stock" if spec is not None and any(spec is stock for stock in STOCK) else "custom"
+
+
+def registry_json() -> list[dict]:
+    """``GET /api/v1/diagnostics``: every registered diagnostic, stock and custom, with its config dataclass as a schema."""
+
+    out = []
+    for name, spec in sorted(dx_registry.REGISTRY.items()):
+        out.append({"id": name, "title": spec.title, "summary": spec.summary, "kind": kind_of(name), "family": spec.family, "role": spec.role,
+                    "hint": spec.hint, "emits": spec.emits, "unit": spec.unit, "consumers": list(spec.consumers), "view_extra": spec.view_extra,
+                    "part_types": catalog_parts(name), "config_type": spec.config_type.__name__, "doc": config_doc(spec.config_type),
+                    "config": schema(spec.config_type, spec.unit)})
+    return out
 
 
 def catalog_parts(name: str) -> list[str]:
@@ -512,4 +566,4 @@ def binding_of(status) -> str:
 
 
 __all__ = ["StockDiagnostics", "Binding", "DiagnosticsError", "parse", "dump", "schema", "field_docs", "trajectory", "SOURCE",
-           "DIAGNOSTICS_FILE", "DEFAULT_FILE", "BEAT_S", "catalog_parts", "catalog_entry", "window_of", "binding_of"]
+           "DIAGNOSTICS_FILE", "DEFAULT_FILE", "BEAT_S", "registry_json", "config_doc", "kind_of", "catalog_parts", "catalog_entry", "window_of", "binding_of"]

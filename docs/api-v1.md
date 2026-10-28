@@ -40,6 +40,8 @@ uv run --project /home/bam/io-diagnostics python /home/bam/io-diagnostics/io_dia
 | `POST /api/v1/config/edit`, `/config/set`, `/config/persist`, `/config/reset` | The Configuration tab's edit session and its live writes ONLY, each with the session's token (docs/state-config-v1.md section 8) | on click / 3 s heartbeat |
 | `GET /api/v1/arrangements`, `POST /api/v1/arrangements` | Pinned rows, manual order, folded folders and the sort, per entity kind and section; the POST is the page's ONLY (section 9) | on load / on change |
 | `GET /api/v1/dashboards`, `GET`, `PUT`, `DELETE /api/v1/dashboards/<name>.base` | The person's dashboards as files (data-ui's `.base` text, opaque to the host) under the config directory: list, read, write (atomic, optional `If-Match`) and move to `.trash/`; the PUT and DELETE are the page's ONLY | on load / on save |
+| `GET /api/v1/diagnostics` | The stock diagnostics' registry (robotdx.diagnostics, stock and custom): each one's title, part types, kind and config dataclass as a schema (field, type, default, unit, doc) | on open |
+| `GET /api/v1/diagnostics/config?path=<entity path>`, `POST /api/v1/diagnostics/config` | The stock diagnostics configured on one entity, each value with where it came from (default / toml / edited) and the latest status; the POST is the entity page's drill-in ONLY: one value, validated and written to diagnostics.toml | on unfold, then 4 s / on Enter |
 | `POST /api/v1/act` | The Utilities panel ONLY: a dry run, then a person's confirmed run with the dry run's token | on click |
 | `POST /api/v1/expect`, `/forget`, `/retire` | The Expected setup card ONLY: one edit of the rig file after a person's confirm | on click |
 | `GET /`, `/<file>`, `/<dir>/` | The page in `io_diagnostics/web/`. A path ending in `/` is that directory's `index.html` when it has one (`/dx/` is `dx/index.html`; `/` is the web root's), else **404**; `/dx` with no slash is not redirected. `.base` files (data-ui's dashboards) are `text/plain; charset=utf-8`. Nothing outside the web root is served (a `..`, an encoded one, a symlink out: **404**) | — |
@@ -952,6 +954,82 @@ The latest checks (diagnostic statuses) of every entity in one answer (2026-10-2
   `X-IO-Diagnostics: ui` header, `Sec-Fetch-Site: same-origin`, a JSON body, else **403** (`NotFromPage`,
   `NotSameOrigin`, `NotJson`). A value outside 1 min .. 24 h, or an unknown setting → **400** `BadSetting`. Answers
   the settings as above.
+
+## Stock diagnostics: `GET /api/v1/diagnostics`, `GET | POST /api/v1/diagnostics/config`
+
+The host runs the robotdx.diagnostics library (`robotdx/diagnostics/`, lifted from sim2real's reference, 2026-10-28) on its entities
+(`io_diagnostics/stock_diagnostics.py`). Which diagnostic runs on which entity, with what config, is `<config dir>/diagnostics.toml`
+(`~/.config/io-diagnostics/`, `$IO_DIAGNOSTICS_CONFIG_DIR` honoured), else the host's default set (`io_diagnostics/diagnostics_default.toml`,
+which explains every key); a fixture replay runs only the person's file. Every 5 s (a thread of its own, never the 10 Hz watch path) each
+binding reads the last `window_s` of its entity's State history (kept at 1 Hz at most) through `stream.monitor`, and the newest window's
+Result is an **ordinary record-v0.2 status** on the entity: `source` `robotdx.diagnostics`, `measurements[0]` the headline value with its
+warn / error limits, `values` the library's `dx.*` keys (`dx.diagnostic`, `dx.config`, ...) plus `dx.binding` (the binding's id) and
+`dx.window` (JSON `{"from", "to", "window_s", "state", "samples"}`, host clock), `expected_period_s` the beat (so a stopped beat goes STALE).
+So it is in `/node`'s `checks`, `/checks`, `/history`, the history bar and `/live` with no change to any of them. A result that could not be
+computed is `unknown`, never `ok`: `NotEnoughHistory`, `NoState`, `NoChannel`, `NumpyMissing` (the `diagnostics` extra is not installed),
+`DiagnosticRaised` (the exception's text).
+
+### `GET /api/v1/diagnostics`
+
+```json
+{"clock": {"now": 1792631550.0, "...": "as in /state"},
+ "file": "/home/bam/.config/io-diagnostics/diagnostics.toml", "writes": "/home/bam/.config/io-diagnostics/diagnostics.toml",
+ "problem": "", "defaults": true, "beat_s": 5.0, "numpy": true,
+ "diagnostics": [
+  {"id": "stock.box", "title": "box check", "summary": "min/max/mean/std of a channel vs four Limits (Zach's BoxChartTask)", "kind": "stock",
+   "family": "health", "role": "health", "hint": "threshold_band", "emits": "series", "unit": "", "consumers": ["robotdx", "sim2real"],
+   "view_extra": "", "part_types": ["arm", "bldc_driver", "deployment", "encoder", "ft_sensor", "gripper", "imu"], "config_type": "BoxConfig",
+   "doc": "Zach's ``BoxChartThresholds`` (min, max, mean_min/mean_max, std) as one frozen config of four ``Limits``.",
+   "config": [{"field": "channel", "type": "str", "default": "temp_c", "unit": "", "doc": "", "group": ""},
+              {"field": "max.warn_high", "type": "float|null", "default": null, "unit": "Cel", "doc": "", "group": "max"},
+              {"field": "headline", "type": "str", "default": "max", "unit": "", "doc": "which statistic is the headline number", "group": ""}]}]}
+```
+
+- `diagnostics`: every registered diagnostic, sorted by `id` (the registry name). `kind` `stock` (robotdx.diagnostics.stock) or `custom` (a
+  `[[diagnostic]]` table with `function` in diagnostics.toml, `registry.load_toml`, or the `robotdx.diagnostics` entry point). `part_types`:
+  the catalog's part types that use it (`robotdx/diagnostics/catalog.py`).
+- `config`: the config dataclass as rows. `type` is `float`, `int`, `bool`, `str`, `tuple` or `float|null`; a `Limits` field is four rows
+  `<field>.warn_low | warn_high | error_low | error_high` (`float|null`, null = no bound), in the value's unit. `doc` is the comment beside
+  the field in the dataclass ("" when it has none).
+- `file`: where the bindings were read (the person's file, the default set, or "" for none); `writes`: where a change goes (null: none);
+  `problem`: why the person's file is not used (then nothing runs from it, never a guess); `numpy` false: every binding reports `NumpyMissing`.
+
+### `GET /api/v1/diagnostics/config?path=<entity path>`
+
+```json
+{"clock": {"...": "as in /state"}, "path": "host/usb1/port-1-3/usb-1-3/can/1", "model_id": "mjbots-moteus-c1",
+ "file": "...", "writes": "...", "problem": "", "defaults": true, "beat_s": 5.0, "numpy": true,
+ "diagnostics": [
+  {"id": "driver.board_temp", "diagnostic": "stock.box", "title": "board temperature", "summary": "...", "doc": "...", "kind": "stock",
+   "match": {"path": "", "model_id": "mjbots-moteus-*"}, "state": "motor", "window_s": 60.0, "edited": ["max.warn_high"],
+   "catalog": {"part": "bldc_driver", "checks": "FET/board temperature stays inside its band", "provenance": "his code", "quote": "...", "where": "..."},
+   "fields": [{"field": "max.warn_high", "type": "float|null", "default": null, "unit": "Cel", "doc": "", "group": "max",
+               "value": 30.0, "source": "edited", "editable": true}],
+   "status": {"name": "board temperature", "level": "warn", "...": "the check exactly as /node gives it"},
+   "window": {"from": 1792631490.0, "to": 1792631550.0, "window_s": 60.0, "state": "motor", "samples": 60}}]}
+```
+
+- One entry per binding that matches the entity (its `path` and / or `model_id` fnmatch); **404** for an entity the host does not know, an empty
+  list for one nothing is configured on. `fields`: the effective value of every config field, and `source`: `default` (the dataclass's),
+  `toml` (the file's), `edited` (written by the POST below; the file lists them in the binding's `edited`). A `Limits` field's four parts are
+  `toml` when the file names the field at all. `status` / `window`: the latest result, null before the first beat.
+
+### `POST /api/v1/diagnostics/config`
+
+`{"path": "<entity path>", "id": "driver.board_temp", "field": "max.warn_high", "value": 30}`, or `{"path", "id", "field", "reset": true}`
+(back to the dataclass default). The entity page's drill-in ONLY, under the same page-only rule as the other config writes (`X-IO-Diagnostics:
+ui`, `Sec-Fetch-Site: same-origin`, the page's origin, a JSON body, else **403** `NotFromPage` / `NotSameOrigin` / `NotJson`). It is pure
+software, the person's own file: no edit session, no dry run and no token.
+
+- **accepted** (200): `{"state": "accepted", "ok": true, "path", "id", "field", "value": <read back>, "source": "edited" | "default", "saved": true,
+  "note": "", "file": "<diagnostics.toml>", "reset": null | "default"}`. The value is checked against the dataclass field's type (a bool is not a
+  number), a `Limits` part against the ordering `error_low <= warn_low <= warn_high <= error_high`, and the config is built whole; then the WHOLE
+  set (the default set's bindings too, on the first change) is written to `<config dir>/diagnostics.toml` atomically (temporary file, fsync,
+  rename; comments are not kept) and read back. The next beat uses it. A binding is shared by every entity it matches: a change on one board's
+  page changes it for every board of its `model_id`.
+- **accepted, not saved** (200): `"saved": false` and `note` says why, when the host keeps no file or cannot write it: the value holds for this run.
+- **rejected** (200, the host answered the question): `{"state": "rejected", "ok": false, "refused": "BadValue" | "NoSuchField" |
+  "NoSuchDiagnostic", "message": "<the reason>"}`; nothing is written. **400** `BadRequest` for a malformed body, **404** `NoSuchEntity`.
 
 ## `GET /api/v1/live` (Server-Sent Events, change-only)
 
