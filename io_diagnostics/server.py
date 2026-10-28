@@ -185,8 +185,10 @@ class Handler(BaseHTTPRequestHandler):
             found = RUN_PATH.match(parsed.path)
             if found and found[2] not in RUN_WRITES:
                 return self._run_get(found[1], found[2], query)
-            if parsed.path in ("/api/v1/history", "/api/v1/history/bar"):
+            if parsed.path in ("/api/v1/history", "/api/v1/history/bar", "/api/v1/history/tree"):
                 return self._history(parsed.path, query)
+            if parsed.path == "/api/v1/checks":
+                return self._json(self.host.checks_json())
             if parsed.path == "/api/v1/settings":
                 return self._json(self.host.settings_json())
             if parsed.path in ("/api/v1/act", "/api/v1/watch") or parsed.path in SETUP_EDITS or parsed.path in CONFIG_WRITES:
@@ -585,6 +587,8 @@ class Handler(BaseHTTPRequestHandler):
                 bins = (query.get("bins") or ["60"])[0]
                 if not bins.isdigit():
                     return self._json({"error": f"bins is a whole number 1..{MAX_BINS}, got {bins!r}"}, 400)
+                if endpoint == "/api/v1/history/tree":
+                    return self._json(self.host.tree_bar_json(int(bins), window))
                 found = self.host.bar_json(path, int(bins), window)
         except SettingsError as error:
             return self._json({"error": str(error)}, 400)

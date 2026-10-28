@@ -3249,21 +3249,62 @@ class Host:
         seconds = self._window(window)
         bins = max(1, min(int(bins), history_module.MAX_BINS))
         start, end = view.now - seconds, view.now
-        rows = []
-        for depth, row in [(0, path), *((1, child) for child in view.merged.children.get(path, []))]:
-            # WHY the row's own statuses when it has any: the bar says what THIS black box reported (its row's level);
-            # a pure grouping row, like its level, shows what everything below reported
-            keys = self.history.keys(row)
-            basis = "own" if keys else "below"
-            if not keys:
-                keys = self.history.keys(row, below=True)
-            if not keys:
-                basis = "none"
-            timelines = [self.history.timeline(key, start, end) for key in keys]
-            rows.append({"path": row, "name": view.merged.entities[row].name, "depth": depth, "basis": basis,
-                         "statuses": len(keys), "bar": history_module.bar(timelines, start, end, bins)})
+        rows = [self._bar_row(view, row, depth, start, end, bins, self.history.timeline)
+                for depth, row in [(0, path), *((1, child) for child in view.merged.children.get(path, []))]]
         return {"path": path, "window_s": seconds, "from": start, "to": end, "bins": bins, "bin_s": seconds / bins,
                 "rows": rows}
+
+    def _bar_row(self, view: View, row: str, depth: int, start: float, end: float, bins: int, timeline_of) -> dict:
+        """One row of a health bar: the worst level any of the row's statuses held per bin. The one place a row's bar is made, for
+        ``/history/bar`` (an entity and its children) and ``/history/tree`` (every row)."""
+
+        # WHY the row's own statuses when it has any: the bar says what THIS black box reported (its row's level);
+        # a pure grouping row, like its level, shows what everything below reported
+        keys = self.history.keys(row)
+        basis = "own" if keys else "below"
+        if not keys:
+            keys = self.history.keys(row, below=True)
+        if not keys:
+            basis = "none"
+        timelines = [timeline_of(key, start, end) for key in keys]
+        return {"path": row, "name": view.merged.entities[row].name, "depth": depth, "basis": basis,
+                "statuses": len(keys), "bar": history_module.bar(timelines, start, end, bins)}
+
+    def tree_bar_json(self, bins: int = 60, window=None) -> dict:
+        """The health bar of EVERY row of the tree, in tree order (a parent before its children), over one window: what ``/history/bar`` answers
+        for each row, in one answer. ``depth`` is the row's depth in the tree (the host row is 0), as in ``/state``.
+
+        WHY one answer: the page's tree rewinds to before it opened, and a request per row is what this replaces. A group's bar reads every
+        status below it, so a timeline is made once per status and shared by every row that reads it."""
+
+        view = self.view()
+        seconds = self._window(window)
+        bins = max(1, min(int(bins), history_module.MAX_BINS))
+        start, end = view.now - seconds, view.now
+        made: dict[tuple[str, str], list[dict]] = {}
+
+        def timeline_of(key: tuple[str, str], low: float, high: float) -> list[dict]:
+            if key not in made:
+                made[key] = self.history.timeline(key, low, high)
+            return made[key]
+
+        rows: list[dict] = []
+        stack = [tree.HOST_PATH]
+        while stack:
+            row = stack.pop()
+            rows.append(self._bar_row(view, row, view.rows.depth.get(row, 0), start, end, bins, timeline_of))
+            stack.extend(reversed(view.merged.children.get(row, [])))
+        return {"path": tree.HOST_PATH, "window_s": seconds, "from": start, "to": end, "bins": bins, "bin_s": seconds / bins,
+                "rows": rows}
+
+    def checks_json(self) -> dict:
+        """The latest checks (diagnostic statuses) of every entity that has any, keyed by entity path, each in the shape ``/node`` gives its
+        ``checks`` (``check_json``). WHY: a Diagnostics table across a rack is one request, not one ``/node`` per entity."""
+
+        view = self.view()
+        return {"clock": self.clock_json(view.now),
+                "checks": {path: [self.check_json(status, view.now) for status in own]
+                           for path, own in view.rows.own.items() if own and path in view.merged.entities}}
 
     def settings_json(self) -> dict:
         return self.settings.json()

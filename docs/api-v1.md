@@ -30,6 +30,8 @@ uv run --project /home/bam/io-diagnostics python /home/bam/io-diagnostics/io_dia
 | `GET /api/v1/health` | `{"ok": true, ...}` liveness | — |
 | `GET /api/v1/history?path=<entity path>[&status=<name>][&window=<duration>]` | One entity's statuses over the window: level spans (stale and no data included) and every measurement value | on select, then 2-5 s |
 | `GET /api/v1/history/bar?path=<entity path>&bins=N[&window=<duration>]` | The health bar of an entity and of each child row: the worst level held per bin | 2-5 s |
+| `GET /api/v1/history/tree?bins=N[&window=<duration>]` | The health bar of EVERY tree row in one answer (what `/history/bar` gives each row), so the tree can rewind to before the page opened | on open, then 2-5 s |
+| `GET /api/v1/checks` | The latest checks of every entity in one answer, keyed by entity path, each as `/node` gives it: a Diagnostics table across a rack without one `/node` per entity | 1-2 s |
 | `GET /api/v1/settings`, `POST /api/v1/settings` | The app-wide settings (the history window); the POST is the page's View options ONLY | on open / on change |
 | `GET /api/v1/runs` (and `/runs/<id>`, `/runs/<id>/stream`, `/runs/<id>/cast`; `POST /runs/<id>/input`, `/signal`, `/resize`, page-only) | Every real utility is a run on a terminal: the list, one run, its live output (SSE), its recording, and the page's typing and Stop. The whole contract is docs/runs-v1.md | stream / on open |
 | `GET /api/v1/values?path=<entity path>[&since=N]` | The entity page's live numbers and images (State), cheap: no tree build. Docs: docs/state-config-v1.md | 250 ms while State shows |
@@ -853,6 +855,62 @@ The health bar (rqt_robot_monitor's timeline) of one entity and of each of its c
 - `basis`: `"own"` = the row's own statuses (what this black box reported, like its row's `level`); `"below"` = a
   pure grouping row with no statuses of its own, which shows every status at or below it (what was reported there,
   not knock-on collapsed); `"none"` = nothing in the history. `statuses` = how many fed the bar.
+
+## `GET /api/v1/history/tree?bins=N[&window=<duration>]`
+
+The health bar of **every row of the tree** over one window, in one answer (2026-10-27): what `/history/bar` gives an entity and its children,
+for the whole tree, so a page's tree can draw each row's past from before it opened without a request per row. `bins` and `window` are
+`/history/bar`'s (`bins` 1..1000, default 60; `window` default the app's, 1 min .. what the history keeps; out of range or not a whole number
+→ **400**); there is no `path` (it is the whole tree from `host`).
+
+```json
+{
+  "path": "host",
+  "window_s": 60.0,
+  "from": 1792631490.0,
+  "to": 1792631550.0,
+  "bins": 12,
+  "bin_s": 5.0,
+  "rows": [
+    {"path": "host", "name": "bam-GPU", "depth": 0, "basis": "below", "statuses": 71,
+     "bar": ["ok", "ok", "error", "error", "error", "error", "error", "error", "error", "error", "error", "error"]},
+    {"path": "host/usb1/port-1-3/usb-1-3", "name": "fdcanusb 272813EF", "depth": 3, "basis": "own", "statuses": 3,
+     "bar": [null, null, null, null, "ok", "stale", "stale", "stale", "stale", "stale", "stale", "stale"]}
+  ]
+}
+```
+
+- `rows`: every row of `/state`'s tree, parent first then its children in order, each exactly the row `/history/bar` returns for that entity
+  (`path`, `name`, `basis`, `statuses`, `bar`, with the same rules: the row's own statuses when it has any, else everything below it), made by the
+  same code, so the two cannot differ. `depth` is the row's depth **in the tree** (the host row is 0, as `/state`'s `depth`), where `/history/bar`
+  counts from the entity it was asked about (0, then 1 for its children).
+- A group's bar reads every status below it, so the host makes each status's timeline once and every row that reads it shares it.
+
+## `GET /api/v1/checks`
+
+The latest checks (diagnostic statuses) of every entity in one answer (2026-10-27), for a Diagnostics table across a rack: one request instead of one
+`GET /api/v1/node` per entity. No parameters.
+
+```json
+{
+  "clock": {"now": 1792631550.0, "iso": "2026-10-21T18:12:30-07:00", "time": "18:12:30", "mode": "fixture", "utc_offset_s": -25200,
+            "rank": ["ok", "warn", "unknown", "stale", "error"], "stale_factor": 3.0, "stale_floor_s": 5.0},
+  "checks": {
+    "host/usb1/port-1-3/usb-1-3": [
+      {"name": "v6_scenario: plugin run", "level": "ok", "effective_level": "stale", "stale": true, "message": "ran in 0.043 s · 31 records",
+       "code": "", "mode": null, "source": "io_diagnostics.runner", "hardware_id": "usb:0483:5740:272813EF", "stamp": 1792631510.0, "received": 1792631510.0,
+       "received_iso": "2026-10-21T18:11:50-07:00", "age_s": 40.0, "expected_period_s": 2.0, "stale_after_s": 6.0, "uptime_s": null,
+       "caused_by": [], "values": [{"key": "outcome", "value": "ok"}],
+       "measurements": [{"key": "duration", "value": 0.05, "unit": "s", "text": "0.05 s", "level": "ok", "stamp": null, "warn_low": null,
+                         "warn_high": 8.0, "error_low": null, "error_high": null}]}
+    ]
+  }
+}
+```
+
+- `clock`: the host's clock as in `/state`; every `age_s` and `effective_level` below is judged at its `now`.
+- `checks`: entity path → that entity's checks, **each exactly the object `/node?path=` gives in its `checks`** (the same `check_json`), worst first.
+  An entity with no checks is absent (an absent path is "none", not "unknown"); a path is any entity `/node` knows.
 
 ## Settings: `GET /api/v1/settings`, `POST /api/v1/settings`
 

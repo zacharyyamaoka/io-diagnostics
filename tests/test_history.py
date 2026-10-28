@@ -362,4 +362,4 @@ def test_the_history_answers_match_the_doc_examples(rack):
     same_keys(answer, documented, "bar")
     same_keys(answer["rows"][0], documented["rows"][0], "bar.rows[]")
     same_keys(rack.settings_json(), example("Settings"), "settings")
-    assert (ROOT / "docs" / "api-v1.md").read_text().count("| `GET /api/v1/history") == 2
+    assert (ROOT / "docs" / "api-v1.md").read_text().count("| `GET /api/v1/history") == 3  # history, history/bar and (2026-10-27) history/tree
