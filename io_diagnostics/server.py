@@ -42,7 +42,8 @@ from io_diagnostics.terminal import KEEPALIVE_S, RunError
 
 DEFAULT_PORT = 8812
 TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
-         ".svg": "image/svg+xml", ".png": "image/png", ".json": "application/json", ".ico": "image/x-icon"}
+         ".svg": "image/svg+xml", ".png": "image/png", ".json": "application/json", ".ico": "image/x-icon",
+         ".base": "text/plain; charset=utf-8"}  # data-ui's dashboard files: text, never a download
 NO_ACTIONS = ("actions never execute through this endpoint: the page runs one only through POST /api/v1/act, a dry run "
               "first, then a person's confirmed click (docs/api-v1.md)")
 # WHY 300 s: a moteus confirm token names one 5-minute window and is honoured for the next one too, so a run within
@@ -197,7 +198,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": f"no endpoint {parsed.path!r} (see docs/api-v1.md)"}, 404)
         except Exception as error:  # noqa: BLE001 - show the failure, keep serving
             return self._json({"error": f"{type(error).__name__}: {error}"}, 500)
-        name = "index.html" if parsed.path in ("/", "") else parsed.path.lstrip("/")
+        # a path that ends in "/" is a directory: its index.html (``/`` is the web root's, ``/dx/`` is dx/index.html); the check below still
+        # resolves the file and refuses anything outside the web root
+        name = parsed.path.lstrip("/")
+        if name == "" or name.endswith("/"):
+            name += "index.html"
         path = (WEB / name).resolve()
         if WEB.resolve() not in path.parents or not path.is_file():
             return self._send(404, b"not found", "text/plain; charset=utf-8")

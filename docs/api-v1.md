@@ -42,7 +42,7 @@ uv run --project /home/bam/io-diagnostics python /home/bam/io-diagnostics/io_dia
 | `GET /api/v1/dashboards`, `GET`, `PUT`, `DELETE /api/v1/dashboards/<name>.base` | The person's dashboards as files (data-ui's `.base` text, opaque to the host) under the config directory: list, read, write (atomic, optional `If-Match`) and move to `.trash/`; the PUT and DELETE are the page's ONLY | on load / on save |
 | `POST /api/v1/act` | The Utilities panel ONLY: a dry run, then a person's confirmed run with the dry run's token | on click |
 | `POST /api/v1/expect`, `/forget`, `/retire` | The Expected setup card ONLY: one edit of the rig file after a person's confirm | on click |
-| `GET /`, `/<file>` | The page in `io_diagnostics/web/` | — |
+| `GET /`, `/<file>`, `/<dir>/` | The page in `io_diagnostics/web/`. A path ending in `/` is that directory's `index.html` when it has one (`/dx/` is `dx/index.html`; `/` is the web root's), else **404**; `/dx` with no slash is not redirected. `.base` files (data-ui's dashboards) are `text/plain; charset=utf-8`. Nothing outside the web root is served (a `..`, an encoded one, a symlink out: **404**) | — |
 
 Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while building a response → **500**
 `{"error": "<Type>: <message>"}` (the server keeps serving).
