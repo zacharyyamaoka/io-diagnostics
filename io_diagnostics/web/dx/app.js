@@ -107,6 +107,8 @@ function sayBefore() {
 // frame), and a throttle that drops it left the line hidden after a scrub ('state' fires before t moves)
 let beforeTimer = null;
 function sayBeforeSoon() {
+  // following, the line is hidden and stays so: no work on every frame's `time` (the profile found a timer a frame here)
+  if (clock.following && before.hidden && !beforeTimer) return;
   const wait = 100 - (performance.now() - beforeAt);
   if (wait <= 0) { beforeAt = performance.now(); sayBefore(); return; }
   if (!beforeTimer) beforeTimer = setTimeout(() => { beforeTimer = null; beforeAt = performance.now(); sayBefore(); }, wait);
