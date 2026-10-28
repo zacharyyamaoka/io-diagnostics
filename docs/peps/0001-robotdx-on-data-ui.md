@@ -486,9 +486,9 @@ bfc632f + lane/app-rail e1dc0b9 (scratch merge 7f2b620; bfc632f changed only dat
 
 | | pytest | JS files | test_dx_page.js |
 |---|---|---|---|
-| phase 3, before the rebase (on ae938a4) | 603 passed, 1 failed, 1 skipped | 18 of 18 pass (2,580 checks) | 57/58 (K5, the old oracle) |
+| phase 3, before the rebase (on ae938a4) | 602 passed, 2 failed (the folder name; a timing test that passes alone), 1 skipped | 18 of 18 pass (2,580 checks) | 57/58 (K5, the old oracle) |
 | rebased, phase 3's page (2efd9e3) | 662 passed, 1 failed, 1 skipped | 19 of 19 pass (main added test_rail_mode.js 6/6; test_layouts.js 200/200; test_diag_variants.js 405, was 406, no failure) | 57/58 (K5, the old oracle) |
-| phase 3b (e948f69) | see the report | see the report | **67/67** (the K5 oracle corrected; the conflict check's own 412 expected) |
+| phase 3b (e948f69) | 662 passed, 1 failed, 1 skipped | 20 of 20 pass (2,685 checks) | **67/67** (the K5 oracle corrected; the conflict check's own 412 expected) |
 
 The one pytest failure every time is `test_host_plugins.py::test_good_declaration_loads_with_placeholders_and_defaults`, which
 asserts that the checkout's folder is named `io-diagnostics`: a lane worktree is not.
