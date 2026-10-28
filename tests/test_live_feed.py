@@ -116,6 +116,12 @@ def rig(tmp_path, monkeypatch):
     host.stop()
 
 
+def unstamped(data: dict) -> dict:
+    """An event's JSON without ``emitted`` (the host's wall-clock send time, tested on its own): what the event says about the rig."""
+
+    return {key: value for key, value in data.items() if key != "emitted"}
+
+
 def state_json(host) -> dict:
     connection = http.client.HTTPConnection(urlparse(host.url).netloc, timeout=10)
     connection.request("GET", "/api/v1/state")
@@ -158,7 +164,7 @@ def test_the_first_event_is_a_snapshot_equal_to_state(rig):
     assert stream.response.status == 200 and stream.response.headers["Content-Type"].startswith("text/event-stream")
     assert stream.response.headers["Cache-Control"] == "no-store"
     first = stream.event()
-    assert first["event"] == "snapshot" and first["data"] == state_json(rig) and int(first["id"]) >= 1
+    assert first["event"] == "snapshot" and unstamped(first["data"]) == state_json(rig) and int(first["id"]) >= 1
     assert until_idle(stream) == []  # nothing changed: nothing is sent
 
 
@@ -166,7 +172,7 @@ def test_the_first_event_is_a_snapshot_equal_to_state(rig):
 def test_a_state_change_is_one_upsert_for_the_changed_row_and_nothing_for_the_rest(rig):
     stream = rig.open_stream()
     snapshot = stream.event()
-    before = rows_of(snapshot["data"])
+    before = rows_of(unstamped(snapshot["data"]))
     change_motor_message(rig, "mapping read again · 10:1")
     after = rows_of(state_json(rig))
     differing = {key for key in after if after[key] != before.get(key)}
@@ -227,7 +233,7 @@ def test_a_row_that_leaves_is_a_remove_and_a_clock_that_runs_is_not_a_change():
         host.state_now = host.make_state(children)
         before = feed.counter
         feed._tick()
-        return [(name, json.loads(data.split(b"data: ", 1)[1])) for number, _t, data in feed.ring
+        return [(name, unstamped(json.loads(data.split(b"data: ", 1)[1]))) for number, _t, data in feed.ring
                 for name in [data.split(b"event: ", 1)[1].split(b"\n", 1)[0].decode()] if number > before]
 
     assert tick(["a", "b"], 105.0) == []  # five seconds on: every age_s and the clock moved, nothing a page draws did
@@ -241,6 +247,9 @@ def test_a_row_that_leaves_is_a_remove_and_a_clock_that_runs_is_not_a_change():
     before = feed.counter
     feed._tick()
     assert [data.split(b"event: ", 1)[1].split(b"\n", 1)[0] for number, _t, data in feed.ring if number > before] == [b"upsert"]
+    # every kind of event the ring holds (the removes too) says when the host emitted it
+    stamps = [json.loads(data.split(b"data: ", 1)[1])["emitted"] for _n, _t, data in feed.ring]
+    assert len(stamps) >= 4 and all(isinstance(stamp, float) and abs(stamp - time.time() * 1000) < 60_000 for stamp in stamps)
 
 
 def test_samples_arrive_with_the_values_shape(rig):
@@ -252,11 +261,32 @@ def test_samples_arrive_with_the_values_shape(rig):
     assert [event["event"] for event in got] == ["samples"]
     path = f"host/usb1/port-1-3/usb-1-3/{key[0]}" if key[0] else "host/usb1/port-1-3/usb-1-3"
     data = got[0]["data"]
-    assert data["path"] == path and set(data) == set(rig.values_json(path)) and data["cursor"] >= 1
+    assert data["path"] == path and set(unstamped(data)) == set(rig.values_json(path)) and data["cursor"] >= 1
     sent = [(group["name"], row["key"], row["points"]) for group in data["groups"] for row in group["rows"]]
     assert sent and all(len(points) == 1 and points[0][1] == 41.5 for _g, _k, points in sent)  # only what is new, nothing already held
     assert sent[0][:2] == (key[1], key[2])
     assert until_idle(stream) == []  # and once
+
+
+# ----- the emit stamp ---------------------------------------------------------------------------------------------------
+def test_every_event_carries_the_wall_clock_it_was_emitted_at(rig):
+    before = time.time() * 1000
+    stream = rig.open_stream()
+    snapshot = stream.event()
+    change_motor_message(rig, "stamped")
+    add_point(rig, 41.5)
+    rig.notify("plugin")
+    got = until_idle(stream)
+    after = time.time() * 1000
+    assert {event["event"] for event in got} == {"upsert", "samples"}
+    for event in [snapshot, *got]:
+        assert isinstance(event["data"]["emitted"], float) and before <= event["data"]["emitted"] <= after, event["event"]
+    # WHY it exists: on a fixture clock.now is the replay clock, so it says nothing about when the host sent the event
+    assert abs(snapshot["data"]["clock"]["now"] * 1000 - snapshot["data"]["emitted"]) > 1000.0
+    assert snapshot["data"]["emitted"] <= got[0]["data"]["emitted"]
+    # a client that resumes is sent the ring again with the stamps the events first left with
+    again = rig.open_stream({"Last-Event-ID": str(snapshot["id"])})
+    assert [event["data"]["emitted"] for event in until_idle(again)] == [event["data"]["emitted"] for event in got]
 
 
 # ----- ids, resume ------------------------------------------------------------------------------------------------------
@@ -361,6 +391,7 @@ def test_a_quiet_stream_sends_a_heartbeat_comment(rig, monkeypatch):
     while not stream.comments and time.monotonic() < deadline:
         time.sleep(0.05)
     assert stream.comments[:1] == [": keepalive"]
+    assert all(comment == ": keepalive" for comment in stream.comments) and stream.queue.empty()  # a heartbeat stays a comment: no event, no stamp
 
 
 def test_the_stream_ends_when_the_host_stops(rig):
@@ -442,6 +473,8 @@ def test_a_watched_entitys_samples_come_at_the_watchs_rate_none_twice_none_lost(
     got = points_by_series(events, board)
     held = {(group["name"], row["key"]): row["points"] for group in rig.host.values_json(board, since)["groups"] for row in group["rows"]}
     assert got and got == held  # not one point sent twice, not one lost, in the host's order
+    sent_at = [event["data"]["emitted"] for event in events if event["data"]["path"] == board]
+    assert all(later - earlier >= 99.0 for earlier, later in zip(sent_at, sent_at[1:]))  # coalesced: one event per entity per 100 ms, measured on the host
 
 
 def test_an_unwatched_entitys_samples_wait_for_the_tick(watched_rig):

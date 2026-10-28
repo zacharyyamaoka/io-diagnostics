@@ -77,6 +77,13 @@ def rows_of(state: dict) -> dict[tuple[str, str], object]:
     return rows
 
 
+def emitted_ms() -> float:
+    """The host's wall clock now, unix milliseconds (``time.time()``). WHY not ``clock.now``: on a fixture that is the replay clock, so a page
+    could not time a sample from the host's send to its own draw."""
+
+    return round(time.time() * 1000, 3)
+
+
 def frame(event_id: int, name: str, data: str) -> bytes:
     return f"id: {event_id}\nevent: {name}\ndata: {data}\n\n".encode()
 
@@ -142,7 +149,7 @@ class LiveFeed:
             resume = None
         if resume is None or not self.floor <= resume <= self.counter:
             sub.cursor = self.counter
-            return [frame(self.counter, "snapshot", _dump(self.state))]
+            return [frame(self.counter, "snapshot", _dump({**self.state, "emitted": emitted_ms()}))]
         sub.cursor = self.counter
         return [data for number, _stamp, data in self.ring if number > resume]
 
@@ -234,13 +241,15 @@ class LiveFeed:
         return {**answer, "groups": groups} if groups else None
 
     def _publish(self, events: list[tuple[str, dict]]) -> None:
-        """Number each event, put it in the ring and wake the clients."""
+        """Number each event, stamp it with the wall clock it leaves at (``emitted``), put it in the ring and wake the clients.
+
+        A client that resumes with ``Last-Event-ID`` is sent the ring's bytes again, so a replayed event keeps the stamp it first left with."""
 
         with self.cond:
             now = time.monotonic()
             for name, data in events:
                 self.counter += 1
-                self.ring.append((self.counter, now, frame(self.counter, name, _dump(data))))
+                self.ring.append((self.counter, now, frame(self.counter, name, _dump({**data, "emitted": emitted_ms()}))))
             while self.ring and (len(self.ring) > self.ring_events or now - self.ring[0][1] > self.ring_seconds):
                 self.floor = self.ring.popleft()[0]
             if events:

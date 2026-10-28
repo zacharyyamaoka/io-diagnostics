@@ -937,6 +937,11 @@ data: {"path": "host/usb1/port-1-3/usb-1-3/can/1/driver", "now": 1792790150.0, "
   `watch` is running; `POST /api/v1/watch`) does not wait for the tick: its new points are sent as they arrive, coalesced to at most one `samples`
   event per watched entity per 100 ms (10 Hz; measured on a 10 Hz fixture watch: 20 events in 2.0 s). The shape is the same, and a point is sent
   once (both paths advance one cursor per entity under one lock), so the page's State moves at the watch's rate. Entities nobody watches keep the tick.
+- **`emitted`** (2026-10-27): every event's JSON, of every kind (`snapshot`, `upsert`, `remove`, `samples`), has `"emitted": <unix milliseconds, float>`, the host's **wall clock**
+  (`time.time()`) when it put the event on the feed. WHY: on a fixture `clock.now` is the replay clock, so without it a page cannot time an event from the host's send to
+  its own draw. It is a top-level key of the event's data, beside `table`/`id`/`row` or `path`/`cursor`/`groups`; in a `snapshot` it sits beside `/state`'s own keys
+  (`/state` itself does not have it, and it is not a state section a client should keep). A client that resumes with `Last-Event-ID` is sent the ring's bytes again, so a
+  replayed event carries the stamp it first left with. The `: keepalive` heartbeat stays a comment line: no event, no stamp.
 - **Time is not a change.** Pure functions of the host clock are not compared, or every row with records would change every tick: a row's
   `age_s` and `presence.age_s`, and `clock.now` / `iso` / `time`. A row that is sent for any other reason carries the age it has at that moment;
   a page that wants it now computes `clock.now` (as of the snapshot, then the time since) minus the row's `last_received`.
