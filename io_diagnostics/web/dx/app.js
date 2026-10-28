@@ -9,11 +9,17 @@
    Read-only by construction: the only request that is not a GET is watch.js's heartbeat (PEP §12.2). Every write the
    host offers (utilities, configuration, the expected setup, settings) stays on the classic page, linked per entity. */
 
-import { LiveClock, LiveDataset, parseBase, stringifyBase, loadDataset, connectSSE, connectPoll, makeResizable, bindRailSelect, esc, fmtTime } from '../vendor/data-ui/data-ui.js';
+import { LiveClock, LiveDataset, parseBase, stringifyBase, loadDataset, connectSSE, connectPoll, makeResizable, bindRailSelect, esc, fmtTime, loadView } from '../vendor/data-ui/data-ui.js';
 import '../vendor/data-ui/dashboard.js';
 import { RobotDxFeed, bindingOf } from './feed.js';
 import { startHeartbeat } from './watch.js';
 import { mountDashboards } from './boards.js';
+
+// WHY the views' code first, beside the feed's first requests: data-ui's live <data-views> builds its first model before its live
+// feed is attached and keeps serving it while the view's module loads, so a live draw in that window drew an empty tree until the
+// next change came (on F1 the host's ~2 s tick: first paint 1.5-1.9 s on 7 of 24 cold loads). A module that is ready before the
+// first live frame takes the live path at once (PEP 0001 §15.1; asked of data-ui's live lane)
+for (const type of ['table', 'kpi', 'playback', 'plot', 'levels']) loadView(type).catch(() => { /* the view says it could not load */ });
 
 const app = document.getElementById('dx-app');
 const main = document.getElementById('dx-main');
