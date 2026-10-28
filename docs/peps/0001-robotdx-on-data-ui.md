@@ -412,7 +412,7 @@ on today's page (a write, §6), linked from Explore ("Open on the classic page" 
 | KPI | Today's page | The new page | Target | How |
 |---|---|---|---|---|
 | K2 bytes, requests per s, idle (Explore, nothing selected) | 54.7-57.9 KB/s, 2.1-2.3 req/s | **26.0-27.6 KB/s, 0.73-0.75 req/s** | ≤ 8 KB/s, ≤ 1 req/s | the same host, the same run, 15 s each (`tests/test_dx_page.js`); `/state` on SSE ticks (≥ 2 s) instead of a 1 s timer. The rest needs a host delta feed |
-| K5 scrub: last seek → every panel of the entity drawn at t | n/a | **10-269 ms** end to end in 10 runs (FAIL at 50 ms in 9 of 10); 8-13 ms per seek once paused, every panel's own draw 0.5-3 ms | ≤ 50 ms | the test's own listeners on the clock and `data-views-live`; the slow part is the first frame after leaving live and frame scheduling in headless software rendering on a loaded machine, not the views' JavaScript (no long tasks seen) |
+| K5 scrub: last seek → every panel of the entity drawn at t | n/a | **10-269 ms** as first measured, **an artefact of the check** (it took the last draw at t, and a keyed panel draws again at the same t whenever a new version arrives; corrected in phase 3b, §14: 9-27 ms); 8-13 ms per seek once paused, every panel's own draw 0.5-3 ms | ≤ 50 ms | the test's own listeners on the clock and `data-views-live`; the slow part is the first frame after leaving live and frame scheduling in headless software rendering on a loaded machine, not the views' JavaScript (no long tasks seen) |
 | K7 cold load → the tree drawn | not measured | **120-221 ms** (221 inside the full suite run) | ≤ 1.5 s | an in-page 10 ms timer from navigation start |
 | Page weight (Explore) | 592 KB gz | **216 KB gz** (data-ui core 103, live views 30, kpi 14, table 12, dashboard 15, the page 30) | — | gzip -9 of each file the page loads |
 
@@ -476,3 +476,44 @@ docs/api-v1.md. One seam each, in the page's adapter and its board store; what t
   device). The checks allow them only while the saving checks run, against the fixture host's scratch config dir
   (`IO_DIAGNOSTICS_CONFIG_DIR`; the host's own rule: that variable, else `$XDG_CONFIG_HOME/io-diagnostics`, else
   `~/.config/io-diagnostics`).
+
+### 14.1 As built and measured (2026-10-27)
+
+**Rebase.** lane/robotdx-data-ui sits on main d0b9223 (78ac3e1, 7e2e789, bbc3e00, d0b9223); data-ui re-vendored at lane/live
+bfc632f + lane/app-rail e1dc0b9 (scratch merge 7f2b620; bfc632f changed only data-ui's bench, so every bundle is the same).
+
+**Tests** (`run_suite.sh`: pytest, then every `tests/test_*.js`):
+
+| | pytest | JS files | test_dx_page.js |
+|---|---|---|---|
+| phase 3, before the rebase (on ae938a4) | 603 passed, 1 failed, 1 skipped | 18 of 18 pass (2,580 checks) | 57/58 (K5, the old oracle) |
+| rebased, phase 3's page (2efd9e3) | 662 passed, 1 failed, 1 skipped | 19 of 19 pass (main added test_rail_mode.js 6/6; test_layouts.js 200/200; test_diag_variants.js 405, was 406, no failure) | 57/58 (K5, the old oracle) |
+| phase 3b (e948f69) | see the report | see the report | **67/67** (the K5 oracle corrected; the conflict check's own 412 expected) |
+
+The one pytest failure every time is `test_host_plugins.py::test_good_declaration_loads_with_placeholders_and_defaults`, which
+asserts that the checkout's folder is named `io-diagnostics`: a lane worktree is not.
+
+**KPIs, as published** to `/home/bam/vt/zach/producers/robotdx` (`tools/bench_robotdx.py`, run 20261027-235638 at e948f690,
+trust quiet: load 12.6-13.1 on 24 CPUs, calibration 389-418 ms against a best of 389; GPU: ANGLE on Vulkan, RTX 4080 SUPER):
+
+| KPI | Value | Budget | Notes |
+|---|---|---|---|
+| `first_paint_ms` (p95 of 5 cold loads) | **165** | 1,500 | 130-165 ms |
+| `ingest_to_pixel_ms` (p95, 6,000 samples/s into 6 plots, host emit) | **36.8** (p50 16.2) | 30 | 600×2: 32.8; 24,000×12: 60.3. On the fixture host from the adapter's receive: 14.4 p95 (8.2 p50), plus the host's own ~1 s change tick |
+| `frame_time_ms` (p95, 6,000×6) | **50.0** (p50 33.3) | 16.7 | 600×2: 16.8 (60 fps, none dropped); 24,000×12: 66.7. The frame loop's own work is 3-11 ms p95: the rest is parsing 360 small SSE events a second and drawing six canvases |
+| `heap_mb` (64 MB cap, 90 s; short) | **22.6** | (diagnostic) | the store at its cap (63.7 MB of typed arrays outside the JS heap) after 20 s; `--long` not run yet |
+| `scrub_ms` (p95 of 30) | **25.8** (p50 23.3) | 50 | the test measures 9-27 ms |
+| `back_to_live_ms` (p95 of 10) | **263.5** (p50 20.2) | 100 | one slow go-live of ten; the first run of the bench had 29.5 |
+| `idle_traffic_kb_s` | **26.3** | 8 | on `/api/v1/live`. The page-level traffic, from the checks: **1.48 MB/min** live, 1.56 MB/min on the `/state` fallback, 3.68 MB/min for today's page; the RobotDx session measured 1.62 MB/min for `/live` against 4.02 MB/min polling on F1 |
+
+**Asks of the RobotDx session** (the API stays frozen here):
+1. `/live`'s `samples` come with the host's change tick, at most about once a second while a 10 Hz watch runs, so State on
+   the page now moves in one-second steps (phase 3 polled `/values` at 4 Hz). A watched entity's samples sent as they arrive
+   (or a tick at the watch's period) would bring the plot back to 10 Hz.
+2. A wall-clock emit stamp on each `/live` event (the fixture's `now` is its replay clock), so ingest to pixel can be timed
+   from the host's emit on a fixture host too, not only from the page's receive.
+3. Still open from §13: the tree's states over the window (step B), all checks in one answer, `/dx/` serving its index.
+
+**Ask of data-ui:** a paused keyed view redraws whenever a version arrives, even one after its t (the `change` event
+carries `from`; an upsert newer than t changes nothing the view shows). It cost K5's first measurement its meaning and
+costs a paused page work it does not need.

@@ -3,7 +3,7 @@
 // beside today's page on the same fixture host, light and dark. No hardware: tests/entity_harness.js starts
 // `cli.py serve --fixture F1 --plugins <copy of tests/fixtures/plugins-state> --port 0 --no-udev` and stops it by its process group.
 //
-//   /usr/bin/node /home/bam/io-diagnostics/docs/record_dx.js [out dir]       (default reports/media/dx, git-ignored)
+//   /usr/bin/node /home/bam/io-diagnostics/docs/record_dx.js [out dir] [--after-only]   (default reports/media/dx, git-ignored)
 //
 // before-*.png  today's page (tree; the entity page's State tab)      after-*.png  the new page (Explore, a dashboard, paused at t,
 // Activity, Dashboards, the rail's three styles, Add panel)              dx-rewind.webm (+ .mp4, .gif)  streaming → scrub back → LIVE
@@ -15,6 +15,8 @@ const { execFileSync } = require('child_process');
 const { BOARD, fs, path } = H;
 
 const OUT = path.resolve(process.argv[2] || path.join(H.ROOT, 'reports', 'media', 'dx'));
+// --after-only keeps the before shots already in OUT (today's page, the comparison) and re-shoots the new page
+const AFTER_ONLY = process.argv.includes('--after-only');
 const DX = '/dx/index.html';
 const sel = encodeURIComponent(BOARD);
 
@@ -61,15 +63,17 @@ async function scrubTo(page, fraction, steps = 6, stepMs = 0) {
     for (const scheme of ['light', 'dark']) {
       console.log(`${scheme}:`);
       // ---- before: today's page on the same host ----------------------------------------------------------------------------
-      const old = await H.newContext(browser, scheme);
-      const oldPage = await old.newPage();
-      await oldPage.goto(`${base}/`);
-      await settle(oldPage, 3000);
-      await shot(oldPage, `before-tree-${scheme}`);
-      await oldPage.goto(`${base}/?sel=${sel}&page=state`);
-      await settle(oldPage, 5000);
-      await shot(oldPage, `before-state-${scheme}`);
-      await old.close();
+      if (!AFTER_ONLY) {
+        const old = await H.newContext(browser, scheme);
+        const oldPage = await old.newPage();
+        await oldPage.goto(`${base}/`);
+        await settle(oldPage, 3000);
+        await shot(oldPage, `before-tree-${scheme}`);
+        await oldPage.goto(`${base}/?sel=${sel}&page=state`);
+        await settle(oldPage, 5000);
+        await shot(oldPage, `before-state-${scheme}`);
+        await old.close();
+      }
       // ---- after: the new page ---------------------------------------------------------------------------------------------------
       const ctx = await H.newContext(browser, scheme);
       const page = await ctx.newPage();
