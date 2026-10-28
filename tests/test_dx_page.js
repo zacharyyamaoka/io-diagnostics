@@ -22,6 +22,11 @@
 //   requests   every request of every page is on the allow-list of §12.2 (GET the page's files and the read endpoints; POST only
 //              /api/v1/watch {path} while State is on screen); the heartbeat stops when State leaves the screen or the tab hides
 //   kpis       K2 bytes / requests per second idle (beside today's page on the same host), K5 scrub to drawn, K7 cold load (§8)
+//   phase 3c   (§15) the snapshot's `emitted` is not kept as a state section; the tree scrubbed back before the page opened is today's
+//              rows with the health the host kept (its own /history/tree read by the test is the oracle), and on a host without
+//              /history/tree it is empty with the phase 3 note; State at the watch's rate stops the /values poll (the fixture host,
+//              and the test-only stub at the host's cadence, at an older host's tick and with a slow watch); the Diagnostics starter
+//              is the host's GET /api/v1/checks, worst first, with no per-entity /node; the page's address is /dx/
 // Exits 1 on any failure.
 'use strict';
 
@@ -29,7 +34,7 @@ const H = require('./entity_harness');
 const { chromium } = require(H.PLAYWRIGHT);
 const { check, BOARD, fs, os, path } = H;
 
-const DX = '/dx/index.html';
+const DX = '/dx/';   // 4e2ec56: a path ending in / serves its index.html (PEP 0001 §15)
 const BROWSER_ARGS = ['--no-first-run', '--disable-extensions', '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
   '--disable-backgrounding-occluded-windows'];
 const GPU_ARGS = ['--use-angle=vulkan', '--enable-features=Vulkan', '--enable-gpu', '--ignore-gpu-blocklist'];
@@ -40,7 +45,7 @@ const RAIL_WIDTHS = { collapsed: 48, expanded: 72, wide: 240 };
 const STARTERS_MIN = 2;
 
 // ---- the request allow-list (PEP 0001 §12.2, §14) -------------------------------------------------------------------------------
-const GET_OK = [/^\/dx\//, /^\/vendor\/data-ui\//, /^\/usb\.js$/, /^\/api\/v1\/(state|node|values|history|activity|events|settings|health|live)(\?|$)/,
+const GET_OK = [/^\/dx\//, /^\/vendor\/data-ui\//, /^\/usb\.js$/, /^\/api\/v1\/(state|node|values|history|history\/tree|activity|events|settings|health|live|checks)(\?|$)/,
   /^\/api\/v1\/dashboards(\/[^/?]+\.base)?$/];
 const DASHBOARD_FILE = /^\/api\/v1\/dashboards\/[^/?]+\.base$/;
 // the dashboard writes (PUT, DELETE) are allowed only while the saving checks run, against this fixture host's own config dir
@@ -94,10 +99,11 @@ const clockState = (page) => page.evaluate(() => { const c = window.robotdx.cloc
 const treeRows = (page) => page.evaluate(() => {
   const el = document.querySelector('#dx-tree');
   const out = [];
-  const walk = (rows, depth) => { for (const r of rows || []) { out.push({ id: String(r.id), name: r.original ? r.original.name : '', depth }); walk(r.subRows, depth + 1); } };
+  const of = (o) => ({ name: o.name, level: o.level ?? null, health: o.health || '', claimed: o.claimed !== false });
+  const walk = (rows, depth) => { for (const r of rows || []) { out.push({ id: String(r.id), ...of(r.original || {}), depth }); walk(r.subRows, depth + 1); } };
   const table = el && el.model && el.model.table;
   if (table && typeof table.getCoreRowModel === 'function') walk(table.getCoreRowModel().rows, 0);
-  else for (const r of (el && el.model && el.model.rows) || []) out.push({ id: String(r.id), name: r.name, depth: 0 });
+  else for (const r of (el && el.model && el.model.rows) || []) out.push({ id: String(r.id), ...of(r), depth: 0 });
   return out;
 });
 const kpiCards = (page, scope) => page.evaluate((s) => [...document.querySelectorAll(`${s} .dv-kpi-card`)].map((c) => {
@@ -157,6 +163,89 @@ async function dragBy(page, handleRect, dx, dy = 0, y = null) {
   await page.waitForTimeout(250);
 }
 
+// ---- phase 3c helpers (PEP 0001 §15) -------------------------------------------------------------------------------------------
+// The host's first /live event, read by the test itself (not the page): the oracle that `emitted` is there to be left out.
+function firstLiveEvent(base) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => { if (!done) { done = true; resolve(v); } };
+    const req = require('http').get(`${base}/api/v1/live`, (res) => {
+      let buf = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk) => {
+        buf += chunk;
+        const at = buf.indexOf('event: snapshot');
+        const end = at >= 0 ? buf.indexOf('\n\n', at) : -1;
+        if (end < 0) return;
+        const line = buf.slice(at, end).split('\n').find((l) => l.startsWith('data: '));
+        req.destroy();
+        try { finish(JSON.parse(line.slice(6))); } catch (_) { finish(null); }
+      });
+    });
+    req.on('error', () => finish(null));
+    setTimeout(() => { req.destroy(); finish(null); }, 8000);
+  });
+}
+
+// The test-only stub (bench/robotdx_stub.py: synthetic State, no plugin, no device) on a free port of 5600-5699, stopped by its group.
+const STUB = path.join(H.ROOT, 'bench', 'robotdx_stub.py');
+async function freePort(first = 5600, last = 5699) {
+  const net = require('net');
+  for (let port = first; port <= last; port += 1) {
+    const ok = await new Promise((res) => { const s = net.createServer(); s.once('error', () => res(false)); s.listen(port, '127.0.0.1', () => s.close(() => res(true))); });
+    if (ok) return port;
+  }
+  throw new Error('no free port in 5600-5699');
+}
+async function startStub(args) {
+  const port = await freePort();
+  const child = require('child_process').spawn('/usr/bin/python3', [STUB, '--port', String(port), ...args], { cwd: H.ROOT, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  return new Promise((resolve, reject) => {
+    let out = '';
+    const timer = setTimeout(() => { H.stopServer(child); reject(new Error(`the stub did not start: ${out}`)); }, 20000);
+    const on = (chunk) => { out += chunk; const m = out.match(/bench stub on (http:\/\/\S+?)\/ /); if (m) { clearTimeout(timer); resolve({ child, base: m[1] }); } };
+    child.stdout.on('data', on);
+    child.stderr.on('data', on);
+    child.on('exit', (code) => { clearTimeout(timer); reject(new Error(`the stub exited (${code}): ${out}`)); });
+  });
+}
+// Explore on the stub's entity with its State on screen: once its watch runs (the heartbeat went), `settle` waits, then for `seconds`
+// the /values polls of the entity and the gaps between the frames that brought it new State (its samples dataset's `change` events).
+async function stubCadence(browser, stubArgs, { settle, seconds = 4 }, sink) {
+  const stub = await startStub(stubArgs);
+  let ctx = null;
+  try {
+    ctx = await H.newContext(browser, 'light');
+    const p = await ctx.newPage();
+    const seen = recorder(p, stub.base);
+    sink.requests.push(seen);
+    const errs = H.watchErrors(p, stub.base);
+    await p.goto(`${stub.base}${DX}?go=explore&sel=stub/0`);
+    await ready(p);
+    const beat = await H.waitFor(() => seen.some((r) => r.method === 'POST' && r.url === '/api/v1/watch'), 10000);
+    const settled = await settle(p);
+    const from = Date.now();
+    const m = await p.evaluate(async (s) => {
+      const ds = window.robotdx.feed.dataset('samples', 'stub/0');
+      const at = [];
+      const on = () => at.push(performance.now());
+      ds.addEventListener('change', on);
+      await new Promise((r) => setTimeout(r, s * 1000));
+      ds.removeEventListener('change', on);
+      const gaps = at.slice(1).map((t, i) => t - at[i]);
+      const e = window.robotdx.feed.entity('stub/0');
+      return { frames: at.length, max_gap_ms: gaps.length ? Math.round(Math.max(...gaps)) : null, keepsUp: e ? e.feedKeepsUp : null };
+    }, seconds);
+    const polls = seen.filter((r) => r.at >= from && r.url.startsWith(`/api/v1/values?path=${encodeURIComponent('stub/0')}`)).length;
+    sink.errors.push(...errs.errors);
+    return { beat: Boolean(beat), settled: Boolean(settled), ...m, polls, polls_s: +(polls / seconds).toFixed(2) };
+  } finally {
+    if (ctx) await ctx.close().catch(() => {});
+    H.stopServer(stub.child);
+  }
+}
+const keepsUpSoon = (ms) => (p) => H.waitFor(() => p.evaluate(() => { const e = window.robotdx.feed.entity('stub/0'); return Boolean(e && e.feedKeepsUp); }), ms);
+
 (async () => {
   let main;
   // WHY these flags: data-ui's bench (bench/runner.py BROWSER_ARGS) runs headless without timer and renderer backgrounding, so
@@ -207,6 +296,11 @@ async function dragBy(page, handleRect, dx, dy = 0, y = null) {
     const liveFeed = { mode: await page.evaluate(() => window.robotdx.feed.mode), live: firstReqs.filter((r) => r.method === 'GET' && r.url === '/api/v1/live').length,
       state: firstReqs.filter((r) => r.url === '/api/v1/state').length };
     check('the page reads the host through GET /api/v1/live: one stream, no /state poll', liveFeed.mode === 'live' && liveFeed.live === 1 && liveFeed.state === 0, liveFeed);
+    // 5cdb4b9: the snapshot's `emitted` sits beside /state's own keys; the page keeps /state's sections only (PEP 0001 §15)
+    const snap = await firstLiveEvent(base);
+    const mirror = await page.evaluate(() => { const m = window.robotdx.feed._mirror; return m ? { keys: Object.keys(m.state).sort(), emitted: 'emitted' in m.state } : null; });
+    check('the host stamps its snapshot with emitted, and the page does not keep it as a state section', snap && Number.isFinite(snap.emitted) && mirror && !mirror.emitted && mirror.keys.includes('clock') && mirror.keys.includes('summary'),
+      { host: snap ? { emitted: snap.emitted, keys: Object.keys(snap).length } : null, mirror });
 
     // ---- explorer: the tree is the host's tree ---------------------------------------------------------------------------------------
     const state = await H.getJson(base, '/api/v1/state');
@@ -240,6 +334,38 @@ async function dragBy(page, handleRect, dx, dy = 0, y = null) {
     const backTo = await page.waitForFunction((x) => new URLSearchParams(location.search).get('sel') === x, PORT, { timeout: 8000 }).then(() => true, () => false);
     check('Back goes to the selection before (a history entry each)', backTo, await page.evaluate(() => location.search));
 
+    // ---- the tree's past (GET /api/v1/history/tree, PEP 0001 §15): scrubbed back to before the page opened, the tree is today's rows
+    // with the health the host kept for each. The oracle is the test's own /history/tree answer, read now; a row is compared where the
+    // host's bar holds one level for five bins around t (the page's bins were cut at another moment, so their edges differ)
+    const openedAt = await page.evaluate(() => window.robotdx.feed.openedAt);
+    const win = (await H.getJson(base, '/api/v1/settings')).history_window_s || 900;
+    const bins = Math.min(1000, Math.ceil(win / 2));
+    const binText = `${+(win / bins).toFixed(1)} s`;
+    const oracle = await H.getJson(base, `/api/v1/history/tree?bins=${bins}`);
+    const tPast = openedAt - 6;
+    await page.evaluate((t) => window.robotdx.clock.seek(t), tPast);
+    await page.waitForTimeout(600);
+    const pastClock = await clockState(page);
+    const past = await treeRows(page);
+    const pastIds = new Set(past.map((r) => r.id));
+    const lostRows = rows.filter((r) => r.claimed && !pastIds.has(r.id)).map((r) => r.id);
+    check('scrubbed back before the page opened, the tree is today\'s rows (every claimed row is there)', Number.isFinite(openedAt) && !pastClock.following && pastClock.t < openedAt && past.length >= 10 && lostRows.length === 0,
+      { t: pastClock.t, opened: openedAt, rows: past.length, live: rows.length, lost: lostRows.slice(0, 5) });
+    const bin = Math.floor((tPast - oracle.from) / oracle.bin_s);
+    let compared = 0;
+    const wrong = [];
+    for (const row of oracle.rows || []) {
+      const shown = past.find((r) => r.id === row.path);
+      const near = row.bar.slice(Math.max(0, bin - 2), bin + 3);
+      if (!shown || near.length < 5 || near.some((x) => x !== near[0])) continue;
+      compared += 1;
+      if ((shown.level ?? null) !== (near[0] ?? null)) wrong.push({ path: row.path, shown: shown.level, host: near[0] });
+    }
+    check('…each with the level the host kept for it then (its /history/tree bar, where it holds one level around t)', compared >= 5 && wrong.length === 0, { compared, wrong: wrong.slice(0, 5), bin_s: oracle.bin_s });
+    const pastNote = await page.evaluate(() => { const n = document.querySelector('#dx-before'); return n && !n.hidden && n.getBoundingClientRect().height > 0 ? n.textContent : null; });
+    check(`…and the note says what the tree is then (today's rows, the host's ${binText} bins)`, Boolean(pastNote) && /today/i.test(pastNote) && pastNote.includes(binText), pastNote);
+    await page.evaluate(() => window.robotdx.clock.goLive());
+
     // ---- the selected entity: Diagnostics, Configuration, State from the host's own answers -----------------------------------------
     await page.goto(`${base}${DX}?go=explore&sel=${encodeURIComponent(BOARD)}`);
     await ready(page);
@@ -269,6 +395,15 @@ async function dragBy(page, handleRect, dx, dy = 0, y = null) {
     }, BOARD);
     const perStream = rate.rows / Math.max(1, rate.streams) / 3;
     check('State streams at about 10 Hz per value once the watch runs', perStream >= 6 && rate.advanced >= 2, { ...rate, per_stream_hz: +perStream.toFixed(1) });
+    // 5cc429f: the host sends a watched entity's State at the watch's rate, so the page stops its /values poll (PEP 0001 §15)
+    const keepsUp = await H.waitFor(() => page.evaluate((p) => Boolean((window.robotdx.feed.entity(p) || {}).feedKeepsUp), BOARD), 8000);
+    const quietFrom = Date.now();
+    const endFrom = await page.evaluate((p) => window.robotdx.feed.dataset('samples', p).end, BOARD);
+    await page.waitForTimeout(4000);
+    const valuesPolls = everyRequest[0].filter((r) => r.at >= quietFrom && r.url.startsWith(`/api/v1/values?path=${encodeURIComponent(BOARD)}`)).length;
+    const endTo = await page.evaluate((p) => window.robotdx.feed.dataset('samples', p).end, BOARD);
+    check('the feed keeps the watch\'s pace, so the page stops polling /values for the entity (and State still moves)', Boolean(keepsUp) && valuesPolls === 0 && endTo - endFrom >= 3,
+      { keepsUp: Boolean(keepsUp), valuesPolls_4s: valuesPolls, state_advanced_s: +(endTo - endFrom).toFixed(2) });
     const follow = await clockState(page);
     check('the clock follows live: t is the newest data', follow.following && Math.abs(follow.liveEnd - follow.t) < 0.5, follow);
     const thumb = await rect(page, '#dx-time .dv-pb-thumb');
@@ -440,6 +575,28 @@ async function dragBy(page, handleRect, dx, dy = 0, y = null) {
     const points = await H.waitFor(() => page.evaluate(() => { const p = document.querySelector('data-dashboard.dx-board [data-points]'); return p && Number(p.dataset.points) > 0 ? Number(p.dataset.points) : null; }), 12000);
     check('its live plot draws points and follows', Boolean(points) && (await clockState(page)).following, { points });
 
+    // ---- every check in one answer (GET /api/v1/checks, PEP 0001 §15): the Diagnostics starter is the host's own list, worst first,
+    // read with /checks and no per-entity /node
+    const diagFrom = Date.now();
+    await page.goto(`${base}${DX}?go=dashboards&board=diagnostics`);
+    await ready(page);
+    const listed = await H.waitFor(() => page.evaluate(() => {
+      const el = document.querySelector('data-dashboard.dx-board data-views[id$="-checks"]');
+      return el && el.model && el.model.rows && el.model.rows.length ? el.model.rows.map((r) => String(r.id)) : null;
+    }), 15000);
+    const allChecks = await H.getJson(base, '/api/v1/checks');
+    const hostChecks = Object.entries(allChecks.checks || {}).flatMap(([p, list]) => list.map((c) => ({ id: `${p}#${c.name}`, level: c.effective_level || c.level })));
+    const notListed = hostChecks.filter((c) => !(listed || []).includes(c.id)).map((c) => c.id);
+    check('the Diagnostics starter lists every check the host reports (its own GET /api/v1/checks)', Boolean(listed) && hostChecks.length >= 5 && notListed.length === 0 && listed.length === hostChecks.length,
+      { listed: listed && listed.length, host: hostChecks.length, missing: notListed.slice(0, 5) });
+    await page.waitForTimeout(3000);
+    const diagReqs = everyRequest[0].filter((r) => r.at >= diagFrom);
+    const order = await page.evaluate(() => { const el = document.querySelector('data-dashboard.dx-board data-views[id$="-checks"]'); return el ? [...el.querySelectorAll('tbody tr[data-id]')].map((tr) => tr.dataset.id) : []; });
+    const rankOf = Object.fromEntries(hostChecks.map((c) => [c.id, ['ok', 'warn', 'unknown', 'stale', 'error'].indexOf(c.level)]));
+    const ranks = order.map((id) => rankOf[id] ?? -1);
+    check('…worst first, from one /checks request and no per-entity /node', diagReqs.some((r) => r.url === '/api/v1/checks') && !diagReqs.some((r) => r.url.startsWith('/api/v1/node')) && ranks.length >= 5 && ranks.every((x, i) => i === 0 || x <= ranks[i - 1]),
+      { checks: diagReqs.filter((r) => r.url === '/api/v1/checks').length, node: diagReqs.filter((r) => r.url.startsWith('/api/v1/node')).length, ranks: ranks.slice(0, 12) });
+
     // ---- your own, on the host (GET | PUT | DELETE /api/v1/dashboards/<name>.base, PEP 0001 §14): files in THIS fixture host's config
     // dir (the harness gives it IO_DIAGNOSTICS_CONFIG_DIR under its scratch root), never Zach's ~/.config/io-diagnostics
     const hostDir = path.join(main.root, 'config', 'dashboards');
@@ -596,6 +753,7 @@ async function dragBy(page, handleRect, dx, dy = 0, y = null) {
     const older = await H.newContext(browser, 'light');
     await older.route('**/api/v1/live', (route) => route.fulfill({ status: 404, contentType: 'application/json', body: '{"error": "no endpoint \'/api/v1/live\'"}' }));
     await older.route(/\/api\/v1\/dashboards(\/.*)?$/, (route) => route.fulfill({ status: 404, contentType: 'application/json', body: '{"error": "no endpoint"}' }));
+    await older.route(/\/api\/v1\/history\/tree/, (route) => route.fulfill({ status: 404, contentType: 'application/json', body: '{"error": "no endpoint"}' }));
     const oldHostPage = await older.newPage();
     everyRequest.push(recorder(oldHostPage, base));
     const oldHostMeter = await meter(oldHostPage, base);
@@ -604,6 +762,15 @@ async function dragBy(page, handleRect, dx, dy = 0, y = null) {
     const polled = await H.waitFor(async () => (await treeRows(oldHostPage)).length >= 10 && everyRequest[everyRequest.length - 1].filter((r) => r.url === '/api/v1/state').length >= 2, 15000);
     const pollMode = await oldHostPage.evaluate(() => window.robotdx.feed.mode);
     check('with no /api/v1/live (404) the page polls /state instead, and draws the same tree', Boolean(polled) && pollMode === 'poll', { mode: pollMode });
+    // with no /history/tree (404) the tree before the page opened is empty, and phase 3's note says why
+    const oldOpened = await oldHostPage.evaluate(() => window.robotdx.feed.openedAt);
+    await oldHostPage.evaluate((t) => window.robotdx.clock.seek(t), oldOpened - 5);
+    await oldHostPage.waitForTimeout(600);
+    const oldPast = { clock: await clockState(oldHostPage), rows: (await treeRows(oldHostPage)).length,
+      note: await oldHostPage.evaluate(() => { const n = document.querySelector('#dx-before'); return n && !n.hidden ? n.textContent : null; }) };
+    check('with no /api/v1/history/tree (404) the tree before the page opened is empty, and the note says the host keeps no tree', oldPast.clock.t < oldOpened && oldPast.rows === 0 && /no tree/.test(oldPast.note || ''),
+      { t: oldPast.clock.t, opened: oldOpened, rows: oldPast.rows, note: oldPast.note });
+    await oldHostPage.evaluate(() => window.robotdx.clock.goLive());
     const polling = await traffic(oldHostMeter, oldHostPage, IDLE_S);
     await oldHostPage.goto(`${base}${DX}?go=dashboards`);
     await ready(oldHostPage);
@@ -629,6 +796,22 @@ async function dragBy(page, handleRect, dx, dy = 0, y = null) {
     }
     const gpuKind = gpu.renderer ? (SOFTWARE.test(gpu.renderer) ? 'software' : 'gpu') : 'none';
     check(`K5 in the GPU browser (${gpuKind}): the last seek to every live panel drawn at t ≤ 50 ms`, gpu.k5 && typeof gpu.k5.ms === 'number' && gpu.k5.ms <= 50 && gpu.k5.panels.length >= 3, { renderer: gpu.renderer, k5: gpu.k5 });
+
+    // ---- State's pace, three hosts (PEP 0001 §15), on the test-only stub (synthetic State, no plugin, no device): 50 samples/s over
+    // one entity's 5 keys, 10 points a second each. The page must poll /values exactly when the feed lags the data: never with the
+    // host's watch-rate samples, at 250 ms with an older host's 1 s tick (State then still moves faster than the tick), and not
+    // for long with a watch slower than the cadence rule can see (1 point a second each: the "who comes first" rule)
+    const stubSink = { requests: [], errors: [] };
+    const atRate = await stubCadence(browser, ['--rate', '50', '--entities', '1', '--keys', '5', '--coalesce', '0.1'], { settle: keepsUpSoon(8000) }, stubSink);
+    check('stub, the host\'s watch-rate samples: the feed keeps up, no /values poll, State in steps of the watch', atRate.beat && atRate.keepsUp === true && atRate.polls === 0 && atRate.max_gap_ms !== null && atRate.max_gap_ms <= 350, atRate);
+    const atTick = await stubCadence(browser, ['--rate', '50', '--entities', '1', '--keys', '5', '--coalesce', '0'], { settle: (p) => p.waitForTimeout(4000).then(() => true) }, stubSink);
+    check('stub, an older host (samples only with its 1 s tick): the page polls /values about every 250 ms and State moves faster than the tick', atTick.beat && atTick.keepsUp === false && atTick.polls_s >= 3 && atTick.max_gap_ms !== null && atTick.max_gap_ms <= 600, atTick);
+    const slow = await stubCadence(browser, ['--rate', '5', '--entities', '1', '--keys', '5', '--coalesce', '0.1'], { settle: keepsUpSoon(10000) }, stubSink);
+    check('stub, a slow watch (1 point a second each): the polls that bring nothing first stop, the feed keeps up', slow.beat && slow.keepsUp === true && slow.polls === 0, slow);
+    const stubAll = stubSink.requests.flat();
+    const stubOff = stubAll.filter((r) => !onList(r));
+    check('on the stub too: every request on the allow-list, the only write the heartbeat for its entity, no page error', stubOff.length === 0 && stubAll.filter((r) => r.method === 'POST').every((r) => JSON.parse(r.body).path === 'stub/0') && stubSink.errors.length === 0,
+      { off: stubOff.slice(0, 5).map((r) => `${r.method} ${r.url}`), errors: stubSink.errors.slice(0, 5) });
 
     // ---- every request, every page ------------------------------------------------------------------------------------------------
     const all = everyRequest.flat();
