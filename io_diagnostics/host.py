@@ -40,6 +40,7 @@ from io_diagnostics import logview as logview_module
 from io_diagnostics import probe as probe_module
 from io_diagnostics import roster as roster_module
 from io_diagnostics import settings as settings_module
+from io_diagnostics import stock_diagnostics as stock_diagnostics_module
 from io_diagnostics import tree
 from io_diagnostics.faults import Faults
 from io_diagnostics import terminal as terminal_module
@@ -501,7 +502,8 @@ class Host:
                  event_log_cap_bytes: int | None = None, event_log_segment_bytes: int | None = None,
                  ledger_file: Path | None = None,
                  watch_grace_s: float | None = None, watch_tick_s: float | None = None, frames_dir: Path | None = None,
-                 describe_check_s: float | None = None):
+                 describe_check_s: float | None = None, diagnostics_beat_s: float | None = None,
+                 stock_diagnostics_defaults: bool = True):
         self.plugins_dir = Path(plugins_dir)
         self.describe_check_s = describe_check_s if describe_check_s is not None else DESCRIBE_CHECK_S
         # WHY settable: the defaults are the product (probe.py: holders' pids every 1 s, 0.5 s settle, 10 s first
@@ -563,6 +565,12 @@ class Host:
         self.arrangements = Arrangements(Path(settings_file).parent / ARRANGEMENTS_FILE if settings_file else None)
         # the person's dashboards as files (dashboards.py), beside settings.toml; none without one (a host built by hand)
         self.dashboards = DashboardStore(Path(settings_file).parent / DASHBOARDS_DIR) if settings_file else None
+        # robotdx.diagnostics (stock_diagnostics.py): which stock diagnostic runs on which entity, from diagnostics.toml beside
+        # settings.toml (else the default set), and the latest status of each, by (entity path, status name), that the beat made
+        self.stock_diagnostics = stock_diagnostics_module.StockDiagnostics(
+            Path(settings_file).parent / stock_diagnostics_module.DIAGNOSTICS_FILE if settings_file else None,
+            diagnostics_beat_s if diagnostics_beat_s is not None else stock_diagnostics_module.BEAT_S, defaults=stock_diagnostics_defaults)
+        self.stock_results: dict[tuple[str, str], DiagnosticStatus] = {}
         # every change a page could see (a refresh, a udev event, a plugin's records): /api/v1/events waits on it
         self.changes = threading.Condition()
         self.revision = 0
@@ -1243,6 +1251,7 @@ class Host:
         threading.Thread(target=self._recheck_loop, name="io-recheck", daemon=True).start()
         threading.Thread(target=self.describe_all, name="io-describe", daemon=True).start()
         threading.Thread(target=self._reload_loop, name="io-reload", daemon=True).start()
+        threading.Thread(target=self._stock_diagnostics_loop, name="io-stock-diagnostics", daemon=True).start()
         # WHY the OS source decides: only a live machine has a udev to listen to (a fixture or a fake machine has none)
         command = getattr(self.os, "udev_command", None)
         if udev and command:
@@ -1261,6 +1270,55 @@ class Host:
                 self._keep_log()
             except Exception as error:  # noqa: BLE001 - a bad read must not stop the refresher; it shows in sources
                 self.sources = [*self.sources, {"name": "refresh", "state": "skipped", "note": f"{type(error).__name__}: {error}"}]
+
+    # --- robotdx.diagnostics: the stock diagnostics, on a slow beat over the State history ----------------------------------
+    def _stock_diagnostics_loop(self) -> None:
+        # WHY a thread of its own on a slow beat (5 s): the library evaluates windows of history, never the 10 Hz watch path
+        while not self._stop.wait(self.stock_diagnostics.beat_s):
+            try:
+                self.run_stock_diagnostics()
+            except Exception as error:  # noqa: BLE001 - a failing beat must not stop the host; it shows in sources
+                self.sources = [*self.sources, {"name": "stock diagnostics", "state": "skipped", "note": f"{type(error).__name__}: {error}"}]
+
+    def _state_history(self, path: str, now: float, span_s: float) -> dict[str, list[dict]]:
+        """The entity's State groups over the last ``span_s``: ``{group name: History.series}``."""
+
+        return {key[1]: self.history.series(key, now - span_s, now) for key in self.history.keys(path, health=False)
+                if key[0] == path and self.history.is_state(key)}
+
+    def run_stock_diagnostics(self) -> list[DiagnosticStatus]:
+        """One beat: every binding of diagnostics.toml on every entity it matches, over that entity's State history; each result a
+        status on the entity (source ``robotdx.diagnostics``), into the history, the fault memory and every view."""
+
+        runner = self.stock_diagnostics
+        runner.reload_if_changed()
+        if not runner.bindings and not self.stock_results:
+            return []  # nothing configured (a replay without the person's file): no view, no tick
+        view = self.view()
+        now = view.now
+        found: dict[tuple[str, str], DiagnosticStatus] = {}
+        for path, entity in view.merged.entities.items():
+            bindings = runner.bindings_for(path, str((entity.identity or {}).get("model_id") or ""))
+            if not bindings:
+                continue
+            # WHY two windows and a beat: stream.windows steps from the slice's first sample, so the newest whole window always fits
+            groups = self._state_history(path, now, 2 * max(binding.window_s for binding in bindings) + runner.beat_s)
+            for binding in bindings:
+                status = runner.evaluate(binding, path, entity.name or path, groups, now, entity.hardware_id)
+                found[(status.path, status.name)] = status
+        def seen(results) -> set:
+            return {(status.path, status.name, status.level, status.code, status.message,
+                     tuple((measurement.key, measurement.value) for measurement in status.measurements)) for status in results.values()}
+
+        with self.lock:
+            changed = seen(found) != seen(self.stock_results)
+            self.stock_results = found
+        statuses = list(found.values())
+        self.history.sync(stock_diagnostics_module.SOURCE, statuses, now)
+        self.faults.observe(statuses, now)
+        if changed:  # WHY only on a change: a page's tick is for what it would draw differently, not for every beat
+            self.notify("stock diagnostics")
+        return statuses
 
     def _keep_log(self) -> None:
         """Write what the host now knows to the event log. WHY here, not only in a view: a service nobody is looking at
@@ -1308,9 +1366,11 @@ class Host:
             # what the history keeps
             self.history.sync("view", setup.statuses + notes, now)
             checks = self._attach_checks(merged)
-            if setup.entities or setup.statuses or notes or checks:
+            # the stock diagnostics' latest statuses, on the entities that are still here (stock_diagnostics.py)
+            stock = [status for status in self.stock_results.values() if status.path in merged.entities]
+            if setup.entities or setup.statuses or notes or checks or stock:
                 layer = self._layer_with(setup.entities)
-                merged = tree.merge(layer, jobs, self.os_records + setup.statuses + notes + checks)
+                merged = tree.merge(layer, jobs, self.os_records + setup.statuses + notes + checks + stock)
             # WHY a first summary: a composite's rollup is its children's levels, which only the summarized tree knows. The rollups
             # join the statuses, and the tree is summarized again with them (a composite's own level is the worse of its plugin's
             # and the rollup's); they are judged per view and never stored, so a composite cannot go stale
@@ -3379,9 +3439,10 @@ def make_host(*, fixture: str | None = None, plugins_dir: Path | None = None, on
     offset = frame.get("utc_offset_s")
     clock = FixedClock(frame["clock"] + at_s, offset, "fixture") if once else ReplayClock(frame["clock"], offset, offset_s)
     # WHY no default manifest here: a recorded frame is replayed as it was; the person's rig file would add rows
-    # the recording never had (a test or a screenshot names its own file with --expected)
+    # the recording never had (a test or a screenshot names its own file with --expected). The same for the stock diagnostics'
+    # default set: a replay runs only what <config dir>/diagnostics.toml names (stock_diagnostics.py)
     return Host(plugins_dir=plugins_dir or FIXTURE_PLUGINS_DIR, clock=clock, os_source=FixtureOs(frame),
-                fixture=fixture_info(document, frame), enable=enable, expected_file=expected,
+                fixture=fixture_info(document, frame), enable=enable, expected_file=expected, stock_diagnostics_defaults=False,
                 plugin_env={"IO_DIAGNOSTICS_FIXTURE": frame["name"], "IO_DIAGNOSTICS_FIXTURE_FILE": str(FIXTURE_FILE)},
                 runs_dir=replay_runs, event_log_dir=replay_log, **settings)
 

@@ -1,0 +1,55 @@
+# robotdx.diagnostics on this host: which stock diagnostic runs on which entity, and with what config
+# (io_diagnostics/stock_diagnostics.py, docs/api-v1.md "Stock diagnostics").
+#
+# This is the host's default set. A person's own set is <config dir>/diagnostics.toml (~/.config/io-diagnostics/ unless
+# $IO_DIAGNOSTICS_CONFIG_DIR says otherwise); when it exists it is read INSTEAD of this file, and the entity page's drill-in writes
+# it (the whole set: this one plus the change) the first time a value is changed there.
+# A fixture replay (serve --fixture) never reads this default set: it runs only what the person's file names.
+#
+# One [[diagnostic]] table binds one stock diagnostic to the entities it matches:
+#   id          this binding's own name: the catalog's id (robotdx/diagnostics/catalog.py), "driver.board_temp"
+#   diagnostic  the registry's function, "stock.box" (GET /api/v1/diagnostics lists them)
+#   title       the status name a person reads on the entity's Diagnostics tab
+#   path        an fnmatch pattern over the entity's path, and/or
+#   model_id    an fnmatch pattern over its identity's model_id (the robotparts id, "mjbots-moteus-c1")
+#   state       the State group it reads ("motor"); "" = the first group with the columns it needs
+#   window_s    how much of that State history one evaluation looks at, in seconds
+#   [diagnostic.config]   the config dataclass's values; a field left out keeps the dataclass default
+#   [diagnostic.columns]  (optional) a Trajectory column = the State key it is read from, beside the moteus names
+# A table with `function` (and `name`, `config`, ...) instead registers a custom diagnostic (registry.load_toml).
+#
+# The default set, from the catalog's BLDC driver board rows (docs: sim2real diagnostics-catalog-2026-10-28.md). Only the stock
+# functions that are implemented AND fit the State a moteus board sends (mode, position, velocity, torque, q_current, voltage,
+# temperature, fault): the history keeps that State at 1 Hz at most, so stock.sample_rate (the loop rate) would measure the history's
+# own downsampling, and driver.bus_voltage waits on the rack's nominal supply voltage. The RealSense rows need hardware frame stamps or
+# images, which the State does not carry, so none ships for a camera yet.
+
+[[diagnostic]]
+id = "driver.board_temp"
+diagnostic = "stock.box"
+title = "board temperature"
+model_id = "mjbots-moteus-*"
+state = "motor"
+window_s = 60
+
+[diagnostic.config]
+channel = "temp_c"
+unit = "Cel"
+headline = "max"
+# his code: board_temp BoxChartTask, max warn 60 / error 70, mean_max warn 55 / error 65
+# (like_keras lk/archive/actuators/moteus_servos/config/default_diagnostics.py:76)
+max = { warn_high = 60.0, error_high = 70.0 }
+mean = { warn_high = 55.0, error_high = 65.0 }
+
+[[diagnostic]]
+id = "driver.faults"
+diagnostic = "stock.fault_codes"
+title = "fault and limiter codes"
+model_id = "mjbots-moteus-*"
+state = "motor"
+window_s = 60
+
+[diagnostic.config]
+# hard faults 32-50 and the watchdog (mode 11) fail; a limiter (96-105) on more than 2 % of rows warns
+# (moteus registers.md 0x00f; bam_rack_twin envelope.py SATURATION_GATE = 0.02)
+limiter_share_warn = 0.02
