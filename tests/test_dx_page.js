@@ -619,6 +619,17 @@ const keepsUpSoon = (ms) => (p) => H.waitFor(() => p.evaluate(() => { const e = 
     const ranks = order.map((id) => rankOf[id] ?? -1);
     check('…worst first, from one /checks request and no per-entity /node', diagReqs.some((r) => r.url === '/api/v1/checks') && !diagReqs.some((r) => r.url.startsWith('/api/v1/node')) && ranks.length >= 5 && ranks.every((x, i) => i === 0 || x <= ranks[i - 1]),
       { checks: diagReqs.filter((r) => r.url === '/api/v1/checks').length, node: diagReqs.filter((r) => r.url.startsWith('/api/v1/node')).length, ranks: ranks.slice(0, 12) });
+    // F1 has two adapters with a "CAN 1" each: a row is told from its twin by its path, shown inside the panel (measured)
+    const pathCol = await page.evaluate(() => {
+      const el = document.querySelector('data-dashboard.dx-board data-views[id$="-checks"]');
+      if (!el) return null;
+      const box = el.getBoundingClientRect();
+      const th = [...el.querySelectorAll('thead th, [role=columnheader]')].find((h) => h.textContent.trim().startsWith('Path'));
+      const r = th && th.getBoundingClientRect();
+      const twins = el.model ? el.model.rows.filter((x) => x.entity === 'CAN 1' && /#CAN 1: driver$/.test(String(x.id))).map((x) => x.path) : [];
+      return { header: Boolean(th), inside: Boolean(r && r.left >= box.left && r.right <= box.right + 1 && r.width > 40), twins };
+    });
+    check('…each row with its path in view, so two entities of one name are told apart', pathCol && pathCol.header && pathCol.inside && new Set(pathCol.twins).size === pathCol.twins.length && pathCol.twins.length >= 2, pathCol);
 
     // ---- your own, on the host (GET | PUT | DELETE /api/v1/dashboards/<name>.base, PEP 0001 §14): files in THIS fixture host's config
     // dir (the harness gives it IO_DIAGNOSTICS_CONFIG_DIR under its scratch root), never Zach's ~/.config/io-diagnostics
