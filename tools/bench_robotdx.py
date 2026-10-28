@@ -5,19 +5,24 @@
     /usr/bin/python3 /home/bam/io-diagnostics/tools/bench_robotdx.py --long                # + 10 minutes at the 256 MB cap
     /usr/bin/python3 /home/bam/io-diagnostics/tools/bench_robotdx.py --publish --to /home/bam/vt/zach/producers/robotdx
     /usr/bin/python3 /home/bam/io-diagnostics/tools/bench_robotdx.py --from results.json --publish --to DIR
+    /usr/bin/python3 /home/bam/io-diagnostics/tools/bench_robotdx.py --profile               # where a frame's time goes (no KPIs)
 
 What runs (every host and browser it starts, it stops):
   fixture   tools/dx_demo.py (fixture F1, the fixture plugins only, a scratch config and state dir): first_paint_ms (cold
             loads), idle_traffic_kb_s (Explore, nothing selected), scrub_ms and back_to_live_ms (Explore on the joint, seven
-            live panels), ingest_to_pixel_ms from the adapter's receive (the host's replay clock is not the browser's)
-  sweep     bench/robotdx_stub.py, a synthetic host (no plugin, no device) speaking /api/v1/live's shape: frame_time_ms while
-            streaming N samples/s into M plot panels, at three N x M, and ingest_to_pixel_ms from the host's emit (the stub
-            stamps its wall clock, which the browser shares)
+            live panels), ingest_to_pixel_ms from the host's emit (each /live event's `emitted`, 5cdb4b9; the adapter's
+            receive beside it)
+  sweep     bench/robotdx_stub.py, a synthetic host (no plugin, no device) speaking /api/v1/live's shape at the host's
+            cadence (a watched entity's samples one event per --coalesce, 0.1 s, as 5cc429f): frame_time_ms while streaming
+            N samples/s into M plot panels, at three N x M, and ingest_to_pixel_ms from the host's emit (`emitted`)
   heap      the stub at the sweep's highest rate: heap_mb after a GC at the retention cap. Short: a 64 MB cap for 90 s (said
             in the point's labels). --long: the page's 256 MB cap for 10 minutes.
 Trust (data-ui bench/runner.py's rule): a run is noisy when its calibration (a fixed loop of JavaScript) is over 1.3x this
 host's best, or the load per CPU is over 1.0. Noisy points still publish, to kpi_diagnostics.jsonl unless --include-noisy.
-Missing numbers are null with a reason, never 0. Publishing (vt-kpi/1, data-ui bench/publish.py's conventions) writes only
+Every ingest point says which stamp it was timed from (`emitted`, the stub's `now`, or the adapter's receive) and every
+sweep point its feed (`watch 100 ms`; phase 3b's points were an event per entity per frame). --profile runs only the
+6,000 x 6 dashboard under Chrome's trace and V8's sampling profiler, at the host's cadence and at one event per frame, and
+prints where the main thread's time goes (PEP 0001 §15). Missing numbers are null with a reason, never 0. Publishing (vt-kpi/1, data-ui bench/publish.py's conventions) writes only
 in --to: kpi_catalog.json, kpi_series.jsonl, runs_table.jsonl, items/<run_id>.jsonl, kpi_diagnostics.jsonl; a run already
 published (its run ids in runs_table.jsonl) is skipped, so publishing twice changes nothing. Stdlib only, plus the Node driver
 bench/robotdx_driver.js (Playwright, headless Chrome on the GPU unless --software).
@@ -54,6 +59,16 @@ SWEEP = ((600, 2), (6000, 6), (24000, 12))   # samples/s x plot panels (5 keys e
 STATE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "robotdx-bench"
 NOISY_CALIB, NOISY_LOAD = 1.3, 1.0
 BENCH_VERSION = "robotdx-bench/1"
+
+
+def feed_label(coalesce: float) -> str:
+    """How the stub sends a watched entity's samples, as the points say it."""
+
+    if coalesce <= 0:
+        return "tick 1 s (a host before 5cc429f)"
+    if coalesce < 0.05:
+        return f"every frame ({1 / coalesce:.0f} Hz per entity, phase 3b's sweep)"
+    return f"watch {coalesce * 1000:.0f} ms"
 
 
 def pct(values, p):
@@ -162,15 +177,15 @@ def run(args) -> dict:
         procs.remove(demo)
         # ---- the stub: frame time and ingest (host emit) at three N x M; the heap at the highest -----------------------------------
         for rate, panels in SWEEP:
-            stub = Process([PYTHON, str(STUB), "--port", str(free_port()), "--rate", str(rate), "--entities", str(panels), "--keys", "5"],
-                           r"bench stub on (http://\S+?)/ ", scratch / f"stub-{rate}x{panels}.log")
+            stub = Process([PYTHON, str(STUB), "--port", str(free_port()), "--rate", str(rate), "--entities", str(panels), "--keys", "5",
+                            "--coalesce", str(args.coalesce)], r"bench stub on (http://\S+?)/ ", scratch / f"stub-{rate}x{panels}.log")
             procs.append(stub)
             phases[f"sweep@{rate}x{panels}"] = drive({**base_cfg, "phase": "sweep", "base": stub.url, "seconds": args.sweep_s}, timeout=300)
             stub.stop()
             procs.remove(stub)
         rate, panels = SWEEP[-1]
-        stub = Process([PYTHON, str(STUB), "--port", str(free_port()), "--rate", str(rate), "--entities", str(panels), "--keys", "5"],
-                       r"bench stub on (http://\S+?)/ ", scratch / "stub-heap.log")
+        stub = Process([PYTHON, str(STUB), "--port", str(free_port()), "--rate", str(rate), "--entities", str(panels), "--keys", "5",
+                        "--coalesce", str(args.coalesce)], r"bench stub on (http://\S+?)/ ", scratch / "stub-heap.log")
         procs.append(stub)
         cap, seconds = (256, 600) if args.long else (64, 90)
         phases["heap"] = drive({**base_cfg, "phase": "heap", "base": stub.url, "capMB": cap, "seconds": seconds}, timeout=seconds + 300)
@@ -182,6 +197,26 @@ def run(args) -> dict:
     load1 = os.getloadavg()[0]
     finished = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
     return summarize(phases, started, finished, (load0, load1), args)
+
+
+def run_profile(args) -> dict:
+    """The one frame-time pass (PEP 0001 §15): the 6,000 x 6 dashboard profiled at the host's cadence and at one event per frame."""
+
+    scratch = Path(tempfile.mkdtemp(prefix="robotdx-profile-"))
+    rate, panels = SWEEP[1]
+    out = {"schema": "robotdx-profile/1", "started": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat(),
+           "code": {"sha": git("rev-parse", "--short=8", "HEAD"), "dirty": bool(git("status", "--porcelain", "--", "io_diagnostics/web/dx", "bench"))},
+           "loadavg": list(os.getloadavg()), "cpus": os.cpu_count(), "runs": {}}
+    for coalesce in (args.coalesce, 1 / 60):
+        stub = Process([PYTHON, str(STUB), "--port", str(free_port()), "--rate", str(rate), "--entities", str(panels), "--keys", "5",
+                        "--coalesce", f"{coalesce:.6f}"], r"bench stub on (http://\S+?)/ ", scratch / f"stub-profile-{coalesce:.3f}.log")
+        try:
+            ph = drive({"software": args.software, "phase": "profile", "base": stub.url, "seconds": args.profile_s}, timeout=300)
+        finally:
+            stub.stop()
+        out["runs"][feed_label(coalesce)] = {k: ph.get(k) for k in ("renderer", "renderer_kind", "calibration_ms", "profile", "errors", "failed")}
+    out["loadavg_after"] = list(os.getloadavg())
+    return out
 
 
 def summarize(phases: dict, started, finished, loads, args) -> dict:
@@ -220,14 +255,24 @@ def summarize(phases: dict, started, finished, loads, args) -> dict:
         frame[nm] = {"value": rnd(pct(gaps, 95)), "p50": rnd(pct(gaps, 50)), "max": rnd(max(gaps)) if gaps else None, "n": len(gaps),
                      "dropped": sum(1 for g in gaps if g > 25), "loop_p95_ms": rnd(pct(sw.get("loop") or [], 95)), "samples_s": rnd(sw.get("samples_s"), 0),
                      "panels": sw.get("panels"), "long_tasks": len(sw.get("longs") or [])} if gaps else missing("no frames recorded while streaming")
+        frame.get(nm, {})["feed"] = feed_label(args.coalesce)
         lat = sw.get("fromEmit") or []
-        ingest[nm] = {"value": rnd(pct(lat, 95)), "p50": rnd(pct(lat, 50)), "n": len(lat), "stamp": "host-emit",
-                      "from_receive_p95": rnd(pct(sw.get("fromGot") or [], 95))} if lat else missing("no batch was drawn")
+        ingest[nm] = {"value": rnd(pct(lat, 95)), "p50": rnd(pct(lat, 50)), "n": len(lat), "stamp": sw.get("stamp") or "none",
+                      "from_receive_p95": rnd(pct(sw.get("fromGot") or [], 95)), "feed": feed_label(args.coalesce), "reconnects": sw.get("reconnects"),
+                      "events_s": rnd(sw.get("events_s"))} if lat else missing("no batch was drawn")
     k["frame_time_ms"] = {**frame.get(head, missing(f"the {head} sweep did not run")), "slice": head}
     k["ingest_to_pixel_ms"] = {**ingest.get(head, missing(f"the {head} sweep did not run")), "slice": head}
-    flat = (fx.get("ingest") or {}).get("lat") or []
-    ingest_fixture = {"value": rnd(pct(flat, 95)), "p50": rnd(pct(flat, 50)), "n": len(flat), "stamp": "adapter-receive",
-                      "note": "the fixture host's samples come in its ~1 s change ticks; this is the page's part only"} if flat else missing("no batch drawn on the fixture host")
+    fi = fx.get("ingest") or {}
+    emit_lat, recv_lat = fi.get("latEmit") or [], fi.get("lat") or []
+    if emit_lat:
+        ingest_fixture = {"value": rnd(pct(emit_lat, 95)), "p50": rnd(pct(emit_lat, 50)), "n": len(emit_lat), "stamp": "emitted",
+                          "from_receive_p95": rnd(pct(recv_lat, 95)), "from_receive_p50": rnd(pct(recv_lat, 50)),
+                          "note": "the fixture host's watched joint at its watch's rate (5cc429f), timed from each event's emitted"}
+    elif recv_lat:
+        ingest_fixture = {"value": rnd(pct(recv_lat, 95)), "p50": rnd(pct(recv_lat, 50)), "n": len(recv_lat), "stamp": "adapter-receive",
+                          "note": "this host's events carry no emitted: the page's part only"}
+    else:
+        ingest_fixture = missing("no batch drawn on the fixture host")
     hp = (phases.get("heap") or {}).get("heap") or {}
     window = f"{hp.get('cap_mb')} MB cap, {hp.get('seconds')} s{' (short: --long runs 10 min at 256 MB)' if not args.long else ''}"
     k["heap_mb"] = {"value": hp.get("heap_mb"), "n": 1, "window": window, "store_mb": hp.get("store_mb"), "at_cap_s": hp.get("at_cap_s"),
@@ -235,7 +280,7 @@ def summarize(phases: dict, started, finished, loads, args) -> dict:
     sha = git("rev-parse", "--short=8", "HEAD")
     dirty = bool(git("status", "--porcelain", "--", "io_diagnostics/web/dx", "bench", "tools/bench_robotdx.py"))
     return {"schema": "robotdx-bench/1", "bench_version": BENCH_VERSION, "started": started.isoformat(), "finished": finished.isoformat(),
-            "mode": "long" if args.long else "short", "code": {"sha": sha, "dirty": dirty, "branch": git("rev-parse", "--abbrev-ref", "HEAD")},
+            "mode": "long" if args.long else "short", "feed": feed_label(args.coalesce), "code": {"sha": sha, "dirty": dirty, "branch": git("rev-parse", "--abbrev-ref", "HEAD")},
             "host": {"hostname": host, "cpus": os.cpu_count(), "os": platform.platform(), "renderer": renderer, "renderer_kind": kind,
                      "browser": next((ph.get("browser") for ph in phases.values() if ph.get("browser")), None)},
             "trust": {"verdict": "noisy" if why else "quiet", "why": why, "calibration_ms": calib, "best_calibration_ms": best, "loadavg": list(loads), "cpus": cpus},
@@ -268,7 +313,7 @@ def publish(res: dict, out: Path, include_noisy: bool, event: str | None) -> int
     trust = res["trust"]["verdict"]
     lane = f"chrome-headless-{res['host']['renderer_kind']}"
     labels = {"lane": lane, "host": host, "trust": trust, "renderer": res["host"]["renderer_kind"], "renderer_string": (res["host"]["renderer"] or "")[:160],
-              "mode": res["mode"]}
+              "mode": res["mode"], "feed": res.get("feed") or "every frame (60 Hz per entity, phase 3b's sweep)"}
     if res["trust"]["why"]:
         labels["noise"] = "; ".join(res["trust"]["why"])[:280]
     if event:
@@ -283,7 +328,9 @@ def publish(res: dict, out: Path, include_noisy: bool, event: str | None) -> int
                 items.append({"item_id": f"{rid}-{key}-{i}", "facets": {"phase": key}, "value": x if not isinstance(x, dict) else x.get("ms"), **(x if isinstance(x, dict) else {})})
         sw = ph.get("sweep") or {}
         for i, g in enumerate(sw.get("fromEmit") or []):
-            items.append({"item_id": f"{rid}-ingest-{i}", "facets": {"phase": "ingest", "stamp": "host-emit"}, "value": round(g, 2)})
+            items.append({"item_id": f"{rid}-ingest-{i}", "facets": {"phase": "ingest", "stamp": sw.get("stamp") or "host-emit"}, "value": round(g, 2)})
+        for i, g in enumerate((ph.get("ingest") or {}).get("latEmit") or []):
+            items.append({"item_id": f"{rid}-ingest-emit-{i}", "facets": {"phase": "ingest", "stamp": "emitted"}, "value": round(g, 2)})
         for i, g in enumerate((ph.get("ingest") or {}).get("lat") or []):
             items.append({"item_id": f"{rid}-ingest-{i}", "facets": {"phase": "ingest", "stamp": "adapter-receive"}, "value": round(g, 2)})
         if ph.get("heap"):
@@ -314,7 +361,7 @@ def publish(res: dict, out: Path, include_noisy: bool, event: str | None) -> int
     for kpi in ("first_paint_ms", "scrub_ms", "back_to_live_ms", "idle_traffic_kb_s"):
         points.append(point(kpi, k[kpi]))
     points.append(point("frame_time_ms", k["frame_time_ms"], extra={"sweep": k["frame_time_ms"].get("slice")}))
-    points.append(point("ingest_to_pixel_ms", k["ingest_to_pixel_ms"], extra={"stamp": "host-emit", "sweep": k["ingest_to_pixel_ms"].get("slice")}))
+    points.append(point("ingest_to_pixel_ms", k["ingest_to_pixel_ms"], extra={"stamp": k["ingest_to_pixel_ms"].get("stamp", ""), "sweep": k["ingest_to_pixel_ms"].get("slice")}))
     points.append(point("heap_mb", k["heap_mb"], extra={"window": k["heap_mb"].get("window", "")}))
     for nm, e in res["slices"]["frame_time_ms"].items():
         points.append(point("frame_time_ms", e, {"sweep": nm}))
@@ -324,7 +371,7 @@ def publish(res: dict, out: Path, include_noisy: bool, event: str | None) -> int
         if k[kpi].get(key) is not None:
             points.append(point(kpi, {"value": k[kpi][key], "n": k[kpi]["n"]}, {"stat": "p50"}))
     points.append(point("ingest_to_pixel_ms", {"value": k["ingest_to_pixel_ms"].get("p50"), "n": k["ingest_to_pixel_ms"].get("n"), "why": k["ingest_to_pixel_ms"].get("why")},
-                        {"stat": "p50"}, extra={"stamp": "host-emit"}))
+                        {"stat": "p50"}, extra={"stamp": k["ingest_to_pixel_ms"].get("stamp", "")}))
     # the gate: no phase threw, no page error (published whatever the trust: a page that throws is a fact on any machine)
     failing = [name for name, ph in phases.items() if ph.get("failed") or ph.get("errors")]
     gate = {"schema": "vt-kpi-point/1", "kpi": "no_page_errors", "t": t, "value": len(failing), "n": len(phases), "status": "measured",
@@ -359,9 +406,18 @@ def main(argv=None) -> int:
     ap.add_argument("--to", type=Path, help="the producer folder, e.g. /home/bam/vt/zach/producers/robotdx")
     ap.add_argument("--include-noisy", action="store_true", help="publish a noisy run's points as KPI points (default: kpi_diagnostics.jsonl)")
     ap.add_argument("--event", help="a milestone label on the points (e.g. 'phase 3b: /api/v1/live')")
+    ap.add_argument("--coalesce", type=float, default=0.1, help="the stub's seconds between a watched entity's samples events (the host's 0.1)")
+    ap.add_argument("--profile", action="store_true", help="only the frame-time profile (Chrome's trace + V8's profiler) at 6,000 x 6, printed")
+    ap.add_argument("--profile-s", type=float, default=6, help="seconds profiled per cadence")
     args = ap.parse_args(argv)
     if args.publish and not args.to:
         ap.error("--publish needs --to <producer folder>")
+    if args.profile:
+        res = run_profile(args)
+        if args.out:
+            args.out.write_text(json.dumps(res, indent=1) + "\n")
+        print(json.dumps(res, indent=1))
+        return 0
     res = json.loads(args.source.read_text()) if args.source else run(args)
     if args.out:
         args.out.write_text(json.dumps(res, indent=1) + "\n")

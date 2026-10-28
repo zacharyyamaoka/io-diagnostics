@@ -64,7 +64,7 @@
    "target": 30,
    "computed_from": "runs",
    "scale": "linear",
-   "description": "A samples batch's stamp to the first plot drawn at its newest sample. The headline is the stub's 6,000 samples/s into 6 plots, stamped at the host's emit (the stub's wall clock, the browser's too); slices: every sweep point, and the fixture host stamped at the adapter's receive (its replay clock is not the browser's; its own ~1 s change ticks are not in it). labels.stamp says which.",
+   "description": "A samples event's emitted (the host's wall clock at send, unix ms: every /live event since 5cdb4b9, and the stub's) to the first plot drawn at its newest sample. The headline is the stub's 6,000 samples/s into 6 plots at the host's cadence (a watched entity one event per 100 ms, labels.feed); slices: every sweep point, and the fixture host's watched joint. labels.stamp says which stamp (emitted; stub-now or adapter-receive for a host without it).",
    "formula": "p95 over batches of (first following plot draw with t >= the batch's newest sample - the batch's stamp)",
    "facets": [
     "sweep",
@@ -88,7 +88,7 @@
    "target": 16.7,
    "computed_from": "runs",
    "scale": "linear",
-   "description": "The interval between animation frames while the stub streams N samples/s into M live plot panels (5 keys each), after a 3 s warm-up. Headline: 6,000 samples/s into 6 plots; slices: 600 x 2, 6,000 x 6, 24,000 x 12. 16.7 ms is 60 frames a second.",
+   "description": "The interval between animation frames while the stub streams N samples/s into M live plot panels (5 keys each), after a 3 s warm-up. Headline: 6,000 samples/s into 6 plots; slices: 600 x 2, 6,000 x 6, 24,000 x 12. 16.7 ms is 60 frames a second. The stub sends at the host's cadence (labels.feed: watch 100 ms); points before 2026-10-28 were taken at one event per entity per frame.",
    "formula": "p95 over requestAnimationFrame intervals while streaming",
    "facets": [
     "sweep"
@@ -126,7 +126,7 @@
    "target": 50,
    "computed_from": "runs",
    "scale": "linear",
-   "description": "clock.seek(t) inside the entity's State on Explore (the fixture's joint, seven live panels), to the last panel's first draw at t. 30 seeks. A panel's later draws at the same t (a new version arriving) are not counted.",
+   "description": "clock.seek(t) inside the entity's State on Explore (the fixture's joint, seven live panels), to the last panel's first draw at t. 30 seeks. A panel's later draws at the same t (a new version arriving) are not counted; since data-ui 3289ab5 a paused panel draws no more than once at t, and the test checks that the two readings agree.",
    "formula": "p95 over seeks of (max over panels of the first draw at t - the seek)",
    "facets": [
     "stat"
