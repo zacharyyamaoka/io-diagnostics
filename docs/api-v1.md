@@ -933,7 +933,10 @@ data: {"path": "host/usb1/port-1-3/usb-1-3/can/1/driver", "now": 1792790150.0, "
   and every event in order holds `/state` as of the last tick. A row is sent whole, never as a patch.
 - **`remove`** `{table, id}`: that row is gone (a device unplugged, a rig edited). Its parent is upserted in the same tick.
 - **`samples`**: State points appended since the last tick for one entity, the answer `GET /api/v1/values?path=<path>&since=<its cursor>` gives
-  (same fields), with `groups` cut to the groups and rows that have new `points`. One event per entity per tick.
+  (same fields), with `groups` cut to the groups and rows that have new `points`. One event per entity per tick. **An entity a page is watching** (its plugin's
+  `watch` is running; `POST /api/v1/watch`) does not wait for the tick: its new points are sent as they arrive, coalesced to at most one `samples`
+  event per watched entity per 100 ms (10 Hz; measured on a 10 Hz fixture watch: 20 events in 2.0 s). The shape is the same, and a point is sent
+  once (both paths advance one cursor per entity under one lock), so the page's State moves at the watch's rate. Entities nobody watches keep the tick.
 - **Time is not a change.** Pure functions of the host clock are not compared, or every row with records would change every tick: a row's
   `age_s` and `presence.age_s`, and `clock.now` / `iso` / `time`. A row that is sent for any other reason carries the age it has at that moment;
   a page that wants it now computes `clock.now` (as of the snapshot, then the time since) minus the row's `last_received`.

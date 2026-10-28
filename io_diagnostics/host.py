@@ -567,6 +567,9 @@ class Host:
         self.changes = threading.Condition()
         self.revision = 0
         self.change_reason = ""
+        # every State point a plugin run or a watch took in: /api/v1/live's samples lane wakes on it (a watch's 10 Hz is not a ``changes`` tick)
+        self.sample_changes = threading.Condition()
+        self.sample_revision = 0
         self.feed = LiveFeed(self)  # GET /api/v1/live: one change-only diff of state() for every client (live.py)
         self._wake = threading.Event()
         self.faults = Faults()
@@ -2376,6 +2379,10 @@ class Host:
         for state in job.cache.fresh_states:
             self.history.measure(absolute(state.path, device_path), state.name, state.measurements,
                                  state.received if state.received is not None else now, now, min_gap_s=STATE_HISTORY_GAP_S)
+        if job.cache.fresh_states:
+            with self.sample_changes:
+                self.sample_revision += 1
+                self.sample_changes.notify_all()
 
     def _frames_base(self) -> Path:
         with self._watch_lock:
@@ -2658,6 +2665,17 @@ class Host:
                 device_path = self.layer.device_paths.get(str(job.device.get("id")), job.device_path)
                 paths.update(f"{device_path}/{rel}" if rel else device_path for rel, _group, _key in list(job.cache.series))
         return sorted(paths)
+
+    def watched_paths(self) -> set[str]:
+        """The entities (absolute paths) a plugin ``watch`` is running or starting for now: the ones ``/api/v1/live`` sends samples for at the
+        watch's rate instead of on the 1 Hz tick."""
+
+        with self._watch_lock:
+            watches = [watch for watch in self.watches.values() if not watch.stopped]
+        with self.lock:
+            return {f"{device_path}/{watch.rel}" if watch.rel else device_path
+                    for watch in watches
+                    for device_path in [self.layer.device_paths.get(str(watch.job.device.get("id")), watch.job.device_path)]}
 
     def frame_file(self, path: str, stream: str) -> tuple[bytes, dict] | None:
         """The latest image of a declared stream: ``(bytes, meta)`` or None. The file is the plugin's own, in the frame

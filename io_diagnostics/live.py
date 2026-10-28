@@ -7,6 +7,10 @@ one ``/api/v1/events`` waits on), builds ``Host.state()`` ONCE, and diffs it aga
 * ``remove``  a row that is gone,
 * ``samples`` State points that arrived since the last tick (what ``GET /api/v1/values?since=`` answers).
 
+An entity a page is WATCHING (a plugin ``watch`` running, ~10 Hz) does not wait for that tick: a second thread, the samples lane, wakes on
+each State point the host takes in and sends that entity's new points at once, coalesced to one ``samples`` event per entity per
+``SAMPLE_COALESCE_S``. Both lanes advance the same per-entity cursor under one lock, so a point is sent once, by whichever got to it first.
+
 Every event gets the next number and sits, already serialized, in a ring (the last ``RING_EVENTS`` events and ``RING_SECONDS`` seconds),
 so a client that reconnects with ``Last-Event-ID`` is sent only what it missed. A number older than the ring (or from before the
 feed last started) gets a fresh ``snapshot`` instead.
@@ -22,6 +26,7 @@ import json
 import threading
 import time
 
+SAMPLE_COALESCE_S = 0.1  # a watched entity's new samples are one event per this (10 Hz at most): the page's State moves as fast as the watch
 COALESCE_S = 0.1  # a burst of changes (a plug's ~30 udev blocks) is one diff, as on /api/v1/events
 RING_EVENTS = 2000
 RING_SECONDS = 60.0
@@ -95,6 +100,8 @@ class LiveFeed:
         self.state: dict | None = None  # /state as of the newest event number
         self.signatures: dict[tuple[str, str], str] = {}
         self.cursors: dict[str, int] = {}  # entity path -> the values cursor its last samples event ended at
+        self.sample_lock = threading.Lock()  # whoever reads values since a cursor and publishes the event holds it, so no point is sent twice
+        self.epoch_over = threading.Event()  # set when this epoch's thread ends: the samples lane ends with it
         self.idle_since: float | None = None
         self.closed = False
 
@@ -152,8 +159,10 @@ class LiveFeed:
         self.counter += 1
         self.floor = self.counter
         self.idle_since = None
+        self.epoch_over = threading.Event()
         self.thread = threading.Thread(target=self._run, name="io-live", daemon=True)
         self.thread.start()
+        threading.Thread(target=self._run_samples, args=(self.epoch_over,), name="io-live-samples", daemon=True).start()
 
     def _values(self, path: str, since: int) -> dict | None:
         return self.host.values_json(path, since)
@@ -181,6 +190,7 @@ class LiveFeed:
                 except Exception:  # noqa: BLE001 - a bad build must not end the feed; the next tick tries again
                     continue
         finally:
+            self.epoch_over.set()
             with self.cond:
                 if host._stop.is_set():
                     self.closed = True
@@ -198,21 +208,35 @@ class LiveFeed:
         for key, row in rows.items():
             if self.signatures.get(key) != signatures[key]:
                 events.append(("upsert", {"table": key[0], "id": key[1], "row": row}))
-        cursors: dict[str, int] = {}
-        for path in self.host.series_paths():
-            answer = self._values(path, self.cursors.get(path, 0))
-            if answer is None:
-                continue
-            cursors[path] = answer["cursor"]
-            groups = []
-            for group in answer["groups"]:
-                fresh = [row for row in group["rows"] if row["points"]]
-                if fresh:
-                    groups.append({**group, "rows": fresh})
-            if groups:
-                events.append(("samples", {**answer, "groups": groups}))
+        with self.sample_lock:
+            cursors: dict[str, int] = {}
+            for path in self.host.series_paths():
+                answer = self._values(path, self.cursors.get(path, 0))
+                if answer is None:
+                    continue
+                cursors[path] = answer["cursor"]
+                event = self._fresh_samples(answer)
+                if event is not None:
+                    events.append(("samples", event))
+            with self.cond:
+                self.state, self.signatures, self.cursors = state, signatures, cursors
+            self._publish(events)
+
+    @staticmethod
+    def _fresh_samples(answer: dict) -> dict | None:
+        """``answer`` cut to the groups and rows that have new points, or None when nothing is new."""
+
+        groups = []
+        for group in answer["groups"]:
+            fresh = [row for row in group["rows"] if row["points"]]
+            if fresh:
+                groups.append({**group, "rows": fresh})
+        return {**answer, "groups": groups} if groups else None
+
+    def _publish(self, events: list[tuple[str, dict]]) -> None:
+        """Number each event, put it in the ring and wake the clients."""
+
         with self.cond:
-            self.state, self.signatures, self.cursors = state, signatures, cursors
             now = time.monotonic()
             for name, data in events:
                 self.counter += 1
@@ -221,3 +245,51 @@ class LiveFeed:
                 self.floor = self.ring.popleft()[0]
             if events:
                 self.cond.notify_all()
+
+    # --- the samples lane: a watched entity at the watch's rate -------------------------------------------------------------
+    def _run_samples(self, epoch_over: threading.Event) -> None:
+        """While a watch runs, send its entity's new State points as they arrive, at most one event per entity per ``SAMPLE_COALESCE_S``.
+
+        Woken by ``Host.sample_changes`` (each State point taken in); an entity that sent less than a coalescing period ago waits out the rest of
+        it, so a burst is one event. Entities nobody watches are left to the 1 Hz tick."""
+
+        host = self.host
+        revision = host.sample_revision
+        last_sent: dict[str, float] = {}
+        due: float | None = None  # when an entity that has to wait may send
+        while not epoch_over.is_set() and not host._stop.is_set():
+            timeout = 0.25 if due is None else max(0.0, due - time.monotonic())
+            with host.sample_changes:
+                host.sample_changes.wait_for(lambda: host.sample_revision != revision or epoch_over.is_set() or host._stop.is_set(), timeout=timeout)
+                revision = host.sample_revision
+            if epoch_over.is_set() or host._stop.is_set():
+                return
+            try:
+                due = self._send_watched(last_sent)
+            except Exception:  # noqa: BLE001 - a bad read must not end the lane; the next point tries again
+                due = None
+
+    def _send_watched(self, last_sent: dict[str, float]) -> float | None:
+        """One pass over the watched entities: those whose coalescing period is over send what is new. Returns the time the soonest of the
+        others may send (or None)."""
+
+        watched = self.host.watched_paths()
+        for path in list(last_sent):
+            if path not in watched:
+                del last_sent[path]
+        due: float | None = None
+        for path in watched:
+            ready_at = last_sent.get(path, 0.0) + SAMPLE_COALESCE_S
+            if time.monotonic() < ready_at:
+                due = ready_at if due is None else min(due, ready_at)
+                continue
+            with self.sample_lock:
+                answer = self._values(path, self.cursors.get(path, 0))
+                if answer is None:
+                    continue
+                self.cursors[path] = answer["cursor"]
+                event = self._fresh_samples(answer)
+                if event is not None:
+                    self._publish([("samples", event)])
+                    last_sent[path] = time.monotonic()
+        return due

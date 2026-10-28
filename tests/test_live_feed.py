@@ -26,6 +26,8 @@ from io_diagnostics.host import make_host
 from io_diagnostics.live import LiveFeed, rows_of
 from io_diagnostics.server import make_server, serve_in_thread
 
+from test_state_config import Rig, wait_for
+
 MOTOR = "host/usb1/port-1-3/usb-1-3/can/1/motor"
 MOTOR_CHECK = "CAN 1 motor: mapping"
 
@@ -373,3 +375,88 @@ def test_the_stream_ends_when_the_host_stops(rig):
     late = http.client.HTTPConnection(urlparse(rig.url).netloc, timeout=5)
     late.request("GET", "/api/v1/live")
     assert late.getresponse().status == 503  # a stopped host takes no new client
+
+
+# ----- a watched entity at the watch's rate ------------------------------------------------------------------------------
+@pytest.fixture()
+def watched_rig(tmp_path, monkeypatch):
+    """A host over a fake OS whose one board has the state fixture plugin: a real ``watch`` subprocess printing a State record every 0.1 s
+    (10 Hz), no hardware. The feed's own tick is left at its real pace (a change every ~1 s from a watch), so a sample that arrives
+    faster did not wait for it."""
+
+    monkeypatch.setattr(server, "LIVE_POLL_S", 0.1)
+    rig = Rig(tmp_path, env={"STATE_PERIOD_S": "0.1"}, grace_s=60.0)
+    http_server = make_server(rig.host, 0)
+    serve_in_thread(http_server)
+    rig.host.feed.idle_grace_s = 0.4
+    streams: list[Stream] = []
+    rig.open_stream = lambda: streams.append(Stream(rig.host)) or streams[-1]
+    yield rig
+    for stream in streams:
+        stream.close()
+    http_server.shutdown()
+    http_server.server_close()
+    rig.stop()
+
+
+def points_by_series(events: list[dict], path: str) -> dict[tuple[str, str], list]:
+    """The points of every samples event for ``path``, in order, per (group, key)."""
+
+    out: dict[tuple[str, str], list] = {}
+    for event in events:
+        if event["event"] == "samples" and event["data"]["path"] == path:
+            for group in event["data"]["groups"]:
+                for row in group["rows"]:
+                    out.setdefault((group["name"], row["key"]), []).extend(row["points"])
+    return out
+
+
+def test_a_watched_entitys_samples_come_at_the_watchs_rate_none_twice_none_lost(watched_rig):
+    rig = watched_rig
+    board = rig.board
+    stream = rig.open_stream()
+    assert stream.event()["event"] == "snapshot"
+    since = rig.host.values_json(board, 0)["cursor"]  # what the feed starts from: nothing before it is its to send
+    assert rig.host.watch_heartbeat(board)["watch"]["state"] in ("starting", "running")
+    first = stream.event(10)
+    assert first["event"] == "samples" and first["data"]["path"] == board
+    events = [first]
+    arrivals = [time.monotonic()]
+    window_end = arrivals[0] + 2.0
+    while time.monotonic() < window_end:
+        try:
+            found = stream.event(0.5)
+        except queue.Empty:
+            continue
+        events.append(found)
+        arrivals.append(time.monotonic())
+    in_window = [at for at in arrivals if at <= window_end]
+    rate = len(in_window) / 2.0
+    print(f"measured: {len(in_window)} samples events in 2.0 s = {rate:.2f} /s")
+    assert rate >= 8.0, f"{len(in_window)} samples events in 2 s"
+    assert all(event["event"] == "samples" for event in events)  # a quiet board: samples and nothing else
+    # stop the watch, take what is still on the way, and compare with what /values holds past the same cursor
+    rig.host.watch_grace_s = 0.0
+    wait_for(lambda: not rig.host.watches, what="the watch ending")
+    events += until_idle(stream, 1.2)
+    got = points_by_series(events, board)
+    held = {(group["name"], row["key"]): row["points"] for group in rig.host.values_json(board, since)["groups"] for row in group["rows"]}
+    assert got and got == held  # not one point sent twice, not one lost, in the host's order
+
+
+def test_an_unwatched_entitys_samples_wait_for_the_tick(watched_rig):
+    rig = watched_rig
+    stream = rig.open_stream()
+    stream.event()
+    assert not rig.host.watches
+    with rig.host.lock:
+        job = next(iter(rig.host.jobs.values()))
+        job.cache.serial += 1
+        job.cache.series.setdefault(("can/1", "motor", "position"), []).append((time.time(), 0.25, job.cache.serial))
+    with rig.host.sample_changes:  # the signal a State point makes: with no watch it must not send anything by itself
+        rig.host.sample_revision += 1
+        rig.host.sample_changes.notify_all()
+    assert until_idle(stream, 0.8) == []
+    rig.host.notify("plugin")  # the host's own tick
+    got = until_idle(stream)
+    assert [event["event"] for event in got] == ["samples"] and got[0]["data"]["path"] == rig.board
