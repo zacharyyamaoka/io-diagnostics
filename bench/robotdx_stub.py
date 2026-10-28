@@ -122,10 +122,10 @@ class Stream:
             if hi <= self.t0:
                 return None
             # the worst level held in the bin, as the host's bar: a bin that overlaps the warn span is "warn"
-            return "warn" if warned and lo < self.t0 + self.past_warn else "ok"
+            return "warn" if warned and self.past_warn > 0 and lo < self.t0 + self.past_warn else "ok"
         rows = [{"path": "host", "name": "bench stub (synthetic)", "depth": 0, "basis": "below", "statuses": len(self.paths),
                  "bar": [level(i, True) for i in range(bins)]}]
-        rows += [{"path": p, "name": f"Stub {i}", "depth": 1, "basis": "own", "statuses": 1, "bar": [level(i, i_ == 0) for i in range(bins)]}
+        rows += [{"path": p, "name": f"Stub {i_}", "depth": 1, "basis": "own", "statuses": 1, "bar": [level(i, i_ == 0) for i in range(bins)]}
                  for i_, p in enumerate(self.paths)]
         return {"path": "host", "window_s": window, "from": start, "to": now, "bins": bins, "bin_s": bin_s, "rows": rows}
 
