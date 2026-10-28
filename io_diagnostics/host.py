@@ -1313,12 +1313,14 @@ class Host:
         with self.lock:
             changed = seen(found) != seen(self.stock_results)
             self.stock_results = found
-        statuses = list(found.values())
+        # WHY a board with no State history posts no row (Zach, 2026-10-28, calm UI): an unwatched moteus keeps no State, so every
+        # board read a grey 'unknown' forever. Its reason stays in stock_results for the drill-in API; it is never shown as OK.
+        statuses = [status for status in found.values() if status.code != stock_diagnostics_module.NO_STATE]
         self.history.sync(stock_diagnostics_module.SOURCE, statuses, now)
         self.faults.observe(statuses, now)
         if changed:  # WHY only on a change: a page's tick is for what it would draw differently, not for every beat
             self.notify("stock diagnostics")
-        return statuses
+        return list(found.values())
 
     def _keep_log(self) -> None:
         """Write what the host now knows to the event log. WHY here, not only in a view: a service nobody is looking at
@@ -1367,7 +1369,8 @@ class Host:
             self.history.sync("view", setup.statuses + notes, now)
             checks = self._attach_checks(merged)
             # the stock diagnostics' latest statuses, on the entities that are still here (stock_diagnostics.py)
-            stock = [status for status in self.stock_results.values() if status.path in merged.entities]
+            stock = [status for status in self.stock_results.values()
+                     if status.path in merged.entities and status.code != stock_diagnostics_module.NO_STATE]
             if setup.entities or setup.statuses or notes or checks or stock:
                 layer = self._layer_with(setup.entities)
                 merged = tree.merge(layer, jobs, self.os_records + setup.statuses + notes + checks + stock)

@@ -46,6 +46,7 @@ DEFAULT_FILE = Path(__file__).with_name("diagnostics_default.toml")
 SOURCE = dx_record.SOURCE  # "robotdx.diagnostics": the status's source, which the page keys its drill-in on
 BEAT_S = 5.0
 DEFAULT_WINDOW_S = 60.0
+NO_STATE = "NoState"  # the entity has no State history: not run, and the host posts no row for it
 MIN_WINDOW_S, MAX_WINDOW_S = 2.0, 86400.0
 LIMIT_PARTS = ("warn_low", "warn_high", "error_low", "error_high")
 HEADER = ("# robotdx.diagnostics on this host (io_diagnostics/stock_diagnostics.py; the default set and every key explained:\n"
@@ -372,7 +373,7 @@ class StockDiagnostics:
             series = next((groups[name] for name in names if name in groups and any(item["key"] in columns.values() for item in groups[name])), None)
             if series is None:
                 which = f"State group {binding.state!r}" if binding.state else "State"
-                result = self._not_run(binding, spec, "NoState", f"no {which} history on {entity_name} yet: it is kept while the driver reports State")
+                result = self._not_run(binding, spec, NO_STATE, f"no {which} history on {entity_name} yet: it is kept while the driver reports State")
             else:
                 from robotdx.diagnostics import stream as dx_stream
 

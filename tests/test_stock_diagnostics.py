@@ -198,6 +198,11 @@ def test_a_board_with_no_state_yet_is_not_run(tmp_path):
     try:
         temp = rig.mine()["board temperature"]
         assert temp.level == "unknown" and temp.code == "NoState"
+        # no row on the board for it (an unwatched board keeps no State), and never OK; the drill-in API still says why
+        names = [check["name"] for check in rig.host.node(rig.board)["checks"]]
+        assert "CAN 1: board temperature" not in names
+        about = next(item for item in rig.host.diagnostics_config_json(rig.board)["diagnostics"] if item["id"] == "driver.board_temp")
+        assert about["status"]["code"] == "NoState" and about["status"]["level"] == "unknown"
     finally:
         rig.host.stop()
 
