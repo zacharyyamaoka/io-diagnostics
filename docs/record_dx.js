@@ -6,7 +6,8 @@
 //   /usr/bin/node /home/bam/io-diagnostics/docs/record_dx.js [out dir] [--after-only]   (default reports/media/dx, git-ignored)
 //
 // before-*.png  today's page (tree; the entity page's State tab)      after-*.png  the new page (Explore, a dashboard, paused at t,
-// Activity, Dashboards, the rail's three styles, Add panel)              dx-rewind.webm (+ .mp4, .gif)  streaming → scrub back → LIVE
+// before the page opened (the tree's past from the host), Activity, Dashboards, Diagnostics, the rail's three styles, Add panel)
+// dx-rewind.webm (+ .mp4, .gif)  streaming (State at the watch's 10 Hz) → scrub back → LIVE
 'use strict';
 
 const H = require('../tests/entity_harness');
@@ -35,10 +36,11 @@ const stateFraction = (page, at) => page.evaluate(([p, a]) => {
   return Math.max(0, Math.min(1, (t - c.start) / (c.end - c.start)));
 }, [BOARD, at]);
 
-/** The fraction for a moment `at` of the page's own lifetime (0 when it opened, 1 now): the tree is known there too. */
+/** The fraction for a moment `at` of the page's own lifetime (0 when it opened, 1 now): everything the page shows is its own there.
+    (The entities' start is earlier since §15: the tree's past from the host's /history/tree.) */
 const pageFraction = (page, at) => page.evaluate((a) => {
-  const c = window.robotdx.clock, e = window.robotdx.feed.dataset('entities');
-  const t = e.start + a * (c.end - e.start);
+  const c = window.robotdx.clock, o = window.robotdx.feed.openedAt;
+  const t = o + a * (c.end - o);
   return Math.max(0, Math.min(1, (t - c.start) / (c.end - c.start)));
 }, at);
 
@@ -86,7 +88,7 @@ async function scrubTo(page, fraction, steps = 6, stepMs = 0) {
       await shot(page, `after-paused-${scheme}`);
       await page.click('#dx-time .dv-pb-live');
       await settle(page, 1000);
-      // further back than the page knows: the host's own history (checks, State, health), the tree not yet (step B)
+      // before the page opened: the host's own history (checks, State, health) and the tree's past (GET /history/tree, §15), with the note
       await scrubTo(page, await stateFraction(page, 0.45));
       await settle(page, 2500);
       await shot(page, `after-paused-before-${scheme}`);
@@ -108,6 +110,13 @@ async function scrubTo(page, fraction, steps = 6, stepMs = 0) {
         await ready(page);
         await settle(page, 1500);
         await shot(page, 'after-dashboards-light');
+        await page.goto(`${base}${DX}?go=dashboards&board=diagnostics`);
+        await ready(page);
+        await settle(page, 3000);
+        await shot(page, 'after-diagnostics-light');
+        await page.goto(`${base}${DX}?go=dashboards`);   // New is on the list
+        await ready(page);
+        await settle(page, 1000);
         await page.click('[data-board-act="new"]');
         await page.waitForFunction(() => new URLSearchParams(location.search).get('board'), null, { timeout: 8000 });
         await settle(page, 800);
