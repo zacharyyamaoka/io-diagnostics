@@ -215,6 +215,8 @@ async function stubCadence(browser, stubArgs, { settle, seconds = 4 }, sink) {
   const stub = await startStub(stubArgs);
   let ctx = null;
   try {
+    // the page is opened once the synthetic entity has State (the case of State that comes later is its own check)
+    await H.waitFor(async () => { const v = await H.getJson(stub.base, '/api/v1/values?path=stub%2F0&since=0'); return (v.groups || []).some((g) => (g.rows || []).some((r) => (r.points || []).length)); }, 15000, 200);
     ctx = await H.newContext(browser, 'light');
     const p = await ctx.newPage();
     const seen = recorder(p, stub.base);
@@ -343,12 +345,18 @@ const keepsUpSoon = (ms) => (p) => H.waitFor(() => p.evaluate(() => { const e = 
     const binText = `${+(win / bins).toFixed(1)} s`;
     const oracle = await H.getJson(base, `/api/v1/history/tree?bins=${bins}`);
     const tPast = openedAt - 6;
+    // the tree's own draws (data-views-live): it must draw AT the clock's t, not its newest rows (a view the clock let go of
+    // shows its dataset's end whatever t is)
+    await page.evaluate(() => { window.__treeDraws = []; document.querySelector('#dx-tree').addEventListener('data-views-live', (e) => window.__treeDraws.push({ t: e.detail.t, following: e.detail.following, rows: e.detail.rows })); });
     await page.evaluate((t) => window.robotdx.clock.seek(t), tPast);
     await page.waitForTimeout(600);
     const pastClock = await clockState(page);
+    const treeDraws = await page.evaluate(() => window.__treeDraws);
     const past = await treeRows(page);
     const pastIds = new Set(past.map((r) => r.id));
     const lostRows = rows.filter((r) => r.claimed && !pastIds.has(r.id)).map((r) => r.id);
+    check('scrubbed back, the tree draws at the clock\'s t (paused), not its newest rows', treeDraws.some((d) => d.t === pastClock.t && !d.following) && !treeDraws.some((d) => d.t !== pastClock.t),
+      { t: pastClock.t, draws: treeDraws.slice(0, 4) });
     check('scrubbed back before the page opened, the tree is today\'s rows (every claimed row is there)', Number.isFinite(openedAt) && !pastClock.following && pastClock.t < openedAt && past.length >= 10 && lostRows.length === 0,
       { t: pastClock.t, opened: openedAt, rows: past.length, live: rows.length, lost: lostRows.slice(0, 5) });
     const bin = Math.floor((tPast - oracle.from) / oracle.bin_s);
@@ -764,12 +772,14 @@ const keepsUpSoon = (ms) => (p) => H.waitFor(() => p.evaluate(() => { const e = 
     check('with no /api/v1/live (404) the page polls /state instead, and draws the same tree', Boolean(polled) && pollMode === 'poll', { mode: pollMode });
     // with no /history/tree (404) the tree before the page opened is empty, and phase 3's note says why
     const oldOpened = await oldHostPage.evaluate(() => window.robotdx.feed.openedAt);
+    await oldHostPage.evaluate(() => { window.__treeDraws = []; document.querySelector('#dx-tree').addEventListener('data-views-live', (e) => window.__treeDraws.push({ t: e.detail.t, following: e.detail.following, rows: e.detail.rows })); });
     await oldHostPage.evaluate((t) => window.robotdx.clock.seek(t), oldOpened - 5);
     await oldHostPage.waitForTimeout(600);
-    const oldPast = { clock: await clockState(oldHostPage), rows: (await treeRows(oldHostPage)).length,
+    const oldPast = { clock: await clockState(oldHostPage), rows: (await treeRows(oldHostPage)).length, draws: await oldHostPage.evaluate(() => window.__treeDraws),
       note: await oldHostPage.evaluate(() => { const n = document.querySelector('#dx-before'); return n && !n.hidden ? n.textContent : null; }) };
-    check('with no /api/v1/history/tree (404) the tree before the page opened is empty, and the note says the host keeps no tree', oldPast.clock.t < oldOpened && oldPast.rows === 0 && /no tree/.test(oldPast.note || ''),
-      { t: oldPast.clock.t, opened: oldOpened, rows: oldPast.rows, note: oldPast.note });
+    check('with no /api/v1/history/tree (404) the tree before the page opened is empty (drawn at t, no rows), and the note says the host keeps no tree',
+      oldPast.clock.t < oldOpened && oldPast.rows === 0 && oldPast.draws.some((d) => d.t === oldPast.clock.t && d.rows === 0) && /no tree/.test(oldPast.note || ''),
+      { t: oldPast.clock.t, following: oldPast.clock.following, opened: oldOpened, rows: oldPast.rows, draws: oldPast.draws.slice(0, 3), note: oldPast.note });
     await oldHostPage.evaluate(() => window.robotdx.clock.goLive());
     const polling = await traffic(oldHostMeter, oldHostPage, IDLE_S);
     await oldHostPage.goto(`${base}${DX}?go=dashboards`);
@@ -808,6 +818,27 @@ const keepsUpSoon = (ms) => (p) => H.waitFor(() => p.evaluate(() => { const e = 
     check('stub, an older host (samples only with its 1 s tick): the page polls /values about every 250 ms and State moves faster than the tick', atTick.beat && atTick.keepsUp === false && atTick.polls_s >= 3 && atTick.max_gap_ms !== null && atTick.max_gap_ms <= 600, atTick);
     const slow = await stubCadence(browser, ['--rate', '5', '--entities', '1', '--keys', '5', '--coalesce', '0.1'], { settle: keepsUpSoon(10000) }, stubSink);
     check('stub, a slow watch (1 point a second each): the polls that bring nothing first stop, the feed keeps up', slow.beat && slow.keepsUp === true && slow.polls === 0, slow);
+    // an entity selected before it has any State (a device whose first point comes a few seconds later) gets its State panels when
+    // the point comes, without a new selection: the stub's first point 5 s after it starts (1 sample/s over 5 keys)
+    {
+      const stub = await startStub(['--rate', '1', '--entities', '1', '--keys', '5', '--coalesce', '0.1']);
+      const ctx = await H.newContext(browser, 'light');
+      try {
+        const p = await ctx.newPage();
+        stubSink.requests.push(recorder(p, stub.base));
+        const errs = H.watchErrors(p, stub.base);
+        await p.goto(`${stub.base}${DX}?go=explore&sel=stub/0`);
+        await ready(p);
+        const early = await H.waitFor(() => p.evaluate(() => { const d = document.querySelector('#dx-detail'); return d && d.dash ? { panels: [...d.querySelectorAll('.dd-panel')].map((x) => x.dataset.panel) } : null; }), 10000);
+        const t0 = Date.now();
+        const late = await H.waitFor(() => p.evaluate(() => { const c = document.querySelectorAll('#dx-detail .dv-kpi-card').length; return c > 0 ? c : null; }), 15000, 200);
+        const wait = Date.now() - t0;
+        const sel = await p.evaluate(() => new URLSearchParams(location.search).get('sel'));
+        stubSink.errors.push(...errs.errors);
+        check('State that comes after the selection gets its panels (no new selection): the State cards appear with the first point', Boolean(early) && !early.panels.includes('state') && Boolean(late) && sel === 'stub/0',
+          { first: early, cards: late, waited_ms: wait });
+      } finally { await ctx.close().catch(() => {}); H.stopServer(stub.child); }
+    }
     const stubAll = stubSink.requests.flat();
     const stubOff = stubAll.filter((r) => !onList(r));
     check('on the stub too: every request on the allow-list, the only write the heartbeat for its entity, no page error', stubOff.length === 0 && stubAll.filter((r) => r.method === 'POST').every((r) => JSON.parse(r.body).path === 'stub/0') && stubSink.errors.length === 0,
