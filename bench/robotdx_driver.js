@@ -276,7 +276,23 @@ async function heap(browser, base, capMB, seconds) {
 const CANVAS = new Set(['stroke', 'fill', 'lineTo', 'moveTo', 'beginPath', 'closePath', 'clearRect', 'fillRect', 'strokeRect', 'rect', 'arc', 'fillText',
   'strokeText', 'measureText', 'drawImage', 'save', 'restore', 'setTransform', 'translate', 'scale', 'rotate', 'clip', 'setLineDash', 'getImageData', 'putImageData',
   'createLinearGradient', 'bezierCurveTo', 'quadraticCurveTo', 'roundRect']);
-function profileClasses(cpu) {
+// cfg.maps (optional): a data-ui tree whose dist/ holds the .map files of the build that was vendored (vendor/data-ui/VERSION
+// names its commit); a minified frame is then named by its source file and line
+function sourceMapper(dir) {
+  if (!dir) return () => null;
+  const { SourceMap } = require('module');
+  const fs = require('fs'), path = require('path');
+  const maps = new Map();
+  return (url, line, col) => {
+    const m = /\/vendor\/data-ui\/(.+\.js)$/.exec(url || '');
+    if (!m || line < 0) return null;
+    if (!maps.has(m[1])) { try { maps.set(m[1], new SourceMap(JSON.parse(fs.readFileSync(path.join(dir, 'dist', `${m[1]}.map`), 'utf8')))); } catch (_) { maps.set(m[1], null); } }
+    const sm = maps.get(m[1]);
+    const e = sm && sm.findEntry(line, col);
+    return e && e.originalSource ? `${e.originalSource.replace(/^.*\/(packages|node_modules)\//, '$1/')}:${e.originalLine + 1}${e.name ? ` ${e.name}` : ''}` : null;
+  };
+}
+function profileClasses(cpu, mapper = () => null) {
   const byId = new Map(cpu.nodes.map((n) => [n.id, n]));
   const parent = new Map();
   for (const n of cpu.nodes) for (const c of n.children || []) parent.set(c, n.id);
@@ -304,10 +320,13 @@ function profileClasses(cpu) {
     else if (url.endsWith('/data-ui.js') || url.includes('/vendor/data-ui/')) k = 'data-ui: other';
     else k = 'other JS';
     add(k, us);
-    const fk = `${name || '(anonymous)'} ${url.split('/').slice(-2).join('/')}:${leaf.callFrame.lineNumber}`;
+    // where: a JS leaf by its source line; a native leaf (a canvas call, getBoundingClientRect, JSON.parse) by the line that called it
+    const where = (f) => mapper(f.url, f.lineNumber, f.columnNumber) || `${f.functionName || '(anonymous)'} ${(f.url || '').split('/').slice(-2).join('/')}:${f.lineNumber + 1}`;
+    const caller = stack.find((f, i) => i > 0 && f.url);
+    const fk = url ? where(leaf.callFrame) : `${name} ← ${caller ? where(caller) : '(no JS caller)'}`;
     fns.set(fk, (fns.get(fk) || 0) + us / 1000);
   }
-  const top = [...fns.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15).map(([f, t]) => ({ fn: f, ms: r1(t) }));
+  const top = [...fns.entries()].sort((a, b) => b[1] - a[1]).slice(0, 25).map(([f, t]) => ({ fn: f, ms: r1(t) }));
   return { ms: Object.fromEntries(Object.entries(ms).map(([k, v]) => [k, r1(v)])), top };
 }
 function traceSplit(events, seconds) {
@@ -371,7 +390,7 @@ async function profile(browser, base, seconds) {
   await complete;
   const f = await frames;
   await page.context().close();
-  const classes = profileClasses(cpu);
+  const classes = profileClasses(cpu, sourceMapper(cfg.maps));
   const wall = seconds * 1000;
   const share = Object.fromEntries(Object.entries(classes.ms).map(([k, v]) => [k, { ms_s: r1(v / seconds), pct: r1((100 * v) / wall) }]));
   return { seconds, frames: { n: f.gaps.length, p50: r1(pct(f.gaps, 50)), p95: r1(pct(f.gaps, 95)), dropped: f.gaps.filter((g) => g > 25).length, loop_p95: r1(pct(f.loop, 95)), draws_per_frame_p50: pct(f.draws, 50) },

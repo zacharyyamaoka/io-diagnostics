@@ -160,37 +160,40 @@ def run(args) -> dict:
     load0 = os.getloadavg()[0]
     phases, procs = {}, []
     base_cfg = {"software": args.software}
+    want = set(args.phases.split(","))
     try:
-        # ---- the fixture host: first paint, idle traffic, scrub, back to live, ingest (adapter receive) ----------------------------
-        demo = Process([PYTHON, str(DEMO), "--port", str(free_port()), "--state", str(scratch / "fixture"), "--quiet"],
-                       r"RobotDx on data-ui: (http://\S+?)/dx/", scratch / "fixture.log")
-        procs.append(demo)
-        with urllib.request.urlopen(f"{demo.url}/api/v1/plugins", timeout=10) as answer:
-            plugins = json.load(answer)
-        names = sorted(p["name"] for p in plugins.get("plugins", []))
-        if not set(names) <= {"state_joint", "state_camera"}:
-            raise SystemExit(f"refusing to go on: the fixture host loaded {names}")
-        time.sleep(20)   # the joint's State and levels history grow a little before the scrub
-        phases["fixture"] = drive({**base_cfg, "phase": "fixture", "base": demo.url, "board": BOARD, "loads": args.loads, "seeks": args.seeks,
-                                   "lives": args.lives, "idleS": args.idle_s, "ingestS": args.ingest_s}, timeout=900)
-        demo.stop()
-        procs.remove(demo)
+        # ---- the fixture host: first paint, idle traffic, scrub, back to live, ingest (the host's emit) ------------------------------
+        if "fixture" in want:
+            demo = Process([PYTHON, str(DEMO), "--port", str(free_port()), "--state", str(scratch / "fixture"), "--quiet"],
+                           r"RobotDx on data-ui: (http://\S+?)/dx/", scratch / "fixture.log")
+            procs.append(demo)
+            with urllib.request.urlopen(f"{demo.url}/api/v1/plugins", timeout=10) as answer:
+                plugins = json.load(answer)
+            names = sorted(p["name"] for p in plugins.get("plugins", []))
+            if not set(names) <= {"state_joint", "state_camera"}:
+                raise SystemExit(f"refusing to go on: the fixture host loaded {names}")
+            time.sleep(20)   # the joint's State and levels history grow a little before the scrub
+            phases["fixture"] = drive({**base_cfg, "phase": "fixture", "base": demo.url, "board": BOARD, "loads": args.loads, "seeks": args.seeks,
+                                       "lives": args.lives, "idleS": args.idle_s, "ingestS": args.ingest_s}, timeout=900)
+            demo.stop()
+            procs.remove(demo)
         # ---- the stub: frame time and ingest (host emit) at three N x M; the heap at the highest -----------------------------------
-        for rate, panels in SWEEP:
+        for rate, panels in (SWEEP if "sweep" in want else ()):
             stub = Process([PYTHON, str(STUB), "--port", str(free_port()), "--rate", str(rate), "--entities", str(panels), "--keys", "5",
                             "--coalesce", str(args.coalesce)], r"bench stub on (http://\S+?)/ ", scratch / f"stub-{rate}x{panels}.log")
             procs.append(stub)
             phases[f"sweep@{rate}x{panels}"] = drive({**base_cfg, "phase": "sweep", "base": stub.url, "seconds": args.sweep_s}, timeout=300)
             stub.stop()
             procs.remove(stub)
-        rate, panels = SWEEP[-1]
-        stub = Process([PYTHON, str(STUB), "--port", str(free_port()), "--rate", str(rate), "--entities", str(panels), "--keys", "5",
-                        "--coalesce", str(args.coalesce)], r"bench stub on (http://\S+?)/ ", scratch / "stub-heap.log")
-        procs.append(stub)
-        cap, seconds = (256, 600) if args.long else (64, 90)
-        phases["heap"] = drive({**base_cfg, "phase": "heap", "base": stub.url, "capMB": cap, "seconds": seconds}, timeout=seconds + 300)
-        stub.stop()
-        procs.remove(stub)
+        if "heap" in want:
+            rate, panels = SWEEP[-1]
+            stub = Process([PYTHON, str(STUB), "--port", str(free_port()), "--rate", str(rate), "--entities", str(panels), "--keys", "5",
+                            "--coalesce", str(args.coalesce)], r"bench stub on (http://\S+?)/ ", scratch / "stub-heap.log")
+            procs.append(stub)
+            cap, seconds = (256, 600) if args.long else (64, 90)
+            phases["heap"] = drive({**base_cfg, "phase": "heap", "base": stub.url, "capMB": cap, "seconds": seconds}, timeout=seconds + 300)
+            stub.stop()
+            procs.remove(stub)
     finally:
         for p in procs:
             p.stop()
@@ -211,7 +214,7 @@ def run_profile(args) -> dict:
         stub = Process([PYTHON, str(STUB), "--port", str(free_port()), "--rate", str(rate), "--entities", str(panels), "--keys", "5",
                         "--coalesce", f"{coalesce:.6f}"], r"bench stub on (http://\S+?)/ ", scratch / f"stub-profile-{coalesce:.3f}.log")
         try:
-            ph = drive({"software": args.software, "phase": "profile", "base": stub.url, "seconds": args.profile_s}, timeout=300)
+            ph = drive({"software": args.software, "phase": "profile", "base": stub.url, "seconds": args.profile_s, "maps": str(args.maps) if args.maps else None}, timeout=300)
         finally:
             stub.stop()
         out["runs"][feed_label(coalesce)] = {k: ph.get(k) for k in ("renderer", "renderer_kind", "calibration_ms", "profile", "errors", "failed")}
@@ -407,8 +410,10 @@ def main(argv=None) -> int:
     ap.add_argument("--include-noisy", action="store_true", help="publish a noisy run's points as KPI points (default: kpi_diagnostics.jsonl)")
     ap.add_argument("--event", help="a milestone label on the points (e.g. 'phase 3b: /api/v1/live')")
     ap.add_argument("--coalesce", type=float, default=0.1, help="the stub's seconds between a watched entity's samples events (the host's 0.1)")
+    ap.add_argument("--phases", default="fixture,sweep,heap", help="which phases run (a comma list of fixture, sweep, heap); a missing one's KPIs are null with a reason")
     ap.add_argument("--profile", action="store_true", help="only the frame-time profile (Chrome's trace + V8's profiler) at 6,000 x 6, printed")
     ap.add_argument("--profile-s", type=float, default=6, help="seconds profiled per cadence")
+    ap.add_argument("--maps", type=Path, help="with --profile: a data-ui tree whose dist/ has the vendored build's .map files (names frames by source)")
     args = ap.parse_args(argv)
     if args.publish and not args.to:
         ap.error("--publish needs --to <producer folder>")
