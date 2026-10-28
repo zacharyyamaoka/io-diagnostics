@@ -394,7 +394,9 @@ class StockDiagnostics:
             result = self._not_run(binding, spec, "NumpyMissing", NUMPY_MISSING if error.name == "numpy" else f"{error}")
         except Exception as error:  # noqa: BLE001 - a diagnostic that raises is a not_run with its reason, never a crashed host
             result = self._not_run(binding, spec, "DiagnosticRaised", f"{binding.diagnostic} raised {type(error).__name__}: {error}")
-        result = dataclasses.replace(result, title=binding.title, subject=path)
+        # WHY "<entity>: <title>": the page's row model folds "who: what" names into the entity's folder, beside its driver's own checks
+        result = dataclasses.replace(result, title=f"{entity_name}: {binding.title}" if entity_name and entity_name != path else binding.title,
+                                     subject=path)
         line = dx_record.to_record(result, hardware_id=hardware_id, expected_period_s=self.beat_s)
         line["values"] = [*line["values"], {"key": "dx.binding", "value": binding.id}]
         if window is not None:

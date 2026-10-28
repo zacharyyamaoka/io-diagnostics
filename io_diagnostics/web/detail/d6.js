@@ -323,7 +323,10 @@
       const log = known && check.code ? `<a class="link d6-lg" data-d6-jump="log" data-code="${h.esc(check.code)}" tabindex="0" title="the Log lines of this fault">in the log →</a>` : '';
       return { flash, extra: `${explain}${log}` };
     };
-    const hooks = { rowClass: (row) => marks(row.check).flash, extra: (row) => marks(row.check).extra };
+    // a stock diagnostic's row (source robotdx.diagnostics) also gets a chevron and its drill-in (d6-rows.js), drawn under the row's own detail
+    const dx = ER() && ER().dx;
+    const hooks = { rowClass: (row) => marks(row.check).flash, extra: (row) => marks(row.check).extra,
+      lead: (row, open) => (dx ? dx.lead(row, open) : ''), body: (row) => (dx ? dx.body(row, ctx) : '') };
     const section = d1a && d1a.embed ? d1a.embed(document.getElementById('detail'), node, detail, ctx, hooks)
       : '<div class="muted">The Diagnostics section (detail/d1a.js) did not load.</div>';
     return rollsUp(node, [...checks].sort((a, b) => rankOf(b.effective_level) - rankOf(a.effective_level)), ctx) + section
@@ -697,6 +700,36 @@
 .er-resetrow { padding: 0 4px 6px calc(var(--er-depth, 0) * 16px + 20px); }
 .er-reset { display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; }
 .er-rbtn { padding: 2px 10px; font-size: 12px; }
+/* a stock diagnostic's drill-in (d6-rows.js): unfolds under its Diagnostics row; health colours only on the band's warn / error zones */
+.dxc-chev { margin-right: 3px; flex: none; }
+.dx-x.dxc { margin: 0 4px 10px 18px; padding: 10px 12px; border: 1px solid var(--io-border-soft); border-radius: var(--io-radius); background: var(--io-surface-alt); gap: 10px; }
+.dxc-h { color: var(--io-text-strong); }
+.dxc-id { color: var(--io-faint); font-size: 11px; margin-left: 4px; }
+.dxc-doc p { margin: 0 0 3px; color: var(--io-muted); }
+.dxc-g { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 14px; align-items: center; }
+.dxc-gb { color: var(--io-muted); font-size: 12px; }
+.dxc-k { color: var(--io-faint); }
+.dxc-band { grid-column: 1 / -1; position: relative; height: 8px; border-radius: var(--io-radius-pill); background: var(--io-control); border: 1px solid var(--io-border-soft); overflow: hidden; }
+.dxc-z { position: absolute; top: 0; bottom: 0; }
+.dxc-z.warn { background: var(--io-warn-soft); border-left: 1px solid var(--io-warn-line); }
+.dxc-z.err { background: var(--io-error-soft); border-left: 1px solid var(--io-error-line); }
+.dxc-v { position: absolute; top: -1px; bottom: -1px; width: 3px; margin-left: -1px; background: var(--io-text-strong); border-radius: 1px; }
+.dxc-w { color: var(--io-muted); font-size: 12px; }
+.dxc-form { display: grid; gap: 2px; border-top: 1px solid var(--io-border-soft); padding-top: 6px; }
+.dxc-f { display: grid; grid-template-columns: minmax(120px, 190px) minmax(0, 1fr) 64px 24px; gap: 10px; align-items: center; min-height: 28px; }
+.dxc-fn { font-size: 12px; color: var(--io-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dxc-src { font-size: 11px; color: var(--io-faint); text-align: right; }
+.dxc-src.edited { color: var(--io-accent-text); font-weight: 600; }
+.dxc-reset { padding-left: 200px; }
+.dxc-foot { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 11.5px; }
+.dxc-all { padding: 2px 10px; font-size: 12px; }
+.dxc-parts { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
+.dxc-part { display: inline-grid; gap: 1px; }
+.dxc-part .er-in { width: 84px; }
+.dxc-pl { font-size: 10.5px; color: var(--io-faint); }
+.dxc-pc { display: inline-flex; align-items: center; gap: 4px; }
+.dxc-pc > .dxc-pl { white-space: nowrap; }
+.dxc-doc code { font: 11.5px var(--io-font-mono); }
 .er-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 0 0 8px; padding: 7px 10px; border: 1px solid var(--io-border); border-radius: var(--io-radius); background: var(--io-control); font-size: 12.5px; }
 .er-bar.dirty { border-style: dashed; color: var(--io-text-strong); }
 .er-bar.bad { color: var(--io-error-text); border-color: var(--io-error-line); background: var(--io-error-soft); }
@@ -793,6 +826,7 @@
     afterDraw(container);
     bindLog(container, node, active);
     if (er) er.config.afterDraw(container);
+    if (er && er.dx) er.dx.afterDraw(container);
   }
 
   // ---------------------------------------------------------------------------------- the clicks ----
@@ -832,6 +866,7 @@
       const { ctx, detail } = live();
       const node = ctx.node;
       const er = ER();
+      if (er && er.dx && container.querySelector('[data-d6-panel="diagnostics"]') && er.dx.click(target, ctx)) return;
       if (er && er.onClick(target, { kind: node.kind || 'device', redraw: ctx.redraw })) return;
       if (er && container.querySelector('[data-d6-panel="config"]') && er.config.click(target, ctx, detail)) return;
       const badge = target.closest('.d6-log .al-badge'); // a fault's badge in the log: that fault, in Diagnostics
@@ -878,6 +913,7 @@
       if (!live() || !(target instanceof Element)) return;
       const { ctx, detail } = live();
       const er = ER();
+      if (er && er.dx && container.querySelector('[data-d6-panel="diagnostics"]') && er.dx.change(target, ctx)) return;
       if (er && er.onChange(target, { kind: ctx.node.kind || 'device', redraw: ctx.redraw })) return;
       if (er && container.querySelector('[data-d6-panel="config"]') && er.config.change(target, ctx, detail)) return;
       const stream = target.closest('[data-d6-stream]');
@@ -893,6 +929,7 @@
     container.addEventListener('input', (event) => {
       const target = event.target;
       if (!live() || !(target instanceof Element)) return;
+      if (ER().dx && ER().dx.input(target, live().ctx)) return;
       ER().config.input(target, live().ctx);
     });
     container.addEventListener('keydown', (event) => {
@@ -900,6 +937,7 @@
       if (!live() || !(target instanceof Element)) return;
       const { ctx, detail } = live();
       if (ER().config.key(event, ctx, detail)) return;
+      if (ER().dx && ER().dx.key(event, ctx)) return;
       if (event.key === 'Escape' && U.lightbox) { U.lightbox = null; ctx.redraw(); event.stopPropagation(); return; }
       if (target.closest('[data-d6-tabs]')) {
         const tabs = tabsFor(detail);

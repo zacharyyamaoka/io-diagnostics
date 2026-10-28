@@ -3387,7 +3387,8 @@ class Host:
         model_id = str((entity.identity or {}).get("model_id") or "")
         out = []
         for binding in runner.bindings_for(path, model_id):
-            status = self.stock_results.get((path, binding.title))
+            status = next((found for (where, _name), found in self.stock_results.items()
+                           if where == path and stock_diagnostics_module.binding_of(found) == binding.id), None)
             out.append({**runner.binding_json(binding),
                         "status": self.check_json(status, view.now) if status is not None else None,
                         "window": stock_diagnostics_module.window_of(status) if status is not None else None})

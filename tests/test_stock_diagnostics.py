@@ -99,7 +99,7 @@ class Rig:
         wait_for(has_value, timeout=timeout, what="a 2 s window of State history")
 
     def mine(self) -> dict:
-        return {status.name: status for status in self.host.run_stock_diagnostics() if status.path == self.board}
+        return {status.name.split(": ", 1)[-1]: status for status in self.host.run_stock_diagnostics() if status.path == self.board}
 
 
 @pytest.fixture
@@ -137,6 +137,7 @@ def test_a_watched_board_gets_its_stock_diagnostics_as_ordinary_statuses(rig):
     temp, faults = found["board temperature"], found["fault and limiter codes"]
     assert temp.level == "ok" and temp.source == sd.SOURCE and temp.expected_period_s == 0.5
     assert validate(temp) == [] and validate(faults) == []
+    assert temp.name == "CAN 1: board temperature"  # "<entity>: <title>": the page folds it into the board's folder
     primary = temp.measurements[0]
     assert primary.key == "max" and primary.unit == "Cel" and (primary.warn_high, primary.error_high) == (60.0, 70.0)
     assert 38.0 <= primary.value <= 45.0  # the fixture's motor runs 38 .. 44 Cel
@@ -148,10 +149,10 @@ def test_a_watched_board_gets_its_stock_diagnostics_as_ordinary_statuses(rig):
     assert faults.level == "error" and faults.code == "HardFault"
     # the Diagnostics tab's checks, /checks and the history all carry them, with no API change
     checks = {check["name"]: check for check in rig.host.node(rig.board)["checks"]}
-    assert checks["board temperature"]["source"] == "robotdx.diagnostics" and checks["board temperature"]["effective_level"] == "ok"
-    assert {"board temperature", "fault and limiter codes"} <= {check["name"] for check in rig.host.checks_json()["checks"][rig.board]}
+    assert checks["CAN 1: board temperature"]["source"] == "robotdx.diagnostics" and checks["CAN 1: board temperature"]["effective_level"] == "ok"
+    assert {"CAN 1: board temperature", "CAN 1: fault and limiter codes"} <= {check["name"] for check in rig.host.checks_json()["checks"][rig.board]}
     history = rig.host.history_json(rig.board)
-    assert {"board temperature", "fault and limiter codes"} <= {status["name"] for status in history["statuses"]}
+    assert {"CAN 1: board temperature", "CAN 1: fault and limiter codes"} <= {status["name"] for status in history["statuses"]}
 
 
 
@@ -186,7 +187,7 @@ def test_not_enough_history_is_not_run_never_ok(tmp_path):
         rig.watch(1.5)
         temp = rig.mine()["board temperature"]
         assert temp.level == "unknown" and temp.code == "NotEnoughHistory" and "600 s window" in temp.message
-        shown = next(check for check in rig.host.node(rig.board)["checks"] if check["name"] == "board temperature")
+        shown = next(check for check in rig.host.node(rig.board)["checks"] if check["name"] == "CAN 1: board temperature")
         assert shown["effective_level"] == "unknown" and shown["source"] == "robotdx.diagnostics"
     finally:
         rig.host.stop()
@@ -244,12 +245,12 @@ def test_the_beat_runs_on_its_own_thread_and_its_rows_go_stale_when_it_stops(tmp
     try:
         rig.host.start(udev=False)
         rig.ready()
-        names = wait_for(lambda: {c["name"] for c in rig.host.node(rig.board)["checks"]} >= {"board temperature"} or None, what="the beat")
+        names = wait_for(lambda: {c["name"] for c in rig.host.node(rig.board)["checks"]} >= {"CAN 1: board temperature"} or None, what="the beat")
         assert names
         rig.host._stop.set()  # the beat stops: its statuses promised 0.3 s, so they go STALE after the 5 s floor
         time.sleep(5.6)
         checks = {check["name"]: check for check in rig.host.node(rig.board)["checks"]}
-        assert checks["board temperature"]["effective_level"] == "stale"
+        assert checks["CAN 1: board temperature"]["effective_level"] == "stale"
     finally:
         rig.host.stop()
 
@@ -328,5 +329,5 @@ def test_the_host_starts_without_numpy_and_each_diagnostic_says_why(tmp_path):
     out = json.loads(done.stdout.strip().splitlines()[-1])
     assert out["numpy"] is False and "stock.box" in out["listed"]
     board = [row for row in out["found"] if row["path"].endswith("/can/1")]
-    assert {row["name"] for row in board} == {"board temperature", "fault and limiter codes"}
+    assert {row["name"] for row in board} == {"CAN 1: board temperature", "CAN 1: fault and limiter codes"}
     assert all(row["level"] == "unknown" and row["code"] == "NumpyMissing" and "diagnostics extra" in row["message"] for row in board), board

@@ -374,19 +374,22 @@
     refreshNode(); ctx.redraw();
   }
 
-  // what a row says about its edit, in plain words
-  function edits(row) {
+  // what a row says about its edit, in plain words: the Configuration tab's and a stock diagnostic's drill-in's (one function). `mine` is this
+  // page's last answer, `server` the host's own edit state (Configuration only), `unsaved` the "not saved" chip's words ('' for none)
+  function chipsHtml(row, { pending, mine, server, unsaved, unsavedTitle }) {
     const parts = [];
-    const pending = C.pending.get(row.key);
-    const mine = C.last.get(row.key);
-    const server = row.edit;
     if (pending) return `<span class="er-chip pending" role="status">sending ${esc(show(pending.asked, row.unit))}…</span>`;
     const verdict = server && server.state !== 'pending' ? { state: server.state === 'accepted' ? 'accepted' : 'rejected', message: server.message, reset: server.reset } : mine ? { state: mine.state === 'accepted' ? 'accepted' : 'rejected', message: mine.message, reset: mine.reset } : null;
     if (verdict && verdict.state === 'accepted') parts.push(`<span class="er-chip ok" title="the board read it back and it matches what you set">✓ accepted${verdict.reset ? ` · reset to ${esc(verdict.reset)}` : ''}</span>`);
     if (verdict && verdict.state === 'rejected') parts.push(`<span class="er-chip bad" data-diagnostic role="status"><svg class="shape lv-error" role="img" aria-label="rejected"><use href="#s-error"/></svg>rejected: ${esc(verdict.message || 'the board refused it')}</span>`);
-    const unsaved = row.unsaved || (mine && mine.state === 'accepted' && mine.stored !== null && mine.stored !== undefined && String(mine.value) !== String(mine.stored));
-    if (unsaved) parts.push(`<span class="er-chip unsaved" title="live in the running board; it is gone at the next restart unless you Save">not saved · stored ${esc(show(row.unsaved ? row.stored : mine.stored, row.unit))}</span>`);
+    if (unsaved) parts.push(`<span class="er-chip unsaved" title="${esc(unsavedTitle || '')}">${unsaved}</span>`);
     return parts.join(' ');
+  }
+  function edits(row) {
+    const mine = C.last.get(row.key);
+    const unsaved = row.unsaved || (mine && mine.state === 'accepted' && mine.stored !== null && mine.stored !== undefined && String(mine.value) !== String(mine.stored));
+    return chipsHtml(row, { pending: C.pending.get(row.key), mine, server: row.edit, unsaved: unsaved ? `not saved · stored ${esc(show(row.unsaved ? row.stored : mine.stored, row.unit))}` : '',
+      unsavedTitle: 'live in the running board; it is gone at the next restart unless you Save' });
   }
   function resetMenu(row) {
     const options = [];
@@ -394,16 +397,20 @@
     if (row.expected !== null && row.expected !== undefined && String(row.expected) !== String(row.value)) options.push(['expected', 'to the deployment record', `${show(row.expected, row.unit)}${row.expected_source ? ` · ${row.expected_source}` : ''}`]);
     if (row.default !== null && row.default !== undefined && String(row.default) !== String(row.value)) options.push(['default', 'to the factory default', show(row.default, row.unit)]);
     if (!options.length) return '<div class="er-reset muted">Nothing to reset to: it already holds its stored value, the record\'s and the default.</div>';
-    return `<div class="er-reset">${options.map(([to, label, value]) => `<button class="btn er-rbtn" data-er-reset="${to}" data-er-key="${esc(row.key)}">Reset ${label}: <b>${esc(value)}</b></button>`).join('')}</div>`;
+    return resetHtml(options, (to) => `data-er-reset="${to}" data-er-key="${esc(row.key)}"`);
   }
-  function input(row) {
-    const draft = C.draft.has(row.key) ? C.draft.get(row.key) : row.value;
-    const common = `data-er-cfg="${esc(row.key)}" aria-label="${esc(row.key)}"`;
+  // the reset buttons, `[to, label, value]` each; `attrsOf(to)` names what a click resets (shared with a stock diagnostic's drill-in)
+  const resetHtml = (options, attrsOf) => `<div class="er-reset">${options.map(([to, label, value]) => `<button class="btn er-rbtn" ${attrsOf(to)}>Reset ${label}: <b>${esc(value)}</b></button>`).join('')}</div>`;
+  const input = (row) => inputHtml(row, C.draft.has(row.key) ? C.draft.get(row.key) : row.value, `data-er-cfg="${esc(row.key)}"`);
+  // one setting's editor by its type (a switch, a choice, a number or text), shared with a stock diagnostic's drill-in: `attrs` names the
+  // field for the clicks, `placeholder` what an empty box means, `hint` the tooltip
+  function inputHtml(row, draft, attrs, placeholder = '', hint = 'Enter applies it live · Esc puts back what the board holds') {
+    const common = `${attrs} aria-label="${esc(row.key)}"`;
     if (row.type === 'bool') return `<label class="er-sw"><input type="checkbox" role="switch" ${common}${row.value ? ' checked' : ''}><span>${row.value ? 'true' : 'false'}</span></label>`;
     if (row.type === 'enum') return `<select class="er-in" ${common}>${(row.choices || []).map((c) => `<option value="${esc(c)}"${String(c) === String(row.value) ? ' selected' : ''}>${esc(c)}</option>`).join('')}</select>${row.unit ? `<span class="er-unit">${esc(row.unit)}</span>` : ''}`;
     const range = row.range ? ` min="${row.range[0]}" max="${row.range[1]}"` : '';
     const numeric = row.type === 'int' || row.type === 'float';
-    return `<input class="er-in mono" type="${numeric ? 'number' : 'text'}"${numeric ? ` step="${row.type === 'int' ? 1 : 'any'}"${range}` : ''} ${common} value="${esc(draft)}" title="Enter applies it live · Esc puts back what the board holds">${row.unit ? `<span class="er-unit">${esc(row.unit)}</span>` : ''}`;
+    return `<input class="er-in mono" type="${numeric ? 'number' : 'text'}"${numeric ? ` step="${row.type === 'int' ? 1 : 'any'}"${range}` : ''} ${common} value="${esc(draft)}"${placeholder ? ` placeholder="${esc(placeholder)}"` : ''} title="${esc(hint)}">${row.unit ? `<span class="er-unit">${esc(row.unit)}</span>` : ''}`;
   }
 
   function configRow(row, d, helpers) {
@@ -532,11 +539,239 @@
   const copyText = (detail) => configText(detail.config || []);
   function leave() { if (E.token) stopEdit(); }
 
+  // ------------------------------------------------------------------ a stock diagnostic's drill-in (Diagnostics tab) ----
+  // A Diagnostics row whose source is robotdx.diagnostics (the host's stock diagnostics, io_diagnostics/stock_diagnostics.py) has a
+  // chevron and unfolds in place: its title and doc, its config as a small form (the Configuration tab's own editing, the same
+  // functions: Enter applies, each field says pending / accepted / rejected / not saved, ↺ resets it to the dataclass default), the
+  // measured value against its warn / error Limits, and the window of State history it ran on. It draws GET
+  // /api/v1/diagnostics/config?path=; POST /api/v1/diagnostics/config is its one write (the person's diagnostics.toml, never a device:
+  // no edit session, no token). WHY (Zach, 2026-10-28): "we can actually on the diaginstics kinda like drill in and you can see and even
+  // configure these values".
+  const DX_SOURCE = 'robotdx.diagnostics';
+  const DXC = { data: new Map(), asked: new Map(), pending: new Map(), last: new Map(), draft: new Map(), resetOpen: new Set(), all: new Set() };
+  const DX_TYPES = { 'float|null': 'float', float: 'float', int: 'int', bool: 'bool', str: 'string' };
+  const isStock = (check) => Boolean(check) && check.source === DX_SOURCE;
+  const valueAt = (check, key) => ((check.values || []).find((v) => v.key === key) || {}).value;
+  const dxKey = (path, id, field) => `${path}\u0001${id}\u0001${field}`;
+  const dxRow = (field) => ({ key: field.field, value: field.value, unit: field.unit, type: DX_TYPES[field.type] || 'string', default: field.default,
+    writable: Boolean(field.editable) && field.type !== 'tuple', nullable: field.type === 'float|null' });
+  const dxShow = (value, unit, nullable) => (value === null || value === undefined ? (nullable ? 'no limit' : '—') : show(Array.isArray(value) ? value.join(', ') : value, unit));
+
+  async function loadDx(path, redraw, force = false) {
+    if (!force && Date.now() - (DXC.asked.get(path) || 0) < 4000) return;
+    DXC.asked.set(path, Date.now());
+    try {
+      const response = await fetch(`/api/v1/diagnostics/config?path=${encodeURIComponent(path)}`);
+      if (response.ok) { DXC.data.set(path, await response.json()); redraw(); }
+    } catch (_) { /* the next unfold asks again */ }
+  }
+  const dxField = (path, id, name) => {
+    const data = DXC.data.get(path);
+    const diagnostic = data && (data.diagnostics || []).find((d) => d.id === id);
+    return diagnostic ? (diagnostic.fields || []).find((f) => f.field === name) : null;
+  };
+
+  async function applyDx(ctx, path, id, field, raw, reset) {
+    const key = dxKey(path, id, field.field);
+    const row = dxRow(field);
+    const parsed = reset ? { value: field.default } : row.nullable && String(raw).trim() === '' ? { value: null } : coerce(row, raw);
+    if (parsed.error) { DXC.last.set(key, { state: 'refused', message: parsed.error }); ctx.redraw(); return; }
+    DXC.pending.set(key, { asked: parsed.value });
+    DXC.last.delete(key);
+    ctx.redraw();
+    const answer = await post('/api/v1/diagnostics/config', reset ? { path, id, field: field.field, reset: true } : { path, id, field: field.field, value: parsed.value });
+    DXC.pending.delete(key);
+    DXC.draft.delete(key);
+    DXC.last.set(key, answer.data.state === 'accepted' ? answer.data : { state: 'rejected', message: answer.data.message || answer.data.error || `HTTP ${answer.status}` });
+    await loadDx(path, ctx.redraw, true);
+    ctx.redraw();
+  }
+
+  // the measured value against its warn / error Limits: the headline measurement, its bounds in words and as a band
+  function dxGauge(check) {
+    const m = (check.measurements || [])[0];
+    if (!m) return '<div class="dxc-g muted">No value: it did not run.</div>';
+    const bounds = [['error_low', 'error below'], ['warn_low', 'warn below'], ['warn_high', 'warn above'], ['error_high', 'error above']]
+      .filter(([k]) => typeof m[k] === 'number').map(([k, words]) => `${words} <b class="mono">${esc(show(+Number(m[k]).toPrecision(6), m.unit === '1' ? '' : m.unit))}</b>`);
+    const value = typeof m.value === 'number' ? m.value : null;
+    const marks = ['error_low', 'warn_low', 'warn_high', 'error_high'].map((k) => m[k]).filter((v) => typeof v === 'number');
+    let band = '';
+    if (value !== null && marks.length) {
+      const all = [...marks, value];
+      let lo = Math.min(...all); let hi = Math.max(...all);
+      const pad = (hi - lo || Math.abs(hi) || 1) * 0.15; lo -= pad; hi += pad;
+      const x = (v) => `${((v - lo) / (hi - lo)) * 100}%`;
+      const zone = (from, to, cls) => `<span class="dxc-z ${cls}" style="left:${x(from)};width:calc(${x(to)} - ${x(from)})"></span>`;
+      const zones = [];
+      if (typeof m.error_low === 'number') zones.push(zone(lo, m.error_low, 'err'));
+      if (typeof m.warn_low === 'number') zones.push(zone(typeof m.error_low === 'number' ? m.error_low : lo, m.warn_low, 'warn'));
+      if (typeof m.warn_high === 'number') zones.push(zone(m.warn_high, typeof m.error_high === 'number' ? m.error_high : hi, 'warn'));
+      if (typeof m.error_high === 'number') zones.push(zone(m.error_high, hi, 'err'));
+      band = `<span class="dxc-band" data-dxc-band aria-hidden="true">${zones.join('')}<span class="dxc-v" style="left:${x(value)}"></span></span>`;
+    }
+    return `<div class="dxc-g"><span class="dxc-gv"><span class="dxc-k mono">${esc(m.key)}</span> <b class="mono" data-dxc-value>${esc(m.text || show(m.value, m.unit))}</b></span>`
+      + `<span class="dxc-gb">${bounds.length ? bounds.join(' · ') : 'no limits: a reading, not a gate'}</span>${band}</div>`;
+  }
+
+  // the window it ran on: how much State history, which group, how many samples, how long ago it ended, how often it runs
+  function dxWindow(check, ctx) {
+    let window = null;
+    try { window = JSON.parse(valueAt(check, 'dx.window') || 'null'); } catch (_) { window = null; }
+    const every = check.expected_period_s ? ` · re-run every ${+Number(check.expected_period_s).toPrecision(3)} s` : '';
+    if (!window) return `<div class="dxc-w" data-dxc-window>No window yet: ${esc(check.message || 'it has not run on any State')}${every}</div>`;
+    const now = ctx.state && ctx.state.clock ? ctx.state.clock.now : null;
+    const ago = now !== null ? `, ending ${ctx.h.ago(Math.max(0, now - window.to))} ago` : '';
+    return `<div class="dxc-w" data-dxc-window>Ran on the last <b>${+Number(window.window_s).toPrecision(4)} s</b> of State history`
+      + `${window.state ? ` (<span class="mono">${esc(window.state)}</span>)` : ''}${window.samples !== null && window.samples !== undefined ? ` · ${esc(window.samples)} samples` : ''}${ago}${every}</div>`;
+  }
+
+  function dxFieldRow(ctx, path, id, field) {
+    const key = dxKey(path, id, field.field);
+    const row = dxRow(field);
+    const mine = DXC.last.get(key);
+    const pending = DXC.pending.get(key);
+    const chips = chipsHtml(row, { pending, mine, server: null, unsaved: dxUnsaved(mine), unsavedTitle: 'kept for this run only' });
+    const draft = DXC.draft.has(key) ? DXC.draft.get(key) : (row.value === null || row.value === undefined ? '' : row.value);
+    const value = row.writable ? `<span class="er-edit">${inputHtml(row, draft, `data-dxc-field="${esc(field.field)}" data-dxc-id="${esc(id)}"`, '', 'Enter applies it · Esc puts back the value in use')}</span>`
+      : `<span class="mono d6-cv-t">${esc(dxShow(row.value, row.unit, row.nullable))}</span>`;
+    const canReset = row.writable && field.source !== 'default';
+    const names = `data-dxc-id="${esc(id)}" data-dxc-field="${esc(field.field)}"`;
+    const resetBtn = canReset ? `<button class="er-rb" data-dxc-resetopen ${names} aria-expanded="${DXC.resetOpen.has(key)}" title="Reset this value">↺</button>` : '';
+    const resetRow = canReset && DXC.resetOpen.has(key)
+      ? `<div class="er-resetrow dxc-reset">${resetHtml([['default', 'to the dataclass default', dxShow(field.default, row.unit, row.nullable)]], () => `data-dxc-reset ${names}`)}</div>` : '';
+    return `<div class="dxc-f" data-dxc-row="${esc(field.field)}"><span class="dxc-fn mono" title="${esc(field.doc || field.field)}">${esc(field.field)}</span>`
+      + `<span class="dxc-fv">${value}${chips ? `<div class="er-chips">${chips}</div>` : ''}</span>`
+      + `<span class="dxc-src ${esc(field.source)}" title="where this value comes from">${esc(field.source)}</span><span class="dxc-fr">${resetBtn}</span></div>${resetRow}`;
+  }
+
+  const PARTS = [['error_low', 'error below'], ['warn_low', 'warn below'], ['warn_high', 'warn above'], ['error_high', 'error above']];
+  const SOURCE_RANK = { default: 0, toml: 1, edited: 2 };
+  const PART_WORDS = Object.fromEntries(PARTS);
+  // one Limits field (four `<field>.<part>` values) as one row: four boxes in the value's unit, the parts' answers under it, one ↺ menu
+  function dxLimitsRow(ctx, path, id, group, parts) {
+    const byPart = new Map(parts.map((f) => [f.field.split('.')[1], f]));
+    const source = parts.reduce((worst, f) => (SOURCE_RANK[f.source] > SOURCE_RANK[worst] ? f.source : worst), 'default');
+    const unit = (parts[0] || {}).unit || '';
+    const boxes = PARTS.filter(([part]) => byPart.has(part)).map(([part, words]) => {
+      const f = byPart.get(part);
+      const key = dxKey(path, id, f.field);
+      const row = { ...dxRow(f), unit: '' };
+      const draft = DXC.draft.has(key) ? DXC.draft.get(key) : (f.value === null || f.value === undefined ? '' : f.value);
+      return `<label class="dxc-part" data-dxc-part="${esc(f.field)}"><span class="dxc-pl">${words}</span>`
+        + `${inputHtml(row, draft, `data-dxc-field="${esc(f.field)}" data-dxc-id="${esc(id)}"`, '—', 'Enter applies it · empty = no limit · Esc puts back the value in use')}</label>`;
+    }).join('');
+    const chips = parts.map((f) => {
+      const key = dxKey(path, id, f.field);
+      const html = chipsHtml(dxRow(f), { pending: DXC.pending.get(key), mine: DXC.last.get(key), server: null, unsaved: dxUnsaved(DXC.last.get(key)), unsavedTitle: 'kept for this run only' });
+      return html ? `<span class="dxc-pc" data-dxc-chips="${esc(f.field)}"><span class="dxc-pl">${esc(PART_WORDS[f.field.split('.')[1]] || f.field)}</span> ${html}</span>` : '';
+    }).join('');
+    const resettable = parts.filter((f) => f.source !== 'default' && String(f.value) !== String(f.default));
+    const menuKey = dxKey(path, id, group);
+    const resetBtn = resettable.length ? `<button class="er-rb" data-dxc-resetopen data-dxc-id="${esc(id)}" data-dxc-field="${esc(group)}" aria-expanded="${DXC.resetOpen.has(menuKey)}" title="Reset a limit">↺</button>` : '';
+    const menu = resettable.length && DXC.resetOpen.has(menuKey)
+      ? `<div class="er-resetrow dxc-reset">${resetHtml(resettable.map((f) => [f.field, `${PART_WORDS[f.field.split('.')[1]] || f.field} to the dataclass default`, dxShow(f.default, unit, true)]),
+        (to) => `data-dxc-reset data-dxc-id="${esc(id)}" data-dxc-field="${esc(to)}"`)}</div>` : '';
+    return `<div class="dxc-f dxc-lim" data-dxc-row="${esc(group)}"><span class="dxc-fn mono" title="${esc((parts[0] || {}).doc || group)}">${esc(group)}</span>`
+      + `<span class="dxc-fv"><span class="dxc-parts">${boxes}${unit && unit !== '1' ? `<span class="er-unit">${esc(unit)}</span>` : ''}</span>${chips ? `<div class="er-chips">${chips}</div>` : ''}</span>`
+      + `<span class="dxc-src ${esc(source)}" title="where these values come from">${esc(source)}</span><span class="dxc-fr">${resetBtn}</span></div>${menu}`;
+  }
+  const dxUnsaved = (mine) => (mine && mine.state === 'accepted' && mine.saved === false ? `not saved · ${esc(mine.note || 'this host keeps no diagnostics.toml')}` : '');
+  // the form: a Limits field is one row, every other field its own
+  function dxForm(ctx, path, id, fields) {
+    const out = [];
+    const done = new Set();
+    for (const f of fields) {
+      if (!f.group) { out.push(dxFieldRow(ctx, path, id, f)); continue; }
+      if (done.has(f.group)) continue;
+      done.add(f.group);
+      out.push(dxLimitsRow(ctx, path, id, f.group, fields.filter((g) => g.group === f.group)));
+    }
+    return out.join('');
+  }
+  // the library's docstrings write code as ``name``: drawn as code here
+  const docHtml = (text) => esc(text).replace(/``([^`]+)``/g, '<code>$1</code>');
+
+  // the drill-in's body: d1x's row hook (body), drawn under the row's own health detail
+  function dxBody(row, ctx) {
+    const check = row.check;
+    if (!isStock(check)) return '';
+    const path = ctx.node.path;
+    const id = valueAt(check, 'dx.binding');
+    loadDx(path, ctx.redraw);
+    const data = DXC.data.get(path);
+    const diagnostic = data && (data.diagnostics || []).find((d) => d.id === id);
+    if (!diagnostic) return `<div class="dx-x dxc" data-dxc="${esc(id || '')}"><div class="muted">loading its configuration…</div></div>`;
+    const metric = ((check.measurements || [])[0] || {}).key;
+    const fields = diagnostic.fields || [];
+    const showAll = DXC.all.has(`${path}\u0001${id}`);
+    // calm by default: the headline's own Limits and every value that is not the dataclass default; the rest one click away
+    const shown = showAll ? fields : fields.filter((f) => f.source !== 'default' || (f.group && f.group === metric) || f.field === 'limits' || f.group === 'limits');
+    const hidden = fields.length - shown.length;
+    const match = diagnostic.match || {};
+    const scope = [match.model_id ? `model_id <span class="mono">${esc(match.model_id)}</span>` : '', match.path ? `path <span class="mono">${esc(match.path)}</span>` : ''].filter(Boolean).join(' and ');
+    const doc = [diagnostic.summary, diagnostic.doc].filter(Boolean).map((text) => `<p>${docHtml(text)}</p>`).join('');
+    return `<div class="dx-x dxc" data-dxc="${esc(id)}">`
+      + `<div class="dxc-h"><b>${esc(diagnostic.title)}</b> <span class="mono dxc-id">${esc(diagnostic.diagnostic)} · ${esc(diagnostic.id)}</span>${diagnostic.kind === 'custom' ? ' <span class="er-chip">custom</span>' : ''}</div>`
+      + `<div class="dxc-doc">${doc}</div>`
+      + dxGauge(check) + dxWindow(check, ctx)
+      + `<div class="dxc-form" role="group" aria-label="${esc(diagnostic.title)} configuration">${dxForm(ctx, path, id, shown)}</div>`
+      + `<div class="dxc-foot">${hidden ? `<button class="btn dxc-all" data-dxc-all="${esc(id)}">Show all ${fields.length} values</button>` : showAll ? `<button class="btn dxc-all" data-dxc-all="${esc(id)}">Show fewer</button>` : ''}`
+      + `<span class="muted">Enter applies a value to ${esc(data.writes || data.file || 'diagnostics.toml')}; it changes this diagnostic on every entity it matches (${scope}). The next run, within ${esc(+Number(data.beat_s).toPrecision(3))} s, uses it.</span></div></div>`;
+  }
+  // d1x's row hook (lead): the chevron that says a stock diagnostic unfolds
+  const dxLead = (row, open) => (isStock(row.check) ? `<svg class="ic dx-chev dxc-chev${open ? ' open' : ''}" data-dxc-chev aria-hidden="true"><use href="#i-chev"/></svg>` : '');
+
+  function dxClick(target, ctx) {
+    const all = target.closest('[data-dxc-all]');
+    if (all) { const k = `${ctx.node.path}\u0001${all.dataset.dxcAll}`; if (DXC.all.has(k)) DXC.all.delete(k); else DXC.all.add(k); ctx.redraw(); return true; }
+    const open = target.closest('[data-dxc-resetopen]');
+    if (open) { const k = dxKey(ctx.node.path, open.dataset.dxcId, open.dataset.dxcField); if (DXC.resetOpen.has(k)) DXC.resetOpen.delete(k); else DXC.resetOpen.add(k); ctx.redraw(); return true; }
+    const reset = target.closest('[data-dxc-reset]');
+    if (reset) {
+      const field = dxField(ctx.node.path, reset.dataset.dxcId, reset.dataset.dxcField);
+      if (field) {
+        DXC.resetOpen.delete(dxKey(ctx.node.path, reset.dataset.dxcId, field.field));
+        DXC.resetOpen.delete(dxKey(ctx.node.path, reset.dataset.dxcId, field.group || field.field));
+        applyDx(ctx, ctx.node.path, reset.dataset.dxcId, field, null, true);
+      }
+      return true;
+    }
+    return Boolean(target.closest('.dxc')); // a click inside the drill-in never folds the row
+  }
+  function dxKeyDown(event, ctx) {
+    const el = event.target instanceof Element && event.target.closest('[data-dxc-field]');
+    if (!el || el.tagName !== 'INPUT' || el.type === 'checkbox') return false;
+    const field = dxField(ctx.node.path, el.dataset.dxcId, el.dataset.dxcField);
+    if (!field) return false;
+    const key = dxKey(ctx.node.path, el.dataset.dxcId, field.field);
+    if (event.key === 'Enter') { event.preventDefault(); applyDx(ctx, ctx.node.path, el.dataset.dxcId, field, el.value, false); return true; }
+    if (event.key === 'Escape') { DXC.draft.delete(key); el.value = field.value === null || field.value === undefined ? '' : String(field.value); el.blur(); event.stopPropagation(); ctx.redraw(); return true; }
+    return false;
+  }
+  function dxInput(target, ctx) {
+    if (!target.matches('input[data-dxc-field]') || target.type === 'checkbox') return false;
+    DXC.draft.set(dxKey(ctx.node.path, target.dataset.dxcId, target.dataset.dxcField), target.value);
+    return true;
+  }
+  function dxChange(target, ctx) {
+    const el = target.closest('[data-dxc-field]');
+    if (!el || (el.tagName === 'INPUT' && el.type !== 'checkbox')) return false;
+    const field = dxField(ctx.node.path, el.dataset.dxcId, el.dataset.dxcField);
+    if (field) applyDx(ctx, ctx.node.path, el.dataset.dxcId, field, el.type === 'checkbox' ? el.checked : el.value, false); // a switch is an explicit pick: it applies at once
+    return true;
+  }
+  function dxAfterDraw(container) {
+    container.querySelectorAll('input[data-dxc-field]').forEach((el) => {
+      if (document.activeElement !== el && el.type !== 'checkbox' && el.value !== el.getAttribute('value')) el.value = el.getAttribute('value');
+    });
+  }
+
   root.IOEntityRows = {
     loadArrangements, spec, update, build, renderTree, sortControl, star, handle, rowAttrs, natural, RANK, folderPath, countLeaves, install,
     onClick, onChange, onDragStart, onDragOver, onDrop, clearDrag,
     config: { panel: configPanel, modalHtml, click: configClick, key: configKey, input: configInput, change: configChange, afterDraw, copyText, leave, editing,
       state: { C, E }, stop: stopEdit },
+    dx: { lead: dxLead, body: dxBody, click: dxClick, key: dxKeyDown, input: dxInput, change: dxChange, afterDraw: dxAfterDraw, isStock, state: DXC },
     arrangement: A,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

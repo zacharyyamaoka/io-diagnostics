@@ -180,13 +180,13 @@
   function line(row, ctx, hist, opts = {}) {
     const open = isOpen(`row:${row.key}`);
     const r = opts.r || { depth: 0, flat: true, drag: '', grip: '', star: '' };
-    const hooks = (last && last.hooks) || null;   // the embedding page's own marks (the entity page: a fault's meaning, its log link)
+    const hooks = (last && last.hooks) || null;   // the embedding page's own marks (the entity page: a fault's meaning, its log link, a stock diagnostic's drill-in)
     const shown = r.flat === false ? esc(r.leaf) : D1().nameHtml(row.name, ctx.h);
     return `<div class="dx-r${row.bad ? ' bad' : ''}${open ? ' open' : ''}${hooks ? hooks.rowClass(row) : ''}" style="--depth:${r.depth}"${r.drag}${row.bad ? ' data-diagnostic' : ''}${hooks ? ` data-code="${esc(row.code)}"` : ''}>`
       + `<div class="dx-line" data-dx-toggle="row:${esc(row.key)}" role="button" tabindex="0" aria-expanded="${open}" title="${esc(row.name)} — ${esc(row.message)}${row.code ? ` · ${esc(row.code)}` : ''}">`
-      + `<span class="dx-n">${r.grip}${r.star}<span class="dx-nt">${shown}</span></span><span class="dx-m"><span class="dx-mt">${esc(usbText(row.message || '—'))}</span>${hooks ? hooks.extra(row) : ''}</span>`
+      + `<span class="dx-n">${r.grip}${r.star}${hooks && hooks.lead ? hooks.lead(row, open) : ''}<span class="dx-nt">${shown}</span></span><span class="dx-m"><span class="dx-mt">${esc(usbText(row.message || '—'))}</span>${hooks ? hooks.extra(row) : ''}</span>`
       + `<span class="dx-s">${pill(ctx, row.level)}</span>${opts.spark === false ? '' : `<span class="dx-h">${cellsOf(row, hist, opts.sparkW || 96, 'spark', ctx)}</span>`}</div>`
-      + `${open ? body(row, ctx) : ''}</div>`;
+      + `${open ? body(row, ctx) + (hooks && hooks.body ? hooks.body(row) : '') : ''}</div>`;
   }
   const lineStyle = (W, opts = {}) => `--dx-name:${opts.nameW || Math.min(240, Math.round(W * 0.32))}px;--dx-spark:${opts.sparkW || 96}px`;
 
