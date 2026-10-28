@@ -187,8 +187,14 @@ name = "io-diagnostics"
 version = "0.0.1"
 source = { editable = "." }
 
+[package.optional-dependencies]
+diagnostics = [
+    { name = "numpy" },
+]
+
 [package.dev-dependencies]
 dev = [
+    { name = "numpy" },
     { name = "pytest" },
 ]
 interop = [
@@ -201,9 +207,14 @@ v4 = [
 ]
 
 [package.metadata]
+requires-dist = [{ name = "numpy", marker = "extra == 'diagnostics'", specifier = ">=1.26" }]
+provides-extras = ["diagnostics"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8" }]
+dev = [
+    { name = "numpy", specifier = ">=1.26" },
+    { name = "pytest", specifier = ">=8" },
+]
 interop = [
     { name = "foxglove-sdk", specifier = ">=0.30" },
     { name = "rosbags", specifier = ">=0.11" },

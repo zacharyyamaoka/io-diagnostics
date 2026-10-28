@@ -5,6 +5,13 @@ description = "IO diagnostics: one host that shows every plugged sensor, actuato
 requires-python = ">=3.12"
 dependencies = []
 
+# WHY numpy is an extra, not a dependency: the host, the record contract and robotdx.diagnostics' core / registry / record are
+# stdlib-only (Zach's "zero or one runtime dep" rule for cores); only the stock diagnostics' arithmetic needs numpy. Without it the
+# host still starts, the registry still lists every diagnostic, and each configured one reports not_run with the reason
+# (robotdx/diagnostics/_numpy.py): uv run --project /home/bam/io-diagnostics --extra diagnostics io-diagnostics serve
+[project.optional-dependencies]
+diagnostics = ["numpy>=1.26"]
+
 [project.scripts]
 # The one command (serve | tray | once --json): uv run --project /home/bam/io-diagnostics io-diagnostics serve
 io-diagnostics = "io_diagnostics.cli:main"
@@ -16,10 +23,12 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["io_diagnostics", "contract", "io_facts"]
+packages = ["io_diagnostics", "contract", "io_facts", "robotdx"]
 
 [dependency-groups]
-dev = ["pytest>=8"]
+# WHY numpy in dev too: the tests (tests/diagnostics) and the page suites run the stock diagnostics; the wheel's runtime stays
+# stdlib-only, and the no-numpy path is proven with uv run --isolated --no-dev (tests/diagnostics/test_without_numpy.py)
+dev = ["pytest>=8", "numpy>=1.26"]
 # Lane C interop (io_diagnostics/interop): foxglove-sdk serves /diagnostics to Lichtblick/Foxglove, rosbags writes
 # ROS 2 CDR + the ros2msg schema, websockets is the stock client in tests. A group, so the record contract stays
 # stdlib-only: uv run --project /home/bam/io-diagnostics --group dev --group interop pytest ...
