@@ -567,3 +567,139 @@ branch is rebased onto main 4e2ec56. Each answer is one seam in the adapter; eac
   data-ui, and the fix is named for the live lane. Before and after from the same bench on the same renderer:
   `frame_time_ms` (the three N×M), `ingest_to_pixel_ms` p50 / p95, `scrub_ms`, `back_to_live_ms`. The sweep now runs at the
   host's cadence (100 ms); each point says so (`feed: watch 100 ms`), since phase 3b's points were taken at a frame's.
+
+### 15.1 As built and measured (2026-10-27)
+
+**On main 4e2ec56; data-ui re-vendored** at lane/live 3289ab5 + lane/app-rail e1dc0b9 (scratch merge a85ebc1; a conflict in
+docs/CONTRACT.md only, both §21 and §22 kept; of the files the page loads only `data-ui.js` changed). The machine was shared all
+evening (load average 15-90 on 24 CPUs from other sessions' runs), so every number below is marked with how it was taken.
+
+**The four answers, as the checks see them** (`tests/test_dx_page.js`):
+- *State at the watch's rate*: on F1 the joint's 10 Hz watch comes as `/live` samples about every 100 ms; the cadence rule stops
+  the `/values` poll in the watch's first half second, and in the 4 s after no `/values` request goes out while State moves 4.0 s.
+  On the stub (50 samples/s over 5 keys): at the host's cadence, no poll and State in steps of at most 116 ms; an older host's 1 s
+  tick, 3.25-3.5 polls a second and State in steps of at most 343 ms; a slow watch (a point a second), the "who comes first" rule
+  stops the poll.
+- *`emitted`*: the host's first `/live` event has it (one of 14 top-level keys); the page's mirror keeps `/state`'s 12 sections.
+- *The tree's past*: one `GET /api/v1/history/tree?bins=450` when the page opens (141 KB on F1; the host answers in about 11 ms).
+  Scrubbed 6 s before the page opened, the tree draws at that t with all 44 rows, each with the level of the host's own bar (44
+  compared); on the stub's synthetic past (stub/0 ▲ warn for its first 6 s) the tree shows warn then and OK after. With a 404 the
+  tree before the page opened is empty (drawn at t, no rows) under phase 3's note.
+- *Every check in one answer*: the Diagnostics starter lists F1's 53 checks worst first from `GET /api/v1/checks` (4 reads in 8 s:
+  the open and the row changes) and no `/node`.
+- *`/dx/`*: the launcher prints it; the checks and the bench open it.
+
+**Found by the new checks, and fixed** (each was in phase 3 already):
+1. *The tree never rewound.* data-ui's `<data-dashboard>` binds the page's shared clock to its own datasets and lets go of every
+   other one (`dashboard/src/live.js` `bindLive`), so a view outside the open dashboard (the tree) drew its newest rows at any t.
+   The page binds every dataset it holds again after each dashboard binds. Phase 3's tree check passed vacuously; the checks now
+   need the tree's own draw at the clock's t.
+2. *The note before the page opened could stay hidden after a scrub*: a throttle that dropped its last call.
+3. *An entity selected before its first State point never got State panels*; they now come with the point (peek kept while
+   selected).
+4. *The connection line popped in about 1 s after load and moved the time bar's track by 345 px* (a GPU scrub in that second
+   pressed past the track's end): `<data-live-status for="dx-app">` connected before `#dx-app` had its clock. It now has a fixed
+   width and reads the clock from the first frame.
+5. *First paint 1.5-1.9 s on 7 of 24 cold loads*: data-ui's live `<data-views>` builds its first model before its live feed is
+   attached and serves it while the view's module loads, so a live draw in that window drew an empty tree until the next change
+   (F1's ~2 s tick); the tree's past landing early made that window likelier. The page loads the first screen's view modules
+   beside its first requests. Interleaved with phase 3b's page on two hosts, 24 cold loads each: **p50 178 ms, p95 440** against
+   237 and 705 (phase 3b's page has the same race: one load of 2,019 ms).
+
+**K5 read both ways** (the data-ui fix 3289ab5): the first draw of each panel at t and every draw at t in the 500 ms after the
+seek agree, with no redraw at t, in every run since the re-vendor: the final run 18.2 / 18.2 ms in software and 44.9 / 44.9 ms
+on the GPU (load 21; earlier runs 14-32 ms on the GPU). Phase 3b's every-draw reading was 237-442 ms.
+
+**The frame-time pass.** One profile of the 6,000×6 dashboard (6 s, GPU, `tools/bench_robotdx.py --profile --maps`, load 40-48):
+
+| Main thread, per second | host's cadence (60 events/s) | one event per frame (339 events/s) |
+|---|---|---|
+| `/live` handler (JSON.parse, the adapter's rows, the store's append) | **25.8 ms (2.5 %)** | 9.0 ms (0.9 %) |
+| frame loop: publish, clock | 14.6 ms (1.5 %) | 8.1 ms (0.8 %) |
+| draw: data-ui's reads and models | 101.3 ms (10.1 %) | 103.1 ms (10.3 %) |
+| draw: the plot view (uPlot and its data) | 68.1 ms (6.8 %) | 78.9 ms (7.9 %) |
+| draw: canvas calls | 25.4 ms (2.5 %) | 28.9 ms (2.9 %) |
+| native: style, layout, paint, **Commit** (trace: Commit 356 / 601 ms) | 394 ms (39 %) | 679 ms (68 %) |
+| GC | 9.8 ms | 22.2 ms |
+| idle | 354 ms (35 %) | 43 ms (4 %) |
+
+The hot lines: uPlot's `Path2D` and `lineTo` (every series' path over the whole window, on every draw), data-ui's
+`live/window.js` 170-196 (the column cache writes every pixel column of every series again each draw), `views/live/src/plot.js:164`,
+uPlot's `getHPos` / `getVPos`, `live/feed.js` 199-201 (the label map and an empty TanStack table built for every plot draw), and
+`views/playback/src/index.js:152` (`getBoundingClientRect` and the ticks' `innerHTML` on every update: a forced layout a frame).
+**Decision, by §15's rule:** the handler is at most 2.5 % of the main thread, and the host's feed brings at most one event per
+stream per frame, so the page queues nothing; the cost is the draw and its Commit; nothing changed in data-ui; the fixes are
+asked of the live lane below.
+
+**Before and after, the same bench and renderer** (GPU, ANGLE on Vulkan). Sequential runs were not comparable (one run's
+calibration was 1.55× the host's best, the next one's 1.1×), so the two pages ran **interleaved**: phase 3b's page (723d7be) and
+this one, each from its own checkout's stub and fixture host, alternating, three runs per sweep point and two fixture rounds
+(load median 34). Medians of the runs (each run's own p95 / p50):
+
+| | phase 3b's page | this page |
+|---|---|---|
+| `frame_time_ms` 600×2 p95 / p50 | 16.8 / 16.7 (runs 16.8, 16.8, 50.1) | 50.0 / 16.7 (runs 50.0, 16.7, 83.3) |
+| `frame_time_ms` 6,000×6 p95 / p50 | 33.4 / 16.7 | 33.3 / 16.7 |
+| `frame_time_ms` 24,000×12 p95 / p50 | 100.0 / 16.7 | 83.3 / 16.7 |
+| `ingest_to_pixel_ms` 6,000×6 p95 / p50 (emitted) | 27.2 / 16.8 | 22.8 / 18.6 |
+| `ingest_to_pixel_ms` on the fixture host p95 / p50 (emitted) | 27.8 / 12.0 | 22.8 / 11.5 |
+| `first_paint_ms` p95 / p50 (12 cold loads) | 1,128.7 / 163.9 | **116.3 / 100.8** |
+| `scrub_ms` p95 / p50 (40 seeks) | 32.2 / 24.1 | 36.8 / 27.4 (the tree now draws at t too) |
+| `back_to_live_ms` p95 / p50 (12) | 37.0 / 21.1 | 33.8 / 17.6 |
+
+So: frame time and ingest are the same within the spread of the runs; first paint is better (fix 5); a scrub costs about 3 ms
+more, the tree's own draw at t (fix 1). Against phase 3b's published points the sweep's frame time fell (6,000×6 p95 50.0 → 33.3,
+p50 33.3 → 16.7) because the host now sends 60 events a second there, not 360: the page did not get faster, its feed got calmer.
+
+**The 10-minute run, as published** to `/home/bam/vt/zach/producers/robotdx` (run 20261028-030207, code cb6b5ac6: the page as
+committed at 0f2cea3 but for the Diagnostics starter's path column, which the bench does not draw; GPU; `systemd-run --user
+--scope -p MemoryMax=16G`; load 25 falling to 15, calibration 389-426 ms against a best of 380, so "noisy" by the load rule only,
+published with `--include-noisy` and labelled so):
+
+| KPI | Value | Budget | Phase 3b (published, one event per frame) |
+|---|---|---|---|
+| `first_paint_ms` (p95 of 5) | **125.7** (97-126) | 1,500 | 165.1 |
+| `ingest_to_pixel_ms` (6,000×6, from `emitted`) p95 / p50 | **16.4** / 14.8 | 30 | 36.8 / 16.2 (the stub's `now`) |
+| ingest 600×2 / 24,000×12 / the fixture host (p95) | 7.0 / 21.9 / 20.5 | 30 | 32.8 / 60.3 / 14.4 (adapter receive) |
+| `frame_time_ms` p95 / p50: 600×2, 6,000×6, 24,000×12 | 16.7 / 16.7, **16.7 / 16.7**, 50.0 / 16.7 | 16.7 | 16.8, 50.0 / 33.3, 66.7 |
+| `heap_mb` (256 MB cap, 600 s) | **54.8** (the store at its cap after 85 s) | diagnostic | 22.6 (64 MB cap, 90 s) |
+| `scrub_ms` p95 / p50 | 29.1 / 25.7 | 50 | 25.8 / 23.3 |
+| `back_to_live_ms` p95 / p50 | **27.2** / 19.3 | 100 | 263.5 / 20.2 |
+| `idle_traffic_kb_s` | 27.0 | 8 | 26.3 |
+
+**Tests.** `tests/test_dx_page.js` **86/86** (phase 3b: 67; every check above is in it). The full suite (`run_suite.sh`: pytest,
+then every `tests/test_*.js`) in a fresh detached checkout of 0f2cea3 named `io-diagnostics`, 2026-10-28, load 9-15: pytest **702
+passed, 1 failed, 1 skipped**; **19 of 20 JS files pass**, 2,704 of 2,705 checks. Neither failure is this lane's: the lane
+changes no host code and no classic-page file (`git diff main...HEAD`), and
+- `test_diag_variants.js` "d1b · order: A-Z sorts the rows inside the folder" fails the same way on a pristine checkout of main
+  4e2ec56 (405 passed, 1 failed): its rows are this machine's own computer checks ("bam-GPU: Network Usage", "NTP offset");
+- the pytest failure is a different host timing test in each run: `test_live_feed.py`'s watch-rate gap (two events under 99 ms
+  apart by `emitted`) in the run the session limit cut short (load 30-90), `test_runs.py`'s lock bound in the full re-run.
+
+**Asks of data-ui's live lane** (none edited here; the page works around 2-4):
+1. **The plot draw** (the frame time above 6,000×6): on every draw uPlot builds every series' `Path2D` over the whole window and
+   the column cache writes every pixel column again (`live/window.js` 170-196), for each plot whose dataset changed, and each
+   redrawn canvas is a Commit. At the host's 10 Hz per entity that is 6 plot draws per 100 ms at 6,000×6 and 12 at 24,000×12.
+   Candidates: draw a streaming plot as a strip chart (scroll what is drawn by the elapsed pixels, draw only the new columns), or
+   redraw a plot at most when its x moves a pixel and draw every due plot in one frame (one Commit). Smaller, from the same
+   profile: `live/feed.js` 199-201 builds the label map and an empty TanStack table on every plot and levels draw; the playback
+   card reads `getBoundingClientRect` and rewrites its ticks' `innerHTML` on every update (`views/playback/src/index.js:152`).
+2. **The first live model**: `liveData()` assigns `el._live` after the LiveFeed's constructor has started the element, so its
+   first model is the placeholder's empty rows; `_render()`'s reuse key (revision, query, filters, view keys) ignores live data,
+   so `_liveDraw()`'s fallback while the view's module loads serves it until a later change. (Fix 5 above.)
+3. **`bindLive` on a shared clock**: `<data-dashboard>` lets go of every dataset on its clock it did not bind itself; it should
+   let go only of its own. (Fix 1 above.)
+4. **`<data-live-status for>`** looks for its clock only when it connects and at its 1 s tick. (Fix 4 above.)
+
+**Needs a decision (Zach's or the orchestrator's), not done here:** Explore leaves out an empty State panel (phase 3's rule), so
+an entity whose State comes only from its watch would never show State: the watch starts only while State is on screen. The
+classic page shows a State tab for every entity whose plugin has a watch. Recommendation: keep the State panel for a
+watch-capable entity (the default if nobody says otherwise: leave the rule as it is until a real plugin needs it; moteus and the
+fixtures report State outside a watch).
+
+**Asks of the RobotDx session:** a fixture in which some tree row's level changes during a run. F1 holds one level per row for
+the whole run, so on a real host the tree's past can be compared with the host but not told from its present; the page's check
+of that uses the stub's synthetic past.
+
+**Not done, on purpose:** per-frame batching of `/live` events (the profile: the handler is at most 2.5 % of the main thread and
+the host sends at most one event per stream per frame); any change in data-ui (the asks above); the State-panel rule above.
