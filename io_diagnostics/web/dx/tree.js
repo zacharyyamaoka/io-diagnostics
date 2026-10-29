@@ -209,7 +209,13 @@ export function mountTree(pane, { feed, clock, table, onSelect }) {
   setMode(st.mode);
 
   return {
-    select(path) { st.selected = path || null; repaint(false); },
+    // WHY drawn at once, not at the next frame: Back moves the URL first and the page's selection follows only after the
+    // detail of the selection before it has loaded (app.js render queues); the tree marks the row as the URL changes
+    select(path) {
+      st.selected = path || null;
+      if (st.raf) { cancelAnimationFrame(st.raf); st.raf = 0; }
+      draw();
+    },
     get built() { return st.built; },
     destroy() {
       st.destroyed = true;

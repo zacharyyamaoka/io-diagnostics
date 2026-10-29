@@ -165,6 +165,17 @@ function declared(base) {
   return out;
 }
 
+/** Hand a <data-dashboard> the page's clock for good. WHY (data-ui 5b4e793, sim2real gap #13: "a new document gets a new
+    clock"): load() of a new document retires the clock the dashboard holds (pause, let go of every dataset, stop) and makes
+    one of its own, so the views inside it would follow a clock the tree and the time bar do not. This page has ONE clock for
+    the tree, the time bar and every dashboard (PEP 0001 §12): an own `clock` the dashboard reads and cannot replace, and
+    openBase puts following back after the load. Asked of data-ui: retire only a clock the dashboard made itself. */
+function holdClock(el) {
+  const own = Object.getOwnPropertyDescriptor(el, 'clock');
+  if (own && own.get) return;
+  Object.defineProperty(el, 'clock', { configurable: true, enumerable: true, get: () => clock, set: () => { /* the page's, kept */ } });
+}
+
 /** A dataset that is not one of the page's: as data-ui loads it (a file, or a live: SSE / polling / pushed source). */
 async function plainDataset(href, live, closers) {
   const file = await loadDataset(href);
@@ -208,10 +219,13 @@ export async function openBase(el, text, baseUrl, { keepState = false } = {}) {
       try { datasets[name] = await plainDataset(href, d.live, closers); } catch (err) { datasets[name] = { properties: {}, rows: [], url: href, error: err.message }; }
     }
   }
-  el.clock = clock;
+  holdClock(el);
   el.baseText = text;
+  const following = clock.following;
   el.load(base, datasets, { keepState });
   rebind();   // a dashboard with no live dataset sends no data-dashboard-live, and still let go of the page's
+  // the load of a new document paused the page's clock (holdClock's WHY): a reader who was following still follows
+  if (following && !clock.following) clock.goLive();
   return {
     base,
     release() { for (const b of used) feed.release(b.kind, b.path); for (const c of closers) c.close(); used.length = 0; closers.length = 0; },
@@ -362,6 +376,7 @@ async function mountExplore(root, params) {
   const tree = mountTree(pane, { feed, clock, table, onSelect: (path) => go('explore', { sel: path }) });
   const mark = document.createElement('style');
   root.append(mark);
+  const markTable = (path) => { mark.textContent = path ? `#dx-tree-table tr[data-id="${CSS.escape(path)}"] { background: var(--dv-hover); box-shadow: inset 3px 0 0 var(--dv-accent); }` : ''; };
 
   let current = { path: null, release: null, seq: 0, hold: null, sig: '' };
   // what decides Explore's panels for an entity: its State keys (in order) and whether it has settings
@@ -369,7 +384,7 @@ async function mountExplore(root, params) {
   async function select(path, urlPage = '') {
     const seq = ++current.seq;
     tree.select(path);
-    mark.textContent = path ? `#dx-tree-table tr[data-id="${CSS.escape(path)}"] { background: var(--dv-hover); box-shadow: inset 3px 0 0 var(--dv-accent); }` : '';
+    markTable(path);
     const e = path ? feed.dataset('entities').latestAt(Infinity, path) : null;
     // the tab: the URL's, else the one last shown for this kind of entity, else the overview; the one shown is remembered
     const kindKey = `${TAB_KEY}${(e && e.kind) || 'entity'}`;
@@ -449,6 +464,7 @@ async function mountExplore(root, params) {
   });
   await select(params.sel, params.page);
   return {
+    mark(p) { tree.select(p.sel || null); markTable(p.sel || null); },
     update(p) { if (p.sel !== (current.path || '') || (p.sel && (p.page || '') !== (current.urlPage || ''))) return select(p.sel, p.page); return null; },
     unmount() { feed.removeEventListener('values', refresh); feed.removeEventListener('node', refresh); if (current.release) current.release(); current.seq += 1; tree.destroy(); if (sizer) sizer.destroy(); },
   };
@@ -517,6 +533,10 @@ let shown = { dest: null, params: null, handle: null };
 let rendering = Promise.resolve();
 
 export function render() {
+  // WHY at once, before the queue: a destination may still be loading the last selection's panels (seconds, on a slow
+  // entity); what the URL now says is marked as it changes (the tree's selected row), the panels follow in order
+  const asked = readUrl();
+  if (shown.dest === asked.go && shown.handle && shown.handle.mark) shown.handle.mark(asked);
   rendering = rendering.then(async () => {
     const params = readUrl();
     rail.current = params.go;
