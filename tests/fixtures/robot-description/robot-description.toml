@@ -1,0 +1,42 @@
+# The 3D view's fixture description (docs/robot-description.md), mapped to the boards of tests/fixtures/robot-description/plugins
+# on fixture frame F1 (fdcanusb 272813EF in port 1-3, fdcanusb 28B3A25D in port 1-5, cameras in ports 6-1 and 6-2).
+# A test copies this file into its own config directory with `urdf` made absolute.
+version = 1
+urdf = "robot.urdf"
+
+# by the adapter's hardware_id and the node below it, as expected.toml names a board
+[[part]]
+name = "Shoulder"
+link = "shoulder_link"
+hardware_id = "usb:0483:5740:272813EF"
+node = "can/1"
+
+[[part]]
+name = "Elbow"
+link = "elbow_link"
+hardware_id = "usb:0483:5740:272813EF"
+node = "can/2"
+
+# by an entity path pattern (fnmatch)
+[[part]]
+name = "Wrist"
+links = ["wrist_link"]
+path = "host/usb1/port-1-5/*/can/1"
+
+# a board that never answers: drawn as a ghost
+[[part]]
+name = "Tool"
+link = "tool_link"
+hardware_id = "usb:0483:5740:272813EF"
+node = "can/9"
+
+# a camera by its USB hardware_id
+[[part]]
+name = "Camera"
+link = "camera_link"
+hardware_id = "usb:8086:0b5b:219323070276"
+
+[[unmapped_device]]
+name = "RealSense D405 130523071221"
+hardware_id = "usb:8086:0b5b:130523071221"
+reason = "no mount for it in this model"

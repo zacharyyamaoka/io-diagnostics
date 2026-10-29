@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<!-- The 3D view's fixture robot (docs/robot-description.md): primitive boxes and one STL, metres, Z up. Mapped to the fixture
+     boards in robot-description.toml beside it. -->
+<robot name="fixture_arm">
+  <link name="base_link">
+    <visual><origin xyz="0 0 0.015"/><geometry><box size="0.5 0.35 0.03"/></geometry></visual>
+  </link>
+  <link name="column">
+    <visual><origin xyz="0 0 0.2"/><geometry><box size="0.06 0.06 0.4"/></geometry></visual>
+  </link>
+  <link name="shoulder_link">
+    <visual><origin xyz="0.15 0 0"/><geometry><box size="0.3 0.07 0.07"/></geometry></visual>
+  </link>
+  <link name="elbow_link">
+    <visual><origin xyz="0.11 0 0"/><geometry><box size="0.22 0.05 0.05"/></geometry></visual>
+  </link>
+  <link name="wrist_link">
+    <visual><origin xyz="0 0 -0.03"/><geometry><cylinder radius="0.035" length="0.06"/></geometry></visual>
+  </link>
+  <link name="tool_link">
+    <visual><origin xyz="0 0 -0.03"/><geometry><box size="0.05 0.05 0.06"/></geometry></visual>
+  </link>
+  <link name="camera_mount">
+    <visual><origin xyz="0 0 0.225"/><geometry><box size="0.03 0.03 0.45"/></geometry></visual>
+  </link>
+  <link name="camera_link">
+    <visual><origin xyz="0 0 0.0125"/><geometry><mesh filename="meshes/camera.stl"/></geometry></visual>
+  </link>
+  <joint name="column_weld" type="fixed"><parent link="base_link"/><child link="column"/><origin xyz="-0.15 0 0.03"/></joint>
+  <joint name="shoulder" type="revolute"><parent link="column"/><child link="shoulder_link"/><origin xyz="0 0 0.435" rpy="0 0 0.5"/>
+    <axis xyz="0 0 1"/><limit lower="-3" upper="3" effort="10" velocity="2"/></joint>
+  <joint name="elbow" type="revolute"><parent link="shoulder_link"/><child link="elbow_link"/><origin xyz="0.3 0 0" rpy="0 0 -1.1"/>
+    <axis xyz="0 0 1"/><limit lower="-3" upper="3" effort="10" velocity="2"/></joint>
+  <joint name="wrist" type="continuous"><parent link="elbow_link"/><child link="wrist_link"/><origin xyz="0.22 0 -0.025"/><axis xyz="0 0 1"/></joint>
+  <joint name="tool_weld" type="fixed"><parent link="wrist_link"/><child link="tool_link"/><origin xyz="0 0 -0.06"/></joint>
+  <joint name="camera_mount_weld" type="fixed"><parent link="base_link"/><child link="camera_mount"/><origin xyz="0.2 0.12 0.03"/></joint>
+  <joint name="camera_weld" type="fixed"><parent link="camera_mount"/><child link="camera_link"/><origin xyz="0 0 0.45" rpy="0 0.5 -2.2"/></joint>
+</robot>

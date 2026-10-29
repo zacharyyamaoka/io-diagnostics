@@ -1,0 +1,7 @@
+# Fixture plugin for the 3D view (docs/robot-description.md): fdcanusb-like adapters whose boards a test colours through $RD_LEVELS.
+name = "rd_joint"
+description = "an fdcanusb-like adapter with boards whose levels a test sets (3D view fixture)"
+command = ["{python}", "{here}/rd_plugin.py", "--role", "joint"]
+timeout_s = 10
+period_s = 2
+matches = ["usb:0483:5740"]

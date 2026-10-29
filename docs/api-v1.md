@@ -42,6 +42,7 @@ uv run --project /home/bam/io-diagnostics python /home/bam/io-diagnostics/io_dia
 | `GET /api/v1/dashboards`, `GET`, `PUT`, `DELETE /api/v1/dashboards/<name>.base` | The person's dashboards as files (data-ui's `.base` text, opaque to the host) under the config directory: list, read, write (atomic, optional `If-Match`) and move to `.trash/`; the PUT and DELETE are the page's ONLY | on load / on save |
 | `GET /api/v1/diagnostics` | The stock diagnostics' registry (robotdx.diagnostics, stock and custom): each one's title, part types, kind and config dataclass as a schema (field, type, default, unit, doc) | on open |
 | `GET /api/v1/diagnostics/config?path=<entity path>`, `POST /api/v1/diagnostics/config` | The stock diagnostics configured on one entity, each value with where it came from (default / toml / edited) and the latest status; the POST is the entity page's drill-in ONLY: one value, validated and written to diagnostics.toml | on unfold, then 4 s / on Enter |
+| Robot description (2026-10-29): `GET /api/v1/robot-description`, `GET /api/v1/robot-description/files/<path>` | The 3D view's optional model: the URDF's URL, each `[[part]]`'s links and the entity path it resolves to (`null`: not detected), and the files under the URDF's folder (the URDF, its meshes), read-only. `present: false` without `<config dir>/robot-description.toml`. Docs: "Robot description" below and docs/robot-description.md | on open, then 5 s / per mesh |
 | `POST /api/v1/act` | The Utilities panel ONLY: a dry run, then a person's confirmed run with the dry run's token | on click |
 | `POST /api/v1/expect`, `/forget`, `/retire` | The Expected setup card ONLY: one edit of the rig file after a person's confirm | on click |
 | `GET /`, `/<file>`, `/<dir>/` | The page in `io_diagnostics/web/`. A path ending in `/` is that directory's `index.html` when it has one (`/dx/` is `dx/index.html`; `/` is the web root's), else **404**; `/dx` with no slash is not redirected. `.base` files (data-ui's dashboards) are `text/plain; charset=utf-8`. Nothing outside the web root is served (a `..`, an encoded one, a symlink out: **404**) | — |
@@ -1133,6 +1134,49 @@ store's own rules below. The folder is created by the first `PUT`, not by a read
   browser, and this server never answers a preflight). No dry run and no token: no hardware is involved. `GET`s need no header.
   A host with no config directory (one built by hand) answers **503** to all of them. Every other `PUT` or `DELETE`
   (another path, or `/dashboards` itself) is still **405**.
+
+## `GET /api/v1/robot-description`
+
+The page's 3D view (2026-10-29, Zach: "basically like Fusion 360 ... navigate devices visually"): an optional URDF whose links are
+mapped to the devices this PC detects, from `<config dir>/robot-description.toml` (the directory settings.toml and expected.toml
+are in; the format is docs/robot-description.md). Read on each request, and again only when the file or its URDF changed on disk.
+Without the file the answer is `present: false` and everything else on the page is unchanged.
+
+```json
+{
+  "present": true,
+  "problem": null,
+  "file": "/home/bam/.config/io-diagnostics/robot-description.toml",
+  "file_name": "robot-description.toml",
+  "docs": "/home/bam/io-diagnostics/docs/robot-description.md",
+  "urdf": "/api/v1/robot-description/files/one_dof_test_rack.urdf",
+  "robot": "one_dof_test_rack",
+  "links": ["base_link", "one_dof_arm"],
+  "parts": [{"name": "CAN 12", "links": ["one_dof_arm"], "match": {"hardware_id": "usb:0483:5740:0607623A", "node": "can/12"},
+             "note": "robot.json revolute_2 can_id 12", "path": "host/usb1/port-1-3/usb-1-3/can/12", "problem": null}],
+  "unmapped_devices": [{"name": "CAN 1 on fdcanusb 272813EF", "match": {"hardware_id": "usb:0483:5740:272813EF", "node": "can/1"},
+                        "reason": "its joint is not in the v1 CAD export", "path": null}]
+}
+```
+
+- `present`: whether the file exists. `problem`: why it does not draw (not TOML, a key wrong, the URDF missing or not XML), else
+  `null`; with a problem `urdf` is `null` and no file is served. `file` is the file the host reads (also when it is absent: where to
+  put one); `file_name` and `docs` (the format's documentation in this checkout) are what the empty state tells a person.
+- `urdf`: the URL the page loads the URDF from; a mesh's relative `filename` resolves next to it. `robot` and `links`: the URDF's
+  `<robot name>` and its link names in file order.
+- `parts`: one per `[[part]]`, in the file's order. `match` is the part's keys as written (`path`, `hardware_id`, `serial`, `node`,
+  `model_id`, `can_id`); `path` is the entity it resolves to on this host now (expected.toml's rules: a device by hardware_id and / or
+  serial, then `node` below it; `path` fnmatch, `model_id` and `can_id` narrow; the first row in tree order), or `null` when nothing
+  matches (the page draws a ghost: not detected). `problem` names a link the URDF does not have.
+- `unmapped_devices`: the file's `[[unmapped_device]]` tables (devices its author could not place in the model, with the `reason`),
+  each resolved the same way; the page lists them and never draws them.
+- **Colour is not here.** The page colours a mapped link by its entity's own row in `/state` / `/live` (`level`, `connected`, `stale`);
+  this endpoint never carries a level.
+
+`GET /api/v1/robot-description/files/<path>` serves one file under the URDF's directory (`.urdf` / `.xml` as
+`application/xml`, `.stl` as `model/stl`, else `application/octet-stream`), read-only and `GET` only. Nothing outside that
+directory is served: a `..` (raw or percent-encoded), an absolute path, a symlink that resolves outside it, a directory or a missing
+file is **404**, as is every file when there is no description or it has a problem. The same guard as the web root's static files.
 
 ## What a page must NOT assume
 

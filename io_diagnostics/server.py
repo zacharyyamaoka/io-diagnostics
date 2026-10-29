@@ -29,7 +29,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
 from io_diagnostics import WEB
-from io_diagnostics import host_utilities, release_channels
+from io_diagnostics import host_utilities, release_channels, robot_description
 from io_diagnostics.arrangements import ArrangementError
 from io_diagnostics.composition import BATCH_PREFIX
 from io_diagnostics.dashboards import MAX_BYTES as MAX_DASHBOARD
@@ -199,6 +199,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(found) if found else self._json({"error": f"no entity {path!r}"}, 404)
             if parsed.path == "/api/v1/settings":
                 return self._json(self.host.settings_json())
+            if parsed.path == robot_description.API:
+                where = robot_description.config_dir(self.host.settings.path) / robot_description.DESCRIPTION_FILE
+                return self._json(robot_description.describe(self._robot_description(), self.host.state()["tree"], where))
+            if parsed.path.startswith(robot_description.FILES):
+                return self._robot_file(parsed.path[len(robot_description.FILES):])
             if parsed.path in ("/api/v1/act", "/api/v1/watch") or parsed.path in SETUP_EDITS or parsed.path in CONFIG_WRITES:
                 return self._json({"error": "POST only, and only from the page (docs/api-v1.md)"}, 405, extra={"Allow": "POST"})
             if parsed.path.startswith("/api/"):
@@ -619,6 +624,18 @@ class Handler(BaseHTTPRequestHandler):
         except SettingsError as error:
             return self._json({"error": str(error)}, 400)
         return self._json(found) if found else self._json({"error": f"no entity {path!r}"}, 404)
+
+    # --- GET /api/v1/robot-description (+ /files/<relative>): the 3D view's model, read-only (robot_description.py) ----------
+    def _robot_description(self):
+        return robot_description.load_cached(robot_description.config_dir(self.host.settings.path))
+
+    def _robot_file(self, relative: str):
+        # WHY the same refusal as the web root's: a URDF's folder is served as files under it and nothing outside it (a ``..``,
+        # an encoded one, a symlink out: 404), and only by GET
+        path = robot_description.served_file(self._robot_description(), relative)
+        if path is None:
+            return self._json({"error": "no such file in the robot description's URDF folder"}, 404)
+        return self._send(200, path.read_bytes(), robot_description.MEDIA.get(path.suffix.lower(), "application/octet-stream"))
 
     def _settings(self):
         # WHY the same page-only rule as /act: a setting is the person's preference, written to their file
