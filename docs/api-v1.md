@@ -39,7 +39,7 @@ uv run --project /home/bam/io-diagnostics python /home/bam/io-diagnostics/io_dia
 | `POST /api/v1/watch` | The entity page's heartbeat ONLY: keeps the plugin's `watch` running while a page looks at the entity | 3 s while shown |
 | `POST /api/v1/config/edit`, `/config/set`, `/config/persist`, `/config/reset` | The Configuration tab's edit session and its live writes ONLY, each with the session's token (docs/state-config-v1.md section 8) | on click / 3 s heartbeat |
 | `GET /api/v1/arrangements`, `POST /api/v1/arrangements` | Pinned rows, manual order, folded folders and the sort, per entity kind and section; the POST is the page's ONLY (section 9) | on load / on change |
-| `GET /api/v1/dashboards`, `GET`, `PUT`, `DELETE /api/v1/dashboards/<name>.base` | The person's dashboards as files (data-ui's `.base` text, opaque to the host) under the config directory: list, read, write (atomic, optional `If-Match`) and move to `.trash/`; the PUT and DELETE are the page's ONLY | on load / on save |
+| `GET /api/v1/dashboards`, `GET`, `PUT`, `DELETE /api/v1/dashboards/<name>.base` | The person's dashboards as files (data-ui's `.base` text, opaque to the host) under the config directory: list, read, write (atomic, optional `If-Match`, or `If-None-Match: *` to create only) and move to `.trash/`; the PUT and DELETE are the page's ONLY | on load / on save |
 | `GET /api/v1/diagnostics` | The stock diagnostics' registry (robotdx.diagnostics, stock and custom): each one's title, part types, kind and config dataclass as a schema (field, type, default, unit, doc) | on open |
 | `GET /api/v1/diagnostics/config?path=<entity path>`, `POST /api/v1/diagnostics/config` | The stock diagnostics configured on one entity, each value with where it came from (default / toml / edited) and the latest status; the POST is the entity page's drill-in ONLY: one value, validated and written to diagnostics.toml | on unfold, then 4 s / on Enter |
 | Robot description (2026-10-29): `GET /api/v1/robot-description`, `GET /api/v1/robot-description/files/<path>` | The 3D view's optional model: the URDF's URL, each `[[part]]`'s links and the entity path it resolves to (`null`: not detected), and the files under the URDF's folder (the URDF, its meshes), read-only. `present: false` without `<config dir>/robot-description.toml`. Docs: "Robot description" below and docs/robot-description.md | on open, then 5 s / per mesh |
@@ -1152,6 +1152,9 @@ store's own rules below. The folder is created by the first `PUT`, not by a read
 - **`If-Match`** (optional, on `PUT` and `DELETE`): the etag (quoted or bare, a comma list, or `*` for "any existing file") the
   client last saw. A different one, or any `If-Match` for a file that is not there, is **412** `EtagMismatch` with the current
   `"etag"` (null if none) and nothing changes, so two tabs cannot silently overwrite each other. Without it the last write wins.
+- **`If-None-Match`** (optional, on `PUT`; added 2026-10-29 for the page's Add to dashboard, PEP 0001 §17): create only. `*` with a
+  file of that name already there, or an etag list naming the file as it is now, is **412** `Exists` with the current `"etag"`, and
+  nothing changes (RFC 9110 §13.1.2). New dashboard… sends `*`, so a name another tab took a moment ago is never written over.
 - **Page-only writes**, the same rule as `POST /api/v1/act`: the page's `X-IO-Diagnostics: ui` header, `Sec-Fetch-Site:
   same-origin`, and an `Origin` (if sent) that is this page's, else **403** `NotFromPage` / `NotSameOrigin`. The body is the
   file's text, so the JSON `Content-Type` check does not apply (a `PUT` with a custom header is preflighted by every

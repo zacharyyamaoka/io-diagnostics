@@ -118,8 +118,9 @@ class DashboardStore:
             raise DashboardError("NotUtf8", 422, f"{file!r} on disk is not UTF-8 text") from None
         return data, self._entry(file, data, path.stat())
 
-    def write(self, file: str, data: bytes, if_match: str | None = None) -> tuple[dict, bool]:
-        """Atomically replace (or create) ``file``; ``(entry, created)``. ``if_match`` is the request's ``If-Match`` header."""
+    def write(self, file: str, data: bytes, if_match: str | None = None, if_none_match: str | None = None) -> tuple[dict, bool]:
+        """Atomically replace (or create) ``file``; ``(entry, created)``. ``if_match`` / ``if_none_match`` are the request's
+        ``If-Match`` / ``If-None-Match`` headers."""
 
         path = self._path(file)
         if len(data) > MAX_BYTES:
@@ -135,6 +136,11 @@ class DashboardStore:
                 raise DashboardError("EtagMismatch", 412, f"If-Match {if_match} does not match the file on disk"
                                      if current is not None else f"If-Match was sent but there is no dashboard {file!r}",
                                      etag=current_etag)
+            # WHY (RFC 9110 §13.1.2, a failed If-None-Match on a PUT is 412): create only. `*` refuses any file there, an etag
+            # list the file as it is now. The page's Add to dashboard sends `*` for a new dashboard, so a name another tab or
+            # person took a moment ago is refused, never written over (PEP 0001 §17)
+            if if_none_match is not None and _matches(if_none_match, current_etag):
+                raise DashboardError("Exists", 412, f"If-None-Match {if_none_match}: there is already a dashboard {file!r}", etag=current_etag)
             self.dir.mkdir(parents=True, exist_ok=True)
             handle, temp = tempfile.mkstemp(dir=self.dir, prefix=".write-", suffix=".tmp")
             try:

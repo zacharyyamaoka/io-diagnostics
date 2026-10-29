@@ -466,7 +466,7 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     self.close_connection = True
                 return self._json({"refused": "TooLarge", "error": f"a dashboard is at most {MAX_DASHBOARD} bytes, got {length}"}, 413)
-            entry, created = store.write(file, self.rfile.read(int(length)), if_match)
+            entry, created = store.write(file, self.rfile.read(int(length)), if_match, self.headers.get("If-None-Match"))
             return self._json({"ok": True, **entry}, 201 if created else 200, {"ETag": f'"{entry["etag"]}"'})
         except DashboardError as error:
             return self._json({"refused": error.code, "error": str(error), **error.extra}, error.status)
