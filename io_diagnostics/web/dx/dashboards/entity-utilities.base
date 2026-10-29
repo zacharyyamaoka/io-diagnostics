@@ -1,0 +1,16 @@
+# An entity's Utilities tab (§16; d6 Utilities: every action with its danger and last run). Read here: a utility runs on the
+# classic page (this page sends no /act: PEP 0001 §12.2), which "Open on the classic page" opens on the same tab.
+datasets:
+  actions:
+    data: "../datasets/actions.json?path={path}"
+layout:
+  columns: 12
+  rowHeight: 56
+  panels:
+    - { view: Utilities, w: 12, h: 9, key: utilities }
+views:
+  - type: table
+    name: Utilities
+    from: actions
+    filters: 'path == "{path}"'
+    order: [title, danger, state, reason, description, last, owner]

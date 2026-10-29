@@ -14,6 +14,7 @@ import '../vendor/data-ui/dashboard.js';
 import { RobotDxFeed, bindingOf } from './feed.js';
 import { startHeartbeat } from './watch.js';
 import { mountDashboards } from './boards.js';
+import { mountTree } from './tree.js';
 
 // WHY the views' code first, beside the feed's first requests: data-ui's live <data-views> builds its first model before its live
 // feed is attached and keeps serving it while the view's module loads, so a live draw in that window drew an empty tree until the
@@ -48,10 +49,23 @@ function rebind() { for (const ds of Object.values(feed.datasets())) clock.bind(
 document.addEventListener('data-dashboard-live', rebind, true);   // capture: the event does not bubble
 
 // ---- the URL: ?go=<destination>&sel=<path>&board=<id>#t=live|<seconds> -----------------------------------------------------
+// An entity's tabs (Zach, 2026-10-28: "on each entity we had these tabs to split up different considerations (Diagnostics/State/
+// Configuration/Log/Utilities) ... I still want that tabbed model on each entity"; PEP 0001 §16): the overview first, then the
+// classic entity page's five, under the classic page's own ids (?page=), each a dashboard of its own over the page's datasets.
+const TABS = [
+  { id: 'overview', title: 'Overview', file: 'explore.base' },
+  { id: 'diagnostics', title: 'Diagnostics', file: 'entity-diagnostics.base', kinds: ['checks', 'levels'] },
+  { id: 'state', title: 'State', file: 'entity-state.base', kinds: ['peek'] },
+  { id: 'config', title: 'Configuration', file: 'entity-config.base', kinds: ['config'] },
+  { id: 'log', title: 'Log', file: 'entity-log.base', kinds: [] },
+  { id: 'utilities', title: 'Utilities', file: 'entity-utilities.base', kinds: ['actions'] },
+];
+const TAB_KEY = 'robotdx.dx.entity-tab.';   // + the entity's kind: the tab last shown for that kind (the classic page keeps it so too)
+
 export function readUrl() {
   const q = new URLSearchParams(location.search);
   const go = DESTS.includes(q.get('go')) ? q.get('go') : 'explore';
-  return { go, sel: q.get('sel') || '', board: q.get('board') || '' };
+  return { go, sel: q.get('sel') || '', board: q.get('board') || '', page: TABS.some((x) => x.id === q.get('page')) ? q.get('page') : '' };
 }
 
 /** Go somewhere: a history entry (Back and Forward walk them, E4), the clock's t kept in the hash. */
@@ -206,21 +220,44 @@ export async function openBase(el, text, baseUrl, { keepState = false } = {}) {
 
 /** Whether a drawn dashboard has its own playback card (then the page's time bar steps aside). */
 const hasPlayback = (base) => (base.views || []).some((v) => v.type === 'playback');
-export function showTimeBar(on) { timeBar.hidden = !on; }
+export function showTimeBar(on) { timeBar.hidden = !on; drawLive(); }
+
+// ---- the playback bar to compare (Zach, 2026-10-28: "Playback bar: I am not sure what I will like more. please give the option to
+// switch between today's bar, rerun simple and foxglove bar"): data-ui's own proposals (its playback.variant: bar, rerun, foxglove),
+// one temporary bottom-right picker that switches live and remembers the pick on this device (memory feedback_prototype_switch_in_app)
+const BARS = [['bar', "Today's bar"], ['rerun', 'Rerun · simple'], ['foxglove', 'Foxglove']];
+const BAR_KEY = 'robotdx.dx.playback-variant';
+const barPick = document.getElementById('dx-playback-variant');
+const liveBtn = document.getElementById('dx-live');
+function barVariant() { const v = store.get(BAR_KEY); return BARS.some(([id]) => id === v) ? v : 'bar'; }
+function drawTimeBar() { timeBar.base = { views: [{ type: 'playback', name: 'Time', playback: { variant: barVariant() } }] }; drawLive(); }
+barPick.innerHTML = BARS.map(([id, name]) => `<option value="${id}">${esc(name)}</option>`).join('');
+barPick.addEventListener('change', () => { store.set(BAR_KEY, barPick.value === 'bar' ? null : barPick.value); drawTimeBar(); });
+// WHY a LIVE of the page's own beside Rerun's and Foxglove's bars: data-ui's proposals were made before its live tier and have no
+// way back to the newest data (today's bar has ● LIVE); asked of data-ui (PEP 0001 §16)
+const lagText = (s) => (s < 60 ? `${s.toFixed(1)} s` : s < 3600 ? `${Math.round(s / 60)} min` : `${(s / 3600).toFixed(1)} h`);
+let liveDrawnAt = 0;
+function drawLive() {
+  const show = barVariant() !== 'bar' && clock.live && !timeBar.hidden;
+  liveBtn.hidden = !show;
+  if (!show) return;
+  liveDrawnAt = performance.now();
+  liveBtn.setAttribute('aria-pressed', String(clock.following));
+  const text = clock.following ? '● LIVE' : `○ LIVE −${lagText(clock.lag)}`;
+  if (liveBtn.textContent !== text) liveBtn.textContent = text;
+}
+clock.addEventListener('live', () => { if (performance.now() - liveDrawnAt > 200) drawLive(); });
+clock.addEventListener('state', drawLive);
+liveBtn.addEventListener('click', () => { clock.goLive(); drawLive(); });
 
 // ---- Explore: the tree and the selected entity -------------------------------------------------------------------------------
 
-const TREE_BASE = {
+// The Table mode of the tree pane: data-ui's (the tree itself is the classic page's own: tree.js, PEP 0001 §16)
+const TABLE_BASE = {
   views: [{
-    type: 'table', name: 'Tree',
+    type: 'table', name: 'Table',
     // WHY these filters: an OS device no driver claims (a keyboard, a mouse) stays hidden unless it reports a problem
     // of its own, and a hidden row never hides a fault (E11)
-    filters: 'claimed == true || rank > 0',
-    tree: { parent: 'parent' }, fold: 'open',
-    order: ['name', 'health', 'below', 'id_text', 'model', 'presence'],
-    columnSize: { name: 210, health: 84, below: 84 },
-  }, {
-    type: 'table', name: 'Table',
     filters: 'claimed == true || rank > 0',
     order: ['name', 'health', 'message', 'id_text', 'rate', 'heard', 'checks', 'faults', 'kind'],
     sort: [{ property: 'rank', direction: 'DESC' }],
@@ -233,7 +270,6 @@ const store = {
   set(k, v) { try { if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (_) { /* private window: this visit only */ } },
 };
 
-let templateText = null;
 async function template(name) {
   const res = await fetch(new URL(name, BOARDS), { cache: 'no-store' });
   return res.text();
@@ -257,6 +293,22 @@ function exploreText(tpl, path, entity) {
   return stringifyBase(base);
 }
 
+/** A tab's .base for one entity: the overview is exploreText's (empty panels left out); the State tab gets a Signals tab per
+    value as the overview does; every other tab is its template with {path} filled in, every panel kept (a tab is always there). */
+function tabText(tab, tpl, path, entity) {
+  if (tab.id === 'overview') return exploreText(tpl, path, entity);
+  if (tab.id !== 'state') return tpl.replaceAll('{path}', path);
+  const base = parseBase(tpl.replaceAll('{path}', path));
+  const keys = entity ? [...entity.keys.entries()] : [];
+  const numeric = keys.filter(([k]) => !['mode', 'fault'].includes(k)).length ? keys.filter(([k]) => !['mode', 'fault'].includes(k)) : keys;
+  base.views = base.views || [];
+  for (const [key, info] of numeric) base.views.push({ type: 'plot', name: info.unit ? `${key} (${info.unit})` : key, from: 'samples', at: '30s', plot: { y: ['value'], series: 'key', only: [key], unit: info.unit || undefined } });
+  base.layout.panels = base.layout.panels.map((p) => (p.key === 'signals' ? { ...p, views: numeric.map(([key, info]) => (info.unit ? `${key} (${info.unit})` : key)) } : p))
+    .filter((p) => p.key !== 'signals' || p.views.length);   // no values yet: the cards say so; the plots come with the first value
+  return stringifyBase(base);
+}
+const templates = new Map();   // a tab's template text, read once
+
 function withoutPlayback(text) {
   const base = parseBase(text);
   const gone = new Set((base.views || []).filter((v) => v.type === 'playback').map((v) => v.name));
@@ -275,56 +327,79 @@ async function mountExplore(root, params) {
       <a class="dx-link" id="dx-classic" href="/" title="Utilities, configuration edits and the expected setup are on the classic page">Open on the classic page ↗</a>
     </div>
     <div class="dx-explore-body">
-      <aside id="dx-tree-pane" aria-label="Entities"><data-views id="dx-tree" no-url toolbar="compact"></data-views></aside>
-      <section class="dx-detail-wrap"><data-dashboard id="dx-detail" no-url></data-dashboard></section>
+      <aside id="dx-tree-pane" aria-label="Entities"></aside>
+      <section class="dx-detail-wrap">
+        <nav id="dx-tabs" class="dx-tabs" role="tablist" aria-label="The entity's tabs" hidden>${TABS.map((t) => `<button type="button" role="tab" data-dx-tab="${t.id}" aria-selected="false">${esc(t.title)}</button>`).join('')}</nav>
+        <data-dashboard id="dx-detail" no-url></data-dashboard>
+      </section>
     </div>
   </div>`;
   const pane = root.querySelector('#dx-tree-pane');
-  const tree = root.querySelector('#dx-tree');
   const detail = root.querySelector('#dx-detail');
   const fold = root.querySelector('#dx-tree-fold');
   const crumbs = root.querySelector('#dx-crumbs');
   const classic = root.querySelector('#dx-classic');
   const keep = root.querySelector('#dx-keep');
+  const tabBar = root.querySelector('#dx-tabs');
+  tabBar.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-dx-tab]');
+    if (b && current.path && b.dataset.dxTab !== current.page) go('explore', { sel: current.path, page: b.dataset.dxTab });
+  });
   // WHY: Zach always wants side panels that drag, remember, reset and fold (memory feedback_resizable_panels)
   const sizer = makeResizable(pane, { edge: 'right', min: 220, max: 640, keep: 420, key: 'dx-tree', label: 'the entity tree' });
   const setFold = (on) => { pane.hidden = on; fold.setAttribute('aria-pressed', String(on)); store.set(FOLD, on ? '1' : null); };
   fold.addEventListener('click', () => setFold(!pane.hidden));
   setFold(store.get(FOLD) === '1');
-  tree.base = TREE_BASE;
-  tree.data = feed.dataset('entities');
-  // a click on a row selects it (the URL and Back follow), never a peek: the entity opens beside the tree
-  tree.openPeek = (id) => go('explore', { sel: String(id) });
+  // the Table mode: data-ui's table of the entities; a click on a row selects it (the URL and Back follow), never a peek
+  const table = document.createElement('data-views');
+  table.id = 'dx-tree-table';
+  table.setAttribute('no-url', '');
+  table.setAttribute('toolbar', 'compact');
+  table.base = TABLE_BASE;
+  table.data = feed.dataset('entities');
+  table.openPeek = (id) => go('explore', { sel: String(id) });
+  // the tree: the classic page's own (tree.js), drawn as of the clock's t
+  const tree = mountTree(pane, { feed, clock, table, onSelect: (path) => go('explore', { sel: path }) });
   const mark = document.createElement('style');
   root.append(mark);
 
   let current = { path: null, release: null, seq: 0, hold: null, sig: '' };
   // what decides Explore's panels for an entity: its State keys (in order) and whether it has settings
   const sigOf = (entity) => (entity ? `${[...entity.keys.keys()].join(',')}|${Boolean(entity.node && (entity.node.config || []).length)}` : '');
-  async function select(path) {
+  async function select(path, urlPage = '') {
     const seq = ++current.seq;
-    mark.textContent = path ? `#dx-tree tr[data-id="${CSS.escape(path)}"] { background: var(--dv-hover); box-shadow: inset 3px 0 0 var(--dv-accent); }` : '';
-    classic.href = path ? `/?sel=${encodeURIComponent(path)}` : '/';
+    tree.select(path);
+    mark.textContent = path ? `#dx-tree-table tr[data-id="${CSS.escape(path)}"] { background: var(--dv-hover); box-shadow: inset 3px 0 0 var(--dv-accent); }` : '';
     const e = path ? feed.dataset('entities').latestAt(Infinity, path) : null;
+    // the tab: the URL's, else the one last shown for this kind of entity, else the overview; the one shown is remembered
+    const kindKey = `${TAB_KEY}${(e && e.kind) || 'entity'}`;
+    const page = path ? (urlPage || (TABS.some((t) => t.id === store.get(kindKey)) ? store.get(kindKey) : 'overview')) : '';
+    if (path) store.set(kindKey, page);
+    const tab = TABS.find((t) => t.id === page) || TABS[0];
+    tabBar.hidden = !path;
+    for (const b of tabBar.querySelectorAll('[data-dx-tab]')) b.setAttribute('aria-selected', String(b.dataset.dxTab === page));
+    // the classic page's own tab of the same name (the overview is this page's)
+    classic.href = path ? `/?sel=${encodeURIComponent(path)}${page && page !== 'overview' ? `&page=${page}` : ''}` : '/';
     crumbs.innerHTML = path ? `<b>${esc((e && e.name) || path)}</b> <span>${esc(path)}</span>` : 'Pick an entity in the tree';
     keep.hidden = !path;
     let text, url = BOARDS;
     if (path) {
       // the entity's feeds start now; the panels' own bindings take them over (counted), and these let go after. 'peek' stays
       // while the entity is selected: its State and its settings may come after the selection (refresh, below)
-      const kinds = ['checks', 'config', 'levels'];
+      const kinds = ['checks', 'config', 'levels', 'actions'];
       for (const k of [...kinds, 'peek']) feed.use(k, path);
-      templateText = templateText || await template('explore.base');
+      const tpl = templates.get(tab.file) || await template(tab.file);
+      templates.set(tab.file, tpl);
       const entity = await feed.whenReady(path);
       if (seq !== current.seq) { for (const k of [...kinds, 'peek']) feed.release(k, path); return; }
-      text = exploreText(templateText, path, entity);
+      text = tabText(tab, tpl, path, entity);
       const was = current.release;
       current.release = null;
       const opened = await openBase(detail, text, url);
       if (was) was();
       for (const k of kinds) feed.release(k, path);
       const hold = { panels: opened };
-      current = { ...current, path, hold, sig: sigOf(entity), release: () => { hold.panels.release(); feed.release('peek', path); }, text };
+      current = { ...current, path, page, urlPage, tab, hold, sig: sigOf(entity), release: () => { hold.panels.release(); feed.release('peek', path); }, text };
     } else {
       // nothing picked: the Overview starter, without its own time bar (Explore's is the page's)
       text = withoutPlayback(await template('overview.base'));
@@ -332,7 +407,7 @@ async function mountExplore(root, params) {
       const was = current.release;
       const opened = await openBase(detail, text, url);
       if (was) was();
-      current = { ...current, path: null, hold: null, sig: '', release: () => opened.release(), text };
+      current = { ...current, path: null, page: '', urlPage: '', tab: null, hold: null, sig: '', release: () => opened.release(), text };
     }
     // WHY hidden where the detail has its own playback card: one time bar on screen, never two
     showTimeBar(!hasPlayback(parseBase(text)));
@@ -346,7 +421,8 @@ async function mountExplore(root, params) {
     const entity = feed.entity(current.path);
     const sig = sigOf(entity);
     if (sig === current.sig) return;
-    const text = exploreText(templateText, current.path, entity);
+    if (!current.tab) return;
+    const text = tabText(current.tab, templates.get(current.tab.file), current.path, entity);
     current.sig = sig;
     if (text === current.text) return;
     refreshing = true;
@@ -371,10 +447,10 @@ async function mountExplore(root, params) {
       go('dashboards', { board: id });
     } catch (err) { crumbs.textContent = `Not kept: ${err.message}`; }
   });
-  await select(params.sel);
+  await select(params.sel, params.page);
   return {
-    update(p) { if (p.sel !== (current.path || '')) return select(p.sel); return null; },
-    unmount() { feed.removeEventListener('values', refresh); feed.removeEventListener('node', refresh); if (current.release) current.release(); current.seq += 1; if (sizer) sizer.destroy(); },
+    update(p) { if (p.sel !== (current.path || '') || (p.sel && (p.page || '') !== (current.urlPage || ''))) return select(p.sel, p.page); return null; },
+    unmount() { feed.removeEventListener('values', refresh); feed.removeEventListener('node', refresh); if (current.release) current.release(); current.seq += 1; tree.destroy(); if (sizer) sizer.destroy(); },
   };
 }
 
@@ -396,9 +472,14 @@ function mountFile(file, title) {
 // ---- Settings ---------------------------------------------------------------------------------------------------------------------
 
 const THEME = 'robotdx.dx.theme';
+// WHY data-mode too: the classic tree's tokens (tokens.css, skins/shadcn.css) are chosen by <html data-mode>
+const systemDark = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
 function applyTheme(value) {
-  if (value === 'light' || value === 'dark') document.documentElement.dataset.theme = value; else delete document.documentElement.dataset.theme;
+  const html = document.documentElement;
+  if (value === 'light' || value === 'dark') html.dataset.theme = value; else delete html.dataset.theme;
+  html.dataset.mode = value === 'light' || value === 'dark' ? value : systemDark && systemDark.matches ? 'dark' : 'light';
 }
+if (systemDark) systemDark.addEventListener('change', () => applyTheme(store.get(THEME)));
 applyTheme(store.get(THEME));
 
 async function mountSettings(root) {
@@ -472,7 +553,8 @@ function readT() {
 (async () => {
   await feed.start();
   startHeartbeat(feed);
-  timeBar.base = { views: [{ type: 'playback', name: 'Time' }] };
+  barPick.value = barVariant();
+  drawTimeBar();
   timeBar.data = feed.dataset('summary');
   await render();
   const t = readT();

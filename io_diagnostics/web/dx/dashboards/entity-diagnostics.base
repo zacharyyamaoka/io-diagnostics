@@ -1,0 +1,26 @@
+# An entity's Diagnostics tab (docs/peps/0001-robotdx-on-data-ui.md §16; the classic entity page's d6 Diagnostics: health only):
+# its checks worst first, and each check's level over the host's window. Both are as of the page clock's t.
+datasets:
+  checks:
+    data: "../datasets/checks.json?path={path}"
+  levels:
+    data: "../datasets/levels.json?path={path}"
+layout:
+  columns: 12
+  rowHeight: 56
+  panels:
+    - { view: Diagnostics, w: 12, h: 6, key: diagnostics }
+    - { view: Health, w: 12, h: 5, key: health }
+views:
+  - type: table
+    name: Diagnostics
+    from: checks
+    filters: 'path == "{path}"'
+    order: [name, health, message, code, why, received, period, source]
+    sort:
+      - { property: rank, direction: DESC }
+  - type: levels
+    name: Health
+    from: levels
+    at: 15m
+    levels: { state: level, label: message, order: [ok, warn, unknown, stale, error], tones: { ok: good, warn: warn, unknown: muted, stale: muted, error: bad }, bar: 3 }

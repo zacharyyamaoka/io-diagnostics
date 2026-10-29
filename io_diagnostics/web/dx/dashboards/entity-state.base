@@ -1,0 +1,29 @@
+# An entity's State tab (§16; d6 State: the entity's live values, never drawn as health): a card per value with its sparkline,
+# the values as a table, and one plot per value (the page puts a Signals tab per value). While it shows, the page sends the
+# watch heartbeat, so a device with a watch streams at its watch's rate.
+datasets:
+  samples:
+    data: "../datasets/samples.json?path={path}"
+style:
+  numbers: { digits: 4 }
+layout:
+  columns: 12
+  rowHeight: 56
+  panels:
+    - { views: [State, State table], w: 12, h: 7, key: state, title: State }
+    - { views: [], w: 12, h: 6, key: signals, title: Signals }
+views:
+  - type: kpi
+    name: State
+    from: samples
+    at: 20s
+    limit: 4000
+    groupBy: { property: label }
+    kpi: { value: { property: value }, spark: { x: t, y: value } }
+  - type: table
+    name: State table
+    from: samples
+    at: latest
+    order: [label, value, meaning, group, t]
+    sort:
+      - { property: order, direction: ASC }

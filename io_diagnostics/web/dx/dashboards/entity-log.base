@@ -1,0 +1,18 @@
+# An entity's Log tab (§16; d6 Log: this entity and everything below it), newest first, as of the page clock's t.
+datasets:
+  events:
+    data: "../datasets/events.json"
+layout:
+  columns: 12
+  rowHeight: 56
+  panels:
+    - { view: Log, w: 12, h: 11, key: log }
+views:
+  - type: table
+    name: Log
+    from: events
+    filters: 'path == "{path}" || path.startsWith("{path}/")'
+    order: [t, severity, message, name, type, code, source, port]
+    sort:
+      - { property: t, direction: DESC }
+    limit: 2000

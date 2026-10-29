@@ -1,0 +1,19 @@
+{
+ "title": "Utilities",
+ "titleProperty": "title",
+ "about": "An entity's utilities (GET /api/v1/node's actions), one row per utility, keyed path#name (dx/feed.js). Read only: a utility runs on the classic page.",
+ "properties": {
+  "t": { "type": "number", "unit": "s", "label": "Seen", "display": "clock" },
+  "id": { "type": "text", "label": "Id" },
+  "path": { "type": "text", "label": "Path" },
+  "name": { "type": "text", "label": "Name" },
+  "title": { "type": "text", "label": "Utility" },
+  "description": { "type": "text", "label": "What it does" },
+  "danger": { "type": "text", "label": "Danger", "note": "query: only reads; changes: changes a setting or state; moves: something moves." },
+  "kind": { "type": "text", "label": "Kind" },
+  "state": { "type": "text", "label": "Can run", "note": "ready, or why not (the host's own preconditions)." },
+  "reason": { "type": "text", "label": "Why not" },
+  "last": { "type": "text", "label": "Last run" },
+  "owner": { "type": "text", "label": "Plugin" }
+ }
+}

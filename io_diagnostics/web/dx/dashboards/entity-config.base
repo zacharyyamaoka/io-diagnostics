@@ -1,0 +1,17 @@
+# An entity's Configuration tab (§16; d6 Configuration: the same for every driver): its settings as a tree by their dotted
+# names, with what each is expected to be and where that comes from. Read here; edits are on the classic page.
+datasets:
+  config:
+    data: "../datasets/config.json?path={path}"
+layout:
+  columns: 12
+  rowHeight: 56
+  panels:
+    - { view: Configuration, w: 12, h: 10, key: configuration }
+views:
+  - type: table
+    name: Configuration
+    from: config
+    filters: 'path == "{path}"'
+    tree: { path: key, separator: "." }
+    order: [key, value, unit, expected, differs, source, unsaved, writable]

@@ -23,9 +23,9 @@ import { LiveDataset } from '../vendor/data-ui/data-ui.js';
 const API = '/api/v1';
 const MARK = { warn: '▲ warn', unknown: '? unknown', stale: '◷ stale', error: '✖ error' };
 const RANK = { ok: 0, warn: 1, unknown: 2, stale: 3, error: 4 };
-const KINDS = ['entities', 'summary', 'attention', 'runs', 'events', 'faults', 'checks', 'config', 'levels', 'samples'];
+const KINDS = ['entities', 'summary', 'attention', 'runs', 'events', 'faults', 'checks', 'config', 'actions', 'levels', 'samples'];
 const PER_ENTITY = new Set(['levels', 'samples']);       // one dataset per entity
-const WATCHED = new Set(['checks', 'config', 'levels', 'samples', 'peek']);   // a binding with ?path= makes the entity watched
+const WATCHED = new Set(['checks', 'config', 'actions', 'levels', 'samples', 'peek']);   // a binding with ?path= makes the entity watched
 // 'peek' reads an entity's /node and /values (what it has: its State keys, its settings) and is never State on screen: no heartbeat
 const STATE_EVERY_MS = 2000;     // /state at most this often (a tick asks sooner than that only once)
 const STATE_IDLE_MS = 5000;      // and this often with no tick at all
@@ -46,6 +46,13 @@ const CADENCE_GAP_MS = 500, CADENCE_RUN = 3, FIRST_POLLS = 12;
 const TREE_BIN_S = 2;            // the tree's past (GET /history/tree): bins of about this, over the host's window
 // a past version of a tree row (from /history/tree) has today's identity and place, its level then, and nothing else
 const PAST_BLANK = { message: '', below: '', presence: '', rate: '', heard: null, checks: null, actions: null, faults: null, knock_on: '' };
+/** Today's node at a past bin: the bin's level as its own (basis own) or as what is below it (basis below), and nothing of today's
+    message, hint, presence, counts or receive times (the host keeps none of them for the past). */
+function pastNode(node, level, basis) {
+  const own = basis === 'own' ? { ...(node.own || {}), level, message: '' } : node.own && node.own.level !== null && node.own.level !== undefined ? { ...node.own, level: null, message: '' } : node.own || null;
+  return { ...node, level, own, rollup: { ...(node.rollup || {}), level, message: '', origin: null, origin_name: null, knock_on: [] }, hint: null, message: '',
+    presence: null, stale: level === 'stale', last_received: null, checks: null, actions: null, faults: null, knock_on_of: null };
+}
 
 // WHY a shape and a word, nothing for OK (E9, Zach's rule): a level is never only a colour, and OK is quiet
 export const health = (level) => MARK[level] || '';
@@ -69,6 +76,15 @@ export function bindingOf(url) {
 
 function flatten(node, out = []) { out.push(node); for (const child of node.children || []) flatten(child, out); return out; }
 
+/** A tree node as the host sent it, its children as paths and without the ages that only count up (the host does not diff them
+    either: live.py VOLATILE_ROW), so the classic tree (tree.js) can be drawn as of any t from the entities' versions. */
+function rawNode(n) {
+  const { children, age_s: _age, presence, ...rest } = n;
+  const out = { ...rest, children: (children || []).map((c) => (typeof c === 'string' ? c : c.path)) };
+  if (presence) { const { age_s: _p, ...pres } = presence; out.presence = pres; } else out.presence = presence ?? null;
+  return out;
+}
+
 /** One entity row of /state's tree, as the entities dataset holds it (the fields the page draws; no ages: they tick). */
 function entityRow(n) {
   const id = n.identity || {};
@@ -88,6 +104,8 @@ function entityRow(n) {
     rate: rate && rate.expected_per_s ? `${rate.received_per_s === null || rate.received_per_s === undefined ? 'measuring' : `${rate.received_per_s.toFixed(2)} /s`} · expected ${rate.expected_per_s.toFixed(2)}` : '',
     heard: n.last_received ?? null, checks: n.checks || 0, actions: n.actions || 0, faults: n.faults || 0,
     knock_on: n.knock_on_of || '', connected: n.connected !== false, stale: !!n.stale, claimed: n.claimed !== false, owner: n.owner || '',
+    // WHY the node itself, under _ (data-ui's views draw no _ field): the classic tree is drawn from it, at any t (PEP 0001 §16)
+    _node: rawNode(n),
   };
 }
 
@@ -179,14 +197,15 @@ export class RobotDxFeed extends EventTarget {
     if (ds) return ds;
     const schema = this.schemas[kind] || { properties: {} };
     const spec = { entities: { key: 'path' }, summary: { key: 'host' }, attention: { key: 'path' }, runs: { key: 'id' },
-      faults: { key: 'id' }, checks: { key: 'id' }, config: { key: 'id' }, events: {}, levels: { stream: 'check' },
+      faults: { key: 'id' }, checks: { key: 'id' }, config: { key: 'id' }, actions: { key: 'id' }, events: {}, levels: { stream: 'check' },
       samples: { stream: 'key' } }[kind];
     const age = this.host.window || 900;
     ds = new LiveDataset({
       id: name, title: schema.title || kind, titleProperty: schema.titleProperty, properties: schema.properties, time: 't',
       ...spec,
       // WHY the host's window: the host keeps levels and measurements that long (§5c4), so rewind covers the same span
-      retention: kind === 'samples' || kind === 'levels' || kind === 'events' || kind === 'summary' ? { age } : {},
+      // (the entities too since §16: each version now carries its node, and PEP §12.1 always said the keyed ones keep the window)
+      retention: kind === 'samples' || kind === 'levels' || kind === 'events' || kind === 'summary' || kind === 'entities' ? { age } : {},
       // WHY 0: staleness is the host's call (PEP §5a8); the page says reconnecting itself when the host goes away
       stale: 0, url: new URL(`${kind}.json${path ? `?path=${encodeURIComponent(path)}` : ''}`, this.schemaBase).href,
     });
@@ -239,7 +258,7 @@ export class RobotDxFeed extends EventTarget {
     await schemas;
     const s = await settings;
     if (s && s.history_window_s) this.host.window = s.history_window_s;
-    for (const kind of ['entities', 'summary', 'attention', 'runs', 'events', 'faults', 'checks', 'config']) this.dataset(kind);
+    for (const kind of ['entities', 'summary', 'attention', 'runs', 'events', 'faults', 'checks', 'config', 'actions']) this.dataset(kind);
     this._liveReady = true;
     for (const [type, data] of this._liveQueue.splice(0)) this._liveEvent(type, data);
     if ((await live) === 'live') this.mode = 'live';
@@ -443,7 +462,8 @@ export class RobotDxFeed extends EventTarget {
     // WHY a version on every answer, changed or not: the connection line's "last data N s ago" is then the last time the
     // host answered (today's status bar, E8), not the last time something changed
     this._seenSummary = srow;
-    this.dataset('summary').upsert([{ ...srow, t }]);
+    // the host's summary and composition themselves, under _: the classic tree's header counts and composites at t (tree.js)
+    this.dataset('summary').upsert([{ ...srow, t, _summary: s.summary || null, _composition: s.composition || null }]);
     // what needs you, worst first (the host counts: one cause counted once, E2)
     const att = new Map((sum.attention || []).map((a) => [a.path, { path: a.path, name: usb(a.name), device: a.device ? usb(a.device.name) : '',
       level: a.level, health: health(a.level), rank: rank(a.level), message: a.message || '' }]));
@@ -485,7 +505,8 @@ export class RobotDxFeed extends EventTarget {
         const level = row.bar[i] ?? null;
         if (i > first && level === last) continue;
         last = level;
-        versions.push({ ...today, ...PAST_BLANK, health: health(level), level, rank: rank(level), stale: level === 'stale', t });
+        versions.push({ ...today, ...PAST_BLANK, health: health(level), level, rank: rank(level), stale: level === 'stale', t,
+          _node: today._node ? pastNode(today._node, level, row.basis) : undefined });
       }
     }
     if (versions.length) this.dataset('entities').upsert(versions.sort((a, b) => a.t - b.t));
@@ -584,8 +605,8 @@ class EntityFeed {
   constructor(feed, path) {
     this.feed = feed;
     this.path = path;
-    this.uses = { checks: 0, config: 0, levels: 0, samples: 0, peek: 0 };
-    this.released = { checks: 0, config: 0, levels: 0, samples: 0, peek: 0 };   // when each kind's last view left
+    this.uses = { checks: 0, config: 0, actions: 0, levels: 0, samples: 0, peek: 0 };
+    this.released = { checks: 0, config: 0, actions: 0, levels: 0, samples: 0, peek: 0 };   // when each kind's last view left
     this.nodeAt = 0;
     this.historyAt = 0;
     this.valuesAt = 0;
@@ -594,6 +615,7 @@ class EntityFeed {
     this.watch = null;
     this.cursor = null;          // /values' serial cursor; null until the backlog is in
     this.seenConfig = new Map();
+    this.seenActions = new Map();
     this.lastLevel = new Map();  // check -> {from, level}
     this.lastPoint = new Map();  // key -> t of the newest point appended
     this.nodeOk = false;
@@ -624,7 +646,7 @@ class EntityFeed {
   tick(now) {
     // WHY linger: Explore's detail is rebuilt on a selection and a dashboard on a reload; its polls must not restart
     const want = (k) => this._want(k, now);
-    if (!['checks', 'config', 'levels', 'samples', 'peek'].some(want)) return;
+    if (!['checks', 'config', 'actions', 'levels', 'samples', 'peek'].some(want)) return;
     const live = this.feed.mode === 'live';
     // WHY on a change with /live: a row is upserted when a report arrives, so a rig that reports every 30 s is read every 30 s,
     // not every 2 s; the slow beat catches what changes with no arrival (a check going stale)
@@ -681,6 +703,16 @@ class EntityFeed {
         differs: !!c.differs, source: c.expected_source || '', stored: c.stored ?? null, unsaved: !!c.unsaved, writable: !!c.writable, stamp: c.stamp ?? null });
     }
     this._diff(this.seenConfig, config, this.feed.dataset('config'), (r) => r.stamp ?? nowHost, nowHost);
+    // the entity's utilities (the Utilities tab, §16): what each does, its danger, whether it can run now and its last run
+    const actions = new Map();
+    for (const a of n.actions || []) {
+      const id = `${this.path}#${a.name}`;
+      const run = a.last_run || null;
+      const last = run ? [run.state || run.outcome || '', run.when || run.started_iso || '', run.exit_code !== undefined && run.exit_code !== null ? `exit ${run.exit_code}` : ''].filter(Boolean).join(' · ') : '';
+      actions.set(id, { id, path: this.path, name: a.name, title: a.title || a.name, description: a.description || '', danger: a.danger || '', kind: a.kind || '',
+        state: a.state || '', reason: a.reason || (a.preconditions || []).filter((x) => x.state !== 'ok').map((x) => x.text).join(' · '), last, owner: a.owner || '' });
+    }
+    this._diff(this.seenActions, actions, this.feed.dataset('actions'), () => nowHost, nowHost);
     this.feed.dispatchEvent(new CustomEvent('node', { detail: { path: this.path, node: n } }));
   }
 

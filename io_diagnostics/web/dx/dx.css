@@ -48,7 +48,31 @@ body.data-ui { background: var(--dv-bg); color: var(--dv-fg); font: 14px/1.45 va
 .dx-explore-body { flex: 1 1 auto; min-height: 0; display: flex; position: relative; }
 #dx-tree-pane { flex: none; width: var(--data-panel-width, 380px); min-width: 0; border-right: 1px solid var(--dv-border); display: flex; flex-direction: column; min-height: 0; }
 #dx-tree-pane[hidden] { display: none; }
-#dx-tree { flex: 1 1 auto; min-height: 0; --dv-height: 100%; }
+/* the tree pane: the classic page's own tree (dx/tree.js, web/tree/v6.js) under the classic Obsidian layout's toolbar and search */
+.dx-tree-head { flex: none; position: relative; display: flex; align-items: center; gap: 2px; padding: 6px 6px 2px 8px; }
+.dx-tree-mode { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--dv-radius); background: var(--dv-group); }
+.dx-tree-mode button { border: 0; background: transparent; color: var(--dv-muted); font: inherit; font-size: 12.5px; padding: 3px 10px; border-radius: calc(var(--dv-radius) - 2px); cursor: pointer; }
+.dx-tree-mode button[aria-selected="true"] { background: var(--dv-bg); color: var(--dv-fg); box-shadow: 0 1px 2px color-mix(in srgb, #000 12%, transparent); }
+.dx-ic-btn { width: 28px; height: 28px; display: inline-grid; place-items: center; border: 0; border-radius: var(--dv-radius); background: transparent; color: var(--dv-muted); cursor: pointer; }
+.dx-ic-btn:hover { background: var(--dv-hover); color: var(--dv-fg); }
+.dx-ic-btn[aria-pressed="true"] { color: var(--dv-accent); }
+.dx-ic-btn[disabled] { opacity: .45; cursor: default; }
+.dx-ic-btn[hidden] { display: none; }
+.dx-ic-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.dx-tree-pop { position: absolute; right: 6px; top: calc(100% + 2px); z-index: 20; display: grid; gap: 8px; width: 240px; padding: 10px 12px; font-size: 12.5px;
+  background: var(--dv-bg); border: 1px solid var(--dv-border); border-radius: var(--dv-radius); box-shadow: 0 4px 16px color-mix(in srgb, #000 14%, transparent); }
+.dx-tree-pop[hidden] { display: none; }
+.dx-tree-pop label { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--dv-muted); }
+.dx-tree-pop p { margin: 0; color: var(--dv-muted); line-height: 1.35; }
+.dx-tree-searchbox { flex: none; display: flex; align-items: center; gap: 6px; margin: 4px 8px 6px; padding: 0 8px; height: 30px; border: 1px solid var(--dv-border); border-radius: var(--dv-radius); background: var(--dv-bg); }
+.dx-tree-searchbox svg { width: 14px; height: 14px; flex: none; fill: none; stroke: var(--dv-muted); stroke-width: 2; stroke-linecap: round; }
+.dx-tree-searchbox input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: var(--dv-fg); font: inherit; font-size: 13px; }
+#dx-tree { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 0 4px 8px; font-family: var(--io-font-ui, inherit); }
+#dx-tree[hidden], #dx-tree-table[hidden] { display: none; }
+#dx-tree-table { flex: 1 1 auto; min-height: 0; --dv-height: 100%; }
+/* WHY hidden (and blocked in tree.js): this page only reads (PEP 0001 §12.2); hiding a row, Expect and Remove from bus are the
+   classic page's */
+#dx-tree .t6-eye, #dx-tree [data-t6-mi="vis"], #dx-tree [data-t6-mi^="setup:"] { display: none !important; }
 .dx-detail-wrap { flex: 1 1 auto; min-width: 0; overflow: auto; padding: 0 0 12px; position: relative; }
 .dx-note-box { margin: 12px; padding: 10px 12px; border: 1px dashed var(--dv-border); border-radius: var(--dv-radius); color: var(--dv-muted); font-size: 13px; }
 #dx-tree-fold svg { width: 16px; height: 16px; }
@@ -104,3 +128,20 @@ data-dashboard[data-arranging] .dd-panel.grid-stack-item:not([gs-h]) { height: v
 /* a save the host refused: a conflict (412), the size cap (413), an error; the reader chooses what happens next */
 .dx-conflict { margin: 8px 12px 0; padding: 8px 12px; border: 1px solid var(--dv-warn); border-radius: var(--dv-radius); color: var(--dv-fg); font-size: 13px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .dx-conflict[hidden] { display: none; }
+
+/* an entity's tabs (PEP 0001 §16; the classic entity page's d6 tabs): a quiet underline row above the tab's dashboard */
+.dx-tabs { position: sticky; top: 0; z-index: 6; display: flex; gap: 2px; padding: 0 12px; border-bottom: 1px solid var(--dv-border); background: var(--dv-bg); overflow-x: auto; }
+.dx-tabs[hidden] { display: none; }
+.dx-tabs button { border: 0; background: transparent; color: var(--dv-muted); font: inherit; font-size: 13px; padding: 8px 10px 7px; border-bottom: 2px solid transparent; margin-bottom: -1px; cursor: pointer; white-space: nowrap; }
+.dx-tabs button:hover { color: var(--dv-fg); }
+.dx-tabs button[aria-selected="true"] { color: var(--dv-fg); border-bottom-color: var(--dv-accent); font-weight: 600; }
+
+/* the playback bar to compare (PEP 0001 §16): the page's own LIVE beside a bar without one, and the temporary picker, bottom right */
+.dx-live { flex: none; min-width: 9.5em; border: 1px solid var(--dv-border); border-radius: 999px; padding: 3px 10px; font: inherit; font-size: 12px; font-weight: 600;
+  background: var(--dv-bg); color: var(--dv-muted); cursor: pointer; white-space: nowrap; }
+.dx-live[aria-pressed="true"] { background: var(--dv-accent); border-color: transparent; color: #fff; }
+.dx-live[hidden] { display: none; }
+/* WHY over the bar's right end, not in it: in the row it took the time bar's track from 417 px to 206 px */
+.dx-proto { position: absolute; right: 12px; bottom: calc(100% + 6px); z-index: 5; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dv-muted);
+  padding: 3px 6px; background: var(--dv-bg); border: 1px dashed var(--dv-border); border-radius: var(--dv-radius); box-shadow: 0 2px 8px color-mix(in srgb, #000 8%, transparent); }
+.dx-proto select { font: inherit; font-size: 12px; color: var(--dv-fg); background: var(--dv-bg); border: 1px solid var(--dv-border); border-radius: calc(var(--dv-radius) - 2px); padding: 1px 4px; }

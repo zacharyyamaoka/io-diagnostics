@@ -6,14 +6,37 @@
 <title>RobotDx</title>
 <link rel="icon" href="data:,">
 <script>
-  // before the first paint: the stored theme (Settings), so a dark choice never flashes light
-  (function () { var t = null; try { t = localStorage.getItem('robotdx.dx.theme'); } catch (_) {} if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; })();
+  // before the first paint: the stored theme (Settings), so a dark choice never flashes light; the classic tree's skin and mode
+  // (data-skin, data-mode: the classic tokens) follow it
+  (function () {
+    var t = null, html = document.documentElement;
+    try { t = localStorage.getItem('robotdx.dx.theme'); } catch (_) {}
+    if (t === 'light' || t === 'dark') html.dataset.theme = t;
+    var dark = t === 'dark' || (t !== 'light' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    html.dataset.skin = 'shadcn';
+    html.dataset.mode = dark ? 'dark' : 'light';
+  })();
 </script>
 <!-- data-ui, vendored by tools/vendor_data_ui.py (vendor/data-ui/VERSION names the source commits); the page's own styles after it -->
 <link rel="stylesheet" href="../vendor/data-ui/data-ui.css">
+<!-- the classic page's own tree (PEP 0001 §16; Zach, 2026-10-28: "switch back to that old entity tree"): its tokens, its default skin
+     and its tree style, as web/index.html links them (custom properties only, and the t6- rows) -->
+<link rel="stylesheet" href="../tokens.css">
+<link rel="stylesheet" href="../skins/shadcn.css">
+<link rel="stylesheet" href="../tree/v6.css">
 <link rel="stylesheet" href="dx.css">
 <!-- the one USB naming (web/usb.js, window.IOUsb): "USB 2.1", never "480 Mb/s" (Zach, 2026-10-24) -->
 <script src="../usb.js"></script>
+<!-- the classic tree's own scripts, in web/index.html's order: the view model, composites, the default structure (p6 on p1) and
+     Type (p7), the header counts, visibility (read only here: dx/tree.js), the tree style v6 -->
+<script src="../view/core.js"></script>
+<script src="../view/composites.js"></script>
+<script src="../view/structure/p1.js"></script>
+<script src="../view/structure/p6.js"></script>
+<script src="../view/structure/p7.js"></script>
+<script src="../summary.js"></script>
+<script src="../visibility.js"></script>
+<script src="../tree/v6.js"></script>
 <script type="module" src="app.js"></script>
 </head>
 <body class="data-ui">
@@ -34,8 +57,12 @@
     <footer class="dx-foot">
       <!-- the page's one time bar (Rerun's time panel): a playback card on the page clock; hidden where a dashboard has its own -->
       <data-views id="dx-time" toolbar="none" no-url aria-label="Time"></data-views>
+      <!-- the page's own way back to live beside a bar that has none (Rerun's, Foxglove's: data-ui's proposals predate its live tier) -->
+      <button type="button" id="dx-live" class="dx-live" hidden aria-pressed="false" title="Back to the newest data (End)">● LIVE</button>
       <span id="dx-before" role="note" hidden></span>
       <data-live-status id="dx-status" for="dx-app"></data-live-status>
+      <!-- TEMPORARY: the playback bar to compare (Zach, 2026-10-28); switches live, remembered on this device, never a URL flag -->
+      <label class="dx-proto" title="Try the playback bars: today's, Rerun's simple time panel, Foxglove's bar (remembered on this device)"><span>Playback</span><select id="dx-playback-variant" aria-label="Playback bar"></select></label>
     </footer>
   </div>
 </div>

@@ -1,27 +1,27 @@
-data-ui 0.1.0, vendored 2026-10-27 18:46 PDT by tools/vendor_data_ui.py
+data-ui 0.1.0, vendored 2026-10-28 15:07 PDT by tools/vendor_data_ui.py
 tree      /tmp/claude-1000/-home-bam-zach-brain--claude-worktrees-robotics-component-library-4a5d75/09ec7f28-61d8-4e9c-a0d1-69e79cf76516/scratchpad/robotdx/rebuild/dui
-commit    a85ebc1a6b4722dcfd190dbcf64425729f6a0043
+commit    a8ec2f5d6a08ff08f4eaa18465af46219569f394
 a merge of:
-  3289ab5079915dea3571df6b65582cf7333434f3  lane/live  fix: a paused view redraws only when what it shows at t can change
-  e1dc0b9461ebd9ce095b20d92240fc2c3862d4c5  lane/app-rail  rail: <data-rail>, the app rail in three styles (icons only, labels under icons, wide list
+  a85ebc1a6b4722dcfd190dbcf64425729f6a0043  (no branch)  scratch integration (RobotDx lane, never pushed): lane/live 3289ab5 + lane/app-rail e1dc0b
+  423615d6f60b6768416afaaae5d282137ff51ba2  lane/dc-pb  playback: five proposals as playback.variant, a switcher, and one variant registry (PEP 00
 views     table, list, cards, kpi, live, playback, record, chart, media
 
 files (sha256, from the build's own dist/manifest.json):
-  f36507421e08c2694393fd38f9907ade2e781cb564d5d4a287fcaf7bfff4a488  data-ui.js
+  611a39e914722bd7cbdeb5fa1641bf3a4ec301145676dad172c9cff2f61f60d0  data-ui.js
   a6fe008105f1afe6af598ddcdd4dcc665ca42614f4ba72c41f003819fa8fd361  data-ui.css
   b406c39a1d9621481b5c8651c86d2dfd823161f07b971f8335ace42030071097  dashboard.js
   68f5e910388b5e8178e65340e173567b2d6cfeba11d420caca285fadb3941361  dashboard-arrange.js
   65ac649e19d1b8ea5914e3737807860c4e892b33d78cdc208614456fd20e67b8  rowmodel-worker.js
   16e34c260f1e4453a20c4af03d092fa7a2fabe06e17e6de4ab08af535e7c2b38  resize.js
   97c23b94b2fcdfe0c7061f6f8d9d4c8e648fec52dacbdabde3febcf052214707  LICENSES.md
-  6011859af3f7828268c5473edb29eb42833774f19b8ded3a7a02103789f690bc  manifest.json
+  2e7369fd515d8485771463cf0ec03ecebb03f7074f89506a8c7817fd0dc66120  manifest.json
   3939c2610bcecd10a5c1544c7caf2ecf4212d3d5092b9d063bf5af00718abfc3  views/table.js
   40537a9fffa417c69e73b7a9a1c588594c23e353d82c972123a88520b057e73b  views/list.js
   2b84d8da34b5eb88d9c143d1b0e0c5c59e06c8867ca915d02f77c4b54ae2f2a4  views/cards.js
   0aacc2d817a3340d29c20bb56c3054fadc3593ca47d92e84dc23b1a8ae52a514  views/cards-lightbox-ETKV2GH7.js
   fbec3d61f559ee7dfecdd44fd2f893e0e723e6bf40123fa10b6a2e0be9119630  views/kpi.js
   c3ae13dfc8e39e2f53a81d2f7ec94f01d84db0d6ce341e5e3e32e2719f76f4b9  views/live.js
-  bae8edc6b81faf72f86cb4bb416a7d1d814cd67b9cc66fb732ace89b973a1314  views/playback.js
+  8d2cde901645f44cf2c3b71d2a41068c4dd5e68f7b08c2b1d1e7eb6f90b8c3f9  views/playback.js
   05186d2064458538a8d2b8b954ac13ad1e7b74775ca9e1dc1085c8a90ad0de93  views/record.js
   7e78ab832ccf24287ed732fcaf5f24ee331195e3566bd3ad9f48f6019c1af7e0  views/chart.js
   b389bbedbcab99737abb539748474d8592ddc2535371c9448287f4d5636c7c51  views/media.js
