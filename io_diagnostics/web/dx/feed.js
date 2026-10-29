@@ -24,6 +24,9 @@ const API = '/api/v1';
 const MARK = { warn: '▲ warn', unknown: '? unknown', stale: '◷ stale', error: '✖ error' };
 const RANK = { ok: 0, warn: 1, unknown: 2, stale: 3, error: 4 };
 const SEV = { debug: 0, info: 1, warn: 2, error: 3, fatal: 3 };   // an event's severity as the Log's floors count it
+// the keyed datasets kept for the host's window whose rows may stand still for longer than it (_carryForward)
+const CARRIED = ['entities', 'summary'];
+const CARRY_EVERY_MS = 2000, CARRY_AHEAD_S = 6, CARRY_SOON_S = 4;
 const RAW_EVERY_MS = 5000;       // an entity's raw lines while its Log is on screen (the classic log reads them every 2-5 s)
 const KINDS = ['entities', 'summary', 'attention', 'runs', 'events', 'faults', 'checks', 'config', 'actions', 'levels', 'samples'];
 const PER_ENTITY = new Set(['levels', 'samples']);       // one dataset per entity
@@ -165,6 +168,7 @@ export class RobotDxFeed extends EventTarget {
     this._touched = new Set();
     this.openedAt = null;            // the host's time of the first /state the page applied: the page opened then
     this.treeBack = null;            // the tree's past: {supported, from, bin_s} once GET /history/tree answered
+    this._carriedAt = 0;             // the last _carryForward
     this._seenChecks = new Map();    // checks: id -> the row last written, shared by every reader (diffChecks)
     this._allChecks = { uses: 0, released: 0, at: 0, busy: false, due: true, supported: null };   // GET /checks (no ?path=)
     this._onVisible = () => { if (!hidden()) { this._state.wanted = true; this._kick(); } };
@@ -325,9 +329,34 @@ export class RobotDxFeed extends EventTarget {
       if (!a.at || (live ? (a.due && now - a.at >= CHECKS_ON_CHANGE_MS) || now - a.at >= CHECKS_LIVE_EVERY_MS : now - a.at >= CHECKS_EVERY_MS)) { a.due = false; this._readChecks(); }
     }
     for (const e of this._entities.values()) e.tick(now);
+    if (now - this._carriedAt >= CARRY_EVERY_MS) this._carryForward();
   }
 
   _kick() { if (!hidden()) this._loop(); }
+
+  /** Keep each row's state at the left edge of the window. WHY (data-ui 5b4e793, live/store.js _dropVersions): age retention
+      drops every keyed version older than end − age except each key's newest, so the version still in force at the cut goes
+      too, and a row is missing from every t between the cut and its next change. On a host up longer than its window the tree
+      before the page opened (one version per row at the window's start, §15) emptied a few seconds after the page opened, and the
+      Rack strip with it. Until data-ui keeps the version in force at the cut, the page writes that version again just inside the
+      window (the same row, a later t), before the cut reaches it: a read at any t in the window but its first seconds finds it. */
+  _carryForward() {
+    this._carriedAt = Date.now();
+    for (const name of CARRIED) {
+      const ds = this._sets.get(name);
+      const age = ds && ds.retention && ds.retention.age;
+      if (!ds || !age || ds.end === null || ds.end === undefined) continue;
+      const cut = ds.end - age;
+      const at = cut + CARRY_AHEAD_S;
+      const copies = [];
+      for (const row of ds.snapshot(at, { at: 'latest', limit: Infinity })) {
+        if (row[ds.time] >= cut + CARRY_SOON_S) continue;                      // the cut is not near it yet
+        if (ds.latestAt(Infinity, row[ds.key]) === row) continue;              // the key's newest: data-ui keeps it
+        copies.push({ ...row, [ds.time]: at });
+      }
+      if (copies.length) ds.upsert(copies);
+    }
+  }
 
   // ---------------------------------------------------------------- GET /api/v1/live: /state as a change-only stream
 
@@ -534,6 +563,8 @@ export class RobotDxFeed extends EventTarget {
       }
     }
     if (rack.length) this.dataset('summary').upsert(rack);
+    // the oldest of these sit at the window's start, where retention takes them within a tick: carried forward at once
+    this._carryForward();
     this.treeBack = { supported: true, from: first < 0 ? null : h.from + first * h.bin_s, bin_s: h.bin_s, versions: versions.length };
     this.dispatchEvent(new CustomEvent('tree-back', { detail: this.treeBack }));
   }
