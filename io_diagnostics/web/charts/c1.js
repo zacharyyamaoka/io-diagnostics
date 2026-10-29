@@ -85,6 +85,8 @@
   }
 
   function refresh(state) {
+    // WHY: refresh history and plots only while this chart is actually on screen.
+    if (!env.showing(state.el)) return;
     const model = env.resolve(state.spec, { window: state.windowS || undefined, everyMs: 1500 });
     state.model = model;
     const { el, spec } = state;

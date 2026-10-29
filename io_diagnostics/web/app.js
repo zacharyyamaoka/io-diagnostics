@@ -187,38 +187,156 @@ function applyTheme() {
   html.dataset.skin = S.skin || DEFAULTS.skin;
   html.dataset.mode = S.mode === 'light' || S.mode === 'dark' ? S.mode : (darkQuery && darkQuery.matches ? 'dark' : 'light');
   html.dataset.modePref = S.mode;
+  // WHY: theme-dependent tree markup (Terminal guides) invalidates on preference changes, independent of data traffic.
+  if (S.data) render();
 }
 
+// WHY: the existing change-only API avoids decoding/rebuilding a whole rack every second.
+// Native EventSource owns reconnect/Last-Event-ID; polling is only a disconnected fallback.
+const ClassicLive = window.IOClassicLive = { source: null, connected: false, rows: new Map(), root: null, dirty: false, clockAt: 0, clockBase: null, initialized: false, firstSnapshot: true, pending: [] };
+function rememberTree(tree) {
+  ClassicLive.rows.clear();
+  ClassicLive.root = tree.path;
+  (function walk(node) {
+    ClassicLive.rows.set(node.path, { ...node, children: node.children.map((child) => child.path) });
+    node.children.forEach(walk);
+  })(tree);
+}
+function materializeTree() {
+  if (!ClassicLive.dirty) return;
+  const nest = (path) => {
+    const row = ClassicLive.rows.get(path);
+    return row ? { ...row, children: row.children.map(nest).filter(Boolean) } : null;
+  };
+  const tree = nest(ClassicLive.root);
+  if (tree) S.data.tree = tree;
+  ClassicLive.dirty = false;
+}
+function acceptedState() {
+  S.lastOk = performance.now(); S.lastError = '';
+  ClassicLive.clockAt = performance.now(); ClassicLive.clockBase = { ...S.data.clock };
+  if (window.IORuns && S.data.runs) { window.IORuns.ingest(S.data.runs); syncRunUtilities(); }
+  if (!S.sel && !S.selKey) {
+    S.sel = (S.data.summary.attention[0] || {}).path || S.data.tree.path;
+    replaceNav();
+  }
+  if (!history.state) replaceNav();
+}
+let activityLoading = false;
+function loadActivity() {
+  if (activityLoading || document.hidden) return;
+  activityLoading = true;
+  getJson('/api/v1/activity').then((act) => { S.act = act; S.actAt = performance.now(); if (S.sort === 'change') render(); else redrawDetail(); })
+    .catch(() => {}).finally(() => { activityLoading = false; });
+}
+function applyLive(kind, data) {
+  // WHY: /state remains the canonical bootstrap (including existing HTTP adapters/proxies).
+  // Subscribe first and retain its following deltas, so changing transports cannot lose a startup change.
+  if (kind === 'snapshot' && ClassicLive.firstSnapshot) {
+    ClassicLive.firstSnapshot = false;
+    if (!ClassicLive.initialized) ClassicLive.initialSnapshot = data;
+    return;
+  }
+  if (!ClassicLive.initialized) {
+    ClassicLive.pending.push([kind, data]);
+    if (ClassicLive.pending.length > 2000) {
+      if (ClassicLive.source) ClassicLive.source.close();
+      ClassicLive.source = null; ClassicLive.connected = false; ClassicLive.pending = [];
+    }
+    return;
+  }
+  if (kind === 'samples') {
+    const layout = layouts().d6;
+    if (layout && layout.samples) layout.samples(data);
+    return;
+  }
+  if (kind === 'snapshot') {
+    S.data = data;
+    rememberTree(data.tree);
+    ClassicLive.dirty = false;
+    const layout = layouts().d6;
+    if (layout && layout.resetLive) layout.resetLive();
+    acceptedState();
+    loadActivity();
+    S.nodeAt = 0;
+  } else {
+    if (!S.data) return;
+    if (data.table === 'tree') {
+      if (kind === 'remove') ClassicLive.rows.delete(data.id); else ClassicLive.rows.set(data.id, data.row);
+      ClassicLive.dirty = true;
+    } else if (data.table === 'state') {
+      if (kind === 'remove') delete S.data[data.id]; else S.data[data.id] = data.row;
+      if (data.id === 'clock') { ClassicLive.clockAt = performance.now(); ClassicLive.clockBase = { ...data.row }; }
+      if (data.id === 'recent') loadActivity();
+      if (data.id === 'runs' && window.IORuns) { window.IORuns.ingest(S.data.runs || []); syncRunUtilities(); }
+    }
+    S.lastOk = performance.now(); S.lastError = '';
+  }
+  render();
+  if (S.sel && (performance.now() - S.nodeAt > 1800 || !S.node || S.node.node.path !== S.sel)) loadNode();
+}
+ClassicLive.apply = applyLive;
+function startLiveFeed() {
+  if (ClassicLive.source || document.hidden || typeof EventSource === 'undefined') return;
+  const source = ClassicLive.source = new EventSource('/api/v1/live');
+  source.onopen = () => { ClassicLive.connected = true; S.lastError = ''; };
+  source.onerror = () => { ClassicLive.connected = false; ClassicLive.firstSnapshot = false; };
+  for (const kind of ['snapshot', 'upsert', 'remove', 'samples']) source.addEventListener(kind, (event) => {
+    if (source !== ClassicLive.source) return;
+    try { applyLive(kind, JSON.parse(event.data)); } catch (error) { console.error('classic live:', error); }
+  });
+}
 async function tick() {
+  if (document.hidden) return;
+  startLiveFeed();
   try {
-    S.data = await getJson('/api/v1/state');
-    if (window.IORuns && S.data.runs) { window.IORuns.ingest(S.data.runs); syncRunUtilities(); }
-    S.lastOk = performance.now();
-    S.lastError = '';
-    if (!S.sel && !S.selKey) {
-      S.sel = (S.data.summary.attention[0] || {}).path || S.data.tree.path;
-      replaceNav(); // the first selection is the page's, not a step the viewer took: Back leaves the page
+    if (!ClassicLive.initialized || !ClassicLive.connected) {
+      const data = await getJson('/api/v1/state');
+      // A late fallback answer cannot roll back an already connected feed.
+      if (!ClassicLive.initialized || !ClassicLive.connected) {
+        S.data = data; rememberTree(data.tree); acceptedState();
+        ClassicLive.initialized = true;
+        delete ClassicLive.initialSnapshot;
+        const pending = ClassicLive.pending; ClassicLive.pending = [];
+        for (const [kind, event] of pending) applyLive(kind, event);
+        render();
+      }
+      if (!S.act || performance.now() - S.actAt > 4000) loadActivity();
     }
-    if (!history.state) replaceNav(); // a URL that came with ?sel=… starts the history at that exact state
-    if (performance.now() - S.actAt > 4000 || !S.act) {
-      S.actAt = performance.now();
-      getJson('/api/v1/activity').then((act) => { S.act = act; render(); }).catch(() => {});
-    }
-    if (S.sel && (performance.now() - S.nodeAt > 1800 || !S.node || S.node.node.path !== S.sel)) loadNode();
-    render();
+    if (S.sel && $('detail').checkVisibility() && (performance.now() - S.nodeAt > 1800 || !S.node || S.node.node.path !== S.sel)) loadNode();
+    renderStatusbar();
+    renderClock();
   } catch (error) {
-    // WHY not wipe the left pane: the tree panes hold each proposal's expansion; a host restart is one blip
     S.lastError = String(error);
     if (!S.data) { $('tree-host').hidden = true; $('left-other').hidden = false; $('left-other').innerHTML = `<div class="err">${esc(error)}</div>`; }
     renderStatusbar();
   }
 }
+document.addEventListener('visibilitychange', () => {
+  // WHY: a background browser tab neither polls nor keeps hardware watches alive.
+  if (document.hidden) {
+    if (ClassicLive.source) ClassicLive.source.close();
+    ClassicLive.source = null; ClassicLive.connected = false;
+  } else { tick(); render(); }
+});
 
+function renderClock() {
+  const base = ClassicLive.clockBase;
+  if (!S.data || !base) return;
+  // WHY: emitted uses wall time; the visible clock uses the host's replay clock and declared time zone.
+  const now = base.now + (performance.now() - ClassicLive.clockAt) / 1000;
+  const shown = new Date((now + (base.utc_offset_s || 0)) * 1000).toISOString();
+  S.data.clock = { ...base, now, iso: shown.slice(0, 19) + String(base.iso || '').slice(19), time: shown.slice(11, 19) };
+  $('clock').textContent = `${shown.slice(5, 10)}  ${shown.slice(11, 19)}`;
+}
+
+let nodeRequest = 0, pendingNode = null;
 function loadNode() {
+  const request = ++nodeRequest;
   const path = S.sel;
   S.nodeAt = performance.now();
   getJson(`/api/v1/node?path=${encodeURIComponent(path)}`)
-    .then((node) => { if (S.sel === path) { S.node = node; render(); } })
+    .then((node) => { if (S.sel === path && request === nodeRequest) { pendingNode = { path, node }; queueRedraw(); } })
     .catch(() => { if (S.sel === path) { S.sel = S.data.tree.path; S.node = null; S.drill = { ...NO_DRILL }; replaceNav(); } });
 }
 
@@ -332,14 +450,33 @@ function cached(url, everyMs = HISTORY_EVERY_MS) {
 const historyOf = (path, opts = {}) => cached(`/api/v1/history?path=${encodeURIComponent(path)}${opts.status ? `&status=${encodeURIComponent(opts.status)}` : ''}`, opts.everyMs);
 const barOf = (path, bins = 60, opts = {}) => cached(`/api/v1/history/bar?path=${encodeURIComponent(path)}&bins=${bins}`, opts.everyMs);
 
-// ctx.redraw(): the detail again, now (a layout's own click, a hover scrub). Landed fetches coalesce into one.
-function redrawDetail() { if (S.data && S.byPath) renderDetail(S.byPath); }
-let redrawQueued = false;
-function queueRedraw() {
-  if (redrawQueued) return;
-  redrawQueued = true;
-  setTimeout(() => { redrawQueued = false; redrawDetail(); }, 0);
+// WHY: network completions and interaction invalidations share one frame per view.
+// A full-shell update subsumes the pending detail update, never paints it twice.
+let renderQueued = false, fullRenderPending = false, detailRenderPending = false;
+function flushRender() {
+  if (document.hidden) return;
+  if (pendingNode) {
+    // WHY: publishing a loaded selection and its DOM in the same frame keeps navigation atomic.
+    if (pendingNode.path === S.sel) S.node = pendingNode.node;
+    pendingNode = null;
+  }
+  const full = fullRenderPending, detail = detailRenderPending;
+  fullRenderPending = detailRenderPending = false;
+  if (full) renderNow(); else if (detail && S.data && S.byPath) renderDetail(S.byPath);
 }
+function scheduleRender() {
+  if (renderQueued) return;
+  renderQueued = true;
+  requestAnimationFrame(() => { renderQueued = false; flushRender(); });
+}
+const interacting = () => window.event && /^(click|dblclick|input|change|keydown|drop|pointer)/.test(window.event.type);
+function redrawDetail() {
+  detailRenderPending = true;
+  // WHY: direct controls keep their existing immediate response; incoming data/fetches coalesce in rAF.
+  if (interacting()) flushRender(); else scheduleRender();
+}
+function queueRedraw() { detailRenderPending = true; scheduleRender(); }
+function render() { fullRenderPending = true; if (interacting()) flushRender(); else scheduleRender(); }
 
 // The app-wide history window (GET / POST /api/v1/settings; View options). POST is page-only, as /api/v1/act.
 const WINDOW_CHOICES = [60, 300, 600, 900, 1800, 3600, 10800, 21600, 43200, 86400];
@@ -1268,8 +1405,16 @@ function drawDetail(html) {
 // the drill step the detail shows (its URL without the view): each keeps its own scroll position
 const drillAt = () => navUrl({ ...navNow(), view: null });
 function renderDetail(byPath) {
+  // WHY: hidden inspectors/Activity panes keep their data, but do no detail/chart/watch work.
+  if (document.hidden || !$('detail').checkVisibility()) {
+    const hiddenLayout = layouts()[S.layout];
+    if (hiddenLayout && hiddenLayout.pause) hiddenLayout.pause();
+    return;
+  }
   const ctx = detailContext(byPath);
+  const previousLayout = S.layout;
   S.layout = layoutFor(ctx.isComputer);
+  if (previousLayout !== S.layout && layouts()[previousLayout] && layouts()[previousLayout].pause) layouts()[previousLayout].pause();
   const picker = $('detail-layout');
   if (S.layout && picker.value !== S.layout && document.activeElement !== picker) picker.value = S.layout;
   const layout = layouts()[S.layout];
@@ -1499,6 +1644,8 @@ function mountRunView() {
   try {
     runViews()[next].mount(runsCtx);
     mountedRunView = next;
+    // WHY: a mounted view gets its initial model even when a quiet SSE feed causes no subsequent full render.
+    updateRunView();
   } catch (error) {
     console.error(`run view ${next} mount:`, error);
     $('runs-root').innerHTML = `<div class="err">run view ${esc(next)} failed: ${esc(error)}</div>`;
@@ -1975,15 +2122,16 @@ function renderStatusbar() {
 }
 
 // --------------------------------------------------------------------------------- render ----
-function render() {
+function renderNow() {
   if (!S.data) return;
+  materializeTree();
   const byPath = index(S.data.tree);
   S.byPath = byPath;
   S.built = IOView.build(S.data, S.structure, { ...structureOptions(), query: S.query, sort: S.sort, changes: changesOf(S.act), into: S.into, inside: S.inside });
   // the row stepped into is gone (unplugged, or this grouping does not have it): back to the whole tree, quietly
   if (S.into && S.built.intoMissing) { S.into = null; replaceNav(); S.built = IOView.build(S.data, S.structure, { ...structureOptions(), query: S.query, sort: S.sort, changes: changesOf(S.act), inside: S.inside }); }
   renderTreeNav();
-  $('clock').textContent = S.data.clock.iso ? `${S.data.clock.iso.slice(5, 10)}  ${S.data.clock.time}` : '—';
+  renderClock();
   const fixture = S.data.fixture;
   $('mode').textContent = fixture ? `Replay ${fixture.name} · ${fixture.label} (recorded)` : `Live · ${S.data.host.name}`;
   const skipped = S.data.host.sources.filter((s) => s.state === 'skipped');

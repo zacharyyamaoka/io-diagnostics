@@ -183,7 +183,8 @@ body.ch4-on .seg button.on:not([data-ch4]) { background: transparent; color: var
     if (!view) return;
     for (const tile of tiles) {
       const node = grid.querySelector(`.ch4-tile[data-id="${tile.id}"]`);
-      if (!node) continue;
+      // WHY: off-screen charts keep their model and defer history/plot work until visible.
+      if (!node || !env.showing(node)) continue;
       const model = env.resolve(tile.spec, { everyMs: 2000 });
       const lead = model.series[0];
       node.querySelector('.ch4-t').textContent = tile.spec.l || (lead ? lead.key : 'Series');

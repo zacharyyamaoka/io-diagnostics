@@ -107,6 +107,7 @@
     const scopeQuery = (query) => { if (s.scope && s.scope.path) { query.set('path', s.scope.path); query.set('scope', s.scope.mode); } return query; };
     let inflight = null;
     function load() {
+      if (document.hidden) return Promise.resolve();
       if (inflight) { again = true; return inflight; }
       inflight = (async () => {
         try {
@@ -400,7 +401,7 @@
       watching = want;
     }
     function draw() {
-      if (!el || !registry.visible && !opts.compact) return;
+      if (document.hidden || !el || !registry.visible && !opts.compact) return;
       const c = compute();
       const list = el.querySelector('.al-list');
       const html = headerHtml() + listHtml(c);
@@ -484,6 +485,7 @@
     };
     function start() { if (!source) { load(); connect(); } }
     inst.start = start;
+    inst.isVisible = () => Boolean(el && el.checkVisibility());
     inst.stop = () => { disconnect(); };
     inst.unmount = () => {
       disconnect();
@@ -707,6 +709,14 @@
 
     return inst;
   }
+
+  // WHY: hidden browser tabs suspend both Log instances' SSE/poll loops; resume only visible panes.
+  document.addEventListener('visibilitychange', () => {
+    for (const instance of registry.instances) {
+      if (document.hidden) instance.stop();
+      else if (instance.isVisible()) { instance.start(); instance.redraw(); }
+    }
+  });
 
   // ============================================================================================= the registry ====
   window.IOActivityLog = {

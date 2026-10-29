@@ -297,12 +297,14 @@ html[data-chart]:not([data-chart="c0"]) .ch-spark:hover .ch-line { background: v
         this.root.addEventListener('dblclick', () => this.reset());
       }
     }
-    destroy() { this.resize.disconnect(); this.root.remove(); }
+    destroy() { this.resize.disconnect(); if (observer) observer.unobserve(this.root); shown.delete(this.root); this.root.remove(); }
     set(model) { this.model = model; this.draw(); }
     setView(view) { this.view = view; this.draw(); }
     visible() { return this.view || (this.model ? [this.model.from, this.model.to] : [0, 1]); }
 
     draw() {
+      // WHY: resize callbacks may also reach a hidden chart; keep its model and defer SVG work.
+      if (!showing(this.root)) return;
       const model = this.model;
       const width = this.root.clientWidth;
       this.width = width;
@@ -616,14 +618,32 @@ html[data-chart]:not([data-chart="c0"]) .ch-spark:hover .ch-line { background: v
     }
   }
 
-  let queued = false;
-  function scheduleSync() {
+  // WHY: closed/off-screen charts retain their model but never fetch history or draw SVGs.
+  // IntersectionObserver supplies visibility without interleaving geometry reads and DOM writes.
+  const shown = new Map();
+  const observer = typeof IntersectionObserver === 'undefined' ? null : new IntersectionObserver((entries) => {
+    for (const entry of entries) shown.set(entry.target, entry.isIntersecting);
+    scheduleSync(true);
+  });
+  function showing(element) {
+    if (document.hidden || !element || !element.isConnected) return false;
+    if (!observer) return element.checkVisibility();
+    if (!shown.has(element)) { shown.set(element, false); observer.observe(element); }
+    return shown.get(element);
+  }
+  let queued = false, visibilityUpdate = false;
+  function scheduleSync(withUpdate = false) {
+    visibilityUpdate = visibilityUpdate || withUpdate === true;
     if (queued) return;
     queued = true;
     requestAnimationFrame(() => {
       queued = false;
+      if (document.hidden) return;
+      for (const element of shown.keys()) if (!element.isConnected) { observer.unobserve(element); shown.delete(element); }
       const view = current();
-      if (view && view.sync) { try { view.sync(env); } catch (error) { console.error(`chart view ${activeId} sync:`, error); } }
+      const method = visibilityUpdate ? 'update' : 'sync';
+      visibilityUpdate = false;
+      if (view && view[method]) { try { view[method](env); } catch (error) { console.error(`chart view ${activeId} ${method}:`, error); } }
     });
   }
 
@@ -650,6 +670,7 @@ html[data-chart]:not([data-chart="c0"]) .ch-spark:hover .ch-line { background: v
     const detail = document.getElementById('detail');
     if (detail) new MutationObserver(scheduleSync).observe(detail, { childList: true, subtree: true });
     setInterval(() => {
+      if (document.hidden) return;
       const view = current();
       if (view && view.update) { try { view.update(env); } catch (error) { console.error(`chart view ${activeId} update:`, error); } }
     }, 1000);
@@ -660,7 +681,7 @@ html[data-chart]:not([data-chart="c0"]) .ch-spark:hover .ch-line { background: v
   root.IOChartViews.c0 = { name: 'Sparkline only', description: 'Today: the sparkline stays as small as it is; nothing enlarges.', order: 0, mount() {}, unmount() {} };
 
   const env = {
-    wrap, select, mount, ids, hostRoot, shadowStyle, addStyle, scheduleSync, resolve, plotModel, statsOf, lastOf, specKey, viewKey, specOf, historyUrl,
+    showing, wrap, select, mount, ids, hostRoot, shadowStyle, addStyle, scheduleSync, resolve, plotModel, statsOf, lastOf, specKey, viewKey, specOf, historyUrl,
     Plot, store, icon, ICONS, esc, num, fmt, unitText, clock, spanText, isNum, asNum, niceTicks, limitsOf,
     get ctx() { return ctx; }, get active() { return activeId; },
     // a combined view lists the single views it is made of (`parts`); each part asks this instead of comparing `active`

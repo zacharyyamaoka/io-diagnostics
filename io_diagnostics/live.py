@@ -215,19 +215,32 @@ class LiveFeed:
         for key, row in rows.items():
             if self.signatures.get(key) != signatures[key]:
                 events.append(("upsert", {"table": key[0], "id": key[1], "row": row}))
+        with self.cond:
+            self.state, self.signatures = state, signatures
+            self._publish(events)
+        paths = self.host.series_paths()
         with self.sample_lock:
-            cursors: dict[str, int] = {}
-            for path in self.host.series_paths():
-                answer = self._values(path, self.cursors.get(path, 0))
-                if answer is None:
+            old_cursors = dict(self.cursors)
+        for path in paths:
+            with self.sample_lock:
+                since = self.cursors.get(path, 0)
+            # WHY: a rack's cold snapshots must not hold up the watched lane. Reads can be slow;
+            # validate the cursor after the read so a racing watched event wins, once, without rewinding.
+            answer = self._values(path, since)
+            if answer is None:
+                continue
+            with self.sample_lock:
+                if self.cursors.get(path, 0) != since:
                     continue
-                cursors[path] = answer["cursor"]
+                self.cursors[path] = answer["cursor"]
                 event = self._fresh_samples(answer)
                 if event is not None:
-                    events.append(("samples", event))
-            with self.cond:
-                self.state, self.signatures, self.cursors = state, signatures, cursors
-            self._publish(events)
+                    self._publish([("samples", event)])
+        with self.sample_lock:
+            for path in old_cursors.keys() - set(paths):
+                # WHY: a watch may have revived this path after the listing; keep its newer cursor.
+                if self.cursors.get(path) == old_cursors[path]:
+                    self.cursors.pop(path, None)
 
     @staticmethod
     def _fresh_samples(answer: dict) -> dict | None:

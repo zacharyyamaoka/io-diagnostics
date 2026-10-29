@@ -1,0 +1,398 @@
+{
+  "t": "2026-10-29T16:16:29.625Z",
+  "sha": "998a49d",
+  "label": "final",
+  "working_tree": "/home/bam/io-diagnostics-lanes/perf-codex",
+  "source_sha256": "a4a5757a9fd5bac6a99e2bea275505c5af5133652995bef6277bde394e2c041d",
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "load": {
+    "boards_per_adapter": 300,
+    "extra_measurements": 200,
+    "watch_hz": 100
+  },
+  "status": "measured",
+  "results": [
+    {
+      "mode": "idle",
+      "seconds": 60,
+      "observed": {
+        "entities": 50,
+        "rows": 7
+      },
+      "delivery_ms": {
+        "p50": 0.00390625,
+        "p95": 0.5859375,
+        "max": 3.511962890625
+      },
+      "emission_gap_ms": {
+        "p50": 100.43603515625,
+        "p95": 100.996826171875,
+        "max": 103.178955078125
+      },
+      "paint_delay_ms": {
+        "p50": 24.5869140625,
+        "p95": 32.697998046875,
+        "max": 34.169921875
+      },
+      "lag_ms": {
+        "p50": 83.3720703125,
+        "p95": 128.360107421875,
+        "max": 134.945068359375
+      },
+      "sample_age_ms": {
+        "p50": 1,
+        "p95": 5,
+        "max": 7
+      },
+      "long_tasks_per_min": 0,
+      "blocked_ms": 0,
+      "long_task_max_ms": 0,
+      "frame_ms": {
+        "p50": 16.69999999999709,
+        "p95": 16.700000000004366,
+        "max": 16.80000000000291
+      },
+      "heard": {
+        "ticks": 9,
+        "jitter_ms": {
+          "p50": 0,
+          "p95": 0.10000002384185791,
+          "max": 0.10000002384185791
+        },
+        "skipped_seconds": 0,
+        "texts": [
+          "heard 1 s ago",
+          "heard 2 s ago",
+          "heard 3 s ago",
+          "heard 4 s ago",
+          "heard 5 s ago",
+          "heard 6 s ago",
+          "heard 7 s ago",
+          "heard 8 s ago",
+          "heard 9 s ago"
+        ]
+      },
+      "sse_bytes_per_min": 2491988,
+      "sse_events": 1589,
+      "all_response_bytes_per_min": 2836944,
+      "heap": {
+        "start": 3943172,
+        "end": 5623072,
+        "growth": 1679900,
+        "retained_growth": 1122384
+      },
+      "render_count": 638,
+      "dom_nodes": 1078,
+      "performance": {
+        "task_s": 3.399547,
+        "layout_s": 0.223919,
+        "script_s": 1.6777860000000002
+      },
+      "hot": [
+        {
+          "function": "(idle)",
+          "file": "",
+          "line": 0,
+          "samples": 53304
+        },
+        {
+          "function": "(program)",
+          "file": "",
+          "line": 0,
+          "samples": 1446
+        },
+        {
+          "function": "drawDetail",
+          "file": "/app.js",
+          "line": 1384,
+          "samples": 290
+        },
+        {
+          "function": "spark",
+          "file": "/detail/d6.js",
+          "line": 213,
+          "samples": 231
+        },
+        {
+          "function": "(garbage collector)",
+          "file": "",
+          "line": 0,
+          "samples": 105
+        },
+        {
+          "function": "",
+          "file": "/detail/d6.js",
+          "line": 217,
+          "samples": 97
+        },
+        {
+          "function": "",
+          "file": "/detail/d6.js",
+          "line": 231,
+          "samples": 97
+        },
+        {
+          "function": "",
+          "file": "/detail/d6.js",
+          "line": 227,
+          "samples": 65
+        },
+        {
+          "function": "natural",
+          "file": "/detail/d6-rows.js",
+          "line": 29,
+          "samples": 48
+        },
+        {
+          "function": "replaceChild",
+          "file": "",
+          "line": 0,
+          "samples": 39
+        },
+        {
+          "function": "",
+          "file": "/app.js",
+          "line": 1346,
+          "samples": 35
+        },
+        {
+          "function": "checkVisibility",
+          "file": "",
+          "line": 0,
+          "samples": 31
+        },
+        {
+          "function": "",
+          "file": "/detail/d6.js",
+          "line": 217,
+          "samples": 26
+        },
+        {
+          "function": "",
+          "file": "/app.js",
+          "line": 1346,
+          "samples": 23
+        },
+        {
+          "function": "JSON.parse",
+          "file": "",
+          "line": 16,
+          "samples": 21
+        },
+        {
+          "function": "requestAnimationFrame",
+          "file": "",
+          "line": 0,
+          "samples": 20
+        },
+        {
+          "function": "stateWindow",
+          "file": "/detail/d6.js",
+          "line": 442,
+          "samples": 16
+        },
+        {
+          "function": "morph",
+          "file": "/app.js",
+          "line": 1343,
+          "samples": 16
+        }
+      ],
+      "errors": [],
+      "targets_met": true
+    },
+    {
+      "mode": "loaded",
+      "seconds": 60.001,
+      "observed": {
+        "entities": 648,
+        "rows": 207
+      },
+      "delivery_ms": {
+        "p50": 2.951904296875,
+        "p95": 13.095947265625,
+        "max": 29.218017578125
+      },
+      "emission_gap_ms": {
+        "p50": 126.8720703125,
+        "p95": 140.887939453125,
+        "max": 212.219970703125
+      },
+      "paint_delay_ms": {
+        "p50": 32.16796875,
+        "p95": 45.31201171875,
+        "max": 78.197998046875
+      },
+      "lag_ms": {
+        "p50": 95.805908203125,
+        "p95": 163.56396484375,
+        "max": 254.22802734375
+      },
+      "sample_age_ms": {
+        "p50": 5,
+        "p95": 16,
+        "max": 86
+      },
+      "long_tasks_per_min": 0,
+      "blocked_ms": 0,
+      "long_task_max_ms": 0,
+      "frame_ms": {
+        "p50": 16.69999999999709,
+        "p95": 16.799999999995634,
+        "max": 33.400000000001455
+      },
+      "heard": {
+        "ticks": 9,
+        "jitter_ms": {
+          "p50": 0,
+          "p95": 0.19999998807907104,
+          "max": 0.19999998807907104
+        },
+        "skipped_seconds": 0,
+        "texts": [
+          "heard 1 s ago",
+          "heard 2 s ago",
+          "heard 3 s ago",
+          "heard 4 s ago",
+          "heard 5 s ago",
+          "heard 6 s ago",
+          "heard 7 s ago",
+          "heard 8 s ago",
+          "heard 9 s ago"
+        ]
+      },
+      "sse_bytes_per_min": 61905678.238696024,
+      "sse_events": 1513,
+      "all_response_bytes_per_min": 62250696.48839186,
+      "heap": {
+        "start": 13753596,
+        "end": 64995116,
+        "growth": 51241520,
+        "retained_growth": 8911952
+      },
+      "render_count": 581,
+      "dom_nodes": 13586,
+      "performance": {
+        "task_s": 13.680731999999999,
+        "layout_s": 0.47466899999999995,
+        "script_s": 9.810135
+      },
+      "hot": [
+        {
+          "function": "(idle)",
+          "file": "",
+          "line": 0,
+          "samples": 43878
+        },
+        {
+          "function": "(program)",
+          "file": "",
+          "line": 0,
+          "samples": 3516
+        },
+        {
+          "function": "spark",
+          "file": "/detail/d6.js",
+          "line": 213,
+          "samples": 3255
+        },
+        {
+          "function": "",
+          "file": "/detail/d6.js",
+          "line": 227,
+          "samples": 851
+        },
+        {
+          "function": "drawDetail",
+          "file": "/app.js",
+          "line": 1384,
+          "samples": 720
+        },
+        {
+          "function": "",
+          "file": "/detail/d6.js",
+          "line": 231,
+          "samples": 502
+        },
+        {
+          "function": "",
+          "file": "/detail/d6.js",
+          "line": 217,
+          "samples": 462
+        },
+        {
+          "function": "(garbage collector)",
+          "file": "",
+          "line": 0,
+          "samples": 379
+        },
+        {
+          "function": "spark",
+          "file": "/detail/d6.js",
+          "line": 213,
+          "samples": 177
+        },
+        {
+          "function": "",
+          "file": "/detail/d6.js",
+          "line": 217,
+          "samples": 166
+        },
+        {
+          "function": "natural",
+          "file": "/detail/d6-rows.js",
+          "line": 29,
+          "samples": 165
+        },
+        {
+          "function": "",
+          "file": "/detail/d6.js",
+          "line": 227,
+          "samples": 146
+        },
+        {
+          "function": "JSON.parse",
+          "file": "",
+          "line": 16,
+          "samples": 145
+        },
+        {
+          "function": "querySelector",
+          "file": "",
+          "line": 0,
+          "samples": 121
+        },
+        {
+          "function": "merge",
+          "file": "/detail/d6.js",
+          "line": 126,
+          "samples": 118
+        },
+        {
+          "function": "stateWindow",
+          "file": "/detail/d6.js",
+          "line": 442,
+          "samples": 102
+        },
+        {
+          "function": "natural",
+          "file": "/detail/d6-rows.js",
+          "line": 29,
+          "samples": 101
+        },
+        {
+          "function": "",
+          "file": "/detail/d6.js",
+          "line": 222,
+          "samples": 96
+        }
+      ],
+      "errors": [],
+      "targets_met": true
+    }
+  ],
+  "ruler": "Age of newest emitted in changed detail markup, sampled each rAF after a paint opportunity. Poll responses receive a bench-only send clock; SSE keeps its real emitted. Idle is a State page without synthetic load. Heard pauses fixture receipts for a separate 10 s on the same warm State page. Long tasks exclude warmup. SSE is page traffic only. Heap reports used and post-GC growth; profiler files are ignored media."
+}

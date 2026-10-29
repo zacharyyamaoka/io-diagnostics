@@ -6,8 +6,8 @@
 // its Raw channel), Utilities (every action with its danger and last run), then a driver's own tabs (the Computer's Processes).
 // State and Diagnostics never show each other's field: a value is never drawn as health, health never as a number.
 //
-// The live data: while the State tab shows, the page sends the host a heartbeat (POST /api/v1/watch, every 3 s) and polls
-// GET /api/v1/values (250 ms while the watch runs); leaving the tab, the entity or the page stops both, and the host stops the
+// The live data: while State shows, POST /api/v1/watch (every 3 s) keeps its query watch alive. One /values bootstrap loads
+// history, then the shell's /live SSE feed supplies points; /values polling is a disconnected fallback. Leaving stops it; the host stops the
 // plugin's watch about 10 s later. Images are <img> elements of the MJPEG stream (/api/v1/frames/stream).
 // The tab is the page's `page` drill (?page=<id>: back / forward work), remembered per entity kind.
 // The rows of Diagnostics, State and Configuration share ONE row model (d6-rows.js, window.IOEntityRows): dot-notation names are
@@ -30,7 +30,6 @@
   const RING_MAX = 1500;
   const WATCH_MS = 250;
   const IDLE_MS = 1000;
-  const STOP_AFTER_MS = 3500; // no render for this long (another layout, another entity's page): the live loops stop themselves
   const LOG_EVERY_MS = 2000;
   const KEYS = { name: 'io-diagnostics.d6.name-w', tile: 'io-diagnostics.d6.tile-w', folded: 'io-diagnostics.d6.folded', off: 'io-diagnostics.d6.streams-off', tab: 'io-diagnostics.entity-tab.' };
 
@@ -53,7 +52,7 @@
   };
   const Live = { path: null, cursor: 0, rings: new Map(), groups: [], streams: [], watch: null, heard: null, loaded: false, none: false,
     error: '', inflight: false, rendered: 0, beat: null, poll: null, now: 0 };
-  const Heard = { base: null, at: 0, source: null };
+  const Heard = { base: null, at: 0, source: null, text: null, path: null, stale: '' };
   let last = null;
   const wired = new WeakSet();
   const ER = () => root.IOEntityRows;
@@ -73,32 +72,54 @@
   }
   const heardAge = () => (Heard.base === null ? null : Heard.base + (performance.now() - Heard.at) / 1000);
   function heardText(h) {
+    if (Heard.text === null) updateHeard(h);
+    return Heard.text;
+  }
+  function updateHeard(h) {
     const age = heardAge();
-    return age === null ? 'never heard' : `heard ${h.ago(Math.max(0, age))} ago`;
+    Heard.text = (age === null ? 'never heard' : `heard ${h.ago(Math.max(0, age))} ago`) + Heard.stale;
   }
   if (typeof setInterval !== 'undefined') {
     setInterval(() => {
-      if (typeof document === 'undefined' || !last) return;
+      if (typeof document === 'undefined' || document.hidden || !last || !last.container.checkVisibility()) return;
+      // WHY: only this 1 Hz ticker owns relative-time text; full renders cannot introduce extra, uneven ticks.
+      updateHeard(last.ctx.h);
       const text = heardText(last.ctx.h);
       document.querySelectorAll('[data-d6-heard]').forEach((el) => { if (el.textContent !== text) el.textContent = text; });
-    }, 250);
+    }, 1000);
   }
 
   // ------------------------------------------------------------------------------------ live data ----
-  // The page's half of docs/state-config-v1.md section 4: a heartbeat and a poll, only while the State tab shows.
+  // One history bootstrap, then SSE; a heartbeat exists only while the State pane is visible.
   function stopLive() {
     if (Live.beat) clearInterval(Live.beat);
     if (Live.poll) clearTimeout(Live.poll);
     Live.beat = Live.poll = null;
+    if (typeof document !== 'undefined' && document.hidden) for (const image of document.querySelectorAll('.d6-lb img[src]')) {
+      // WHY: the enlarged stream is also a decoder; preserve its URL and suspend it with the browser tab.
+      image.d6Resume = image.getAttribute('src'); image.removeAttribute('src');
+    }
+    // WHY: an MJPEG URL keeps decoding after its pane/tab disappears unless its source is removed.
+    if (typeof document !== 'undefined') for (const image of document.querySelectorAll('img[data-d6-image]')) {
+      image.removeAttribute('src');
+      if (StateWindow.observer) StateWindow.observer.unobserve(image);
+      StateWindow.nodes.delete(image); StateWindow.visible.delete(`image:${image.dataset.d6Image}`);
+    }
+    if (Live.abort) Live.abort.abort();
+    Live.inflight = false;
+    Live.pending = [];
     Live.path = null;
+    Live.generation = (Live.generation || 0) + 1;
   }
-  const liveAlive = (path) => Live.path === path && !(typeof document !== 'undefined' && document.hidden) && performance.now() - Live.rendered < STOP_AFTER_MS;
+  const liveAlive = (path) => Live.path === path && !document.hidden && last && last.container.checkVisibility()
+    && last.container.querySelector('[data-d6-panel="state"]');
 
   async function heartbeat(path) {
+    const generation = Live.generation;
     try {
       const response = await fetch('/api/v1/watch', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-IO-Diagnostics': 'ui' }, body: JSON.stringify({ path }) });
       const body = await response.json();
-      if (Live.path === path && body.watch) Live.watch = body.watch;
+      if (Live.path === path && Live.generation === generation && body.watch) Live.watch = body.watch;
     } catch (_) { /* the poll shows the host is unreachable */ }
   }
 
@@ -106,7 +127,18 @@
     if (data.cursor < Live.cursor) Live.rings.clear(); // the host restarted: its serial numbers began again
     Live.cursor = data.cursor;
     Live.now = data.now;
-    Live.groups = data.groups;
+    // WHY: SSE samples may omit unchanged rows/groups. Merge by identity instead of losing their latest value.
+    if (!Live.loaded) Live.groups = data.groups;
+    else {
+      const groups = new Map(Live.groups.map((group) => [group.name, group]));
+      for (const group of data.groups) {
+        const previous = groups.get(group.name);
+        const rows = new Map((previous ? previous.rows : []).map((row) => [row.key, row]));
+        for (const row of group.rows) rows.set(row.key, row);
+        groups.set(group.name, { ...group, rows: [...rows.values()] });
+      }
+      Live.groups = [...groups.values()];
+    }
     Live.streams = data.streams;
     Live.watch = data.watch;
     Live.heard = data.heard;
@@ -126,37 +158,49 @@
   async function pollOnce(path) {
     if (Live.inflight) return;
     Live.inflight = true;
+    const generation = Live.generation;
+    const abort = Live.abort = new AbortController();
     try {
-      const response = await fetch(`/api/v1/values?path=${enc(path)}&since=${Live.cursor}`, { cache: 'no-store' });
+      const response = await fetch(`/api/v1/values?path=${enc(path)}&since=${Live.cursor}`, { cache: 'no-store', signal: abort.signal });
       if (response.status === 404) {
-        if (Live.path === path) { Live.none = true; Live.loaded = true; }
+        if (Live.path === path && Live.generation === generation) { Live.none = true; Live.loaded = true; }
       } else {
         const data = await response.json();
         if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`);
-        if (Live.path === path) { Live.none = false; Live.error = ''; merge(data); }
+        if (Live.path === path && Live.generation === generation) {
+          // WHY: a fallback response already in flight cannot rewind a resumed SSE cursor.
+          if (Live.loaded && root.IOClassicLive && root.IOClassicLive.connected && data.cursor < Live.cursor) return;
+          Live.none = false; Live.error = ''; merge(data);
+          for (const pending of Live.pending || []) if (pending.cursor > Live.cursor) merge(pending);
+          Live.pending = [];
+        }
       }
     } catch (error) {
-      if (Live.path === path) Live.error = String(error.message || error);
+      if (Live.path === path && Live.generation === generation) Live.error = String(error.message || error);
     } finally {
-      Live.inflight = false;
+      if (Live.generation === generation) Live.inflight = false;
     }
-    if (Live.path === path && last) last.ctx.redraw();
+    if (Live.path === path && Live.generation === generation && last) last.ctx.redraw();
   }
 
-  function startLive(path, supported) {
+  function startLive(path, supported, framePeriod = 0) {
     stopLive();
     Object.assign(Live, { path, cursor: 0, rings: new Map(), groups: [], streams: [], watch: null, heard: null, loaded: false, none: false, error: '', rendered: performance.now() });
     if (supported) {
       heartbeat(path);
       Live.beat = setInterval(() => { if (!liveAlive(path)) { stopLive(); return; } heartbeat(path); }, BEAT_MS);
     }
+    const generation = Live.generation;
     const loop = async () => {
-      if (!liveAlive(path)) { stopLive(); return; }
-      await pollOnce(path);
-      if (Live.path !== path) return;
-      Live.poll = setTimeout(loop, Live.none ? 5000 : Live.watch && Live.watch.state === 'running' ? WATCH_MS : IDLE_MS);
+      if (Live.generation !== generation) return;
+      if (Live.loaded && !liveAlive(path)) { stopLive(); return; }
+      if (!Live.loaded || !root.IOClassicLive || !root.IOClassicLive.connected) await pollOnce(path);
+      if (Live.path !== path || Live.generation !== generation) return;
+      Live.poll = setTimeout(loop, root.IOClassicLive && root.IOClassicLive.connected ? IDLE_MS : Live.none ? 5000 : Live.watch && Live.watch.state === 'running' ? WATCH_MS : IDLE_MS);
     };
-    loop();
+    // WHY: retain the watch's original startup cadence so the one bootstrap contains coherent frame/rate metadata.
+    // The page says “starting” meanwhile; steady-state samples never wait for this timer.
+    Live.poll = setTimeout(loop, framePeriod ? Math.min(1000, framePeriod * 2000) : 0);
   }
 
   // ------------------------------------------------------------------------------------- the marks ----
@@ -213,7 +257,8 @@
     const usb = detail && detail.badge && detail.badge.usb && root.IOUsb ? root.IOUsb.describe(detail.badge.usb) : { text: '', tip: '' };
     const badgeText = detail && detail.badge ? (detail.badge.kind === 'can' ? detail.badge.text : usb.text) : '';
     const badge = badgeText ? `<span class="d6-badge-c" title="${h.esc([usb.tip, detail.badge.kind === 'can' ? `via ${detail.badge.text.split(' · ')[1] || ''}` : ''].filter(Boolean).join(' · '))}">${h.esc(badgeText)}</span>` : '';
-    const stale = node.stale ? ' · stale' : '';
+    Heard.stale = node.stale ? ' · stale' : '';
+    if (Heard.path !== node.path) { Heard.path = node.path; Heard.text = null; }
     const hw = hardwareItems(node);
     const open = U.more.has(node.path);
     const parent = detail && detail.ancestors && detail.ancestors[detail.ancestors.length - 1];
@@ -222,7 +267,7 @@
       [node.edge === 'part_of' ? 'part of' : 'via', parent ? `<a class="link" data-go="${h.esc(parent.path)}" title="${h.esc(parent.name)}">${h.esc(usbText(parent.name))}</a>` : '']]
       .filter(([, v]) => v).map(([k, v]) => [k, /^<(span|a)/.test(String(v)) ? v : h.esc(v)]);
     return `<div class="d-head d6-head"><div class="d-title">${h.icon(node.icon)}<span class="d6-name">${h.esc(title)}</span>${showModel ? `<span class="d6-model">${h.esc(model)}</span>` : ''}${h.pill(node.level)}</div>`
-      + `<div class="d6-line">${badge}<span class="d6-heard" data-d6-heard title="when the host last received anything from this entity">${h.esc(heardText(h))}${stale}</span></div>`
+      + `<div class="d6-line">${badge}<span class="d6-heard" data-d6-heard title="when the host last received anything from this entity">${h.esc(heardText(h))}</span></div>`
       + `<div class="d-msg" title="${h.esc(node.message || '')}">${h.esc(usbText(node.message || '—'))}</div>`
       + `<div class="d6-hw">${hw.map(([k, v]) => `<span><span class="d6-k">${h.esc(k)}</span> <span class="mono">${h.esc(v)}</span></span>`).join('')}`
       + `<button class="d6-more" data-d6-more aria-expanded="${open}">${open ? 'Less' : 'More'} ${open ? '▴' : '▾'}</button></div>`
@@ -340,6 +385,7 @@
   function watchNote(detail) {
     const watch = Live.watch || (detail && detail.watch) || { supported: false, state: 'unsupported' };
     if (!watch.supported) return { cls: 'plain', text: 'Not live: this driver does not stream. The values are from its last check.' };
+    if (!Live.loaded && watch.state === 'running') return { cls: 'plain', text: 'starting the live stream…' };
     switch (watch.state) {
       case 'running': return { cls: 'live', text: `live · every ${num(watch.period_s)} s` };
       case 'paused': return { cls: 'paused', text: `paused: ${watch.reason || 'something else is using the device'}`, watch };
@@ -356,7 +402,7 @@
     const rate = stream.fps ? `${stream.fps} fps` : stale ? `last frame ${h.ago(stream.age_s)} ago` : 'no frames';
     const src = `/api/v1/frames/stream?path=${enc(path)}&stream=${enc(stream.name)}&fps=10`;
     const picture = !on ? '<div class="d6-ph">off</div>' : stream.seq === null ? '<div class="d6-ph">waiting for the first frame</div>'
-      : `<img src="${src}" alt="${h.esc(stream.title)}" draggable="false">`;
+      : `<img data-d6-image="${enc(key)}" data-d6-src="${src}"${StateWindow.visible.has(`image:${enc(key)}`) ? ` src="${src}"` : ''} alt="${h.esc(stream.title)}" draggable="false">`;
     return `<figure class="d6-tile${on ? '' : ' off'}"><figcaption><label class="d6-sw"><input type="checkbox" role="switch" data-d6-stream="${h.esc(stream.name)}"${on ? ' checked' : ''} aria-label="${h.esc(stream.title)} stream"><span class="d6-sw-t">${h.esc(stream.title)}</span></label>`
       + `<span class="d6-dim" title="${stream.colormap ? `colormap ${h.esc(stream.colormap)}` : ''}">${h.esc(size)} · ${h.esc(rate)}</span></figcaption>`
       + `<button class="d6-pic" data-d6-enlarge="${h.esc(stream.name)}" aria-label="Enlarge ${h.esc(stream.title)}"${on && stream.seq !== null ? '' : ' disabled'}>${picture}</button></figure>`;
@@ -392,13 +438,73 @@
         + sparkCell(group, row, ring) + '</div>';
     };
   }
+  const StateWindow = { path: null, visible: new Set(), heights: new Map(), counts: new Map(), nodes: new Set(), observer: null, resize: null };
+  function stateWindow(group, rows) {
+    if (rows.length <= 64 || typeof IntersectionObserver === 'undefined') return rows.map((draw) => draw()).join('');
+    const prefix = enc(group.name);
+    if (StateWindow.counts.get(prefix) !== rows.length) {
+      StateWindow.counts.set(prefix, rows.length);
+      for (const key of StateWindow.heights.keys()) if (key.startsWith(`${prefix}:`)) StateWindow.heights.delete(key);
+    }
+    const chunks = [];
+    for (let start = 0; start < rows.length; start += 16) {
+      const key = `${prefix}:${start}`;
+      const visible = StateWindow.visible.has(key);
+      const height = StateWindow.heights.get(key) || Math.min(16, rows.length - start) * 32;
+      chunks.push(`<div data-d6-window="${key}"${visible ? ' data-d6-filled' : ''} style="${visible ? '' : `height:${height}px`}">`
+        + (visible ? rows.slice(start, start + 16).map((draw) => draw()).join('') : '') + '</div>');
+    }
+    return chunks.join('');
+  }
+  function bindStateWindow(container, path) {
+    if (StateWindow.path !== path) {
+      StateWindow.path = path; StateWindow.visible.clear(); StateWindow.heights.clear(); StateWindow.counts.clear();
+    }
+    if (!StateWindow.observer && typeof IntersectionObserver !== 'undefined') {
+      // WHY: native intersection and resize observations virtualize variable-height rows without layout reads after writes.
+      // Folded folders and enlarged charts keep their normal geometry; only visible blocks generate SVGs/DOM.
+      StateWindow.observer = new IntersectionObserver((entries) => {
+        let changed = false;
+        for (const entry of entries) {
+          if (!entry.target.isConnected) continue;
+          if (entry.target.hasAttribute('data-d6-image')) {
+            const image = entry.target;
+            const key = `image:${image.dataset.d6Image}`;
+            const visible = entry.isIntersecting && !document.hidden;
+            if (visible !== StateWindow.visible.has(key)) {
+              if (visible) { StateWindow.visible.add(key); image.src = image.dataset.d6Src; }
+              else { StateWindow.visible.delete(key); image.removeAttribute('src'); }
+              changed = true;
+            }
+            continue;
+          }
+          const key = entry.target.dataset.d6Window;
+          if (entry.isIntersecting !== StateWindow.visible.has(key)) {
+            if (entry.isIntersecting) StateWindow.visible.add(key); else StateWindow.visible.delete(key);
+            changed = true;
+          }
+        }
+        if (changed && last) last.ctx.redraw();
+      }, { root: container });
+      StateWindow.resize = new ResizeObserver((entries) => {
+        for (const entry of entries) if (entry.target.hasAttribute('data-d6-filled')) {
+          StateWindow.heights.set(entry.target.dataset.d6Window, entry.borderBoxSize[0].blockSize);
+        }
+      });
+    }
+    if (!StateWindow.observer) return;
+    const current = new Set(container.querySelectorAll('[data-d6-window], img[data-d6-image]'));
+    for (const node of StateWindow.nodes) if (!current.has(node)) { StateWindow.observer.unobserve(node); StateWindow.resize.unobserve(node); }
+    for (const node of current) if (!StateWindow.nodes.has(node)) { StateWindow.observer.observe(node); StateWindow.resize.observe(node); }
+    StateWindow.nodes = current;
+  }
   const stateId = (group, row) => (group.name ? `${group.name}::${row.key}` : row.key);
   function statePanel(node, detail, ctx) {
     const h = ctx.h;
     childName = (path) => (ctx.byPath && ctx.byPath.has(path) ? ctx.byPath.get(path).name : null);
     const note = watchNote(detail);
     const streams = Live.streams && Live.streams.length ? Live.streams : (detail.streams || []);
-    const head = `<div class="d6-note ${note.cls}" role="status" data-d6-watch="${h.esc((Live.watch || detail.watch || {}).state || '')}">${note.cls === 'paused' ? '⏸ ' : note.cls === 'live' ? '<span class="d6-dot"></span>' : ''}${h.esc(note.text)}</div>`;
+    const head = `<div class="d6-note ${note.cls}" role="status" data-d6-watch="${h.esc(!Live.loaded && (Live.watch || detail.watch || {}).supported ? 'starting' : (Live.watch || detail.watch || {}).state || '')}">${note.cls === 'paused' ? '⏸ ' : note.cls === 'live' ? '<span class="d6-dot"></span>' : ''}${h.esc(note.text)}</div>`;
     if (!Live.loaded) return `${head}<div class="muted">loading…</div>`;
     if (Live.none && !streams.length) return `${head}<div class="muted">This entity reports no state of its own.</div>`;
     const images = streams.filter((s) => s.kind === 'image');
@@ -422,7 +528,7 @@
           + `${stale ? `<span class="right d6-staleq">last values ${h.ago(group.age_s)} ago</span>` : ''}</h3>` : (stale ? `<div class="d6-staleq">last values ${h.ago(group.age_s)} ago</div>` : '');
         const rows = group.rows.filter((r) => !sp.pins.includes(stateId(group, r)));
         const tree = er.build(rows, { idOf: (r) => r.key, nameOf: (r) => r.key, sp: { ...sp, pins: [] }, mode });
-        return heading + (isOpen ? er.renderTree(tree, { section: 'state', sp, leaf: stateLeaf(group, h) }) : '');
+        return heading + (isOpen ? er.renderTree(tree, { section: 'state', sp, leaf: stateLeaf(group, h), windowRows: (rows) => stateWindow(group, rows) }) : '');
       }).join('') + '</section>' : '';
     const empty = !images.length && !groups.length ? '<div class="muted">This entity reports no state of its own.</div>' : '';
     return head + imageBlock + numbers + empty + (Live.error ? `<div class="d6-staleq">the host did not answer: ${h.esc(Live.error)}</div>` : '');
@@ -458,6 +564,7 @@
       LogView.inst.mount(el);
       Object.assign(LogView, { el, path: node.path });
     }
+    LogView.inst.start();
     watchLog(el);
     flashLog(el);
   }
@@ -813,8 +920,11 @@
     // the live loops: only while the State tab shows (docs/state-config-v1.md section 7)
     if (active === 'state') {
       Live.rendered = performance.now();
-      if (Live.path !== node.path) startLive(node.path, Boolean(detail.watch && detail.watch.supported));
+      if (Live.path !== node.path) startLive(node.path, Boolean(detail.watch && detail.watch.supported), (detail.streams || []).length ? Number((detail.watch || {}).period_s) || 0 : 0);
     } else if (Live.path) stopLive();
+    if (StateWindow.path !== node.path) {
+      StateWindow.path = node.path; StateWindow.visible.clear(); StateWindow.heights.clear(); StateWindow.counts.clear();
+    }
     const row = ctx.row;
     const er = ER();
     if (er && !er.arrangement.started) er.loadArrangements(() => { if (last) last.ctx.redraw(); });
@@ -823,6 +933,7 @@
     const style = `--d6-name-w:${U.nameW}px;--d6-tile-w:${U.tileW}px`;
     ctx.draw(`<div class="d6-top">${headerHtml(node, detail, ctx, row)}${banners ? `<div class="d6-banners">${banners}</div>` : ''}${tabBar(ctx, node, detail, tabs, active)}</div>`
       + `<div class="d6-panel" role="tabpanel" id="d6-panel" aria-labelledby="d6-tab-${h.esc(active)}" data-d6 data-d6-panel="${h.esc(active)}" style="${style}">${panelHtml(active, tabs, node, detail, ctx)}</div>${lightboxHtml(node, h)}${active === 'config' && er ? er.config.modalHtml(node, ctx) : ''}`);
+    bindStateWindow(container, node.path);
     afterDraw(container);
     bindLog(container, node, active);
     if (er) er.config.afterDraw(container);
@@ -1008,7 +1119,10 @@
       if (stepTab(event.key === 'PageDown' ? 1 : -1)) event.preventDefault();
     });
     document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && U.lightbox && last) { U.lightbox = null; last.ctx.redraw(); } });
-    document.addEventListener('visibilitychange', () => { if (document.hidden) stopLive(); });
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) { stopLive(); if (LogView.inst) LogView.inst.stop(); }
+      else for (const image of document.querySelectorAll('.d6-lb img')) if (image.d6Resume) { image.src = image.d6Resume; delete image.d6Resume; }
+    });
   }
 
   root.IODetailLayouts = root.IODetailLayouts || {};
@@ -1017,6 +1131,21 @@
     description: 'A header that is always visible (name, model, connection badge, the ticking "heard 2 s ago", hardware line) and tabs: Diagnostics (health only), State (live numbers as one-line rows with a sparkline, images as stream tiles), Configuration (read-only, searchable, expected vs read), Log (this entity and below, with Raw), Utilities, and a driver\'s own tabs (the Computer\'s Processes).',
     order: 0,
     render,
+    // WHY: /values establishes a coherent cursor/history before incremental SSE points can advance it.
+    samples(data) {
+      if (!Live.path || data.path !== Live.path || !liveAlive(Live.path)) return;
+      if (!Live.loaded) {
+        // WHY: preserve points that arrive while the one-time history bootstrap is in flight.
+        Live.pending.push(data);
+        if (Live.pending.length > 100) { if (Live.abort) Live.abort.abort(); stopLive(); if (last) last.ctx.redraw(); }
+        return;
+      }
+      if (data.cursor <= Live.cursor) return;
+      merge(data);
+      if (last) last.ctx.redraw();
+    },
+    resetLive() { stopLive(); },
+    pause() { stopLive(); if (LogView.inst) LogView.inst.stop(); },
     // for tests and the next lane
     internals: { Live, U, Heard, tabsFor },
   };

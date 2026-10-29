@@ -205,7 +205,8 @@ body.ch3-sizing-row { cursor: row-resize; user-select: none; } body.ch3-sizing-c
     }
   }
   function update() {
-    if (!pane || !state.open) return;
+    // WHY: off-screen charts keep their model and defer history/plot work until visible.
+    if (!pane || !state.open || !env.showing(pane)) return;
     const bar = pane.querySelector('.ch3-bar');
     bar.querySelector('.ch3-n').textContent = state.series.length ? `${state.series.length} series` : '';
     const models = state.series.map((entry) => ({ entry, model: env.resolve(entry.spec, { everyMs: 2000 }) }));

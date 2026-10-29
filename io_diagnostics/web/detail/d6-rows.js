@@ -154,7 +154,7 @@
   // renders the pinned block and the tree. leaf(item, {label, depth, parent, id, pinned}) draws one row (its own markup, with the
   // marks from star() / handle() and rowAttrs()); the folders are drawn here.
   // mark(folder) -> html: what a folder shows at its end instead of the number of rows (Diagnostics: the worst level below it, as an icon)
-  function renderTree(result, { section, sp, leaf, mark }) {
+  function renderTree(result, { section, sp, leaf, mark, windowRows }) {
     const folded = new Set(sp.folded);
     const out = [];
     if (result.pinned.length) {
@@ -162,19 +162,21 @@
     }
     const walk = (folder, depth) => {
       for (const child of folder.children) {
-        if (child.type === 'leaf') { out.push(leaf(child.item, { label: child.name, depth, parent: folder.path, id: child.name, pinned: false })); continue; }
+        if (child.type === 'leaf') { out.push(() => leaf(child.item, { label: child.name, depth, parent: folder.path, id: child.name, pinned: false })); continue; }
         // a chain of folders that each hold one folder (aux1 > pins > 0) is one row: aux1.pins.0
         let node = child;
         let label = child.name;
         while (node.children.length === 1 && node.children[0].type === 'folder') { node = node.children[0]; label += `.${node.name}`; }
         const open = !folded.has(node.path);
-        out.push(`<div class="er-fold" ${rowAttrs(folder.path, child.name, section)} style="--er-depth:${depth}"><button class="er-fb" data-er-fold="${esc(node.path)}" aria-expanded="${open}">`
+        out.push(() => `<div class="er-fold" ${rowAttrs(folder.path, child.name, section)} style="--er-depth:${depth}"><button class="er-fb" data-er-fold="${esc(node.path)}" aria-expanded="${open}">`
           + `<svg class="ic sec-chev"><use href="#i-chev"/></svg><span class="er-fn">${esc(label)}</span>${mark ? mark(node) : `<span class="er-fc">${countLeaves(node)}</span>`}</button>${handle(folder.path, child.name)}</div>`);
         if (open) walk(node, depth + 1);
       }
     };
     walk(result.root, 0);
-    return out.join('');
+    // WHY: large State lists supply a viewport window before any leaf builds its sparkline or markup.
+    const draw = (row) => typeof row === 'function' ? row() : row;
+    return windowRows ? windowRows(out.map((row) => () => draw(row))) : out.map(draw).join('');
   }
 
   // the little order switch every tab carries: A–Z · Manual (· Severity for Diagnostics), and where the arrangement lives

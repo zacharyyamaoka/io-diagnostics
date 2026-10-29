@@ -24,6 +24,7 @@
 `;
   let env = null;
   let open = new Set();
+  const reveal = new Set();
   const boxes = new Map(); // key -> { shadow, plot, el }
 
   const persist = () => env.store.setJson('c2.open', [...open]);
@@ -31,7 +32,7 @@
   const words = (s) => (s < 3600 ? `${Math.round(s / 60)} min` : `${+(s / 3600).toFixed(1)} h`);
 
   function toggle(key) {
-    if (open.has(key)) { open.delete(key); const box = boxes.get(key); if (box) { box.plot.destroy(); boxes.delete(key); } } else open.add(key);
+    if (open.has(key)) { open.delete(key); const box = boxes.get(key); if (box) { box.plot.destroy(); boxes.delete(key); } } else { open.add(key); reveal.add(key); }
     persist();
     if (env.ctx && env.ctx.redraw) env.ctx.redraw();
     env.scheduleSync();
@@ -87,8 +88,13 @@
       const spec = env.specOf(el);
       if (!spec) continue;
       present.add(key);
+      // WHY: the empty host has zero height after a reload. Give it a static shell before observing
+      // visibility, then defer all history/model/plot work while the chart is off screen.
       const box = build(el, key, spec);
-      if (box) { box.spec = spec; draw(box); }
+      if (box) box.spec = spec;
+      // WHY: explicitly unfolding a chart brings it into view; background updates never scroll it.
+      if (box && reveal.delete(key)) el.scrollIntoView({ block: 'nearest' });
+      if (box && env.showing(el)) draw(box);
     }
     // an unfolded row that left the page (another entity) keeps its state in `open`, not its plot
     for (const [key, box] of boxes) if (!present.has(key)) { box.plot.destroy(); boxes.delete(key); }

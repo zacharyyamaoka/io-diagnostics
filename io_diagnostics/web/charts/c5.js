@@ -66,6 +66,8 @@ body.ch5-page .ch5 { display: flex; }
       + '<div class="ch5-plotwrap" tabindex="0" aria-label="Chart: wheel zooms, drag pans, arrow keys pan, + and - zoom"></div>'
       + '<div class="ch5-hint">Wheel zooms around the cursor · drag pans · double-click shows the whole window · the strip underneath is the status\'s health on the same time axis</div>'
       + '<table class="ch5-tbl"><thead><tr><th>series</th><th>unit</th><th>now</th><th>min</th><th>max</th><th>mean</th></tr></thead><tbody></tbody></table></div>';
+    // WHY: the authored title belongs to the static shell, even before lazy history/plot work runs.
+    el.querySelector('h1').textContent = spec.l || 'Series';
     const state = { el, spec, key: env.specKey(spec), view: null, follow: true, yMode: 'fit', model: null };
     const wrap = el.querySelector('.ch5-plotwrap');
     state.plot = new env.Plot(wrap, { height: 'fill', zoom: true, strip: true, area: true, tip: true,
@@ -96,6 +98,8 @@ body.ch5-page .ch5 { display: flex; }
   }
 
   function draw(state) {
+    // WHY: refresh history and plots only while this chart is actually on screen.
+    if (!env.showing(state.el)) return;
     const { el, spec } = state;
     const model = env.resolve(spec, { everyMs: 1500 });
     state.model = model;
