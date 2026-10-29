@@ -10,7 +10,7 @@
    dashboard files (boards.js, add.js: PEP §14, §17). Every write the host offers (utilities, configuration, the expected setup,
    settings) stays on the classic page, linked per entity. */
 
-import { LiveClock, LiveDataset, parseBase, stringifyBase, loadDataset, connectSSE, connectPoll, makeResizable, bindRailSelect, esc, fmtTime, loadView } from '../vendor/data-ui/data-ui.js';
+import { LiveClock, LiveDataset, parseBase, stringifyBase, loadDataset, connectSSE, connectPoll, makeResizable, bindRailSelect, esc, fmtTime, loadView, clockFor } from '../vendor/data-ui/data-ui.js';
 import '../vendor/data-ui/dashboard.js';
 import { RobotDxFeed, bindingOf } from './feed.js';
 import { startHeartbeat } from './watch.js';
@@ -53,7 +53,25 @@ window.robotdx = Object.freeze({ clock, feed, parseBase, stringifyBase, version:
 // time bar and the other views read the page's datasets, and a view whose dataset the clock let go of shows its newest rows
 // whatever t is (the tree did not rewind). So every dataset the page holds goes back on it (PEP 0001 §15.1; asked of data-ui)
 function rebind() { for (const ds of Object.values(feed.datasets())) clock.bind(ds); }
-document.addEventListener('data-dashboard-live', rebind, true);   // capture: the event does not bubble
+
+/** A panel added "At this moment" (a layout panel's t, data-ui CONTRACT §34) stands at its t. WHY here: data-ui gives such a panel a
+    plain Clock paused at t, but a view of a live dataset that finds a clock that is not live follows a LiveClock of its own
+    (live/feed.js _clock), and every dataset on this page is live: the panel said "at t = …" and drew the newest data (PEP 0001
+    §17). Its views' own clocks are paused at t; a clock that already stands there is left alone, so a data-ui that pins a live
+    panel itself needs nothing from here (asked of data-ui). */
+function holdPins(dash) {
+  for (const p of (dash && dash.dash && dash.dash.panels) || []) {
+    if (!Number.isFinite(p.t)) continue;
+    const sec = dash.querySelector(`.dd-panel[data-panel="${CSS.escape(p.key)}"]`);
+    for (const v of sec ? sec.querySelectorAll('data-views') : []) {
+      const own = clockFor(v);
+      if (own instanceof LiveClock && own !== clock && (own.following || own.t !== p.t)) own.restore({ t: p.t });
+    }
+  }
+}
+// capture: the event does not bubble. WHY the pins a microtask later: a dashboard binds its live datasets (this event) before it
+// draws its panels, and an Arrange draws them again without openBase
+document.addEventListener('data-dashboard-live', (e) => { rebind(); queueMicrotask(() => holdPins(e.target)); }, true);
 
 // ---- the URL: ?go=<destination>&sel=<path>&board=<id>#t=live|<seconds> -----------------------------------------------------
 // An entity's tabs (Zach, 2026-10-28: "on each entity we had these tabs to split up different considerations (Diagnostics/State/
@@ -243,6 +261,7 @@ export async function openBase(el, text, baseUrl, { keepState = false } = {}) {
   const following = clock.following;
   el.load(base, datasets, { keepState });
   rebind();   // a dashboard with no live dataset sends no data-dashboard-live, and still let go of the page's
+  holdPins(el);
   // the load of a new document paused the page's clock (holdClock's WHY): a reader who was following still follows
   if (following && !clock.following) clock.goLive();
   return {
