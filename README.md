@@ -256,3 +256,20 @@ Measured traps worth keeping:
   DBusMenu labels with a non-global `replace(/_([^_])/, '$1')`: prefix a mnemonic `_` or underscores render doubled.
 - GNOME 46's `org.freedesktop.Notifications` is a separate D-Bus-activated gjs service; a private bus must start it
   by hand (`tools/sandbox.sh`).
+
+## Classic page performance (2026-10-29)
+
+[Visual review, recorded journey and full results](reports/media/classic-performance-2026-10-29.html) ·
+[Baseline](bench/classic/2026-10-29-998a49d-baseline.json) ·
+[Final KPI JSON](bench/classic/2026-10-29-998a49d-final.json) ·
+[Ordered commit plan](bench/classic/commit-plan.md).
+
+The isolated 60 s loaded fixture run has **163.6 ms lag p95**, **0 long tasks/min** and a **16.8 ms frame p95** at 648 entities, 207 measurements and a 100 Hz watch. The classic page takes its canonical HTTP bootstrap once, consumes the existing live SSE feed, virtualizes large State lists, and suspends hidden State/chart/image/Log work. Polling is a disconnected fallback. The record and API payload shapes are unchanged.
+
+`tools/bench_classic.js` starts its own F1 fixture host on a free port with disposable State/config directories and the two fixture plugins. It never touches hardware or fixed release ports. JSON has top-level `t` / `sha`, a source fingerprint, and the exact `results[]` KPI fields; ignored `reports/media/classic-perf/` holds CPU profiles and raw evidence. The heard probe pauses fixture receipts on the same warm State page. The report states the paint-ruler limits.
+
+```bash
+node /home/bam/io-diagnostics-lanes/perf-codex/tools/bench_classic.js --seconds 60 --label run
+```
+
+The reviewed HTML is self-contained. The work remains uncommitted on `lane/perf-codex` for the orchestrator; no merge, push, or retained server was started. The only failing page assertion is the known pre-existing d1b ordering check.
