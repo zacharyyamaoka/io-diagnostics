@@ -1,30 +1,27 @@
-data-ui 0.1.0, vendored 2026-10-29 08:44 PDT by tools/vendor_data_ui.py
+data-ui 0.1.0, vendored 2026-10-29 13:02 PDT by tools/vendor_data_ui.py
 repo      /home/bam/data-ui
 ref       integrate/packet  (exported with git archive and built by this tool)
-commit    5b4e793f66074a95e0da86dae38d138a4793d34f
-a merge of:
-  73a1f04b8703e192d67a51bd337e52dde243b09d  integrate/packet~1  merge lane/p4-parts @ 778fac8: PEP 0010 P4, the BLDC driver, camera and arm + gripper temp
-  4726d8318e42551d274a172511f5a73c34c8ffe0  lane/p2-coverage  chart README: a rewritten histogram's datum stays Vega-Lite's own, and the hover card read
+commit    0db2785346c47671142592d2f173f13b8c4570d7
 views     table, list, cards, kpi, live, playback, record, chart, media
 
 files (sha256, from the build's own dist/manifest.json):
-  eada1cf55e4cb9652057908b4831ae40e700c5b2fcbc5568b699ba963cfb24a4  data-ui.js
-  06ebf790ac727223c88187d0c4ebc3c6995c00f2c7d571791cf55832456720c6  data-ui.css
-  35ff153ed68d5ad2498837b874b3524dae0bc06ca704f9e4d3a56168e545778c  dashboard.js
-  1c1938a1e7eef434fa44bcea022f5ce9ed4d6c64b7e2dccd49326fb2e3fb7b65  dashboard-arrange.js
-  10666c940dc76d58d95333385f1c729ae0e92c94143fd498eb94fd6c0f4070d0  rowmodel-worker.js
+  2193e1dc2f13710d6c551441aef295491295294dcd84618f0e6802ec2530f4f5  data-ui.js
+  00e91c11acf4be5e07b01f5da9c051e1ae19da9fcc5ea65cc6cdb9cc4e01d0b9  data-ui.css
+  51b226bb9241a0fa86922f28d71578f419932823f0bd9a659eb89cfac48ba615  dashboard.js
+  056cdd0d2240ceb34b633dff7d3638ded0c8f5aa2eca46d6728c0c6f2d5fe743  dashboard-arrange.js
+  e02d67a7afec7e8171b02acc44d1db92236ae6a5768d4ef58dced88a8c62ff2c  rowmodel-worker.js
   16e34c260f1e4453a20c4af03d092fa7a2fabe06e17e6de4ab08af535e7c2b38  resize.js
   65c4e719d3fbdc06b0d1fec663f0ad08dd38a52d83295dedc0f4fbcae4e1d062  LICENSES.md
-  86c8a64c519fe2d3572efaa93ac67c4362470a543c76c8e70f6e363bf3b60f7d  manifest.json
+  d2efd9936dd1505d5d21f7037848f100dd78f4170051905072ed7a7df537e1c8  manifest.json
   8b602a1dbb7f6d5baee160d81059e79bf4ea9cbb9c08e99b2a11f4be5ba81d2e  views/table.js
   40537a9fffa417c69e73b7a9a1c588594c23e353d82c972123a88520b057e73b  views/list.js
-  277dc11c59f35c2d1a5b8aa237f5ca20ee4bff90b0dafcc255d2abb55bf1de60  views/cards.js
-  886542c0d452a5770aa8a6593ac84d44ed35c0e4cf81f813fc3070aef187c71b  views/cards-lightbox-V5S7PN4Q.js
+  007fd721b9b0dd121bad36041ea5438bb6647569f431d67bc8083dda4732be74  views/cards.js
+  1c0a6f323c36b3cc6e07c97269634c562754bb9453af56b0d01cad8be26cdf4c  views/cards-lightbox-4RUCWWZ6.js
   568ff7c72c56248f2da015cf4d943b26328ccb3c8211801cb1edc81c3d1f40de  views/kpi.js
-  5c9f1bb9b893d5f19658a391407908de18c032a5977f3b0f4557d93e8fbaa32b  views/live.js
+  1d7ada319a5db84f6ec82111b700f208fa41fdd1ff7f5af37d186028bfb6a9c7  views/live.js
   ffdf9fd9cb84ef23336bd5b298976b2ab2139620834353955f6f49d315c1b2bc  views/playback.js
   05186d2064458538a8d2b8b954ac13ad1e7b74775ca9e1dc1085c8a90ad0de93  views/record.js
-  cada5314eb1eece64cb0056c903960ad52a88db8b2a4ac2fc1c7bead1a5e5468  views/chart.js
-  607a6a7de46a2fffb974790eecb538468b0dcac650447a3775b1a8ed859c13c4  views/chart-chunk-W4L3DGGF.js
-  0cf68ae6046acc421d8e93fed1fc4d914315070050ddbd1defe50ff1c369e4ec  views/chart-plot-BCPVROHG.js
-  4ebb1bd1179f8b3752e962833ff88fa326a2a3bde601f4c890ad9be00c5e250a  views/media.js
+  a2bb510b22d50b45dc4ec13da10ce5583148066f337af2873378402fdbe14907  views/chart.js
+  cdd1fb924498c25d1cff580eb33c7c2fbf0ef65ad37ed62bae6c4d32644b465b  views/chart-chunk-QL7PZWZD.js
+  1c9dbd076f9fd94449dd41d43b6e10eff49c5610b1de620cdf9f56a4d33717ea  views/chart-plot-O3I4ORDN.js
+  6dd40903c17c9575e05c8619e89be938142494b5f1a4b92cf9af03ec27b55844  views/media.js
