@@ -1,5 +1,5 @@
 // L1 · Obsidian. Zach's own reference (his screenshot of Obsidian's left sidebar, 2026-10-24): match its conventions.
-//   - a vertical RIBBON at the far left carries the views (Devices, Table, Activity, Runs) and Settings at its foot;
+//   - a vertical RIBBON at the far left carries the views (Devices, 3D, Table, Activity, Runs) and Settings at its foot;
 //   - the left PANE has a header, a small toolbar row (collapse all, expand all, View options, visibility), then the SEARCH
 //     FIELD on top of the tree, then the tree;
 //   - the main area is the entity page under a slim view header (back / forward, the breadcrumb of the selection).
@@ -59,6 +59,8 @@
 `;
   const RIBBON = [
     { id: 'tree', icon: 'devices', title: 'Devices (the tree)', label: 'Devices' },
+    // WHY here: Zach, 2026-10-29: a "3D" item in the activity bar; the left tree stays, the device page's area becomes the robot
+    { id: 'threed', icon: 'i-cube', title: '3D: the robot, each part coloured by its device', label: '3D' },
     { id: 'table', icon: 'table', title: 'Table', label: 'Table' },
     { id: 'activity', icon: 'log', title: 'Activity', label: 'Activity' },
     { id: 'runs', icon: 'i-tty', title: 'Runs (the terminal panel)', label: 'Runs' },
@@ -109,6 +111,7 @@
     // the control that reaches each view and what must then be on screen (tests/test_layouts.js)
     reach: {
       tree: { control: '.l1-ribbon [data-l1="tree"]', shows: '#tree-host .t6-row' },
+      threed: { control: '.l1-ribbon [data-l1="threed"]', shows: '#threed-host .td-root' },
       table: { control: '.l1-ribbon [data-l1="table"]', shows: 'table.grid' },
       activity: { control: '.l1-ribbon [data-l1="activity"]', shows: '.act .ev' },
       runs: { control: '.l1-ribbon [data-l1="runs"]', shows: '#runs-root.r1' },
@@ -141,6 +144,7 @@
         anchor: () => gear,
         go: () => [
           { icon: 'lx-devices', label: 'Devices', sub: 'The tree and the entity page', run: () => ctx.go('tree') },
+          { icon: 'i-cube', label: '3D', sub: 'The robot, its parts coloured by their devices', run: () => ctx.go('threed') },
           { icon: 'lx-table', label: 'Table', sub: 'Every device in one table', run: () => ctx.go('table') },
           { icon: 'lx-log', label: 'Activity', sub: 'The log, newest first', run: () => ctx.go('activity') },
           { icon: 'i-tty', label: 'Terminal', sub: 'Runs of utilities', run: () => ctx.runs.toggle() },
@@ -158,7 +162,7 @@
         button.addEventListener('click', () => {
           if (item.id !== 'runs') closeDashboard();
           if (item.id === 'runs') { ctx.runs.toggle(); return; }
-          if (sash.folded() && item.id === 'tree') sash.fold(false);
+          if (sash.folded() && (item.id === 'tree' || item.id === 'threed')) sash.fold(false);
           ctx.go(item.id);
         });
         if (item.id === 'runs') button.insertAdjacentHTML('beforeend', '<span class="badge" hidden></span>');
@@ -271,9 +275,12 @@
       s.visible.innerHTML = ctx.ico(hidden && hidden.on ? 'eye' : 'eye-off');
       ctx.$('search').closest('.search').classList.toggle('has-query', Boolean(S.query));
       // the view header: the breadcrumb of the selection (Tree), or the view's own name
-      const crumbs = S.view === 'tree' ? ctx.crumbs(S.sel) : [];
+      const crumbs = S.view === 'tree' || S.view === 'threed' ? ctx.crumbs(S.sel) : [];
+      // the 3D view: "3D", then the selection's breadcrumb (a crumb selects that row, the view stays 3D)
+      const threed = S.view === 'threed';
       const html = S.view === 'table' ? '<a class="last">Table</a>' : S.view === 'activity' ? '<a class="last">Activity</a>'
-        : (crumbs.length ? crumbs.map((crumb, at) => `<a${at === crumbs.length - 1 ? ' class="last"' : ` data-go="${ctx.esc(crumb.path)}"`} title="${ctx.esc(crumb.raw)}">${ctx.esc(crumb.name)}</a>`).join('<span class="sep">›</span>')
+        : threed && !crumbs.length ? '<a class="last">3D</a>'
+        : (threed ? '<a class="l1-view">3D</a><span class="sep">›</span>' : '') + (crumbs.length ? crumbs.map((crumb, at) => `<a${at === crumbs.length - 1 ? ' class="last"' : ` data-go="${ctx.esc(crumb.path)}"`} title="${ctx.esc(crumb.raw)}">${ctx.esc(crumb.name)}</a>`).join('<span class="sep">›</span>')
           : `<a class="last">${ctx.esc(S.selKey ? 'Group' : 'Devices')}</a>`);
       if (s.crumbsHtml !== html) { s.crumbsHtml = html; s.crumbs.innerHTML = html; }
     },

@@ -30,8 +30,11 @@
 'use strict';
 
 const params = new URLSearchParams(location.search);
+// threed: the 3D view (threed/core.js, docs/robot-description.md), the robot's parts coloured by their devices, the tree kept beside it
+const VIEWS = ['tree', 'table', 'activity', 'threed'];
 const S = {
-  view: ['tree', 'table', 'activity'].includes(params.get('view')) ? params.get('view') : 'tree',
+  view: VIEWS.includes(params.get('view')) ? params.get('view') : 'tree',
+  cam: params.get('cam') || null, // the 3D view's camera pose (threed/scene.js cameraText), part of its history entry
   sel: params.get('group') ? null : params.get('sel'),
   query: '',
   data: null,          // /api/v1/state
@@ -226,9 +229,11 @@ function loadNode() {
 // (?sel=<path>&diag=<status name>&view=tree), and popstate puts that exact state back. The mouse's back / forward
 // buttons and Alt+← / → are then the browser's own, in a tab and in the Chrome --app window.
 // WHY in the shell, once: d1-d5 each kept a private drill stack the browser could not see; they read ctx.diagnostic.
-const NAV_KEYS = ['sel', 'group', 'diag', 'dpath', 'm', 'page', 'view', 'into', 'inside'];
+// `cam` (2026-10-29): the 3D view's camera, only in a 3D entry, so Open from 3D and then Back returns to the same view of the robot
+const NAV_KEYS = ['sel', 'group', 'diag', 'dpath', 'm', 'page', 'view', 'into', 'inside', 'cam'];
 const NO_DRILL = { diag: null, dpath: null, m: null, page: null };
-const navNow = () => ({ sel: S.selKey ? null : S.sel || null, group: S.selKey || null, ...S.drill, view: S.view, into: S.into || null, inside: S.inside.join(',') || null });
+const navNow = () => ({ sel: S.selKey ? null : S.sel || null, group: S.selKey || null, ...S.drill, view: S.view, into: S.into || null, inside: S.inside.join(',') || null,
+  cam: S.view === 'threed' ? S.cam || null : null });
 function navUrl(nav) {
   const query = new URLSearchParams();
   for (const key of NAV_KEYS) if (nav[key]) query.set(key, nav[key]);
@@ -252,7 +257,8 @@ function replaceNav() {
   history.replaceState({ ...nav, up: Boolean(history.state && history.state.up) }, '', navUrl(nav));
 }
 function applyNav(nav) {
-  S.view = ['tree', 'table', 'activity'].includes(nav.view) ? nav.view : 'tree';
+  S.view = VIEWS.includes(nav.view) ? nav.view : 'tree';
+  if (S.view === 'threed') S.cam = nav.cam || S.cam;
   S.into = nav.into || null;
   S.inside = String(nav.inside || '').split(',').filter(Boolean);
   if (nav.group) {
@@ -1986,6 +1992,7 @@ function render() {
   document.querySelectorAll('#views button').forEach((b) => b.classList.toggle('on', b.dataset.view === S.view));
   const treeView = S.view === 'tree';
   const tableView = S.view === 'table';
+  const threedView = S.view === 'threed'; // the tree stays drawn beside it, as in the Tree view
   $('main').className = `main v-${S.view}${treeView && WIDE.has(S.variant) ? ' wide-tree' : ''}${tableView && inspectorShown() ? ' insp-open' : ''}`;
   $('insp-toggle').hidden = !tableView;
   $('insp-toggle').setAttribute('aria-pressed', String(S.inspPinned));
@@ -2000,14 +2007,15 @@ function render() {
   const activityView = S.view === 'activity';
   // WHY keepTree: a layout (layouts/*.js) that holds the tree in a sidebar keeps it drawn beside the Table and Activity
   const keepTree = Boolean(window.IOLayoutHost && window.IOLayoutHost.keepsTree());
-  $('tree-host').hidden = !treeView && !keepTree;
-  $('left-other').hidden = treeView || activityView;
+  $('tree-host').hidden = !treeView && !threedView && !keepTree;
+  $('left-other').hidden = treeView || activityView || threedView;
   $('activity-host').hidden = !activityView;
+  $('threed-host').hidden = !threedView;
   if (!activityView && window.IOActivityLog) window.IOActivityLog.setVisible(false);
-  if (treeView || keepTree) renderTreePane();
+  if (treeView || threedView || keepTree) renderTreePane();
   if (activityView) renderActivityView();
-  else if (!treeView) $('left-other').innerHTML = renderTable();
-  const noSearch = (treeView || keepTree) && NO_QUERY.has(S.variant);
+  else if (!treeView && !threedView) $('left-other').innerHTML = renderTable();
+  const noSearch = (treeView || threedView || keepTree) && NO_QUERY.has(S.variant);
   $('search').disabled = noSearch;
   $('search').placeholder = noSearch ? `No search in ${S.variant} · try Table` : 'Search entities, ids, ports…';
   $('search').closest('.search').classList.toggle('off', noSearch);
@@ -2017,6 +2025,7 @@ function render() {
   renderModal();
   renderStatusbar();
   updateRunView();
+  if (window.IOThreeD) window.IOThreeD.update(threedView);
   if (window.IOLayoutHost) window.IOLayoutHost.update();
 }
 
@@ -2217,6 +2226,19 @@ async function boot() {
       setView(view) { S.view = view; pushNav(); render(); } });
   }
   if (S.view === 'table' && (S.sel || S.selKey) && (S.drill.diag || S.drill.page)) S.inspOpen = true;
+  // the 3D view (threed/core.js): the page's selection, history, history cache and drawing helpers; it never reads the API's tree itself
+  if (window.IOThreeD) {
+    window.IOThreeD.attach({ S, esc, usb, icon, shape, pill, entityLabel, render, replaceNav, cached,
+      select: onSelectEntity,
+      // Open: the entity's own device page, one history step after the 3D view (Back returns to it, selection and camera kept)
+      open(path) {
+        if (path !== S.sel || S.selKey) { select(path); pushNav(); }
+        S.view = 'tree';
+        S.drill = { ...NO_DRILL };
+        pushNav();
+        render();
+      } });
+  }
   setupPanes();
   loadSettings();
   tick();
