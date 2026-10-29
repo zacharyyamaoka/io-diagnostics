@@ -16,9 +16,10 @@ description = "fdcanusb adapters + moteus boards: ids, identity, firmware vs lat
 # an `act` that the host runs only for a person at a TTY with --confirm, never on a schedule (docs/api-v1.md).
 enabled = true
 
-# WHY a group: diagnose takes the rack bus lock (flock LOCK_NB), and so does intel_rgbd's; two runs at once fail
-# each other with BusLockHeld. The host queues the group's jobs instead (moteus vs RealSense, and one plugin's
-# devices: found live 2026-10-22 17:41).
+# WHY a group: one adapter's probes must take turns, and the driver's own per-adapter port lock refuses a second one
+# with PortBusy (found live 2026-10-22 17:41). The host queues this plugin's jobs instead. Only moteus_servo is in the
+# group now (Zach, 2026-10-29: "they are likely completely different ... should not be blocked"): diagnose takes the
+# rack bus lock SHARED, so a RealSense query no longer blocks a CAN probe; only a rack experiment's LOCK_EX does.
 exclusive = "rack-bus"
 
 # WHY uv run in the driver's own project: moteus and pyserial live in the driver's env, never in io-diagnostics'.

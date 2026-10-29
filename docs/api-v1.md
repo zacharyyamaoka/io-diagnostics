@@ -331,7 +331,8 @@ specified in `docs/state-config-v1.md`; `history`'s `state: true` marks a series
 - `actions`: registered by the entity's owner, with each precondition evaluated **passively** by the host:
   - each precondition's `state` is `"pass"`, `"fail"`, `"unknown"` or `"waiting"` (held by this host's own check);
   - `port_free` (no process holds the device's tty / by-id; `find_port_holders`), `bus_lock_free` (rack bus lock
-    `/home/bam/.cache/rack-commissioning/bus.lock`, read from `/proc/locks`, never taken), `camera_free`
+    `/home/bam/.cache/rack-commissioning/bus.lock`, read from `/proc/locks`, never taken; only an exclusive `WRITE`
+    holder, a rack experiment, blocks it: probes hold it shared), `camera_free`
     (`camera_holders`), `board_answers` (the entity has a fresh own record whose code is not `NoReply` / `NoAck` /
     `PortBusy`), `update_available` (its `firmware` check says `UpdateAvailable`).
   - `state`: `"nothing_to_do"` (`update_available` fails: "up to date", whatever else holds, since a free port

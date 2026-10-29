@@ -5,6 +5,12 @@ if anyone holds it. A registry that "checks" the lock by acquiring it, even for 
 can make an experiment refuse at that instant. Reading /proc/locks shows the holder's pid and
 never contends. (Only the gated ACTIVE path takes the lock, for the length of one bounded query,
 the same way ``rack_inventory`` already does.)
+
+WHY a holder's mode matters (Zach, 2026-10-29: "they are likely completely different ... should not be
+blocked"): probes (the drivers' diagnose, probe and watch) take the lock SHARED (``LOCK_SH``, /proc/locks
+``READ``) and a rack experiment takes it EXCLUSIVE (``LOCK_EX``, ``WRITE``). Only a WRITE holder blocks a
+probe; READ holders are other probes. Before this, two hosts' queries (a camera's and a CAN adapter's) made
+each other's probe show "paused" until the next one.
 """
 
 from __future__ import annotations
@@ -21,6 +27,11 @@ class LockHolder:
     pid: int
     command: str
     kind: str  # FLOCK or POSIX
+    mode: str = "WRITE"  # /proc/locks READ (shared: a probe) or WRITE (exclusive: an experiment)
+
+    @property
+    def exclusive(self) -> bool:
+        return self.mode == "WRITE"
 
 
 def _command_of(pid: int) -> str:
@@ -47,5 +58,5 @@ def lock_holders(lock_path: Path = BUS_LOCK, proc_locks: Path = Path("/proc/lock
             continue
         if len(fields) >= 6 and fields[5] == wanted:
             pid = int(fields[4])
-            holders.append(LockHolder(pid=pid, command=_command_of(pid), kind=fields[1]))
+            holders.append(LockHolder(pid=pid, command=_command_of(pid), kind=fields[1], mode=fields[3]))
     return holders

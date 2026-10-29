@@ -14,11 +14,11 @@ description = "Intel RealSense cameras: USB and RealSense serials, USB link, fir
 # an `act` that the host runs only for a person at a TTY with --confirm, never on a schedule (docs/api-v1.md).
 enabled = true
 
-# WHY a group: diagnose takes the rack bus lock (flock LOCK_NB), and so does moteus_servo's; two runs at once fail
-# each other with BusLockHeld. The host queues the group's jobs instead (camera 6-1 vs 6-2, and moteus vs
-# RealSense: found live 2026-10-22 17:41).
-exclusive = "rack-bus"
-
+# WHY no `exclusive` group (Zach, 2026-10-29: "they are likely completely different ... should not be blocked"):
+# diagnose takes the rack bus lock SHARED (flock LOCK_SH | LOCK_NB), so two cameras, or a camera and a moteus probe,
+# never fail each other with BusLockHeld; only a rack experiment's LOCK_EX does. It used to queue behind
+# moteus_servo's jobs in the "rack-bus" group (found live 2026-10-22 17:41), and a camera query in the other host
+# still showed that host's CAN probe as "paused", because two hosts' queues cannot see each other.
 # WHY uv run in the driver's own project: pyrealsense2 lives in the driver's env, never in io-diagnostics'.
 # WHY the worktree path: the plugin lives on bam_ws branch claude/traj-tracking-sim-to-real-a3da60 until it is
 # merged; then both paths become /home/bam/bam_ws/src/core/mdp/agent/sensors/intel_rgbd.

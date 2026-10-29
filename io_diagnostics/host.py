@@ -247,10 +247,18 @@ def _without_own_watchers(holders_fn):
 def bus_lock_state(holders) -> tuple[bool | str, str]:
     """The rack bus lock is held: by one of THIS host's own running checks (``WAITING``: it frees in a few seconds,
     the host's own jobs take turns), or by anyone else (``False``: blocked, naming the pid and its command line).
+    Holders that only share it (probes: a camera's query, a CAN adapter's) leave it free (``True``).
 
     WHY not "blocked" for our own: the lock is the host's own diagnose doing its job; calling it an experiment, in a
-    blocking colour, sent people looking for a process that was the dashboard itself (round 3 brief item 10)."""
+    blocking colour, sent people looking for a process that was the dashboard itself (round 3 brief item 10).
 
+    WHY shared holders do not block (Zach, 2026-10-29: "they are likely completely different ... should not be
+    blocked"): probes take the lock shared and a rack experiment exclusive, so only a WRITE holder is an experiment."""
+
+    shared = [holder for holder in holders if not holder.exclusive]
+    holders = [holder for holder in holders if holder.exclusive]
+    if not holders:
+        return True, f"rack bus lock free for probes ({len(shared)} probe{'s' if len(shared) != 1 else ''} share it)"
     foreign = [holder for holder in holders if RUNNING.owner(holder.pid) is None]
     if foreign:
         return False, "blocked by " + ", ".join(f"pid {holder.pid} ({holder.command})" for holder in foreign)

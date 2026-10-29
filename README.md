@@ -247,7 +247,8 @@ they become `/home/bam/bam_ws/src/core/mdp/agent/...` (also in `plugins.d/*.toml
 
 Measured traps worth keeping:
 - `hold_bus_lock` takes the rack lock with `LOCK_NB` and refuses if held, so a check that test-acquires the lock can
-  make an experiment refuse to start: read `/proc/locks` instead.
+  make an experiment refuse to start: read `/proc/locks` instead. Probes take the lock shared (`LOCK_SH`), an
+  experiment exclusive, so only a `WRITE` holder blocks a probe.
 - USB descriptor serial != RealSense SDK serial (219323070276 vs 2186222…): `hardware_id` uses the USB one.
 - moteus 1.0.0 never bounds a reply from a real fdcanusb, and a second transport in one event loop is never read:
   one guarded transport per check, one id per transaction (lane D, `moteus_servo/diagnostics.py`).

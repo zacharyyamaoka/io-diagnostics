@@ -57,10 +57,12 @@ def decide(
         holders = [holder for node in nodes for holder in imported.function(node)]
         decided_by.insert(0, imported.source)
     locks = lock_fn() if uses_rack_lock else []
+    # WHY only a WRITE holder blocks: probes take the lock shared, an experiment exclusive (io_facts/lock.py)
+    blocking = [holder for holder in locks if holder.exclusive]
     if holders:
         return GateDecision("blocked", f"open by {', '.join(holders)}", holders, locks, decided_by)
-    if locks:
-        names = ", ".join(f"pid {holder.pid} {holder.command}" for holder in locks)
+    if blocking:
+        names = ", ".join(f"pid {holder.pid} {holder.command}" for holder in blocking)
         return GateDecision("blocked", f"rack bus lock held by {names}", holders, locks, decided_by)
     return GateDecision("free", "no holder, lock free", holders, locks, decided_by)
 
@@ -84,7 +86,9 @@ def run_gated(
     with open(lock_path, "w") as handle:
         try:
             # WHY NB and held only for this one bounded query: the same contract rack_inventory uses.
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            # WHY SH: a query-only check is a probe, and probes share the lock; an experiment's LOCK_EX still
+            # refuses it and is still refused by it (io_facts/lock.py).
+            fcntl.flock(handle, fcntl.LOCK_SH | fcntl.LOCK_NB)
         except BlockingIOError:
             return {"state": "blocked", "reason": "bus lock taken between check and run"}
         recheck = decide(nodes, **{**decide_options, "lock_fn": lambda: []})

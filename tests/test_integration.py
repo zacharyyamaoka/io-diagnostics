@@ -45,7 +45,9 @@ def test_plugins_d_runs_the_real_driver_module_in_its_own_project_enabled_in_the
     command = declared["command"]
     # WHY enabled (2026-10-22): query-only bus traffic is approved; writes run only through `act`, for a person
     assert declared["enabled"] is True, f"{name}: the rack drivers ship on, so plugging in the rack shows it live"
-    assert declared["exclusive"] == "rack-bus", f"{name}: both take the rack bus lock, so they must take turns"
+    # WHY only moteus_servo (Zach, 2026-10-29): probes share the rack lock, so a camera has no group to queue in;
+    # one adapter's probes still take turns
+    assert declared.get("exclusive") == ("rack-bus" if name == "moteus_servo" else None), name
     assert "diagnose_args" not in declared, f"{name}: plugins.d runs the driver's own default (query-only) diagnose"
     # one spelling in the shipped files; act gets its own, longer limit (firmware flash, calibration)
     assert {"timeout_s", "period_s", "act_timeout_s"} <= set(declared) and not {"timeout", "period", "act_timeout"} & set(declared)
