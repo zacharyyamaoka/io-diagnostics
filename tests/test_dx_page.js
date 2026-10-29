@@ -103,8 +103,11 @@ const clockState = (page) => page.evaluate(() => { const c = window.robotdx.cloc
 // the tree's rows as the classic tree style draws them (web/tree/v6.js, PEP 0001 §16): every [role=treeitem] in the DOM, in order,
 // with its row key (the entity path), its label, its depth and the health SHAPE at its right (none for OK: rule 3)
 const TREE_ROWS = (sel) => [...document.querySelectorAll(`${sel} [role=treeitem][data-t6-path]`)].map((r) => {
-  const mark = r.querySelector('.t6-st svg.shape, .t6-mark svg.shape');
-  const level = mark ? ([...mark.classList].find((c) => c.startsWith('lv-')) || '').slice(3) : null;
+  // WHY both spellings (orchestrator fix): the classic tree draws `svg.t6-shape.t6-<level>` since 854c0f0 (summary.js), the
+  // older `svg.shape.lv-<level>` before it; this read only the old one, so a drawn shape read as no shape
+  const mark = r.querySelector('.t6-st svg.t6-shape, .t6-mark svg.t6-shape, .t6-st svg.shape, .t6-mark svg.shape');
+  const cls = mark ? [...mark.classList].find((c) => c.startsWith('lv-') || (c.startsWith('t6-') && c !== 't6-shape')) : null;
+  const level = mark ? (cls || '').replace(/^(lv|t6)-/, '') : null;
   return { id: r.getAttribute('data-t6-path'), name: ((r.querySelector('.t6-name') || {}).textContent || '').trim(), depth: Number(r.getAttribute('aria-level')) - 1,
     level, open: r.getAttribute('aria-expanded'), selected: r.getAttribute('aria-selected') === 'true' };
 });
