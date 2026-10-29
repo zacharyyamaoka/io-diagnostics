@@ -173,6 +173,9 @@ def motor_state(path: str, now: float, period: float | None) -> dict:
     values = motor(now)
     units = {"position": "rev", "velocity": "rev/s", "torque": "N.m", "voltage": "V", "temperature": "Cel"}
     measurements = [{"key": key, "value": round(values[key], 4), "unit": unit} for key, unit in units.items()]
+    # WHY: opt-in stress rows exercise the real State/cache/SSE/page path; ordinary fixtures stay byte-for-byte shaped as before.
+    measurements.extend({"key": f"load.sensor_{index:04d}", "value": round(math.sin(now + index), 4)}
+                        for index in range(int(os.environ.get("STATE_EXTRA_ROWS", "0"))))
     measurements[3]["warn_low"], measurements[3]["error_low"] = 20.0, 18.0
     measurements[4].update(warn_high=60.0, error_high=75.0)
     measurements.append({"key": "mode", "value": values["mode"], "meaning": MODE_MEANING.get(values["mode"], str(values["mode"]))})
@@ -364,6 +367,11 @@ def watch(path: str) -> None:
     seq = 0
     next_frame = 0.0
     while True:
+        # WHY: a bench can age the real heard label while its State page keeps rendering.
+        pause_file = os.environ.get("STATE_PAUSE_FILE")
+        if pause_file and os.path.exists(pause_file):
+            time.sleep(PERIOD_S)
+            continue
         now = clock()
         if ROLE == "joint":
             emit(**motor_state(path, now, 2.0))
