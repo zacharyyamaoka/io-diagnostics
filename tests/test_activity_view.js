@@ -350,10 +350,8 @@ async function utilities(page) {
 async function startCalibration(page) {
   await utilities(page);
   await page.click('[data-util="calibrate"]');
-  await page.waitForSelector('.ent-sheet [data-util-run]', { timeout: 10000 });
-  await page.click('.ent-sheet [data-util-run]');
-  await page.waitForSelector('#modal [data-util-tick]');
-  await page.check('#modal [data-util-tick]');
+  // 2026-10-29: the click opens the Run page, whose Run button runs it (no dry-run sheet, no ticked box)
+  await page.waitForSelector('#modal:not([hidden]) [data-util-confirm]:not([disabled])', { timeout: 10000 });
   await page.click('#modal [data-util-confirm]');
 }
 async function runChecks(browser, base) {

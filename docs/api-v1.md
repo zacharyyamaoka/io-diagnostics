@@ -275,9 +275,9 @@ specified in `docs/state-config-v1.md`; `history`'s `state: true` marks a series
     {"name": "reset", "title": "Reset…", "description": "...", "danger": "interrupts", "scope": "node", "kind": "changes",
      "confirm": "Reboot CAN 15 (serial ABoA...)? ...",
      "preconditions": [{"check": "port_free", "text": "Port not held by another process", "state": "fail",
-                        "detail": "port held by 640623 tview"}],
+                        "detail": "port held by 640623 tview", "resolves": "blocks"}],
      "state": "blocked", "reason": "blocked: port held by 640623 tview", "executable": false, "owner": "moteus_servo",
-     "second_confirm": "",
+     "second_confirm": "", "confirmations": [],
      "last_run": {"id": "r7", "state": "done", "active": false, "started": 1761096000.0, "started_iso": "2026-10-21T18:20:00-07:00",
                   "ended": 1761096012.0, "ended_iso": "2026-10-21T18:20:12-07:00", "exit_code": 0, "elapsed_s": 12.0}}
   ],
@@ -337,9 +337,33 @@ specified in `docs/state-config-v1.md`; `history`'s `state: true` marks a series
     (`camera_holders`), `board_answers` (the entity has a fresh own record whose code is not `NoReply` / `NoAck` /
     `PortBusy`), `update_available` (its `firmware` check says `UpdateAvailable`).
   - `state`: `"nothing_to_do"` (`update_available` fails: "up to date", whatever else holds, since a free port
-    would not make the button useful), else `"blocked"` (another precondition fails), else `"waiting"` (one is held
-    by this host's own running check, below), else `"unknown"` (one cannot be evaluated), else `"ready"`. `reason` is
-    the text to show beside a disabled button.
+    would not make the button useful), else `"blocked"` (a precondition `resolves` `"blocks"`), else `"waiting"` (one
+    is held by this host's own running check, below), else `"ready"`. `reason` is the text to show beside a disabled
+    button. **Since 2026-10-29 an action's `state` is never `"unknown"`** (it was "can't tell: ..."): see below.
+  - **Actions: two states (2026-10-29, addition).** Zach: "I am confused by the can't tell: does that mean it can block
+    or not block? The utilities menu should just have 2 states." Every precondition carries **`resolves`**, what it does
+    to its action, and the `state` above is made from it alone:
+    - `"ready"` (`state` `pass`), `"blocks"` (`fail`), `"waiting"` (`waiting`);
+    - `"confirm"`: a precondition only a person can check (`joint_free`, `joint_clear`, `joints_clear`, `target_in_view`):
+      never blocks; the action's new **`confirmations`** lists their texts, which the page's Run page states and the
+      person confirms by pressing Run (the host's own `device_free` second confirmation stays in `second_confirm`);
+    - `"at_run"`: one the host cannot read now (`state` `unknown`) and the driver checks on the bus right before it
+      sends anything (it refuses with nothing sent): `board_idle` without a fresh State, `config_interlock`,
+      `new_id_free`, `boards_idle`; never blocks;
+    - an unknown `config_recorded` `"blocks"` with the detail "no recorded configuration for this board": the action
+      needs a file that nobody said exists.
+    New host checks: `board_idle` (the entity's latest fresh State, a watch's or a probe's `state` record: `mode` 0 and
+    `fault` 0 pass, anything else fails with the mode or fault in words), `source_id_unique` (the driver's id check:
+    `IdCollision` / `PossibleIdCollision` fail, else the board answering passes). **A driver answers a precondition only it
+    can read** with a status value `precondition.<check>` on any of the entity's own statuses, `"pass: <why>"` or
+    `"fail: <why>"` (moteus_servo: `precondition.config_recorded`, its config dir); the host reads it for any check that is
+    not an OS gate (`port_free`, `bus_lock_free`, `camera_free`).
+  - **A port held by a RobotDx check** (2026-10-29, "blocked: held by 1652054 python3": a routine `diagnose` of this host or
+    of the other channel's, measured holding each fdcanusb a few seconds every 5 min): `port_free` is `"waiting"` with "this
+    host's own check is running (a few s): ..." when every holder is one of this host's own processes, or with "RobotDx (tray,
+    port 8822) has it open (moteus_servo.diagnostics diagnose, pid N) (a few s)" when every other holder was started by
+    another RobotDx host (its ancestor runs `io_diagnostics/cli.py`). Any other holder is `"fail"`, named in plain words
+    ("tview, moteus's console (pid N): close it to free the port"). This host's own watch never counts (it yields, as before).
   - **The rack bus lock held by this host itself** (round 3 brief item 10): when every holder of the lock belongs to
     one of THIS host's own running plugin or check processes (its session: `os.getsid(holder)` is one the host started,
     so `uv run` → python counts), `bus_lock_free` is `"waiting"` with the detail `"this host's own check is running (a

@@ -14,6 +14,9 @@ Actions (``act``, a real run):
     hang         (changes)  ignores SIGINT and SIGTERM (and logs that it got them) until SIGKILL.
     old          (query)  an OLD plugin: ignores ``IO_DIAGNOSTICS_RECORD_FD`` and prints its records on stdout.
     crash        (changes)  prints, then exits 3.
+    identify     (moves, the adapter)  moteus_servo's walk without a motor: "Wiggling CAN ID n" for CAN 1, 14, 15 in turn, each
+                 until a line arrives on stdin (Enter) or ``$TERMINAL_WALK_S`` (10) s pass, then "CAN n stopped (mode 0) after
+                 Enter | 10 s"; a Ctrl-C ends it ("stopped (Ctrl-C) while wiggling CAN n"), exit 130.
 
 Records go to the fd named by ``IO_DIAGNOSTICS_RECORD_FD`` when it is set, else to stdout (the old protocol). Every verb
 appends a JSON line to ``$TERMINAL_LOG`` (verb, argv, the signals it got, the record fd, whether stdin is a tty).
@@ -24,6 +27,7 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import signal
 import sys
 import time
@@ -47,7 +51,14 @@ ACTIONS = [
      "scope": "device", "confirm": "Run the old plugin on {name}?", "kind": "touches"},
     {"name": "crash", "title": "Crash", "description": "exits 3", "danger": "changes", "scope": "device",
      "confirm": "Crash on {name}?", "kind": "changes"},
+    {"name": "identify", "title": "Identify (wiggle each board)", "description": "each board wiggles in turn until you press Enter",
+     "danger": "moves", "scope": "device", "kind": "changes",
+     "confirm": "Each board on {name} wiggles about +-5 degrees at low torque, one at a time; press Enter to move on (or wait 10 s).",
+     "preconditions": [["joints_clear", "Nothing is in the way of any joint: each swings a few degrees"]]},
 ]
+WALK_IDS = (1, 14, 15)
+WALK_CONFIRM = ("Each board on fdcanusb FIX1 wiggles about +-5 degrees at low torque, one at a time; press Enter to move on "
+                "(or wait 10 s).")
 
 
 def log(**fields) -> None:
@@ -98,6 +109,30 @@ def calibrate(out) -> int:
     return 1
 
 
+def walk(out) -> int:
+    hold = float(os.environ.get("TERMINAL_WALK_S", "10"))
+    print(f"fdcanusb fixture: {len(WALK_IDS)} boards in CAN-id order: CAN 1, 14, 15. Each wiggles until you press Enter or "
+          f"{hold:g} s pass; Ctrl-C stops.", flush=True)
+    last = None
+    for can_id in WALK_IDS:
+        print(f"Wiggling CAN ID {can_id}", flush=True)
+        log(wiggling=can_id, at=time.time())
+        try:
+            ready, _, _ = select.select([sys.stdin], [], [], hold)
+            if ready:
+                sys.stdin.readline()
+        except KeyboardInterrupt:
+            print(f"stopped (Ctrl-C) while wiggling CAN {can_id}: it was sent stop (mode 0)", flush=True)
+            emit(out, {"record": "event", "code": "ActionInterrupted", "severity": "warn", "message": "identify was interrupted"})
+            return 130
+        print(f"  CAN {can_id} stopped (mode 0) after {'Enter' if ready else f'{hold:g} s'}", flush=True)
+        log(advanced=can_id, by="enter" if ready else "timeout", at=time.time())
+        last = can_id
+    print(f"last wiggled CAN {last}; {len(WALK_IDS)} of {len(WALK_IDS)} wiggled", flush=True)
+    emit(out, {"record": "event", "code": "ActionCompleted", "severity": "info", "message": f"last wiggled CAN {last}"})
+    return 0
+
+
 def main() -> int:
     if VERB == "describe":
         print(json.dumps({"name": "terminal_fixture", "schema": SCHEMA, "matches": ["usb:0483:5740"], "actions": ACTIONS,
@@ -126,7 +161,7 @@ def main() -> int:
         print(json.dumps({"record": "action-result", "action": action, "dry_run": True, "command": ["fixture-tool", "--" + action],
                           "steps": [{"purpose": "do it", "runs": "subprocess", "argv": ["fixture-tool", "--" + action]}],
                           "preconditions": [{"check": "joint_free", "text": "the joint is free to spin", "state": "the person confirms it"}],
-                          "confirm": f"Do {action}?", "token": token}))
+                          "confirm": WALK_CONFIRM if action == "identify" else f"Do {action}?", "token": token}))
         return 0
     if action not in ("check_comms", "old") and arg("--confirm") != token:
         emit(records(), {"record": "event", "code": "ConfirmationRequired", "severity": "info", "message": "pass the token"})
@@ -169,6 +204,8 @@ def main() -> int:
             print("\ninterrupted: the tool was stopped", flush=True)
             emit(out, {"record": "event", "code": "ActionInterrupted", "severity": "warn", "message": "calibrate was interrupted"})
             return 130
+    if action == "identify":
+        return walk(out)
     if action == "check_comms":
         for number in range(int(os.environ.get("TERMINAL_LINES", "5"))):
             print(f"line {number} t={time.time():.6f}", flush=True)

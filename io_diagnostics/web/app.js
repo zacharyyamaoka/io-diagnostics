@@ -1252,7 +1252,13 @@ function linkHealthTable() {
     + '</tbody></table>';
 }
 
-const HELPERS = { esc, usb, icon, shape, pill, ago, kv, statusMark, eventRow, checkBlock };
+const HELPERS = { esc, usb, icon, shape, pill, ago, kv, statusMark, eventRow, checkBlock,
+  // the Utilities tab draws what the menu draws (the same icon, label, state and reason) and its buttons are the menu's
+  util: {
+    icon: (name) => utilIcon(name), label: (action) => utilLabel(action), flow: (action) => flowOf(action),
+    reason: (action) => reasonText(action), runnable: (action) => RUNNABLE.has(action.state),
+    busy: (action) => (S.node ? utilityContext([action], S.node.node.path).busy(action) : ''),
+  } };
 
 // What a detail layout draws from, for the current selection.
 function detailContext(byPath) {
@@ -1441,26 +1447,30 @@ function renderDetail(byPath) {
 // The printer-utility window (Zach, 2026-10-22: Canon "Cleaning": icon, title, one-line description per utility),
 // over docs/actions-vocabulary-v0.1.md. Checks first (query), then maintenance (changes / interrupts), then motion
 // (moves) set apart, then the driver's own non-standard actions under "More".
-// WHY every click is a dry run first: the person reads exactly what would run (argv, steps, preconditions, the
-// plugin's own confirm text) before anything can; a query then runs with one more click, anything else only from a
-// confirm modal that repeats the danger (moves: a ticked box that states the physical precondition). The server
-// runs a real action only with the dry run's token, from this page (io_diagnostics/server.py, docs/api-v1.md).
+// WHY a click runs, or opens one Run page (Zach, 2026-10-29: "There are way too many steps to use a utility"): an
+// immediate utility (a query, Open console, Stop telemetry) runs on the click; any other opens the Run page (renderModal)
+// and runs on its Run button. The server still runs a real action only with a dry run's token, from this page
+// (io_diagnostics/server.py, docs/api-v1.md): the page asks for it behind the click.
 const STANDARD_ORDER = ['check_comms', 'check_firmware', 'update_firmware', 'update_config', 'clear_faults', 'set_id', 'reboot', 'reset_port',
   'stop_all', 'open_console', 'calibrate', 'identify'];
 const STANDARD = new Set(STANDARD_ORDER);
-const DANGER_WORDS = {
-  query: 'Reads only.',
-  interrupts: 'Interrupts what runs: a stream drops, a board restarts or stops.',
-  changes: 'Changes what the device stores: its configuration, id, faults or firmware.',
-  moves: 'Makes hardware move: a motor spins, and a loaded joint can fall.',
-};
 // The host's own reset_port asks twice when something else has the device open (docs/usb-reset.md): the dry run's
-// `second_confirm` names who loses it, and the confirm modal's box must be ticked, like moves' box, before the button works.
+// `second_confirm` names who loses it; the Run page states it, and its Run button confirms it (confirm_holders).
 const secondConfirmOf = (util) => String(((util && util.dry && util.dry.result && util.dry.result.action_result) || {}).second_confirm || '');
-const needsTick = (action, util) => action.danger === 'moves' || Boolean(secondConfirmOf(util));
-// a precondition only a person can check (the host cannot read it passively): what the moves box states
-const PHYSICAL = new Set(['joint_free', 'joint_clear', 'joints_clear', 'target_in_view']);
-const RUNNABLE = new Set(['ready', 'unknown']); // blocked / nothing_to_do keep the Run button disabled
+// WHY only "ready" runs (Zach, 2026-10-29): "The utilities menu should just have 2 states: able to run: just the name of the
+// utility; OR not able to run: greyed out with an explanation underneath as to why." The host never answers "unknown" now
+// (docs/api-v1.md, "Actions: two states"); blocked / waiting / nothing_to_do are greyed with their reason.
+const RUNNABLE = new Set(['ready']);
+// WHY one click for these (Zach, 2026-10-29: "Some things, like Open console (tview), should just run with a single button
+// click. As ergonomic and fast as possible"): nothing to enter, nothing moves, nothing stored on the board changes. Every
+// other utility opens ONE Run page (the confirm modal) whose Run button runs it: "at most 1 other page".
+const IMMEDIATE = new Set(['open_console', 'stop_telemetry']);
+const flowOf = (action) => ((action.danger === 'query' || IMMEDIATE.has(baseName(action.name))) && action.name !== 'set_id'
+  && !action.second_confirm ? 'immediate' : 'confirm');
+// the label in the menu and the tab: a utility that asks first keeps its "…", one that runs on the click has none
+const utilLabel = (action) => `${plainTitle(action.title)}${flowOf(action) === 'confirm' ? '…' : ''}`;
+// the one line under a greyed utility: the host's reason without its "blocked: " lead
+const reasonText = (action) => String(action.reason || action.state || '').replace(/^blocked:\s*/, '');
 const UTIL_ICONS = {
   check_comms: '<path d="M4.9 19.1a10 10 0 0 1 0-14.2M7.8 16.2a6 6 0 0 1 0-8.4M16.2 7.8a6 6 0 0 1 0 8.4M19.1 4.9a10 10 0 0 1 0 14.2"/><circle cx="12" cy="12" r="2"/>',
   check_firmware: '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="m8.5 12 2.5 2.5 4.5-5"/>',
@@ -1507,14 +1517,18 @@ function nodeOf(path, action) {
   return /^\d+$/.test(last) ? Number(last) : null;
 }
 
-// set_id's new CAN id: what the person typed in its row when it is a whole number 1-126 other than the board's own id
-// (the driver refuses anything else), else null. Every other action takes no new id.
+// set_id's new CAN id, typed on its Run page: {id, problem}. id is a whole number 1-126 other than the board's own id and
+// any other board this bus already shows (the driver checks the bus again before it writes); else null with the problem.
 function newIdOf(path, action) {
-  if (action.name !== 'set_id') return null;
+  if (action.name !== 'set_id') return { id: null, problem: '' };
   const text = String(S.newIds.get(path) ?? '').trim();
-  if (!/^\d+$/.test(text)) return null;
+  if (!text) return { id: null, problem: 'Type the new CAN id (1-126).' };
+  if (!/^\d+$/.test(text) || Number(text) < 1 || Number(text) > 126) return { id: null, problem: 'A CAN id is a whole number from 1 to 126.' };
   const id = Number(text);
-  return id >= 1 && id <= 126 && id !== nodeOf(path, action) ? id : null;
+  if (id === nodeOf(path, action)) return { id: null, problem: `This board is CAN ${id} already.` };
+  const bus = String(path).split('/').slice(0, -1).join('/');
+  if (S.byPath && S.byPath.has(`${bus}/${id}`)) return { id: null, problem: `CAN ${id} is already on this bus.` };
+  return { id, problem: '' };
 }
 
 async function postAct(body) {
@@ -1526,23 +1540,75 @@ async function postAct(body) {
   }
 }
 
-async function startDryRun(name) {
+// A click on a utility, from the header's menu or the Utilities tab: the SAME flow (Zach, 2026-10-29: "Unify the buttons on
+// the utility page and the drop-down tray: they are basically the same buttons and should go to the same next page").
+// An immediate one runs now; any other opens its Run page (the modal), which holds its inputs and its confirmations and one
+// Run button. WHY the dry run is still made: the host runs a real action only with a dry run's token (docs/api-v1.md); the
+// page asks for it behind the click (immediate) or while the Run page is open, so the person never sees or types it.
+function startUtility(name) {
   const action = S.node && (S.node.actions || []).find((item) => item.name === name);
-  if (!action) return;
+  if (!action || !RUNNABLE.has(action.state)) return;
   const path = S.node.node.path;
-  const newId = newIdOf(path, action);
-  if (name === 'set_id' && newId === null) return; // no dry run until the row holds a valid new id
-  const util = { path, name, node: nodeOf(path, action), newId, phase: 'dry', dry: null, result: null, error: '', refused: '', ticked: false,
-    title: action.title, danger: action.danger, owner: action.owner, label: entityLabel(path) };
+  if (S.util && S.util.path === path && ['dry', 'running'].includes(S.util.phase) && S.util.name === name) return;
+  const util = { path, name, node: nodeOf(path, action), newId: null, phase: 'confirm', dry: null, result: null, error: '', refused: '',
+    asking: false, title: action.title, danger: action.danger, owner: action.owner, label: entityLabel(path), flow: flowOf(action) };
   S.util = util;
-  S.menuOpen = false; // the dry run reads in the sheet under the button
+  S.menuOpen = false;
   S.runs.delete(path);
+  if (util.flow === 'immediate') {
+    util.phase = 'dry';
+    render();
+    dryRun(util).then((ok) => {
+      if (S.util !== util) return;
+      if (ok) runUtility(); else finishUtility(util, 0, { refused: util.refused, error: util.error });
+    });
+    return;
+  }
   render();
-  const { status, data } = await postAct({ path, action: name, node: util.node, ...(newId !== null ? { new_id: newId } : {}), dry_run: true });
-  if (S.util !== util) return;
-  if (status === 200) { util.dry = data; util.at = Date.now(); } else { util.refused = data.refused || `HTTP ${status}`; util.error = data.error || ''; }
-  util.phase = 'shown';
-  render();
+  if (name !== 'set_id') dryRun(util).then(() => { if (S.util === util) render(); }); // set_id's token names its new id
+}
+// The tree's row menu and the page layouts start a utility by this name (layouts/host.js)
+function startDryRun(name) { startUtility(name); }
+
+// The dry run behind the click: true with util.dry holding the token, else false with util.refused / util.error saying why.
+async function dryRun(util) {
+  util.asking = true;
+  const { status, data } = await postAct({ path: util.path, action: util.name, node: util.node, ...(util.newId !== null ? { new_id: util.newId } : {}), dry_run: true });
+  util.asking = false;
+  const result = (data && data.result) || {};
+  if (status === 200 && data.token && !result.refused && result.outcome === 'ok') {
+    util.dry = { ...data, newId: util.newId };
+    util.at = Date.now();
+    util.refused = '';
+    util.error = '';
+    return true;
+  }
+  util.dry = null;
+  util.refused = result.refused || data.refused || (status === 200 ? result.outcome || 'no token' : `HTTP ${status}`);
+  util.error = result.message || result.stderr_tail || data.error || '';
+  return false;
+}
+
+// The Run page's Run button: the one more click. A token older than 4 min (its window is 5) or for another new id is asked
+// for again first.
+async function confirmRun() {
+  const util = S.util;
+  if (!util || util.phase !== 'confirm' || util.asking) return;
+  const action = S.node && (S.node.actions || []).find((item) => item.name === util.name);
+  if (!action || !RUNNABLE.has(action.state)) return;
+  if (util.name === 'set_id') {
+    const typed = newIdOf(util.path, action);
+    if (typed.id === null) return;
+    util.newId = typed.id;
+  }
+  const fresh = util.dry && util.dry.token && util.dry.newId === util.newId && Date.now() - util.at < 240000;
+  if (!fresh) {
+    render();
+    const ok = await dryRun(util);
+    if (S.util !== util) return;
+    if (!ok) { render(); return; }
+  }
+  runUtility();
 }
 
 async function runUtility() {
@@ -1697,21 +1763,6 @@ function stashRun(path) {
   if (path && !S.util && S.runs.has(path)) { S.util = S.runs.get(path); S.runs.delete(path); }
 }
 
-// The host's passive evaluation (pass / fail / unknown + detail) beside the plugin's own reading, by check name.
-function preconditionRows(action, answer) {
-  const plugin = new Map(((answer && answer.preconditions) || []).map((item) => [item.check, item]));
-  const rows = (action.preconditions || []).map((item) => ({ check: item.check, text: item.text, state: item.state, detail: item.detail,
-    plugin: plugin.has(item.check) ? plugin.get(item.check).state : '' }));
-  for (const [check, item] of plugin) if (!rows.some((row) => row.check === check)) rows.push({ check, text: item.text, state: 'unknown', detail: '', plugin: item.state });
-  return rows;
-}
-function preconditionsHtml(rows) {
-  if (!rows.length) return '<div class="muted">No preconditions.</div>';
-  // WHY muted when not met: a precondition is not a diagnostic; warn / error colours are reserved for those (round 3)
-  return `<ul class="pre">${rows.map((row) => `<li class="pre-${esc(row.state)}"><span class="st ${esc(row.state)}">${{ pass: '✓', fail: '✗' }[row.state] || '?'}</span>`
-    + `<span>${esc(row.text)}</span><span class="why">${esc([row.detail, row.plugin ? `driver: ${row.plugin}` : ''].filter(Boolean).join(' · '))}</span></li>`).join('')}</ul>`;
-}
-
 const commandOf = (answer) => {
   const command = answer && answer.command;
   if (Array.isArray(command) && command.length) return command.join(' ');
@@ -1728,24 +1779,6 @@ function stepsHtml(answer) {
 }
 
 const FAILED_CODES = new Set(['ActionRefused', 'ConfirmationRequired', 'ConfirmRequired', 'ActionFailed']);
-function resultHtml(util) {
-  if (!util.result) {
-    return `<div class="u-result fail"><div class="u-result-h">${shape('error', 'not run')}<b>Not run</b> · ${esc(util.refused)}</div><div>${esc(util.error)}</div></div>`;
-  }
-  const result = util.result;
-  const records = result.records || [];
-  const refusedByDriver = records.find((record) => FAILED_CODES.has(record.code));
-  const ok = !result.refused && result.outcome === 'ok' && !refusedByDriver;
-  const head = ok ? `<b>Done</b> · ${esc(result.message || `${result.outcome} in ${result.duration_s} s`)}`
-    : `${shape('error', 'failed')}<b>${esc(result.refused ? `Refused: ${result.refused}` : refusedByDriver ? `${refusedByDriver.code}` : result.outcome)}</b> · ${esc(result.message || (refusedByDriver && refusedByDriver.message) || '')}`;
-  const lines = records.map((record) => `<li><span class="mono">${esc(record.code || record.record || '')}</span> ${esc(record.message || record.name || '')}</li>`).join('');
-  return `<div class="u-result ${ok ? 'ok' : 'fail'}"><div class="u-result-h">${head}</div>`
-    + `${lines ? `<ul class="u-records">${lines}</ul>` : ''}`
-    + `${(result.rejected || []).length ? `<pre class="u-tail">${esc(result.rejected.join('\n'))}</pre>` : ''}`
-    + `${result.stderr_tail ? `<pre class="u-tail">${esc(result.stderr_tail)}</pre>` : ''}`
-    + `<div class="muted">${esc(result.plugin || '')} · ${esc(result.outcome)} · ${esc(result.duration_s)} s · exit ${esc(result.returncode)}</div></div>`;
-}
-
 // The N runs of a batch, in the order they start: one line each (the board's name and the action, and when it starts: now, or behind how
 // many earlier runs of its exclusive group), then the members the batch leaves out and why.
 function batchRunsHtml(batch) {
@@ -1757,50 +1790,6 @@ function batchRunsHtml(batch) {
     + `<ol class="u-batch" data-batch-runs="${esc(batch.n)}">${batch.runs.map((run) => `<li><span class="u-b-n">${esc(run.order)}</span><span class="u-b-l">${esc(run.label)}</span>`
       + `<span class="u-b-s muted" title="${esc(run.starts)}">${run.after > 0 ? `after ${esc(run.after)}` : 'now'}</span></li>`).join('')}</ol>`
     + (skipped.length ? `<div class="u-b-skip muted">Not included: ${esc(text)}</div>` : '');
-}
-
-function dryRunPanel(action) {
-  const util = S.util;
-  const close = '<button class="btn" data-util-close>Cancel</button>';
-  // asking / running: no panel and no live output; the row itself greys out with one quiet line ("Asking … what it would
-  // run…", "Checking communication… 3 s"; Zach, 2026-10-23), and the panel comes back with the result
-  if (util.phase === 'dry' || util.phase === 'running') return '';
-  if (!util.dry) return `<div class="u-panel">${resultHtml(util)}<div class="u-foot">${close}</div></div>`;
-  const result = util.dry.result || {};
-  const answer = result.action_result || {};
-  if (result.refused || result.outcome !== 'ok' || !util.dry.token) {
-    return `<div class="u-panel"><div class="u-result fail"><div class="u-result-h">${shape('error', 'dry run failed')}<b>The dry run did not answer</b> · ${esc(result.refused || result.outcome)}</div>`
-      + `<div>${esc(result.message || '')}</div>${result.stderr_tail ? `<pre class="u-tail">${esc(result.stderr_tail)}</pre>` : ''}</div><div class="u-foot">${close}</div></div>`;
-  }
-  const batch = result.batch || null; // an all:<action> of a composite: N runs, one confirm (docs/composition-v1.md section 6)
-  const command = commandOf(answer);
-  const confirm = answer.confirm || action.confirm;
-  const runnable = RUNNABLE.has(action.state);
-  // the token's window runs on this computer's clock (a replay's clock shows the recorded time)
-  const expires = `${Math.round((util.dry.window_s || 300) / 60)} min`;
-  let foot;
-  if (util.phase === 'done') foot = `<button class="btn" data-util-again>Dry run again</button>${close}`;
-  else if (action.danger === 'query') foot = `<button class="btn primary query" data-util-run${runnable ? '' : ' disabled'}>Run ${esc(plainTitle(action.title))}</button>${close}`;
-  else foot = `<button class="btn primary ${esc(action.danger)}" data-util-run${runnable ? '' : ' disabled'}>Continue…</button>${close}`;
-  // the sheet stays small (round 3.5): what will run, its preconditions, the confirm text, Run / Cancel; the steps and
-  // the plugin command line it runs through are one click further ("How it runs ▸")
-  const how = batch ? `<div class="u-k">Each run</div><div class="u-v"><ol class="u-steps">${batch.runs.map((run) => `<li><span>${esc(run.label)}</span> <code>${esc((run.argv || []).join(' '))}</code></li>`).join('')}</ol></div>`
-    : `${stepsHtml(answer) ? `<div class="u-k">Steps</div><div class="u-v">${stepsHtml(answer)}</div>` : ''}`
-    + `<div class="u-k">Through</div><div class="u-v"><code class="u-argv">${esc((result.argv || []).join(' '))}</code></div>`;
-  return `<div class="u-panel">`
-    + `<div class="u-panel-h">Dry run · nothing ran<span class="right muted">its token is good for ${esc(expires)}</span></div>`
-    + (batch ? `<div class="u-k">Will run</div><div class="u-v">${batchRunsHtml(batch)}</div>`
-      : `<div class="u-k">Will run</div><div class="u-v"><code class="u-cmd">${esc(command || 'in-process (no command line)')}</code>`
-      + `${answer.command_kind ? ` <span class="tag recorded">${esc(answer.command_kind)}</span>` : ''}</div>`)
-    + `<div class="u-k">Preconditions</div><div class="u-v">${preconditionsHtml(preconditionRows(action, answer))}</div>`
-    // WHY the fix before the confirm: when RobotDx may not reset the device, what to do about it is the sheet's point
-    + `${answer.fix ? `<div class="u-k">To allow it</div><div class="u-v"><pre class="u-tail u-fix">${esc(answer.fix)}</pre></div>` : ''}`
-    + `${confirm ? `<div class="u-k">Confirm</div><div class="u-v"><div class="confirm">${esc(confirm)}</div></div>` : ''}`
-    + `${!runnable ? `<div class="banner blocked">◌ <span><b>${esc(action.reason || action.state)}</b></span></div>` : ''}`
-    + `<button class="u-how-t" data-sheet-more aria-expanded="${S.sheetMore}">How it runs ${S.sheetMore ? '▾' : '▸'}</button>`
-    + `<div class="u-how${S.sheetMore ? ' open' : ''}">${how}</div>`
-    + `${util.phase === 'done' ? resultHtml(util) : ''}`
-    + `<div class="u-foot">${foot}</div></div>`;
 }
 
 // "Check communication" -> "Checking communication", "Run calibration…" -> "Running calibration", "Stop all" ->
@@ -1818,8 +1807,8 @@ function gerund(title) {
 }
 
 // The ctx a utility menu draws from (window.IOUtilityMenus[id].html(ctx), docs/round2-seams.md §6). The page owns the
-// whole flow: a [data-util=<name>] click is always a dry run; the panel (ctx.panel) carries Run / Continue…, and
-// anything but a query runs only from the confirm modal (moves: its ticked box), with the dry run's token.
+// whole flow: a [data-util=<name>] click runs an immediate utility at once and opens any other's Run page (the modal),
+// the same for the menu and the Utilities tab.
 function utilityContext(actions, path) {
   const active = S.util && S.util.path === path ? S.util : null;
   const isActive = (action) => Boolean(active && active.name === action.name);
@@ -1830,44 +1819,46 @@ function utilityContext(actions, path) {
     owner: (actions[0] && actions[0].owner) || '',
     active,
     groups: utilityGroups(actions),
-    h: { esc, utilIcon, plainTitle, gerund, shape },
+    h: { esc, utilIcon, plainTitle, gerund, shape, utilLabel, reasonText },
     isActive,
     phase,
     runnable: (action) => RUNNABLE.has(action.state),
-    // set_id names its new id in the row itself; its dry run stays disabled until the box holds a valid one
-    needsId: (action) => action.name === 'set_id',
-    waiting: (action) => action.name === 'set_id' && newIdOf(path, action) === null,
-    newIdBox: (action) => (action.name === 'set_id' ? `<label class="u-newid"><span>New id (1-126)</span><input type="number" min="1" max="126" step="1" inputmode="numeric"`
-      + ` data-util-newid value="${esc(S.newIds.get(path) ?? '')}" aria-label="New CAN id (1-126)"></label>` : ''),
-    // the quiet line under a busy utility: '' when it is not asking or running
+    flow: flowOf,
+    // WHY none: the new id is typed on set_id's Run page, the same page the Utilities tab opens (Zach, 2026-10-29)
+    needsId: () => false,
+    waiting: () => false,
+    newIdBox: () => '',
+    // the quiet line under a busy utility: '' when it is not starting or running
     busy: (action) => {
       const now = phase(action);
-      if (now === 'dry') return `Asking ${action.owner} what it would run…`;
+      if (now === 'dry') return `Starting ${plainTitle(action.title)}…`;
       if (now === 'running') return `${gerund(action.title)}… ${Math.max(0, Math.round((Date.now() - active.startedAt) / 1000))} s`;
       return '';
     },
-    // round 3.5: the dry run reads in the sheet under the Utilities ▾ button, never inside the menu's rows
     panel: () => '',
   };
 }
 
 // The menu's rows: the active utility menu (u0's quiet rows by default: icon + title, the description as a tooltip,
-// Checks / Maintenance / Motion) inside the header's dropdown.
+// Checks / Maintenance / Motion) inside the header's dropdown, then "All utilities…", which opens the Utilities tab.
 function renderUtilities(actions, path) {
   if (!actions || !actions.length) return '';
   const menu = menus()[S.menu] || menus()[DEFAULTS.menu];
   if (!menu) return '<div class="muted">No utility menu loaded (utilities/*.js).</div>';
+  // WHY at the bottom (Zach, 2026-10-29): "At the bottom of the menu, an option to expand, which takes you to the main utility page"
+  const all = '<div class="u-allrow"><button class="u-all" data-util-all role="menuitem">'
+    + '<svg class="u-ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M9 9v11"/></svg>'
+    + '<span class="u-text"><span class="u-title">All utilities…</span></span></button></div>';
   try {
-    return menu.html(utilityContext(actions, path)) || '';
+    return `${menu.html(utilityContext(actions, path)) || ''}${all}`;
   } catch (error) {
     console.error(`utility menu ${S.menu}:`, error);
     return `<div class="err">utility menu ${esc(S.menu)} failed: ${esc(error)}</div>`;
   }
 }
 
-// The entity header's tools: Utilities ▾ at the same place on every entity page (disabled where there are none), its
-// menu, and the dry-run sheet anchored under it. The sheet is the dry run (what will run, preconditions, Run / Cancel);
-// anything but a query then confirms in the modal, a safety gate and not feedback.
+// The entity header's tools: Utilities ▾ at the same place on every entity page (disabled where there are none) and its
+// menu. A click in it runs the utility or opens its Run page (the modal), exactly as the Utilities tab's button does.
 const CARET = '<svg class="ent-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
 function entityTools() {
   const detail = S.sel && !S.selKey && S.node && S.node.node.path === S.sel ? S.node : null;
@@ -1876,22 +1867,11 @@ function entityTools() {
   const none = !actions.length;
   const open = S.menuOpen && !none;
   const title = S.selKey ? 'A grouping row has no utilities' : !detail ? 'Utilities (loading…)'
-    : none ? 'No utilities for this entity' : `${actions.length} utilit${actions.length === 1 ? 'y' : 'ies'} · ${actions[0].owner || 'its plugin'} runs them · every one is a dry run first`;
+    : none ? 'No utilities for this entity' : `${actions.length} utilit${actions.length === 1 ? 'y' : 'ies'} · ${actions[0].owner || 'its plugin'} runs them`;
   const button = `<button class="ent-util-btn${open ? ' on' : ''}" id="ent-util-btn" aria-haspopup="menu" aria-expanded="${open}" aria-controls="ent-menu"${none ? ' disabled' : ''} title="${esc(title)}">`
     + `<span>Utilities</span>${CARET}</button>`;
   const menu = open ? `<div class="ent-menu" id="ent-menu" role="menu" aria-label="Utilities">${renderUtilities(actions, path)}</div>` : '';
-  const util = S.util && S.util.path === path ? S.util : null;
-  const sheet = !open && util && ['dry', 'shown', 'confirm'].includes(util.phase) ? sheetHtml(util, actions) : '';
-  return `<div class="ent-tools">${button}${menu}${sheet}</div>`;
-}
-
-function sheetHtml(util, actions) {
-  const action = actions.find((item) => item.name === util.name);
-  if (!action) return '';
-  const danger = action.danger !== 'query' ? `<span class="danger ${esc(action.danger)}">${esc(action.danger)}</span>` : '';
-  const body = util.phase === 'dry' ? `<div class="ent-asking u-busy">Asking ${esc(action.owner)} what it would run…</div>` : dryRunPanel(action);
-  return `<div class="ent-sheet" role="dialog" aria-label="${esc(`Dry run: ${plainTitle(action.title)}`)}">`
-    + `<div class="ent-sheet-h">${utilIcon(action.name)}<b>${esc(plainTitle(action.title))}</b>${danger}</div>${body}</div>`;
+  return `<div class="ent-tools">${button}${menu}</div>`;
 }
 
 // The quiet one-line run status under the entity header: "Updating firmware on moteus-c1 · CAN 21… 42 s" while it runs
@@ -1899,8 +1879,11 @@ function sheetHtml(util, actions) {
 // the run's records and output tail. Only a failure is a diagnostic-level line, the one place colour is allowed.
 function runLine() {
   const path = S.selKey ? null : S.sel;
-  const util = S.util && S.util.path === path && (S.util.phase === 'running' || S.util.phase === 'done') ? S.util : null;
+  const util = S.util && S.util.path === path && ['dry', 'running', 'done'].includes(S.util.phase) ? S.util : null;
   if (!util) return '';
+  if (util.phase === 'dry') {
+    return `<div class="ent-run running" role="status" aria-live="polite"><span class="ent-run-t">Starting ${esc(plainTitle(util.title))} on ${esc(util.label)}…</span></div>`;
+  }
   const run = util.runId && window.IORuns ? window.IORuns.get(util.runId) : null;
   const custom = run && mountedRunView && runViews()[mountedRunView].runLine ? runViews()[mountedRunView].runLine(util, run, runsCtx) : null;
   if (custom) return custom; // a run view that draws the line itself (r2: the output in place)
@@ -1931,41 +1914,55 @@ function runDetailsHtml(util) {
     + `${(result.argv || []).length ? ` · <code>${esc(result.argv.join(' '))}</code>` : ''}</div>`;
 }
 
-// The confirm modal for anything but a query: the danger repeated in words, the plugin's confirm text, what runs,
-// the preconditions; for moves a box stating the physical precondition must be ticked, and the button says the action.
+// The Run page: the ONE page between a click and a run, the same for the menu and the Utilities tab. It says in plain words
+// what happens (the plugin's own confirm sentence, from the dry run once it has answered), holds the inputs (set_id's new
+// id), states what the person confirms by pressing Run (a moves utility's "nothing is in the way", the host's second
+// confirmation), and has one Run button. WHY no tick box (Zach, 2026-10-29: "After you click a utility it can go to at
+// most 1 other page, if you need to enter information or confirm the area is clear, and then it should just run"): the
+// confirmations are the question the Run button answers, so a confirm utility runs on exactly one more click.
 function renderModal() {
   const back = $('modal');
   const util = S.util;
   const action = util && util.phase === 'confirm' && S.node && util.path === S.node.node.path && (S.node.actions || []).find((item) => item.name === util.name);
-  if (!action || !util.dry) {
+  if (!action) {
     back.hidden = true;
+    S.modalFocused = false;
     if (S.modalHtml) { back.innerHTML = ''; S.modalHtml = ''; }
     return;
   }
   back.hidden = false;
-  const answer = (util.dry.result || {}).action_result || {};
-  const batch = (util.dry.result || {}).batch || null;
-  const rows = preconditionRows(action, answer);
-  const again = secondConfirmOf(util);
-  const moves = needsTick(action, util);
-  const physical = rows.find((row) => PHYSICAL.has(row.check)) || rows.find((row) => /person confirms/.test(row.plugin || ''));
-  const tick = again || (physical ? physical.text : (answer.confirm || action.confirm));
+  const answer = (util.dry && util.dry.result && util.dry.result.action_result) || {};
+  const batch = (util.dry && util.dry.result && util.dry.result.batch) || null;
   const label = (S.built && S.built.byEntity.has(util.path) && S.built.byKey.get(S.built.byEntity.get(util.path)).entity === util.path)
     ? S.built.byKey.get(S.built.byEntity.get(util.path)).label : S.node.node.name;
-  const html = `<div class="modal m-${esc(action.danger)}" role="dialog" aria-modal="true" aria-labelledby="m-title">`
-    + `<header><h2 id="m-title">${esc(plainTitle(action.title))} · ${esc(label)}</h2><span class="danger ${esc(action.danger)}">${esc(action.danger)}</span></header>`
-    // WHY the utility's own icon, not a warn / error shape: those shapes mean a diagnostic result (round 3); moves gets
-    // the strongest NEUTRAL treatment instead (a heavy frame, the ticked box, an inverted button)
-    + `<div class="body"><div class="m-danger">${utilIcon(action.name)}<b>${esc(DANGER_WORDS[action.danger] || 'Needs your confirmation: its danger class is not one this page knows.')}</b></div>`
-    + `<div class="confirm">${esc(answer.confirm || action.confirm)}</div>`
-    + `${util.name === 'set_id' && util.newId !== null ? `<div class="m-newid">CAN ${esc(util.node)} → CAN ${esc(util.newId)}</div>` : ''}`
-    + (batch ? `<div class="m-runs">${batchRunsHtml(batch)}</div>` : `<div class="m-runs">Runs <code>${esc(commandOf(answer) || 'in-process')}</code></div>`)
-    + `<div class="m-pre-h">Preconditions</div>${preconditionsHtml(rows)}`
-    + `${moves ? `<label class="m-tick"><input type="checkbox" data-util-tick${util.ticked ? ' checked' : ''}><span>${again ? 'I understand: ' : 'I checked: '}${esc(tick)}</span></label>` : ''}`
-    + `</div><footer><span class="note">${esc(action.owner)} runs it once you press the button; the dry run's token is good for ${esc(Math.round((util.dry.window_s || 300) / 60))} min.</span>`
+  const again = secondConfirmOf(util) || action.second_confirm || '';
+  const confirmations = [...(action.confirmations || []), ...(again ? [again] : [])];
+  const typed = action.name === 'set_id' ? newIdOf(util.path, action) : null;
+  const ready = RUNNABLE.has(action.state) && !util.asking && (!typed || typed.id !== null);
+  const input = typed ? `<label class="m-newid-in"><span>New CAN id (1-126)</span><input type="number" min="1" max="126" step="1" inputmode="numeric"`
+    + ` data-util-newid value="${esc(S.newIds.get(util.path) ?? '')}" aria-label="New CAN id (1-126)" autofocus></label>`
+    + `<div class="m-newid">${typed.id !== null ? `CAN ${esc(util.node)} → CAN ${esc(typed.id)}` : `<span class="muted">${esc(typed.problem)}</span>`}</div>` : '';
+  const failed = !util.asking && !util.dry && util.refused ? `<div class="m-refused">${shape('error', 'not run')}<span><b>${esc(util.refused)}</b>${util.error ? ` · ${esc(util.error)}` : ''}</span></div>` : '';
+  // a batch (all:<action> of a composite) shows its N runs in the open: what one Run starts is the point of its page
+  const runs = batch ? `<div class="m-runs">${batchRunsHtml(batch)}</div>` : '';
+  const how = util.dry && !batch ? `<code class="u-cmd">${esc(commandOf(answer) || 'in-process (no command line)')}</code>${stepsHtml(answer)}` : '';
+  const html = `<div class="modal m-${esc(action.danger)}" role="dialog" aria-modal="true" aria-labelledby="m-title" data-run-page="${esc(action.name)}">`
+    + `<header>${utilIcon(action.name)}<h2 id="m-title">${esc(plainTitle(action.title))} · ${esc(label)}</h2><span class="danger ${esc(action.danger)}">${esc(action.danger)}</span></header>`
+    + `<div class="body"><div class="confirm" data-run-says>${esc(answer.confirm || action.confirm)}</div>${input}${runs}`
+    + (confirmations.length ? `<div class="m-pre-h">Pressing Run confirms</div><ul class="m-confirms">${confirmations.map((text) => `<li>${esc(text)}</li>`).join('')}</ul>` : '')
+    + failed
+    + (how ? `<button class="u-how-t" data-sheet-more aria-expanded="${S.sheetMore}">How it runs ${S.sheetMore ? '▾' : '▸'}</button><div class="u-how${S.sheetMore ? ' open' : ''}">${how}</div>` : '')
+    + `</div><footer><span class="note">${util.asking ? `Asking ${esc(action.owner)} for its token…` : `${esc(action.owner)} runs it when you press Run.`}</span>`
     + `<button class="btn" data-util-cancel>Cancel</button>`
-    + `<button class="btn primary ${esc(action.danger)}" data-util-confirm${moves && !util.ticked ? ' disabled' : ''}>${esc(plainTitle(action.title))}</button></footer></div>`;
-  if (html !== S.modalHtml) { back.innerHTML = html; S.modalHtml = html; }
+    + `<button class="btn primary ${esc(action.danger)}" data-util-confirm${ready ? '' : ' disabled'}>Run</button></footer></div>`;
+  if (html !== S.modalHtml) {
+    const typing = document.activeElement && document.activeElement.matches && document.activeElement.matches('#modal [data-util-newid]');
+    back.innerHTML = html;
+    S.modalHtml = html;
+    const box = back.querySelector('[data-util-newid]');
+    if (box && (typing || !S.modalFocused)) { const value = box.value; box.focus(); box.value = ''; box.value = value; }
+    S.modalFocused = true;
+  }
 }
 
 // ------------------------------------------------------------------------ the expected setup ----
@@ -2239,28 +2236,14 @@ document.addEventListener('click', (event) => {
   }
   if (t.closest('[data-tab]')) { S.view = t.closest('[data-tab]').dataset.tab; S.chip = false; pushNav(); return render(); }
   if (t.closest('[data-close]')) { S.chip = false; return render(); }
-  // utilities: a click dry-runs; Run (a query) or Continue… (the confirm modal) only after it
+  // utilities, from the menu or the Utilities tab: an immediate one runs on the click, any other opens its Run page
+  if (t.closest('[data-util-all]')) { S.menuOpen = false; openPage('utilities'); return undefined; }
   const util = t.closest('[data-util]');
-  if (util) { startDryRun(util.dataset.util); return undefined; }
-  if (t.closest('[data-util-again]') && S.util) { startDryRun(S.util.name); return undefined; }
-  if (t.closest('[data-util-run]') && S.util) {
-    const action = S.node && (S.node.actions || []).find((item) => item.name === S.util.name);
-    if (!action) return undefined;
-    if (action.danger === 'query') { runUtility(); return undefined; }
-    S.util.phase = 'confirm';
-    S.util.ticked = false;
-    return render();
-  }
-  if (t.closest('[data-util-confirm]')) {
-    const action = S.util && S.node && (S.node.actions || []).find((item) => item.name === S.util.name);
-    if (action && (!needsTick(action, S.util) || S.util.ticked)) runUtility(); // moves, or something else has the device open: only with the box ticked
-    return undefined;
-  }
-  if (t.closest('[data-util-cancel]') || t.id === 'modal') { if (S.util && S.util.phase === 'confirm') S.util.phase = 'shown'; return render(); }
-  if (t.closest('[data-util-close]')) { S.util = null; return render(); }
+  if (util) { if (!util.disabled) startUtility(util.dataset.util); return undefined; }
+  if (t.closest('[data-util-confirm]')) { confirmRun(); return undefined; }
+  if (t.closest('[data-util-cancel]') || t.id === 'modal') { if (S.util && S.util.phase === 'confirm') S.util = null; return render(); }
   const showRun = t.closest('[data-run-open]');
   if (showRun) { openRun(showRun.dataset.runOpen); return undefined; }
-  if (t.closest('[data-util-tick]')) return undefined; // its change event records the tick
   // the Expected setup card: a click opens its confirm; only the confirm's button writes the file
   const setupButton = t.closest('[data-setup]');
   if (setupButton && S.node && S.node.setup) {
@@ -2305,19 +2288,13 @@ $('structure-toggles').addEventListener('change', (event) => {
   if (box) setToggle(box.dataset.opt, box.checked);
 });
 document.addEventListener('change', (event) => {
-  if (event.target.closest('[data-util-tick]') && S.util) { S.util.ticked = event.target.checked; render(); }
   if (event.target.closest('[data-setup-rig]') && S.setup) { S.setup.rig = event.target.value; render(); }
 });
 document.addEventListener('input', (event) => {
   if (event.target.closest('[data-setup-reason]') && S.setup) { S.setup.reason = event.target.value; render(); return; }
   const box = event.target.closest('[data-util-newid]');
-  const action = box && S.node && (S.node.actions || []).find((item) => item.name === 'set_id');
-  if (!action) return;
-  const path = S.node.node.path;
-  S.newIds.set(path, box.value);
-  // a dry run shown for another new id no longer says what would run: close it, the person dry-runs the new one
-  const util = S.util;
-  if (util && util.path === path && util.name === 'set_id' && util.phase !== 'running' && util.newId !== newIdOf(path, action)) S.util = null;
+  if (!box || !S.util || S.util.name !== 'set_id' || S.util.phase !== 'confirm') return;
+  S.newIds.set(S.util.path, box.value); // the Run page checks it as it is typed (newIdOf); its Run button asks for the token
   render();
 });
 document.addEventListener('keydown', (event) => {
@@ -2330,12 +2307,12 @@ document.addEventListener('keydown', (event) => {
     event.preventDefault();
     return;
   }
+  if (event.key === 'Enter' && event.target.closest && event.target.closest('#modal [data-util-newid]')) { confirmRun(); event.preventDefault(); return; }
   if (event.key !== 'Escape') return;
-  // one layer at a time, innermost first: the confirm, the Utilities menu, its dry-run sheet, the setup edit, the
-  // chip, View options, then the inspector
-  if (S.util && S.util.phase === 'confirm') S.util.phase = 'shown';
+  // one layer at a time, innermost first: the Run page, the Utilities menu, the setup edit, the chip, View options,
+  // then the inspector
+  if (S.util && S.util.phase === 'confirm') S.util = null;
   else if (S.menuOpen) { S.menuOpen = false; render(); $('ent-util-btn') && $('ent-util-btn').focus(); event.preventDefault(); return; }
-  else if (S.util && (S.util.phase === 'shown' || S.util.phase === 'dry') && S.util.path === S.sel) S.util = null;
   else if (S.setup && S.setup.phase === 'confirm') S.setup = null;
   else if (S.chip) S.chip = false;
   else if (S.vo) setViewOptions(false);

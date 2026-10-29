@@ -9,13 +9,14 @@
 // and refuses to press anything unless /api/v1/plugins lists only the fixture plugin v6_scenario. Checks:
 //   offered     Reset USB port is in the Utilities menu of a USB device row, its port row and a hub, under Maintenance with the
 //               plain word `interrupts`, and not on a bus row
-//   dry run     the sheet: the exact command (the fake usbreset, by bus/device number), the four preconditions, the confirm text
-//               naming the device and warning that tview, a camera stream or an experiment loses it
-//   holders     a process with the device open is named in the sheet; the confirm modal asks again with a box ("I understand ..."),
-//               its button stays disabled until the box is ticked; the run then goes through the fake tool exactly once
-//   privilege   a device whose node this user cannot write: the sheet is blocked, "To allow it" shows the udev rule for THAT
-//               vendor:product, Continue is disabled and the fake tool never ran
-//   hub         a hub's dry run names a holder of something plugged in behind it
+//   run page    (2026-10-29: one Run page, no dry-run sheet, no box to tick) the exact command (the fake usbreset, by bus/device
+//               number) under "How it runs", the confirm text naming the device and warning that tview, a camera stream or an
+//               experiment loses it
+//   holders     a process with the device open is what pressing Run confirms ("tview (pid 4242) will lose ..."); nothing runs
+//               before Run; Run goes through the fake tool exactly once, with confirm_holders
+//   privilege   a device whose node this user cannot write: Reset USB port… is greyed with why, the Utilities tab's "How to allow
+//               it" shows the udev rule for THAT vendor:product, and the fake tool never ran
+//   hub         a hub's Run page names a holder of something plugged in behind it
 // Screenshots: reports/media/usb-reset/*.png (sheets light and dark, the modal). Exits 1 on any failed check.
 'use strict';
 
@@ -127,20 +128,33 @@ async function menu(page) {
   if (!(await page.$('.ent-menu'))) await page.click('#ent-util-btn');
   await page.waitForSelector('.ent-menu [data-util]', { timeout: 5000 });
 }
+// Reset USB port…'s Run page (2026-10-29: the one step between the click and the run), once its dry run has answered
 async function sheet(page) {
   await menu(page);
   await page.click('[data-util="reset_port"]');
-  await page.waitForSelector('.ent-sheet .u-panel .u-cmd', { timeout: 20000 });
+  await page.waitForSelector('#modal:not([hidden]) [data-run-page="reset_port"]', { timeout: 20000 });
+  await page.waitForFunction(() => S.util && S.util.dry, null, { timeout: 20000 });
   await page.waitForTimeout(300);
   await page.mouse.move(5, 995);
   return page.evaluate(() => ({
-    cmd: document.querySelector('.u-panel .u-cmd').textContent,
-    pre: [...document.querySelectorAll('.u-panel .pre li')].map((li) => ({ state: li.className, text: li.textContent })),
-    confirm: (document.querySelector('.u-panel .confirm') || {}).textContent || '',
-    banner: (document.querySelector('.u-panel .banner') || {}).textContent || '',
-    fix: (document.querySelector('.u-panel .u-fix') || {}).textContent || '',
-    proceed: document.querySelector('.u-panel [data-util-run]') ? { text: document.querySelector('.u-panel [data-util-run]').textContent, disabled: document.querySelector('.u-panel [data-util-run]').disabled } : null,
+    cmd: (document.querySelector('#modal .u-cmd') || {}).textContent || '',
+    confirm: (document.querySelector('#modal [data-run-says]') || {}).textContent || '',
+    confirms: [...document.querySelectorAll('#modal .m-confirms li')].map((li) => li.textContent),
+    run: (() => { const button = document.querySelector('#modal [data-util-confirm]'); return button ? { text: button.textContent, disabled: button.disabled } : null; })(),
   }));
+}
+// a reset_port that cannot run: its greyed menu line, and the Utilities tab's "How to allow it" opened
+async function blocked(page) {
+  await menu(page);
+  const item = await page.evaluate(() => { const button = document.querySelector('.ent-menu [data-util="reset_port"]');
+    return { disabled: button.disabled, reason: (button.querySelector('.u-reason') || {}).textContent || '' }; });
+  await page.keyboard.press('Escape');
+  await page.click('[data-d6-tab="utilities"]');
+  await page.waitForSelector('[data-util-row="reset_port"] [data-d6-fix]', { timeout: 10000 });
+  await page.click('[data-util-row="reset_port"] [data-d6-fix]');
+  await page.waitForSelector('[data-util-row="reset_port"] pre.d6-fix');
+  return { ...item, fix: await page.textContent('[data-util-row="reset_port"] pre.d6-fix'),
+    button: await page.evaluate(() => document.querySelector('[data-util-row="reset_port"] [data-util]').disabled) };
 }
 const shot = async (page, name) => page.screenshot({ path: path.join(SHOTS, name), clip: await page.locator('#inspector').boundingBox() });
 
@@ -149,7 +163,8 @@ async function main() {
   const root = fakeMachine();
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'usb-reset-state-'));
   const { chromium } = require(PLAYWRIGHT);
-  const browser = require('./pin_layout').pinDetailLayout(await chromium.launch({ executablePath: CHROME, headless: true }));
+  // d6 (the entity page): a greyed reset's "How to allow it" lives in its Utilities tab since 2026-10-29
+  const browser = require('./pin_layout').pinDetailLayout(await chromium.launch({ executablePath: CHROME, headless: true }), 'd6');
   const server = await startServer(root, stateDir);
   const base = server.base;
   const calls = () => fs.readFileSync(path.join(root, 'calls.log'), 'utf8').split('\n').filter(Boolean);
@@ -166,8 +181,9 @@ async function main() {
     await open(darkPage, base, ADAPTER);
     await sheet(darkPage);
     await shot(darkPage, 'sheet-holder-dark.png');
+    await darkPage.keyboard.press('Escape');
     await open(darkPage, base, LOCKED);
-    await sheet(darkPage);
+    await blocked(darkPage);
     await shot(darkPage, 'sheet-blocked-dark.png');
     await dark.close();
 
@@ -184,7 +200,7 @@ async function main() {
       return button ? { title: button.querySelector('.u-title').textContent, danger: button.querySelector('.danger').textContent, group: button.closest('.ugroup').className,
         word: getComputedStyle(button.querySelector('.danger')).backgroundColor } : null;
     });
-    check('offered: on a USB device, under Maintenance', offered && offered.title === 'Reset USB port' && offered.danger === 'interrupts' && /ugroup-maintenance/.test(offered.group)
+    check('offered: on a USB device, under Maintenance', offered && offered.title === 'Reset USB port…' && offered.danger === 'interrupts' && /ugroup-maintenance/.test(offered.group)
       && offered.word === 'rgba(0, 0, 0, 0)', offered);
     await shot(page, 'menu.png');
     await page.keyboard.press('Escape');
@@ -197,39 +213,26 @@ async function main() {
     const bus = await page.evaluate(() => ({ disabled: document.getElementById('ent-util-btn').disabled, actions: (S.node.actions || []).map((a) => a.name) }));
     check('offered: not on a bus row', bus.disabled && !bus.actions.includes('reset_port'), bus);
 
-    // ---- the dry run of a device something holds, then the second confirmation, then the run
+    // ---- the Run page of a device something holds: pressing Run confirms who loses it, then the run (2026-10-29: one step)
     await open(page, base, ADAPTER);
     const dry = await sheet(page);
-    check('dry run: the exact command, by bus/device number', dry.cmd === `${tool} 001/002`, dry.cmd);
-    check('dry run: four preconditions, the holder named', dry.pre.length === 4 && dry.pre.some((row) => /Nothing else has it open/.test(row.text) && /tview \(pid 4242\)/.test(row.text) && /pre-fail/.test(row.state))
-      && dry.pre.filter((row) => /pre-pass/.test(row.state)).length === 3, dry.pre);
-    check('dry run: the confirm names the device and who loses it', /fdcanusb 272813EF/.test(dry.confirm) && /tview, a camera stream, an experiment/.test(dry.confirm) && /1-3/.test(dry.confirm), dry.confirm);
-    check('dry run: ready, with Continue…', dry.banner === '' && dry.proceed && dry.proceed.text === 'Continue…' && !dry.proceed.disabled, dry);
-    check('dry run: one POST, a dry run, and the tool never ran', posts.length === 1 && posts[0].dry_run === true && posts[0].action === 'reset_port' && calls().length === 0, posts);
+    check('run page: the exact command, by bus/device number', dry.cmd === `${tool} 001/002`, dry.cmd);
+    check('run page: the confirm names the device and who loses it', /fdcanusb 272813EF/.test(dry.confirm) && /tview, a camera stream, an experiment/.test(dry.confirm) && /1-3/.test(dry.confirm), dry.confirm);
+    check('run page: Run confirms the holder, enabled', dry.confirms.some((text) => /^tview \(pid 4242\) will lose fdcanusb 272813EF$/.test(text)) && dry.run && dry.run.text === 'Run' && !dry.run.disabled, dry);
+    check('run page: one POST, a dry run, and the tool never ran', posts.length === 1 && posts[0].dry_run === true && posts[0].action === 'reset_port' && calls().length === 0, posts);
     await shot(page, 'sheet-holder-light.png');
-    await page.click('[data-util-run]');
-    await page.waitForSelector('#modal:not([hidden]) .modal', { timeout: 5000 });
-    const modal = await page.evaluate(() => ({ danger: document.querySelector('#modal .danger').textContent, tick: document.querySelector('#modal .m-tick').textContent,
-      checked: document.querySelector('#modal [data-util-tick]').checked, disabled: document.querySelector('#modal [data-util-confirm]').disabled,
-      label: document.querySelector('#modal [data-util-confirm]').textContent, title: document.querySelector('#modal h2').textContent }));
-    check('modal: asks again, names who loses it, button off', modal.danger === 'interrupts' && /^I understand: tview \(pid 4242\) will lose fdcanusb 272813EF$/.test(modal.tick)
-      && !modal.checked && modal.disabled && modal.label === 'Reset USB port', modal);
     await page.screenshot({ path: path.join(SHOTS, 'modal-light.png') });
-    await page.click('#modal [data-util-confirm]', { force: true }); // disabled: nothing may happen
-    await page.waitForTimeout(500);
-    check('modal: no run without the box', posts.length === 1 && calls().length === 0, { posts: posts.length, calls: calls() });
-    await page.check('#modal [data-util-tick]');
     await page.click('#modal [data-util-confirm]');
     await page.waitForSelector('.ent-run.ok, .ent-run.fail', { timeout: 30000 });
     const run = await page.evaluate(() => ({ line: document.querySelector('.ent-run').textContent, fail: document.querySelector('.ent-run').classList.contains('fail') }));
-    check('run: the second POST carries the box, the fake tool ran once', posts.length === 2 && posts[1].confirm_holders === true && posts[1].detach === true && !posts[1].dry_run
+    check('run: the second POST carries the confirmation, the fake tool ran once', posts.length === 2 && posts[1].confirm_holders === true && posts[1].detach === true && !posts[1].dry_run
       && calls().join() === '001/002', { posts: posts.map((post) => Object.keys(post).join()), calls: calls(), run });
     check('run: the line says what happened', !run.fail && /^fdcanusb 272813EF at 1-3 reset with usbreset: (back after [\d.]+ s as device \d+|reset in place)/.test(run.line), run);
 
-    // ---- no privilege: blocked, with the rule for THAT device
+    // ---- no privilege: greyed, with the rule for THAT device in the Utilities tab
     await open(page, base, LOCKED);
-    const locked = await sheet(page);
-    check('privilege: the sheet is blocked and says why', /no way to reset it as your user/.test(locked.banner) && locked.proceed && locked.proceed.disabled, locked);
+    const locked = await blocked(page);
+    check('privilege: greyed in the menu, and says why', locked.disabled && /no way to reset it as your user/.test(locked.reason) && locked.button, locked);
     check('privilege: the udev rule for this vendor:product', /ATTR\{idVendor\}=="0483", ATTR\{idProduct\}=="5740", GROUP="plugdev", MODE="0664"/.test(locked.fix)
       && /\/etc\/udev\/rules\.d\/70-robotdx-usb-reset\.rules/.test(locked.fix) && /udevadm trigger/.test(locked.fix), locked.fix);
     check('privilege: the tool never ran for it', calls().join() === '001/002', calls());
@@ -238,7 +241,7 @@ async function main() {
     // ---- a hub: the holder is behind it
     await open(page, base, HUB);
     const hub = await sheet(page);
-    check('hub: a holder behind it is named', hub.pre.some((row) => /ffplay \(pid 5151\)/.test(row.text)) && /A hub takes everything/.test(hub.confirm), hub);
+    check('hub: a holder behind it is named', hub.confirms.some((text) => /ffplay \(pid 5151\)/.test(text)) && /A hub takes everything/.test(hub.confirm), hub);
     await shot(page, 'sheet-hub-light.png');
     await context.close();
   } catch (error) {

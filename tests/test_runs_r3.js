@@ -108,14 +108,12 @@ async function main() {
     // ---- run again: the normal dry run -> confirm
     const before = await page.evaluate(() => window.IORuns.list().length);
     await page.click('[data-r3-again]');
-    await page.waitForSelector('.ent-sheet [data-util-run]', { timeout: 15000 });
-    const sheet = await page.evaluate(() => ({ title: document.querySelector('.ent-sheet-h b').textContent, panelHidden: document.getElementById('runs-root').hidden, runs: window.IORuns.list().length,
+    // 2026-10-29: Run again opens the utility's Run page (the one step between a click and a run), not a dry-run sheet
+    await page.waitForSelector('#modal:not([hidden]) [data-run-page="calibrate"] [data-util-confirm]:not([disabled])', { timeout: 15000 });
+    const sheet = await page.evaluate(() => ({ title: document.querySelector('#modal h2').textContent, panelHidden: document.getElementById('runs-root').hidden, runs: window.IORuns.list().length,
       util: S.util && S.util.name, phase: S.util && S.util.phase, sel: S.sel }));
-    check('again: the dry-run sheet is shown, nothing has run, the panel got out of the way', sheet.title === 'Run calibration' && sheet.panelHidden && sheet.runs === before && sheet.phase === 'shown' && sheet.sel === CAN1, sheet);
+    check('again: the Run page is shown, nothing has run, the panel got out of the way', /^Run calibration · /.test(sheet.title) && sheet.panelHidden && sheet.runs === before && sheet.phase === 'confirm' && sheet.sel === CAN1, sheet);
     await page.screenshot({ path: `${SHOTS}/r3-run-again-sheet.png` });
-    await page.click('.ent-sheet [data-util-run]');
-    await page.waitForSelector('#modal [data-util-tick]');
-    await page.check('#modal [data-util-tick]');
     await page.click('#modal [data-util-confirm]');
     await page.waitForSelector('#runs-root:not([hidden]) .r3-job h3', { timeout: 10000 });
     const second = await H.currentRunId(page);

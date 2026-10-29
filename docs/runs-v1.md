@@ -263,6 +263,18 @@ button is `data-run-open="<id>"` and calls `ctx.open`; with a finished run, the 
 the detach flow (`POST /api/v1/act` with `detach: true`, the run id kept on the page's `util`, completion read from
 `/state` → `runs`), and the `Runs` select. A view never calls `/api/v1/act`.
 
+**How a run starts (2026-10-29, addition).** Zach: "After you click a utility it can go to at most 1 other page, if you
+need to enter information or confirm the area is clear, and then it should just run." The Utilities ▾ menu and the
+entity page's Utilities tab call one function (`startUtility`): a query, Open console and Stop telemetry start their run
+on the click (the page makes the dry run for its token behind the click, then `detach`); every other utility opens its
+Run page (the modal: the plugin's confirm sentence, its inputs such as set_id's new id, what pressing Run confirms, one
+Run button), and Run starts the run, asking for a fresh token first when the one it holds is older than 4 minutes or
+for another new id. The token mechanism above is unchanged; nobody types a token. An interactive run reads its stdin
+from the terminal as before: moteus_servo's adapter-level Identify (wiggle each board) prints `Wiggling CAN ID n`
+and moves on to the next board when the person presses Enter in the run's terminal (or after 10 s); Ctrl-C or Stop
+ends it, and as a `moves` run the host then runs the plugin's own stop. `tests/fixtures/plugins-terminal`'s `identify`
+is that walk without a motor (`$TERMINAL_WALK_S`), and `tests/test_utilities_ux.js` types Enter into it through the page.
+
 **xterm.js** is the terminal emulator (the one VS Code and Jupyter use), vendored for the offline page in
 `web/vendor/xterm/` (`xterm.js` + `xterm.css` 6.0.0, `addon-fit.js` 0.11.0, MIT, `NOTICE.md`), loaded by `index.html`.
 Panes are resizable: every boundary a view adds drags, remembers its size (`ctx.setPref`), restores on double-click and

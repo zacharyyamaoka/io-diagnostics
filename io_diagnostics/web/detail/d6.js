@@ -49,6 +49,7 @@
     looked: new Map(), seen: new Map(),  // entity path -> host time the Log was last shown / first drawn (the Log badge)
     sort: new Map(),                     // table key -> {col, desc}
     flash: null, forced: null, lightbox: null, copied: 0,
+    fixes: new Set(),                    // `${path}\u0001${action}`: a greyed utility's "How to allow it" opened in the Utilities tab
   };
   const Live = { path: null, cursor: 0, rings: new Map(), groups: [], streams: [], watch: null, heard: null, loaded: false, none: false,
     error: '', inflight: false, rendered: 0, beat: null, poll: null, now: 0 };
@@ -607,22 +608,35 @@
   // ------------------------------------------------------------------------------------- Utilities ----
   const DANGER = { query: 'reads only', interrupts: 'interrupts what runs', changes: 'changes what the device stores', moves: 'makes hardware move' };
   const DANGER_ORDER = ['query', 'interrupts', 'changes', 'moves'];
+  // WHY a real table with headers and the menu's icons (Zach, 2026-10-29: "add the icons to the main utilities page. Better
+  // format it so the columns are aligned and the table has proper headers"), and the menu's buttons: a click here goes to the
+  // same next page as the same item in the Utilities ▾ menu ("they are basically the same buttons").
   function utilitiesPanel(node, detail, ctx) {
     const h = ctx.h;
+    const u = h.util;
     const actions = [...(detail.actions || [])].filter((action) => !CONFIG_ACTIONS.has(action.name)).sort((a, b) => (DANGER_ORDER.indexOf(a.danger) - DANGER_ORDER.indexOf(b.danger)) || a.title.localeCompare(b.title));
     if (!actions.length) return '<div class="muted">This entity registers no utilities.</div>';
     const now = ctx.state && ctx.state.clock ? ctx.state.clock.now : null;
     const rows = actions.map((action) => {
-      const runnable = action.state === 'ready' || action.state === 'unknown';
+      const busy = u.busy(action);
+      const runnable = u.runnable(action) && !busy;
       const run = action.last_run;
       const when = run && run.ended !== null && run.ended !== undefined && now !== null ? `${h.ago(Math.max(0, now - run.ended))} ago` : run && run.active ? 'running now' : '';
-      const last = run ? `${h.esc(run.state)}${run.exit_code !== null && run.exit_code !== undefined ? ` · exit ${h.esc(run.exit_code)}` : ''}${when ? ` · ${h.esc(when)}` : ''}` : 'not run from here';
-      const reason = action.state === 'ready' ? 'ready' : action.reason || action.state;
-      return `<div class="d6-ur"><span class="d6-un"><b>${h.esc(action.title)}</b><small>${h.esc(action.description || '')}</small></span>`
-        + `<span class="d6-ud">${h.esc(DANGER[action.danger] || action.danger)}</span><span class="d6-us" title="${h.esc(reason)}">${h.esc(reason)}</span><span class="d6-ul">${last}</span>`
-        + `<button class="btn d6-run" data-util="${h.esc(action.name)}"${runnable ? '' : ' disabled'} title="every click is a dry run first">${h.esc(action.title.replace(/…$/, ''))}…</button></div>`;
+      const last = run ? `${h.esc(run.state)}${run.exit_code !== null && run.exit_code !== undefined ? ` · exit ${h.esc(run.exit_code)}` : ''}${when ? ` · ${h.esc(when)}` : ''}` : '<span class="d6-faint">never from here</span>';
+      const status = busy || (runnable ? 'Ready' : u.reason(action));
+      // a greyed utility the person can allow (the host's reset_port: a udev rule) says how, one click away
+      const fixKey = `${node.path}\u0001${action.name}`;
+      const fix = !runnable && action.fix ? `<button class="d6-fix-t" data-d6-fix="${h.esc(fixKey)}" aria-expanded="${U.fixes.has(fixKey)}">How to allow it ${U.fixes.has(fixKey) ? '▾' : '▸'}</button>`
+        + (U.fixes.has(fixKey) ? `<pre class="d6-fix">${h.esc(action.fix)}</pre>` : '') : '';
+      return `<tr class="d6-ur${runnable ? '' : ' blocked'}" data-util-row="${h.esc(action.name)}"><td class="d6-ui">${u.icon(action.name)}</td>`
+        + `<td class="d6-un"><b>${h.esc(u.label(action))}</b><small>${h.esc(action.description || '')}</small></td>`
+        + `<td class="d6-ud">${h.esc(DANGER[action.danger] || action.danger)}</td><td class="d6-us" title="${h.esc(status)}">${h.esc(status)}${fix}</td><td class="d6-ul">${last}</td>`
+        + `<td class="d6-ub"><button class="btn d6-run" data-util="${h.esc(action.name)}"${runnable ? '' : ' disabled'}>${u.flow(action) === 'confirm' ? 'Run…' : 'Run'}</button></td></tr>`;
     }).join('');
-    return `<div class="d6-dim d6-ulead">${actions.length} utilit${actions.length === 1 ? 'y' : 'ies'} · ${h.esc(actions[0].owner || 'its plugin')} runs them · a click shows exactly what would run first (the Utilities menu in the header does the same)</div>${rows}`;
+    return `<div class="d6-dim d6-ulead">${actions.length} utilit${actions.length === 1 ? 'y' : 'ies'} · ${h.esc(actions[0].owner || 'its plugin')} runs them · the same buttons as the Utilities menu in the header</div>`
+      + '<table class="d6-ut"><colgroup><col class="c-ic"><col class="c-name"><col class="c-effect"><col class="c-status"><col class="c-last"><col class="c-btn"></colgroup>'
+      + '<thead><tr><th class="d6-ui"><span class="d6-vh">Icon</span></th><th>Utility</th><th>Effect</th><th>Status</th><th>Last run</th><th class="d6-ub"><span class="d6-vh">Run</span></th></tr></thead>'
+      + `<tbody>${rows}</tbody></table>`;
   }
 
   // -------------------------------------------------------------------------------- driver tabs ----
@@ -750,10 +764,23 @@
 .d6-raw { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0 0 2px 164px; padding: 4px 8px; font-size: 11px; color: var(--io-muted); background: var(--io-surface-alt); border-radius: var(--io-radius-sm); }
 .d6-flash { animation: d6-flash 2.4s ease-out; }
 @keyframes d6-flash { 0%, 55% { background: var(--io-accent-soft); outline: 1px solid var(--io-accent-line); } 100% { background: transparent; outline-color: transparent; } }
-.d6-ur { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1.2fr) minmax(0, 1.3fr) minmax(0, 1.2fr) auto; gap: 6px 12px; align-items: center; padding: 8px 4px; border-bottom: 1px solid var(--io-border-soft); font-size: 12.5px; }
-.d6-un { display: grid; min-width: 0; }
-.d6-un small { color: var(--io-faint); font-size: 11.5px; }
-.d6-ud, .d6-us, .d6-ul { min-width: 0; overflow-wrap: anywhere; color: var(--io-muted); font-size: 12px; }
+.d6-ut { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 12.5px; }
+.d6-ut col.c-ic { width: 40px; } .d6-ut col.c-effect { width: 18%; } .d6-ut col.c-status { width: 22%; } .d6-ut col.c-last { width: 15%; } .d6-ut col.c-btn { width: 88px; }
+.d6-ut th { padding: 6px 8px; text-align: left; font: 600 11px var(--io-font-ui); letter-spacing: .4px; text-transform: uppercase; color: var(--io-muted); border-bottom: 1px solid var(--io-border); }
+.d6-ut td { padding: 8px; vertical-align: middle; border-bottom: 1px solid var(--io-border-soft); }
+.d6-ut .d6-ui { padding-right: 0; }
+.d6-ut .d6-ui .u-ic { display: block; }
+.d6-ut .d6-ub { text-align: right; }
+.d6-ut .d6-run { white-space: nowrap; }
+.d6-un b, .d6-un small { display: block; overflow-wrap: anywhere; }
+.d6-un small { color: var(--io-faint); font-size: 11.5px; font-weight: 400; }
+.d6-ud, .d6-us, .d6-ul { overflow-wrap: anywhere; color: var(--io-muted); font-size: 12px; }
+.d6-ur.blocked .d6-un b { color: var(--io-muted); }
+.d6-ur.blocked .u-ic { stroke: var(--io-faint); }
+.d6-faint { color: var(--io-faint); }
+.d6-fix-t { display: block; margin-top: 2px; padding: 0; border: 0; background: transparent; color: var(--io-accent-text); font: inherit; font-size: 11.5px; cursor: pointer; }
+.d6-fix { margin: 4px 0 0; padding: 6px 8px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; background: var(--io-surface-alt); border-radius: var(--io-radius-sm); color: var(--io-text); }
+.d6-vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .d6-ulead { margin-bottom: 6px; }
 .d6-tbl { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 12.5px; }
 .d6-tbl th.num { width: 112px; }
@@ -989,6 +1016,8 @@
       const tab = target.closest('[data-d6-tab]');
       if (tab) { chooseTab(ctx, node, tabsFor(detail), tab.dataset.d6Tab); return; }
       if (target.closest('[data-d6-lb]')) { U.lightbox = null; ctx.redraw(); return; }
+      const fixToggle = target.closest('[data-d6-fix]');
+      if (fixToggle) { const key = fixToggle.dataset.d6Fix; if (U.fixes.has(key)) U.fixes.delete(key); else U.fixes.add(key); ctx.redraw(); return; }
       const enlarge = target.closest('[data-d6-enlarge]');
       if (enlarge) { U.lightbox = { path: node.path, stream: enlarge.dataset.d6Enlarge }; ctx.redraw(); return; }
       const more = target.closest('[data-d6-more]');

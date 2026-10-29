@@ -385,8 +385,8 @@ table.grid td.mono.xcol { font-size: 11.5px; }
 .ugroup-motion .ugroup-h { color: var(--io-text); }
 .urow { border-radius: var(--io-radius); }
 .urow.active { background: var(--io-surface); box-shadow: inset 0 0 0 1px var(--io-border); }
-.u-btn { position: relative; display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; border: 0; background: transparent; padding: 5px 8px; border-radius: var(--io-radius); cursor: pointer; color: var(--io-text); }
-.u-btn:hover { background: var(--io-hover); }
+.u-btn, .u-all { position: relative; display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; border: 0; background: transparent; padding: 5px 8px; border-radius: var(--io-radius); cursor: pointer; color: var(--io-text); }
+.u-btn:hover, .u-all:hover { background: var(--io-hover); }
 .u-ic { width: 20px; height: 20px; flex: none; fill: none; stroke: var(--io-icon); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .u-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
 .u-title { color: var(--io-text-strong); font-weight: 500; }
@@ -496,15 +496,25 @@ table.grid td.mono.xcol { font-size: 11.5px; }
 .sec.setup .s-reason input, .sec.setup .s-reason select { flex: 1; min-width: 0; padding: 5px 8px; font: inherit; color: var(--io-text-strong); background: var(--io-field); border: 1px solid var(--io-border); border-radius: var(--io-radius-sm); }
 .sec.setup .s-note { font-size: 11.5px; }
 
-/* ---- the confirm modal repeats the danger; moves gets the strongest NEUTRAL treatment: a heavy frame, a framed box
-   to tick, an inverted button (round 3: warn / error colours mean a diagnostic, never a control) ----------------- */
+/* ---- the Run page (renderModal): what happens, the inputs, what pressing Run confirms, one Run button; moves gets the
+   strongest NEUTRAL treatment: a heavy frame and an inverted button (round 3: warn / error colours mean a diagnostic) ---- */
 .modal.m-moves { border: 2px solid var(--io-text-strong); }
 .m-danger { display: flex; align-items: center; gap: 8px; margin: 2px 0 10px; color: var(--io-text-strong); }
 .m-danger .u-ic { width: 18px; height: 18px; }
 .m-runs { margin: 8px 0; color: var(--io-muted); font-size: 12px; }
 .m-pre-h { color: var(--io-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; margin-top: 10px; }
-.m-tick { display: flex; gap: 10px; align-items: flex-start; margin: 12px 0 4px; padding: 10px 12px; border-radius: var(--io-radius); border: 1px solid var(--io-text-strong); background: var(--io-control); color: var(--io-text-strong); cursor: pointer; font-weight: 600; }
-.m-tick input { margin-top: 3px; accent-color: var(--io-text-strong); width: 16px; height: 16px; flex: none; }
+.modal header .u-ic { width: 20px; height: 20px; }
+.m-confirms { margin: 4px 0 0; padding-left: 18px; color: var(--io-text-strong); font-weight: 500; }
+.m-confirms li { margin: 2px 0; }
+.m-newid-in { display: flex; align-items: center; gap: 10px; margin: 10px 0 0; color: var(--io-muted); font-size: 12px; }
+.m-newid-in input { width: 90px; padding: 5px 8px; border: 1px solid var(--io-border); border-radius: var(--io-radius); background: var(--io-control); color: var(--io-text-strong); font: 600 14px var(--io-font-mono); }
+.m-newid .muted { font: 400 12px var(--io-font-ui); }
+.m-refused { display: flex; gap: 8px; align-items: flex-start; margin: 10px 0 0; font-size: 12.5px; }
+.modal .u-how-t { margin-top: 10px; }
+.modal .u-how.open { display: block; margin-top: 6px; }
+.modal .u-how .u-steps { margin: 6px 0 0; padding-left: 18px; font-size: 12px; color: var(--io-muted); }
+.u-allrow { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--io-border-soft); }
+.u-all .u-title { color: var(--io-text); font-weight: 400; }
 
 /* ---- step into / only inside (app.js treeNav): the bar above the tree, inside #tree-host so every layout carries it ---- */
 .tree-nav { position: sticky; top: 0; z-index: 4; display: flex; flex-direction: column; gap: 4px; padding: 4px 6px; background: var(--io-surface); border-bottom: 1px solid var(--io-border-soft); }

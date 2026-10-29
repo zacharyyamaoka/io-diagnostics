@@ -99,23 +99,25 @@ const row = (page, entity) => page.evaluate((p) => {
     const armUtils = await page.evaluate(() => [...document.querySelectorAll('.d6-panel [data-util]')].map((b) => b.dataset.util));
     check('the arm offers the plugin\'s Home the arm, and the batch actions its three joints share', armUtils.includes('home_arm') && armUtils.includes('all:calibrate') && armUtils.includes('all:clear_faults'), armUtils);
     check('a batch that not every joint offers is not offered (check_comms is the adapter\'s, not the boards\')', !armUtils.includes('all:check_comms') && !armUtils.includes('all:set_id'), armUtils);
-    const armTitle = await page.evaluate(() => (document.querySelector('.d6-panel [data-util="all:calibrate"]').textContent || '').trim());
+    // 2026-10-29: the Utilities tab is a table; a row's title is its Utility cell, its button says Run…
+    const armTitle = await page.evaluate(() => (document.querySelector('.d6-panel [data-util-row="all:calibrate"] .d6-un b').textContent || '').trim());
     check('its title says how many: "Calibrate all 3…"', /^Calibrate all 3…$/.test(armTitle), armTitle);
 
     // ---- the rack: one dry run lists the six runs ---------------------------------------------------------------------------------------------
     await H.goTo(page, PATHS.rack);
     await H.ready(page);
     await H.goTab(page, 'utilities');
-    const rackTitles = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll('.d6-panel [data-util]')].map((b) => [b.dataset.util, b.textContent.trim()])));
+    const rackTitles = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll('.d6-panel [data-util-row]')].map((r) => [r.dataset.utilRow, r.querySelector('.d6-un b').textContent.trim()])));
     check('the rack (batch = having) offers "Calibrate all 6…" and its other shared actions, no plugin utilities', rackTitles['all:calibrate'] === 'Calibrate all 6…' && !('home_arm' in rackTitles), rackTitles);
     await page.click('.d6-panel [data-util="all:calibrate"]');
-    await page.waitForSelector('.ent-sheet [data-batch-runs]', { timeout: 20000 });
+    // 2026-10-29: the batch's runs read on its Run page (the one step), not in a dry-run sheet
+    await page.waitForSelector('#modal:not([hidden]) [data-batch-runs]', { timeout: 20000 });
     const sheet = await page.evaluate(() => {
-      const ol = document.querySelector('.ent-sheet [data-batch-runs]');
+      const ol = document.querySelector('#modal [data-batch-runs]');
       return { n: ol.dataset.batchRuns, lines: [...ol.querySelectorAll('li')].map((li) => li.textContent.trim().replace(/\s+/g, ' ')), starts: [...ol.querySelectorAll('.u-b-s')].map((e) => e.textContent.trim()),
-        head: document.querySelector('.ent-sheet .u-batch-h').textContent.replace(/\s+/g, ' ').trim(), skip: (document.querySelector('.ent-sheet .u-b-skip') || {}).textContent || '',
-        title: document.querySelector('.ent-sheet-h').textContent.trim(), danger: Boolean(document.querySelector('.ent-sheet-h .danger.moves')),
-        confirm: (document.querySelector('.ent-sheet .confirm') || {}).textContent || '' };
+        head: document.querySelector('#modal .u-batch-h').textContent.replace(/\s+/g, ' ').trim(), skip: (document.querySelector('#modal .u-b-skip') || {}).textContent || '',
+        title: document.querySelector('#modal header').textContent.trim(), danger: Boolean(document.querySelector('#modal header .danger.moves')),
+        confirm: (document.querySelector('#modal [data-run-says]') || {}).textContent || '' };
     });
     check('one dry run lists six runs, in order', sheet.n === '6' && sheet.lines.length === 6 && /^1\s*CAN 1 · .* · Run calibration/.test(sheet.lines[0]) && /^6\s*CAN 3/.test(sheet.lines[5]), sheet.lines);
     check('the first starts now, the others queue behind it on the bus ("after 1" … "after 5")', sheet.starts.join() === 'now,after 1,after 2,after 3,after 4,after 5', sheet.starts);
@@ -124,11 +126,9 @@ const row = (page, entity) => page.evaluate((p) => {
     await page.screenshot({ path: `${H.SHOTS}/composition-dry-run.png`.replace('entity-page', 'composition') }).catch(() => {});
 
     // ---- one confirm, six runs ------------------------------------------------------------------------------------------------------------------------
-    await page.click('.ent-sheet [data-util-run]');
-    await page.waitForSelector('#modal:not([hidden]) [data-util-tick]', { timeout: 5000 });
-    const modal = await page.evaluate(() => ({ runs: document.querySelectorAll('#modal [data-batch-runs] li').length, confirm: document.querySelector('#modal .confirm').textContent, disabled: document.querySelector('#modal [data-util-confirm]').disabled }));
-    check('the confirm modal lists the six runs again and the button waits for the tick (moves)', modal.runs === 6 && modal.disabled && /^Calibrate all 6\?/.test(modal.confirm), modal);
-    await page.click('#modal [data-util-tick]');
+    const modal = await page.evaluate(() => ({ runs: document.querySelectorAll('#modal [data-batch-runs] li').length, confirm: document.querySelector('#modal [data-run-says]').textContent,
+      disabled: document.querySelector('#modal [data-util-confirm]').disabled, confirms: [...document.querySelectorAll('#modal .m-confirms li')].map((li) => li.textContent) }));
+    check('the Run page lists the six runs and states what Run confirms (moves: the joints are free)', modal.runs === 6 && !modal.disabled && /^Calibrate all 6\?/.test(modal.confirm) && modal.confirms.length === 1, modal);
     await page.click('#modal [data-util-confirm]');
     // a person may look at a run that is still queued: its tab opens its terminal, which must not be sized (a 409) until the run starts
     await page.waitForSelector('.r1-tab', { timeout: 10000 });

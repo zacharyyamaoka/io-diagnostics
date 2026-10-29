@@ -699,23 +699,19 @@ async function warnGate(page, base) {
   await page.mouse.move(1590, 600);
   await page.waitForTimeout(400);
   await measure('utilities', ['.ent-tools', '.sec.setup', '#detail button']);
-  await page.click('[data-util="calibrate"]');
-  await page.waitForSelector('.ent-sheet .u-panel .pre', { timeout: 15000 });
-  await page.waitForTimeout(300);
-  await measure('dry run', ['.ent-sheet', '.ent-tools']);
-  // the confirm modal opens only from a runnable dry run (F1: calibrate is; F2's busy bus blocks it, so F1 covers it)
-  if (await page.evaluate(() => { const run = document.querySelector('[data-util-run]'); return Boolean(run && !run.disabled); })) {
-    await page.click('[data-util-run]');
+  // 2026-10-29: a click opens the utility's Run page (the one step); F1's calibrate is runnable, F2's busy bus greys it
+  if (await page.$('.ent-menu [data-util="calibrate"]:not([disabled])')) {
+    await page.click('[data-util="calibrate"]');
     await page.waitForSelector('#modal:not([hidden]) .modal', { timeout: 5000 });
+    await page.waitForTimeout(300);
     await measure('modal', ['#modal .modal']);
     await page.click('[data-util-cancel]');
   }
-  // a blocked utility (update_firmware: "up to date" = nothing_to_do): its dry run shows the blocked banner
-  await page.click('#ent-util-btn');
-  await page.click('.ent-menu [data-util="update_firmware"]');
-  await page.waitForSelector('.ent-sheet .u-panel .banner.blocked', { timeout: 15000 });
-  await measure('blocked dry run', ['.ent-sheet']);
-  await page.click('[data-util-close]');
+  // a utility that cannot run (F1's update_firmware: "up to date"): greyed in the menu with its reason under it
+  if (!(await page.$('.ent-menu'))) await page.click('#ent-util-btn'); // still open when calibrate was greyed (F2)
+  await page.waitForSelector('.ent-menu [data-util]', { timeout: 15000 });
+  if (await page.$('.ent-menu [data-util][disabled]')) await measure('blocked dry run', ['.ent-menu']);
+  await page.keyboard.press('Escape');
   // a query run on the adapter: the quiet line under the header while it runs (held at the network), then its result
   await page.goto(`${base}/?sel=${encodeURIComponent(CAN15.replace(/\/can\/15$/, ''))}`);
   await page.waitForSelector('#ent-util-btn:not([disabled])', { timeout: 20000 });
@@ -727,15 +723,11 @@ async function warnGate(page, base) {
   await page.waitForSelector('.ent-menu', { timeout: 5000 });
   // (F1: check_comms runs; a frame whose bus is busy blocks it, and F1 covers the line)
   if (await page.$('.ent-menu [data-util="check_comms"]:not([disabled])')) {
-    await page.click('.ent-menu [data-util="check_comms"]');
-    await page.waitForSelector('.ent-sheet [data-util-run]', { timeout: 15000 });
-    if (await page.$('.ent-sheet [data-util-run]:not([disabled])')) {
-      await page.click('[data-util-run]');
-      await page.waitForSelector('.ent-run.running', { timeout: 5000 });
-      await measure('run line', ['.ent-run']);
-      await page.waitForSelector('.ent-run.ok, .ent-run.fail', { timeout: 20000 });
-      if (await page.$('.ent-run.ok')) await measure('run line', ['.ent-run']);
-    } else await page.click('[data-util-close]');
+    await page.click('.ent-menu [data-util="check_comms"]'); // 2026-10-29: a query runs on the click
+    await page.waitForSelector('.ent-run.running', { timeout: 5000 });
+    await measure('run line', ['.ent-run']);
+    await page.waitForSelector('.ent-run.ok, .ent-run.fail', { timeout: 20000 });
+    if (await page.$('.ent-run.ok')) await measure('run line', ['.ent-run']);
   } else await page.keyboard.press('Escape');
   await page.unroute('**/api/v1/act');
   await page.click('[data-view="activity"]');

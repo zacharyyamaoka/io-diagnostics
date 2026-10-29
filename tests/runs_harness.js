@@ -87,16 +87,13 @@ async function utilities(page) {
   if (!(await page.$('.ent-menu'))) await page.click('#ent-util-btn');
   await page.waitForSelector('.ent-menu [data-util]', { timeout: 5000 });
 }
-// Utilities ▾ -> the action -> its dry-run sheet -> Run (a query) or Continue… and the confirm modal (a moves action's box
-// ticked). Nothing runs before the confirm.
+// Utilities ▾ -> the action: a query runs on the click; anything else opens its Run page, whose Run button runs it (2026-10-29,
+// "at most 1 other page": no dry-run sheet, no ticked box). Nothing runs before Run.
 async function runAction(page, name, danger) {
   await utilities(page);
   await page.click(`[data-util="${name}"]`);
-  await page.waitForSelector('.ent-sheet [data-util-run]', { timeout: 10000 });
-  await page.click('.ent-sheet [data-util-run]');
   if (danger === 'query') return;
-  await page.waitForSelector('#modal [data-util-confirm]');
-  if (danger === 'moves') await page.check('#modal [data-util-tick]');
+  await page.waitForSelector('#modal:not([hidden]) [data-util-confirm]:not([disabled])', { timeout: 10000 });
   await page.click('#modal [data-util-confirm]');
 }
 const startCalibration = (page) => runAction(page, 'calibrate', 'moves');

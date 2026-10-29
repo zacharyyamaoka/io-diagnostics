@@ -69,6 +69,15 @@ FAST_REFRESH_S = 0.5
 # so it frees by itself in a few seconds. Never "blocked", never a warning (round 3 brief item 10).
 WAITING = "waiting"
 GATE_CACHE_S = 2.0
+# WHY every precondition resolves (Zach, 2026-10-29: "I am confused by the can't tell: does that mean it can block or not
+# block? The utilities menu should just have 2 states"): what the host cannot read now is either the person's to confirm on
+# the Run page, or checked by the driver on the bus right before it sends anything (it refuses, nothing sent). Only a
+# precondition that says what the action needs to exist blocks while unknown.
+PERSON_CHECKS = frozenset({"joint_free", "joint_clear", "joints_clear", "target_in_view"})
+BLOCK_WHEN_UNKNOWN = {"config_recorded": "no recorded configuration for this board"}
+OS_GATES = frozenset({"port_free", "bus_lock_free", "camera_free"})
+PRECONDITION_VALUE = "precondition."  # a driver's own answer, a status value precondition.<check> = "pass: ..." | "fail: ..."
+ID_SHARED_CODES = frozenset({"IdCollision", "PossibleIdCollision", "SourceIdShared"})
 # docs/state-config-v1.md section 4: a page's heartbeat keeps a plugin's ``watch`` running; it stops this long after the last one
 WATCH_GRACE_S = 10.0
 WATCH_TICK_S = 0.5  # how often the host re-checks every watch's gates and heartbeat
@@ -193,6 +202,18 @@ class LiveOs:
                 return None, "no serial port node for this device"
             if port_holders.function is None:
                 return None, f"port holder check {port_holders.source}"
+            held = [holder for node in nodes for holder in _without_own_watchers(port_holders.function)(node)]
+            mine = [holder for holder in held if _holder_pid(holder) and RUNNING.owner(_holder_pid(holder))]
+            if held and len(mine) == len(held):
+                # WHY waiting, not blocked (2026-10-29, "blocked: held by 1652054 python3"): that was a routine diagnose, ours or
+                # the other channel's host, holding the port for a few seconds; a person's run of ours waits its turn
+                label, elapsed = RUNNING.owner(_holder_pid(mine[0]))
+                return WAITING, f"this host's own check is running (a few s): {label}, {elapsed:.0f} s so far"
+            others = [holder for holder in held if holder not in mine]
+            if held and all(other_robotdx(_holder_pid(holder)) for holder in others):
+                return WAITING, "; ".join(holder_words(holder) for holder in others) + " (a few s)"
+            if held:
+                return False, "held by " + "; ".join(holder_words(holder) for holder in others)
             decision = gate.decide(nodes, holders_fn=_without_own_watchers(port_holders.function), uses_rack_lock=False)
         elif check == "camera_free":
             if camera_holders.function is None:
@@ -242,6 +263,79 @@ def _without_own_watchers(holders_fn):
         return kept
 
     return filtered
+
+
+def _holder_pid(holder) -> int | None:
+    lead = str(holder).split(None, 1)[0] if str(holder).strip() else ""
+    return int(lead) if lead.isdigit() else None
+
+
+def _cmdline(pid: int, proc: Path = Path("/proc")) -> list[str]:
+    try:
+        return [part for part in (proc / str(pid) / "cmdline").read_bytes().decode(errors="replace").split("\0") if part]
+    except OSError:
+        return []
+
+
+def _parent(pid: int, proc: Path = Path("/proc")) -> int | None:
+    try:
+        stat = (proc / str(pid) / "stat").read_text()
+    except OSError:
+        return None
+    fields = stat.rsplit(")", 1)[-1].split()
+    return int(fields[1]) if len(fields) > 1 and fields[1].isdigit() else None
+
+
+def other_robotdx(pid: int | None, proc: Path = Path("/proc")) -> str:
+    """``"RobotDx (tray, port 8822)"`` when ``pid`` was started by another RobotDx host on this machine (the other release
+    channel's), else "". Read from /proc: its own or an ancestor's command line runs ``io_diagnostics/cli.py``."""
+
+    seen = 0
+    while pid and pid > 1 and seen < 6:
+        argv = _cmdline(pid, proc)
+        script = next((index for index, part in enumerate(argv) if part.endswith("io_diagnostics/cli.py")), None)
+        if script is not None:
+            rest = argv[script + 1:]
+            verb = rest[0] if rest else "serve"
+            port = rest[rest.index("--port") + 1] if "--port" in rest[:-1] else ""
+            return f"RobotDx ({verb}{f', port {port}' if port else ''})"
+        pid, seen = _parent(pid, proc), seen + 1
+    return ""
+
+
+def holder_words(holder, proc: Path = Path("/proc")) -> str:
+    """Who holds a port, in plain words: another RobotDx host's routine check, tview, moteus_tool, else the program."""
+
+    pid = _holder_pid(holder)
+    argv = _cmdline(pid, proc) if pid else []
+    text = " ".join(argv)
+    host = other_robotdx(pid, proc) if pid else ""
+    if host:
+        verb = next((word for word in ("diagnose", "probe", "watch", "follow", "act") if f" {word} " in f" {text} "), "")
+        driver = next((part for part in argv if part.endswith(".diagnostics")), "")
+        what = " ".join(filter(None, [driver, verb]))
+        return f"{host} has it open ({f'{what}, ' if what else ''}pid {pid})"
+    if "tview" in text:
+        return f"tview, moteus's console (pid {pid}): close it to free the port"
+    if "moteus_tool" in text:
+        return f"moteus_tool (pid {pid})"
+    return f"{holder}" if not argv else f"pid {pid} ({' '.join(argv[:3])[:80]})"
+
+
+def resolves(check: str, state: bool | str | None) -> str:
+    """What one precondition does to its action (docs/api-v1.md, "Actions: two states"): ``ready`` (met), ``blocks`` (the
+    action cannot run now, the detail says why), ``waiting`` (this host's own check, a few seconds), ``confirm`` (the
+    person confirms it on the Run page) or ``at_run`` (the driver checks it on the bus right before it sends anything)."""
+
+    if check in PERSON_CHECKS and state is not False:
+        return "confirm"
+    if state is True:
+        return "ready"
+    if state is False:
+        return "blocks"
+    if state == WAITING:
+        return "waiting"
+    return "blocks" if check in BLOCK_WHEN_UNKNOWN else "at_run"
 
 
 def bus_lock_state(holders) -> tuple[bool | str, str]:
@@ -2081,10 +2175,71 @@ class Host:
             return None, firmware.message or versions
         if check in host_utilities.CHECKS:
             return self._evaluate_utility(check, path, view)
+        if check == "board_idle":
+            return self._board_idle(path, view)
+        if check == "source_id_unique":
+            return self._source_id_unique(path, view)
+        if check not in OS_GATES:
+            # the driver answers a precondition only it can read (its own files): a value precondition.<check> on one of
+            # the entity's statuses, "pass: <why>" or "fail: <why>" (docs/api-v1.md, "Actions: two states")
+            said = self._driver_says(check, path, view)
+            if said is not None:
+                return said
         device_path = tree.nearest_device(path, view.merged, view.layer)
         if device_path is None:
             return None, f"{check}: no physical device above {entity.name}"
         return self.os.gate(view.layer.matchable(view.layer.device_of_path[device_path]), check)
+
+    def _driver_says(self, check: str, path: str, view: View) -> tuple[bool, str] | None:
+        key = f"{PRECONDITION_VALUE}{check}"
+        for status in view.rows.own.get(path, []):
+            text = str(dict(status.values).get(key, "")).strip()
+            verdict, _, why = text.partition(":")
+            if verdict in ("pass", "fail"):
+                return verdict == "pass", why.strip() or text
+        return None
+
+    def _board_idle(self, path: str, view: View) -> tuple[bool | None, str]:
+        """The board's latest State (a watch's, or a probe's ``state`` record): mode 0 and no fault is idle. A State that
+        has gone stale says nothing; the driver reads the board on the bus before it moves it, and sends nothing if not."""
+
+        entity = view.merged.entities[path]
+        target = self._watch_target(path)
+        if target is None:
+            return None, f"no State from {entity.name}"
+        job, rel = target
+        with self.lock:
+            groups = entity_state.state_groups(job.cache, rel, view.now)
+        found = {}
+        for group in groups:
+            if group["stale"]:
+                continue
+            for row in group["rows"]:
+                if row["key"] in ("mode", "fault") and row["key"] not in found and isinstance(row["value"], (int, float)):
+                    found[row["key"]] = row
+        if "mode" not in found:
+            return None, f"no fresh State from {entity.name}: its mode is read on the bus when it runs"
+        mode, fault = found["mode"], found.get("fault")
+        words = lambda row: f"{row['value']:g}" + (f" ({row['meaning']})" if row.get("meaning") else "")  # noqa: E731
+        if fault is not None and fault["value"]:
+            return False, f"{entity.name} reports fault {words(fault)}: Clear faults first"
+        if mode["value"] != 0:
+            return False, f"{entity.name} is in mode {words(mode)}: something is driving it (it must be stopped, mode 0)"
+        return True, f"{entity.name} reports mode 0 (stopped), no fault"
+
+    def _source_id_unique(self, path: str, view: View) -> tuple[bool | None, str]:
+        """One board on this CAN id: the driver's own id check (two UUIDs answering one id is IdCollision). Without one,
+        the driver reads the UUIDs on the bus before it changes the id, and refuses a shared id with nothing sent."""
+
+        entity = view.merged.entities[path]
+        own = view.rows.own.get(path, [])
+        shared = next((status for status in own if status.code in ID_SHARED_CODES and effective_level(status, view.now) != STALE), None)
+        if shared is not None:
+            return False, f"{entity.name}: {shared.message}"
+        answers, detail = self.evaluate("board_answers", path, view)
+        if answers:
+            return True, f"one board answers {entity.name}"
+        return (False, detail) if answers is False else (None, detail)
 
     def _evaluate_utility(self, check: str, path: str, view: View) -> tuple[bool | None, str]:
         """The preconditions of the host's own utilities (``host_utilities.CHECKS``) for a USB device or port row."""
@@ -2153,13 +2308,20 @@ class Host:
                 state, detail = self.evaluate(check, path, view)
                 results.append({"check": check, "text": string.Formatter().vformat(text, (), fill),
                                 "state": {True: "pass", False: "fail", None: "unknown", WAITING: WAITING}[state],
-                                "detail": detail})
+                                "detail": detail, "resolves": resolves(check, state)})
+                if results[-1]["resolves"] == "blocks" and state is None:
+                    results[-1]["detail"] = BLOCK_WHEN_UNKNOWN[check]
+                elif results[-1]["resolves"] == "at_run" and detail.endswith("not a check the host evaluates"):
+                    results[-1]["detail"] = "checked on the bus when it runs; nothing is sent if it fails"
+                elif results[-1]["resolves"] == "confirm" and state is None:
+                    results[-1]["detail"] = "you confirm it on the Run page"
             # WHY device_free is not a block: something else having the device open is the person's call (the second
             # confirmation names it), not a reason the button is dead (docs/usb-reset.md)
             second = next((result for result in results if result["check"] == "device_free" and result["state"] == "fail"), None)
-            failing = [result for result in results if result["state"] == "fail" and result is not second]
+            if second is not None:
+                second["resolves"] = "confirm"
+            failing = [result for result in results if result["resolves"] == "blocks"]
             waiting = [result for result in results if result["state"] == WAITING]
-            unknown = [result for result in results if result["state"] == "unknown"]
             up_to_date = next((result for result in failing if result["check"] == "update_available"), None)
             if up_to_date:  # WHY first: with nothing to install, a free port would not make the button useful (V6)
                 state, reason = "nothing_to_do", f"up to date: {up_to_date['detail']}"
@@ -2169,19 +2331,29 @@ class Host:
                 state, reason = "blocked", detail if detail.startswith("blocked") else f"blocked: {detail}"
             elif waiting:  # WHY its own state: runnable in a few seconds, by itself; the page greys it, never warns
                 state, reason = WAITING, waiting[0]["detail"]
-            elif unknown:
-                state, reason = "unknown", f"can't tell: {unknown[0]['detail']}"
-            else:
+            else:  # never "unknown" (Zach, 2026-10-29): what is not read now is confirmed by the person or checked at run
                 state, reason = "ready", ""
+            confirmations = [result["text"] for result in results if result["resolves"] == "confirm" and result is not second]
+            # WHY here and not only in the dry run: a greyed utility has no Run page, so how to allow it rides on the action
+            fix = self._reset_fix(path, view) if action.name == usb_reset.NAME and any(
+                result["check"] == "reset_privilege" and result["resolves"] == "blocks" for result in results) else None
             out.append({"name": action.name, "title": action.title, "description": action.description, "danger": action.danger,
                         "scope": action.scope, "kind": action.kind,
                         "confirm": string.Formatter().vformat(action.confirm, (), fill),
                         "preconditions": results, "state": state, "reason": reason, "executable": False,
                         "owner": host_utilities.OWNER if action in host_utilities.OFFERED else entity.owner,
-                        "second_confirm": second["detail"] if second else "", "last_run": self._last_run(path, action.name)})
+                        "second_confirm": second["detail"] if second else "", "confirmations": confirmations,
+                        **({"fix": fix} if fix else {}), "last_run": self._last_run(path, action.name)})
         if view.composition is not None and path in view.composition.by_path:
             out += self.batch_actions_json(path, view)
         return out
+
+    def _reset_fix(self, path: str, view: View) -> str | None:
+        """How to let this user reset the USB port (the udev rule for this device), for a reset_port its privilege blocks."""
+
+        found = host_utilities.usb_target(path, view.layer)
+        target = usb_reset.target_of(found[0]) if found and found[0] is not None else None
+        return usb_reset.fix_text(target) if target is not None else None
 
     def _entity_actions(self, path: str, entity, view: View) -> list[Action]:
         """The entity's registered actions, plus the host's own utilities on the rows they belong to (a USB device or port
@@ -3005,12 +3177,9 @@ class Host:
             self._label_batch(plan, view)
             states = [(item, next((a for a in self.actions_json(item.child.path, view) if a["name"] == plan.name), None)) for item in plan.items]
             blocked = next(((item, a) for item, a in states if a and a["state"] == "blocked"), None)
-            unknown = next(((item, a) for item, a in states if a and a["state"] == "unknown"), None)
             waiting = next(((item, a) for item, a in states if a and a["state"] == WAITING), None)
             if blocked:
                 state, reason = "blocked", f"{blocked[0].child.name}: {blocked[1]['reason']}"
-            elif unknown:
-                state, reason = "unknown", f"can't tell: {unknown[0].child.name}: {unknown[1]['reason']}"
             elif waiting:
                 state, reason = WAITING, f"{waiting[0].child.name}: {waiting[1]['reason']}"
             elif states and all(a and a["state"] == "nothing_to_do" for _item, a in states):
@@ -3024,12 +3193,14 @@ class Host:
             by_check: dict[str, dict] = {}
             for _item, found in states:
                 for pre in (found or {}).get("preconditions", []):
-                    row = by_check.setdefault(pre["check"], {"check": pre["check"], "texts": [], "state": "pass", "detail": ""})
+                    row = by_check.setdefault(pre["check"], {"check": pre["check"], "texts": [], "state": "pass", "detail": "",
+                                                             "resolves": pre.get("resolves", "ready")})
                     row["texts"].append(pre["text"])
                     if severity.get(pre["state"], 0) > severity[row["state"]]:
-                        row["state"], row["detail"] = pre["state"], pre["detail"]
+                        row["state"], row["detail"], row["resolves"] = pre["state"], pre["detail"], pre.get("resolves", row["resolves"])
             preconditions = [{"check": row["check"], "text": "; ".join(row["texts"][:3]) + ("; …" if len(row["texts"]) > 3 else ""),
-                              "state": row["state"], "detail": row["detail"]} for row in by_check.values()]
+                              "state": row["state"], "detail": row["detail"], "resolves": row["resolves"]} for row in by_check.values()]
+            confirmations = [row["text"] for row in preconditions if row["resolves"] == "confirm"]
             groups = sorted({item.group for item in plan.items if item.group})
             queue = (f"; runs of {', '.join(groups)} go one at a time" if groups else "")
             skipped = self._skipped_text(plan)
@@ -3041,7 +3212,7 @@ class Host:
                 "danger": plan.danger, "scope": "composite", "kind": plan.items[0].action.kind,
                 "confirm": f"{plan.title.rstrip('…')} under {composite.label()}? {len(plan.items)} runs: {names}.",
                 "preconditions": preconditions, "state": state, "reason": reason, "executable": False, "owner": "io_diagnostics",
-                "last_run": None, "batch": {"action": plan.name, "n": len(plan.items), "groups": groups,
+                "confirmations": confirmations, "last_run": None, "batch": {"action": plan.name, "n": len(plan.items), "groups": groups,
                                             "skipped": [{"path": child.path, "name": child.name, "why": why} for child, why in plan.skipped]}})
         return out
 

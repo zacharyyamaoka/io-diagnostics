@@ -94,14 +94,11 @@ const waitTerminal = (page, id, pattern, timeout = 20000) => page.waitForFunctio
   return new RegExp(source).test(text);
 }, [id, pattern.source], { timeout });
 
-// Run Run calibration… on CAN 1 from the Utilities menu: the sheet, then the confirm modal with its box ticked.
+// Run Run calibration… on CAN 1 from the Utilities menu: its Run page, then Run (2026-10-29: no sheet, no ticked box).
 async function startCalibration(page) {
   await utilities(page);
   await page.click('[data-util="calibrate"]');
-  await page.waitForSelector('.ent-sheet [data-util-run]', { timeout: 10000 });
-  await page.click('.ent-sheet [data-util-run]');
-  await page.waitForSelector('#modal [data-util-tick]');
-  await page.check('#modal [data-util-tick]');
+  await page.waitForSelector('#modal:not([hidden]) [data-util-confirm]:not([disabled])', { timeout: 10000 });
   await page.click('#modal [data-util-confirm]');
 }
 const currentRunId = (page) => page.evaluate(() => S.util && S.util.runId);
@@ -304,9 +301,7 @@ async function main() {
     await open(page, base, adapter);
     await page.evaluate(() => { const root = document.getElementById('runs-root'); if (!root.hidden) document.querySelector('.r1-hide').click(); });
     await utilities(page);
-    await page.click('[data-util="check_comms"]');
-    await page.waitForSelector('.ent-sheet [data-util-run]');
-    await page.click('.ent-sheet [data-util-run]');
+    await page.click('[data-util="check_comms"]'); // 2026-10-29: a query runs on the click
     await page.waitForSelector('.ent-run.ok', { timeout: 20000 });
     const quiet = await page.evaluate(() => ({ hidden: document.getElementById('runs-root').hidden, line: document.querySelector('.ent-run').textContent, badge: document.querySelector('.r1-badge').hidden }));
     check('quiet: a query run leaves the panel closed, its line offers the output', quiet.hidden && /Show output/.test(quiet.line) && quiet.badge, quiet);

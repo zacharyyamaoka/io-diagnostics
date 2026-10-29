@@ -14,11 +14,11 @@
 //   absent       an expected-but-absent device (ExpectedAbsent, injected into /state and /node) is a row in every
 //                structure, whose detail shows its checklist and kernel evidence
 //   utilities    the printer-utility card: icon + title + description per action, Checks first, Maintenance, Motion
-//                (set apart), More; every click is a dry run (POST /api/v1/act dry_run) showing argv, steps,
-//                preconditions and the confirm text; a query runs with one more click and shows its result; moves
-//                needs the modal's box ticked and a button labelled with the action
-//   set_id       its row's "New id (1-126)" box keeps the dry run disabled until it holds a valid id; the dry run,
-//                the modal ("CAN 15 → CAN 7") and the run carry that id; typing another closes the dry run
+//                (set apart), More; (2026-10-29) a query runs on the click (a dry run for its token, then the run) and
+//                shows its result; anything else opens its Run page (the confirm text, what Run confirms, the command
+//                under "How it runs") and runs on its one Run button, no box to tick
+//   set_id       the new id is typed on its Run page: Run stays disabled until it holds a valid id; the dry run and the
+//                run carry that id; Cancel sends nothing
 //   server       a fetch without the page header, or without a dry run's token, is refused with a plain reason
 //   seams        subtitle / suffix (p3), attrs (p4), lead (p5), toggles[].when (p2), box guides (Terminal), mono
 //                columns and the folded Connection card (p1)
@@ -284,16 +284,17 @@ async function main() {
       && card.groups[0].names.join() === 'update_firmware,update_config,clear_faults,set_id', card.groups);
     check('utilities: icon + title + description', card.rows.every((row) => row.icon && row.title && row.desc) && standardIcons.size === card.rows.length - 1, card.rows.map((row) => row.title));
     // round 3 (u0): the description is a tooltip (hidden at rest, shown on hover and on keyboard focus); danger is a word
-    const tip = async () => page.evaluate(() => { const desc = document.querySelector('[data-util="update_firmware"] .u-desc'); const style = getComputedStyle(desc); return style.visibility === 'visible' && parseFloat(style.opacity) > 0.9; });
+    // (2026-10-29: on a ready utility: a greyed one is a disabled button, so it takes no keyboard focus; its why is its own line)
+    const tip = async () => page.evaluate(() => { const desc = document.querySelector('[data-util="clear_faults"] .u-desc'); const style = getComputedStyle(desc); return style.visibility === 'visible' && parseFloat(style.opacity) > 0.9; });
     await page.mouse.move(5, 995);
     await page.waitForTimeout(300);
     const atRest = await tip();
-    await page.hover('[data-util="update_firmware"] .u-title');
+    await page.hover('[data-util="clear_faults"] .u-title');
     await page.waitForTimeout(700);
     const onHover = await tip();
     await page.mouse.move(5, 995);
     await page.waitForTimeout(300);
-    await page.focus('[data-util="update_firmware"]');
+    await page.focus('[data-util="clear_faults"]');
     await page.keyboard.press('Shift+Tab');
     await page.keyboard.press('Tab');
     await page.waitForTimeout(400);
@@ -307,68 +308,56 @@ async function main() {
     await page.waitForTimeout(300);
     const detail = await page.locator('#inspector').boundingBox();
     await page.screenshot({ path: path.join(ROUND3, 'r35-header-menu.png'), clip: detail });
+    // 2026-10-29 (Zach: "After you click a utility it can go to at most 1 other page ... and then it should just run"): the
+    // click opens calibrate's Run page (it was a dry-run sheet, then a modal with a box to tick); its dry run is asked for
+    // behind it, the command is under "How it runs ▸", and Run is the one more click
     await page.click('[data-util="calibrate"]');
-    await page.waitForSelector('.ent-sheet .u-panel .u-cmd', { timeout: 15000 });
+    await page.waitForSelector('#modal:not([hidden]) [data-run-page="calibrate"]', { timeout: 15000 });
+    await page.waitForFunction(() => S.util && S.util.dry, null, { timeout: 15000 });
+    await page.click('#modal [data-sheet-more]');
     await page.waitForTimeout(300);
-    // round 3.5: the dry run reads in a small sheet under the button (the menu closes); its steps and the plugin
-    // command line are behind "How it runs ▸"
-    const dry = await page.evaluate(() => ({ cmd: document.querySelector('.u-panel .u-cmd').textContent, steps: document.querySelectorAll('.u-panel .u-steps li').length,
-      pre: [...document.querySelectorAll('.u-panel .pre li')].map((li) => li.textContent), confirm: (document.querySelector('.u-panel .confirm') || {}).textContent,
-      argv: document.querySelector('.u-panel .u-argv').textContent, button: (document.querySelector('[data-util-run]') || {}).textContent,
-      cancel: (document.querySelector('.ent-sheet [data-util-close]') || {}).textContent, menu: Boolean(document.querySelector('.ent-menu')),
-      under: (() => { const b = document.getElementById('ent-util-btn').getBoundingClientRect(); const s = document.querySelector('.ent-sheet').getBoundingClientRect(); return Math.round(s.top - b.bottom) >= 0 && Math.round(s.top - b.bottom) <= 8 && Math.abs(Math.round(s.right - b.right)) <= 1; })() }));
-    check('dry run: what will run', dry.cmd === 'moteus_tool --target 15 --calibrate --fdcanusb /dev/serial/by-id/usb-mjbots_fdcanusb_272813EF-if00'
-      && dry.steps === 1 && dry.pre.some((text) => /joint is free to spin/.test(text) && /person confirms/.test(text)) && /rotor spins/.test(dry.confirm)
-      && /--action calibrate --node 15 --dry-run$/.test(dry.argv) && dry.button === 'Continue…', dry);
-    check('dry run: a sheet under the button, Run / Cancel', dry.under && !dry.menu && dry.cancel === 'Cancel', dry);
-    check('dry run: one POST, dry_run, from the page', posts.length === 1 && posts[0].body.dry_run === true && posts[0].headers['x-io-diagnostics'] === 'ui', posts.map((p) => p.body));
+    const dry = await page.evaluate(() => ({ cmd: document.querySelector('#modal .u-cmd').textContent, steps: document.querySelectorAll('#modal .u-steps li').length,
+      confirms: [...document.querySelectorAll('#modal .m-confirms li')].map((li) => li.textContent), confirm: (document.querySelector('#modal [data-run-says]') || {}).textContent,
+      buttons: [...document.querySelectorAll('#modal footer button')].map((button) => button.textContent), menu: Boolean(document.querySelector('.ent-menu')) }));
+    check('run page: what will run', dry.cmd === 'moteus_tool --target 15 --calibrate --fdcanusb /dev/serial/by-id/usb-mjbots_fdcanusb_272813EF-if00'
+      && dry.steps === 1 && dry.confirms.some((text) => /joint is free to spin/.test(text)) && /rotor spins/.test(dry.confirm), dry);
+    check('run page: the menu closes, Cancel / Run', !dry.menu && dry.buttons.join() === 'Cancel,Run', dry);
+    check('run page: one POST, dry_run, from the page', posts.length === 1 && posts[0].body.dry_run === true && posts[0].headers['x-io-diagnostics'] === 'ui', posts.map((p) => p.body));
     await page.mouse.move(5, 995);
     await page.waitForTimeout(300);
     await page.screenshot({ path: path.join(SHOTS, 'integration-utilities-dry-run.png'), clip: detail });
     await page.screenshot({ path: path.join(ROUND3, 'r35-dry-run-sheet.png'), clip: detail });
-    await page.click('[data-util-run]');
-    await page.waitForSelector('#modal:not([hidden]) .modal', { timeout: 5000 });
-    const modal = await page.evaluate(() => ({ danger: document.querySelector('#modal .danger').textContent, words: document.querySelector('#modal .m-danger').textContent,
-      tick: document.querySelector('#modal .m-tick').textContent, checked: document.querySelector('#modal [data-util-tick]').checked,
+    const modal = await page.evaluate(() => ({ danger: document.querySelector('#modal .danger').textContent,
       disabled: document.querySelector('#modal [data-util-confirm]').disabled, label: document.querySelector('#modal [data-util-confirm]').textContent }));
-    check('moves modal: the danger, a box, a labelled button', modal.danger === 'moves' && /Makes hardware move/.test(modal.words) && /I checked: CAN 15's joint is free to spin/.test(modal.tick)
-      && !modal.checked && modal.disabled && modal.label === 'Run calibration', modal);
+    check('moves Run page: the danger word, Run ready', modal.danger === 'moves' && !modal.disabled && modal.label === 'Run', modal);
     await page.screenshot({ path: path.join(SHOTS, 'integration-utilities-moves-modal.png') });
-    await page.click('#modal [data-util-confirm]', { force: true }); // disabled: nothing may happen
-    await page.waitForTimeout(500);
-    check('moves: no run without the box', posts.length === 1, posts.length);
-    await page.check('#modal [data-util-tick]');
-    await page.waitForTimeout(200);
-    const enabled = await page.evaluate(() => !document.querySelector('#modal [data-util-confirm]').disabled);
+    check('moves: nothing runs before Run', posts.length === 1, posts.length);
     await page.click('#modal [data-util-confirm]');
     // round 3.5: the result is the line under the header (Details ▸ opens its records), not a panel
     await page.waitForSelector('.ent-run.ok, .ent-run.fail', { timeout: 20000 });
     await page.click('[data-run-details]');
     await page.waitForSelector('.ent-run-details .u-records');
     const moved = await page.evaluate(() => ({ line: document.querySelector('.ent-run').textContent, records: document.querySelector('.ent-run-details .u-records').textContent,
-      modal: document.getElementById('modal').hidden, sheet: Boolean(document.querySelector('.ent-sheet')) }));
-    check('moves: ticked, pressed, the fixture answers', enabled && posts.length === 2 && posts[1].body.token && !('dry_run' in posts[1].body) && moved.modal && !moved.sheet
-      && /ActionCompleted/.test(moved.records) && /nothing ran/.test(moved.records), { enabled, run: posts[1] && posts[1].body, moved });
+      modal: document.getElementById('modal').hidden }));
+    check('moves: one more click, the fixture answers', posts.length === 2 && posts[1].body.token && !('dry_run' in posts[1].body) && moved.modal
+      && /ActionCompleted/.test(moved.records) && /nothing ran/.test(moved.records), { run: posts[1] && posts[1].body, moved });
     await page.click('[data-run-details]');
 
-    // ---- a query: one more click, then the quiet run line under the header and its result (round 3.5)
+    // ---- a query: it runs on the click (2026-10-29), then the quiet run line under the header and its result (round 3.5)
     await open(page, base, ADAPTER);
     await utilities(page);
     const adapterGroups = await page.evaluate(() => [...document.querySelectorAll('.ent-menu .ugroup')].map((group) => group.className.replace('ugroup ugroup-', '')));
     check('utilities: checks come first', adapterGroups[0] === 'checks' && adapterGroups.join() === 'checks,tools,maintenance,motion', adapterGroups);
-    await page.click('[data-util="check_comms"]');
-    await page.waitForSelector('[data-util-run]');
-    const runLabel = await page.textContent('[data-util-run]');
+    const runLabel = await page.textContent('[data-util="check_comms"] .u-title');
     // the run is held 2.6 s at the network so the running state can be read: one quiet muted line under the header
-    // ("Checking communication on fdcanusb · 272813EF… N s"), the sheet gone, no live output, no other modal; in the
-    // menu its row greys out
+    // ("Checking communication on fdcanusb · 272813EF… N s"), no live output, no modal; in the menu its row greys out
     await page.route('**/api/v1/act', async (route) => {
       if (!JSON.parse(route.request().postData() || '{}').dry_run) await new Promise((resolve) => setTimeout(resolve, 2600));
       await route.continue();
     });
     const nodeAfter = [];
     page.on('request', (request) => { if (request.url().includes(`/api/v1/node?path=${encodeURIComponent(ADAPTER)}`)) nodeAfter.push(Date.now()); });
-    await page.click('[data-util-run]');
+    await page.click('[data-util="check_comms"]');
     await page.waitForTimeout(1400);
     const busy = await page.evaluate(() => {
       const line = document.querySelector('.ent-run.running');
@@ -398,7 +387,7 @@ async function main() {
     await page.waitForSelector('.ent-run-details .u-records');
     const records = await page.evaluate(() => document.querySelector('.ent-run-details').textContent);
     await page.screenshot({ path: path.join(ROUND3, 'r35-result-details.png'), clip: detail });
-    check('query: runs with one more click, its result is the line', runLabel === 'Run Check communication' && !result.modalShown && /· just now · (Show output · )?Details ▸$/.test(result.line)
+    check('query: runs on the click, its result is the line', runLabel === 'Check communication' && !result.modalShown && /· just now · (Show output · )?Details ▸$/.test(result.line)
       && !result.diagnostic && !result.details && /ActionCompleted/.test(records) && posts.length === 4, { runLabel, result, records: records.slice(0, 160), posts: posts.length });
     check('query: the entity re-reads its diagnostics at once', nodeAfter.some((at) => at >= doneAt - 400 && at <= doneAt + 600), { doneAt, nodeAfter: nodeAfter.map((at) => at - doneAt) });
     await page.click('[data-view="activity"]');
@@ -410,14 +399,12 @@ async function main() {
     await page.click('[data-view="tree"]');
     // a failed run is the one coloured line: diagnostic-level (data-diagnostic, the error shape, --io-error-text)
     await utilities(page);
-    await page.click('[data-util="check_comms"]');
-    await page.waitForSelector('.ent-sheet [data-util-run]');
     await page.route('**/api/v1/act', async (route) => {
       if (JSON.parse(route.request().postData() || '{}').dry_run) return route.continue();
       return route.fulfill({ status: 403, json: { refused: 'TokenExpired', error: 'the dry run is 400 s old (a token lasts 300 s): click the utility again' } });
     });
     const beforeFail = errors.length;
-    await page.click('[data-util-run]');
+    await page.click('[data-util="check_comms"]');
     await page.waitForSelector('.ent-run.fail', { timeout: 10000 });
     await page.unroute('**/api/v1/act');
     errors.splice(beforeFail, errors.length - beforeFail, ...errors.slice(beforeFail).filter((text) => !/status of 403/.test(text))); // the refusal we injected
@@ -429,66 +416,56 @@ async function main() {
     check('a failed run: a diagnostic-level line, the only colour', fail.diagnostic && fail.shape && fail.color === fail.error && /Check communication failed · not run · TokenExpired/.test(fail.text), fail);
     await page.screenshot({ path: path.join(ROUND3, 'r35-result-failed.png'), clip: detail });
 
-    // ---- set_id: the new id in its row gates the dry run; the dry run, the modal and the run all carry it
+    // ---- set_id (2026-10-29): the new id is typed on its Run page; Run waits for a valid one; the dry run and the run carry it
     await open(page, base, CAN15);
     await utilities(page);
-    await page.waitForSelector('[data-util-row="set_id"] [data-util-newid]');
-    const idRow = async () => page.evaluate(() => {
-      const row = document.querySelector('[data-util-row="set_id"]');
-      const box = row.querySelector('[data-util-newid]');
-      return { label: row.querySelector('.u-newid').textContent, value: box.value, type: box.type, min: box.min, max: box.max,
-        disabled: row.querySelector('[data-util="set_id"]').disabled, focused: document.activeElement === box };
-    });
-    const empty = await idRow();
     const sent = posts.length;
-    await page.click('[data-util="set_id"]', { force: true }); // disabled: nothing may happen
+    await page.click('[data-util="set_id"]');
+    await page.waitForSelector('#modal:not([hidden]) [data-util-newid]');
+    const idPage = async () => page.evaluate(() => {
+      const box = document.querySelector('#modal [data-util-newid]');
+      return { label: document.querySelector('#modal .m-newid-in span').textContent, value: box.value, type: box.type, min: box.min, max: box.max,
+        disabled: document.querySelector('#modal [data-util-confirm]').disabled, says: document.querySelector('#modal .m-newid').textContent, focused: document.activeElement === box };
+    });
+    const empty = await idPage();
+    await page.click('#modal [data-util-confirm]', { force: true }); // disabled: nothing may happen
     await page.waitForTimeout(400);
-    check('set_id: an input, the dry run disabled', empty.label === 'New id (1-126)' && empty.type === 'number' && empty.min === '1' && empty.max === '126'
-      && empty.value === '' && empty.disabled && posts.length === sent, { empty, posts: posts.length - sent });
+    check('set_id: an input on its Run page, Run disabled', empty.label === 'New CAN id (1-126)' && empty.type === 'number' && empty.min === '1' && empty.max === '126'
+      && empty.value === '' && empty.disabled && empty.focused && posts.length === sent, { empty, posts: posts.length - sent });
     const gate = {};
     for (const typed of ['0', '127', '15', '1.5', '12']) {
-      await page.fill('[data-util-row="set_id"] [data-util-newid]', '');
-      await page.type('[data-util-row="set_id"] [data-util-newid]', typed, { delay: 60 });
-      await page.waitForTimeout(1300); // past a poll: the detail is rewritten, the caret stays
-      gate[typed] = await idRow();
+      await page.fill('#modal [data-util-newid]', '');
+      await page.type('#modal [data-util-newid]', typed, { delay: 60 });
+      await page.waitForTimeout(1300); // past a poll: the page is redrawn, the caret stays
+      gate[typed] = await idPage();
     }
-    check('set_id: only a valid new id enables it', ['0', '127', '15', '1.5'].every((typed) => gate[typed].disabled) && !gate['12'].disabled
-      && gate['12'].value === '12' && gate['12'].focused, gate);
-    await page.fill('[data-util-row="set_id"] [data-util-newid]', '7');
+    check('set_id: only a valid new id enables Run', ['0', '127', '15', '1.5'].every((typed) => gate[typed].disabled) && !gate['12'].disabled
+      && gate['12'].value === '12' && gate['12'].focused && gate['12'].says === 'CAN 15 → CAN 12', gate);
+    await page.fill('#modal [data-util-newid]', '7');
     await page.waitForTimeout(300);
-    const rowBox = await page.locator('[data-util-row="set_id"]').boundingBox();
-    await page.evaluate(() => document.activeElement.blur()); // the resting row, not its focus ring
+    await page.evaluate(() => document.activeElement.blur());
     await page.mouse.move(5, 995);
-    await page.screenshot({ path: path.join(SHOTS, 'fix-set-id.png'), clip: { x: rowBox.x - 12, y: rowBox.y - 30, width: rowBox.width + 24, height: rowBox.height + 42 } });
-    await page.click('[data-util="set_id"]');
-    await page.waitForSelector('.ent-sheet .u-panel .u-cmd', { timeout: 15000 });
-    await page.waitForTimeout(300);
-    const idDry = await page.evaluate(() => ({ cmd: document.querySelector('.u-panel .u-cmd').textContent, confirm: (document.querySelector('.u-panel .confirm') || {}).textContent,
-      argv: document.querySelector('.u-panel .u-argv').textContent }));
-    check('set_id: the dry run carries the new id', posts.length === sent + 1 && posts[sent].body.new_id === 7 && posts[sent].body.dry_run === true
-      && /--new 7$/.test(idDry.cmd) && /New id: CAN 7\./.test(idDry.confirm) && /--node 15 --new-id 7 --dry-run$/.test(idDry.argv), { body: posts[sent] && posts[sent].body, idDry });
-    await page.click('[data-util-run]');
-    await page.waitForSelector('#modal:not([hidden]) .modal', { timeout: 5000 });
+    await page.screenshot({ path: path.join(SHOTS, 'fix-set-id.png'), clip: await page.locator('#modal .modal').boundingBox() });
     const idModal = await page.evaluate(() => (document.querySelector('#modal .m-newid') || {}).textContent);
-    check('set_id: the modal repeats CAN A → CAN B', idModal === 'CAN 15 → CAN 7', idModal);
+    check('set_id: the Run page says CAN A → CAN B', idModal === 'CAN 15 → CAN 7', idModal);
     await page.screenshot({ path: path.join(SHOTS, 'fix-set-id-modal.png') });
+    check('set_id: nothing sent while typing', posts.length === sent, posts.length - sent);
     await page.click('#modal [data-util-confirm]');
     await page.waitForSelector('.ent-run.ok, .ent-run.fail', { timeout: 20000 });
     await page.click('[data-run-details]');
     await page.waitForSelector('.ent-run-details');
     const idRun = await page.evaluate(() => document.querySelector('.ent-run-details').textContent);
-    check('set_id: the run carries the dry run\'s new id', posts.length === sent + 2 && posts[sent + 1].body.new_id === 7 && posts[sent + 1].body.token
+    check('set_id: Run asks for the token with the new id', posts.length === sent + 2 && posts[sent].body.new_id === 7 && posts[sent].body.dry_run === true, posts.slice(sent).map((post) => post.body));
+    check('set_id: the run carries the dry run\'s new id', posts[sent + 1] && posts[sent + 1].body.new_id === 7 && posts[sent + 1].body.token
       && !('dry_run' in posts[sent + 1].body) && /ActionCompleted/.test(idRun), { body: posts[sent + 1] && posts[sent + 1].body, idRun });
-    // round 3.5: a dry run again is the menu again (the sheet has no "Dry run again"); typing another id in the menu closes it
+    await page.click('[data-run-details]');
     await utilities(page);
     await page.click('[data-util="set_id"]');
-    await page.waitForSelector('.ent-sheet .u-panel .u-cmd', { timeout: 15000 });
-    await utilities(page);
-    await page.fill('[data-util-row="set_id"] [data-util-newid]', '9');
-    await page.waitForTimeout(300);
-    await page.keyboard.press('Escape');
+    await page.waitForSelector('#modal:not([hidden]) [data-util-newid]');
+    await page.fill('#modal [data-util-newid]', '9');
+    await page.click('#modal [data-util-cancel]');
     await page.waitForTimeout(200);
-    check('set_id: another new id closes the dry run', await page.evaluate(() => !document.querySelector('.ent-sheet') && S.util === null), '');
+    check('set_id: Cancel closes the Run page and sends nothing', await page.evaluate(() => document.getElementById('modal').hidden && S.util === null) && posts.length === sent + 2, '');
 
     // ---- the server refuses anything but the page's dry-run-then-click (the browser logs each 403: expected here)
     const before = errors.length;
@@ -1073,9 +1050,7 @@ async function round3Shots(browser, base, scheme) {
       await route.continue();
     });
     await utilities(page);
-    await page.click('[data-util="check_comms"]');
-    await page.waitForSelector('[data-util-run]');
-    await page.click('[data-util-run]');
+    await page.click('[data-util="check_comms"]'); // 2026-10-29: a query runs on the click
     await page.waitForTimeout(3200);
     await page.mouse.move(5, 995);
     await shot('utilities-busy', await page.locator('#inspector').boundingBox());
