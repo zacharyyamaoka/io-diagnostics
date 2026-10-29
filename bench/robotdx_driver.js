@@ -62,7 +62,13 @@ async function firstPaint(browser, base, loads) {
     const page = await newPage(browser);
     await page.addInitScript(() => {
       window.__fp = null;
-      const done = () => { const el = document.querySelector('#dx-tree'); return el && el.model && el.model.rows.length >= 10 && el.querySelector('tbody tr[data-id]'); };
+      // the tree drawn: since PEP 0001 §16 the classic page's own (web/tree/v6.js rows, tests/test_dx_page.js's K7 timer: five);
+      // before it, data-ui's table tree (its model's rows and a drawn row), so the same driver times either page
+      const done = () => {
+        if (document.querySelectorAll('#dx-tree [role=treeitem][data-t6-path]').length >= 5) return true;
+        const el = document.querySelector('#dx-tree');
+        return el && el.model && el.model.rows.length >= 10 && el.querySelector('tbody tr[data-id]');
+      };
       const poll = () => { if (done()) window.__fp = performance.now(); else if (performance.now() < 15000) setTimeout(poll, 10); };
       poll();
     });
