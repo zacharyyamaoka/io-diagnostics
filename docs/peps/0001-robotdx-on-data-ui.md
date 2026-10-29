@@ -703,3 +703,176 @@ of that uses the stub's synthetic past.
 
 **Not done, on purpose:** per-frame batching of `/live` events (the profile: the handler is at most 2.5 % of the main thread and
 the host sends at most one event per stream per frame); any change in data-ui (the asks above); the State-panel rule above.
+
+## 16. The rework (Zach, 2026-10-28) and the timeline and Log toolbar (2026-10-29), as built
+
+*2026-10-29. The branch `lane/robotdx-dx2` is main d8e734a with the rework's acceptance (42989ca: written before its code) and the
+previous owner's work in progress (dc5da40) cherry-picked; data-ui is re-vendored at `integrate/packet` 5b4e793. The asks of
+2026-10-29 have their acceptance in 5dae710, committed red before their code (32eb4f3). Nothing in `/api/v1`, the record or the
+classic page changed (`git diff main...HEAD -- io_diagnostics/*.py io_diagnostics/web/*.js io_diagnostics/web/tree io_diagnostics/web/view`
+is empty).*
+
+### 16.1 The rework (asked 2026-10-28)
+
+- **The tree is the classic page's own** ("please switch back to that old entity tree"): `web/tree/v6.js` over `web/view`'s rows
+  (the default structure p6 on p1, `summary.js`'s header counts, `visibility.js`'s "Show N hidden" rows), loaded by `dx/index.html`
+  as the classic page loads them. `dx/tree.js` draws it as of the clock's t: `/state`'s shape is rebuilt from the `entities`
+  versions in force at t (each version keeps its node as the host sent it), so it rewinds with everything else. Group by, Sort by
+  and "show what is hidden" are the classic page's own preferences (the same keys: a choice on either page holds on both). The
+  renderer's writes (the eye, Hide, Expect, Remove from bus) are hidden and blocked: this page only reads (§12.2). Tree | Table
+  (the table is data-ui's), Collapse all, Expand all, the search on top.
+- **Each entity has tabs**: Overview (Explore's starter), then the classic entity page's Diagnostics, State, Configuration, Log and
+  Utilities under the classic page's ids (`?page=`), each a history entry, the last one remembered per kind of entity, each a
+  dashboard of its own (`dashboards/entity-*.base`; Utilities lists the host's utilities and links the classic tab, where they run).
+- **Three playback bars to compare** (data-ui's `playback.variant`: today's `bar`, `rerun`, `foxglove`), switched by a temporary
+  bottom-right picker and remembered on this device. Rerun's and Foxglove's have no way back to the newest data (data-ui's proposals
+  predate its live tier), so the page draws its own LIVE beside them.
+- **Back marks the tree's row as the URL changes.** `render()` queues destinations; Back moved the URL first and the tree's mark only
+  after the selection before it had loaded its panels (up to 2.5 s). What the URL asks is now marked at once (`handle.mark`).
+
+### 16.2 data-ui at `integrate/packet` 5b4e793
+
+`tools/vendor_data_ui.py --ref integrate/packet` builds the ref without checking it out anywhere (`git archive` into a scratch
+folder, `node_modules` linked from a worktree whose `package-lock.json` is the commit's, `npm run build`); `VERSION` names the ref,
+the commit and its parents. The same nine view bundles; the chart's plot and chunk are files of their own now.
+
+One real change of behaviour: **a dashboard retires a clock a host handed it** (sim2real gap #13, "a new document gets a new
+clock": `<data-dashboard>.load()` of a new document pauses the clock it holds, lets go of every dataset, stops it and makes its
+own). This page hands every dashboard its one clock (§12), so after the first load the views inside a dashboard followed a clock
+the tree and the time bar did not, and the page's clock sat paused with no data (13 checks of `test_dx_page.js`). `holdClock()` in
+`app.js` gives each dashboard an own `clock` property it reads and cannot replace, and `openBase` puts following back after the
+load. Asked of data-ui below.
+
+### 16.3 The timeline: a panel that rises from the bottom (asked 2026-10-29)
+
+*"The playback/rewind bar becomes a panel that rises from the bottom of the page, collapses, and is brought back from the bottom
+status bar, like the Terminal panel on the classic page today ... It is live by default, like a system monitor, and you can rewind
+at any moment. Its height is draggable and remembered, and it stays collapsed or open across reloads."*
+
+- **The classic Terminal panel's conventions** (`web/runs/r1.js`): `#dx-timeline` sits between the page and a 32 px status bar
+  (`#dx-statusbar`, the classic `.statusbar`'s height). Its top edge is a horizontal separator (`role=separator`, keyboard-reachable)
+  that drags (120 px to the window less 220), is kept (`robotdx.dx.timeline.height`), resets on a double-click and moves 16 px per
+  arrow key; a chevron in its head hides it; the status bar's **Timeline** toggle (`aria-pressed`, `aria-expanded`,
+  `aria-controls`) and Ctrl+` bring it back and hide it, at the height it had. Collapsed or open is kept
+  (`robotdx.dx.timeline.open`; only a closed panel is written: open is the default).
+- **Live by default, rewind at any moment.** The clock follows on load as before; the panel holds the page's one time bar. Collapsing
+  it never moves the clock: the toggle says **● LIVE**, or how far behind (`○ −8 min`), so a collapsed panel still tells you when.
+- **Like a system monitor.** Under the bar, the rack over the host's window, both as of t, both stock data-ui views over the summary
+  dataset: a `levels` strip (**Rack**: the worst level per bin) and a `plot` of the problem counts (errors, warnings, stale,
+  unknown). Its past before the page opened is the root row of `GET /history/tree` (read once already, §15); the counts are not kept
+  for the past and stay empty there. Dragging the panel taller gives the plot the room.
+- The connection line and the temporary pickers sit in the status bar (the classic page keeps its Prototype pickers there). At 390 px
+  the connection line folds (its state is the toggle's word) and the status bar stays one row.
+
+### 16.4 The Log toolbar: five one-line proposals (asked 2026-10-29)
+
+*"If you are using data-ui then the ways of doing this are already quite supported. for example we don't want to tool bar to split
+onto two lines."* The classic Log tab wraps: its count, the level segment, Raw, search and Live, then "Log of CAN 13 + children /
+this only / + path to host" on a second line. Every proposal here is data-ui's one-row bar (`toolbar="bar"`, CONTRACT §15: it never
+wraps, its presets are attributes) and the log's controls become data-ui's own things:
+
+| Proposal | The bar (data-ui's attributes) | Level floor | Scope | Raw lines |
+|---|---|---|---|---|
+| 1 · Overflow menu (default) | Shopify: `views="dropdown" promote=""` | the view chip | a clause in Display | a clause in Display |
+| 2 · Scope as a chip | `views="dropdown" promote=""` | typed: `level:>=2` | the view chip | typed: `-channel:raw` |
+| 3 · Search on focus | `views="dropdown" promote="filter" search="icon" labels="icons"` | the view chip | behind Filter | behind Filter |
+| 4 · Scope in the breadcrumb | `views="tabs" promote="filter"` | tabs | a select in the entity's breadcrumb | behind Filter |
+| 5 · Level as a facet | `views="tabs" promote=""` + the dashboard's rail | a facet (Debug+ … Error+) | tabs | a facet (Hide raw lines) |
+
+The count is data-ui's status line under the table in all five; Live is the page's one LIVE (the timeline and the status bar:
+Rerun's single way back), never a second control in the Log. A temporary bottom-right picker (`#dx-log-variant`) switches them live
+and remembers the pick on this device; proposal 1 is the default. The data under them:
+
+- The Log reads the entity's **raw lines** (`GET /activity?channel=raw&path=…&scope=host`, the widest scope, so every scope is a
+  filter of what is held), every 5 s while it is on screen, as the classic entity log does, **inside the host's window** as the
+  activity backlog is (§12.1; 16.5 says why); they go into the events dataset as a stream of their own (each read is in time
+  order; another entity's lines may be older). Activity, the overview's Recent and Explore's own Log keep raw lines out, as the
+  classic Activity log does. F1 has no raw line inside its window (its kernel lines are from the rack's boot), so on F1 the raw
+  controls have nothing to act on.
+- Events gain `sev` (the floor as a number: debug 0, info 1, warn 2, error 3), `channel` and `lineage` (the path and every path
+  above it), so "+ children" is one clause, `lineage.contains(p)`, which data-ui draws by the entity's name (`labels`), and
+  "+ path to host" is it or-ed with each path above.
+- **Why no query tokens**: proposal 2 first drew the scope as a token in the query box (`filters="query-tokens"`); on a board's Log
+  the token wrapped data-ui's query box onto a second line at 1280 px (the bar 71 px, the boxes' tops 15 px apart) and onto three
+  over the bar at 390 px. Asked of data-ui below.
+
+### 16.5 Found on a host up longer than its window, and fixed
+
+The checks' fixture host is seconds old when the page opens; a real one has been up for hours. Two faults showed only there:
+
+1. **The tree's past emptied a tick after the page opened, and the clock could not go back before the open.** dc5da40 kept the
+   entities for the host's window (main keeps none for them), and data-ui's keyed age retention drops every version older than
+   end − age but each key's newest, so the version still in force at the cut goes too. The tree's past (§15) is one version per row
+   at the window's start: on a host whose history fills the window it sat at the cut and went at once; the clock's span then
+   started at the page's open, and the Rack strip lost its past. Later, any row that changed inside the window was missing from a
+   rewind back to its change. The feed now writes the version in force at the cut again just inside the window, before the cut
+   reaches it (`_carryForward`: entities and summary, every 2 s and at once after the tree's past is read, only for a version that is
+   not its key's newest). `tests/test_dx_tree_past.js` (a fixture host with a 60 s window, up 70 s): 4/7 before, 7/7 after. The
+   first seconds at the window's far edge still have no row (data-ui's rule; asked below).
+2. **Opening a Log stretched the time bar to the device's plug.** An entity's raw lines go back to its plug (F1's are 12 h before the
+   replay) and the clock spans what its datasets hold: the bar went from 15 min to 12 h (on a host up for days, days) until a reload.
+   Letting the events go of the clock keeps the bar but stops the Log rewinding (data-ui draws a dataset its clock is not bound to at
+   its newest rows, `live/feed.js:178`), so raw lines are kept inside the window, as the activity backlog is.
+   `tests/test_dx_time_span.js`: 4/6 before, 6/6 after.
+
+### 16.6 Measured (2026-10-29, this PC, load 3-9 on 24 CPUs)
+
+**Checks** at the final commit: `tests/test_dx_page.js` **99/101**, `test_dx_timeline.js` **27/27**, `test_dx_log_toolbar.js`
+**38/41**, `test_dx_tree_past.js` **7/7**, `test_dx_time_span.js` **6/6**; pytest (a detached checkout named `io-diagnostics`)
+**778 passed, 1 skipped**. The five failures, none edited:
+- 42989ca's two shape checks ("…each leaf with the shape of the level the host kept for it then"; "the tree's past is the host's,
+  where it differs from now") read a row's level from `.t6-st svg.shape` and its `lv-<level>` class; the classic tree draws its
+  shapes as `svg.t6-shape.t6-<level>` (`web/summary.js` since 854c0f0, 2026-10-24), so the reader finds no level on any row and
+  every warn or error row compares as none. Read with the classic markup, the same comparisons pass: on F1 5 leaves compared, 0
+  wrong; on the stub, stub/0 warn then, OK a few seconds later and now, stub/1 never. The fix is the test's selector.
+- 5dae710's three raw-line checks counted F1's 12 h old kernel lines, which the page must not hold (16.5, 2); F1 has no raw line
+  inside its window for any entity. They need a fixture with raw lines inside the window.
+
+**The one-line toolbar** (a single row of boxes, the same top within 2 px, nothing under the bar): every proposal at 1280 and 390
+px, light and dark, 20 of 20; the boxes' tops spread 1.5-2 px (data-ui's controls are 25, 28 and 32 px tall, centred).
+
+**The timeline**: on the status bar, the status bar on the window's bottom edge (±1 px); the top edge drags +80 px with the page
+above giving up 80 px (±3), kept on reload, ArrowUp +16, double-click back to 200 px; collapsed and open kept across reloads;
+Ctrl+` both ways; the Rack strip's window ends at the clock's t when paused (±0.5 s); 390 px one row, no sideways scroll.
+
+**KPIs** (`test_dx_page.js`): K2 idle 25.3 KB/s on the live feed against 61.5 for the classic page; K5 scrub to every live panel
+drawn 6-8 ms software, 9-13 ms GPU; K7 cold load 107-157 ms. **The bench** (`tools/bench_robotdx.py --phases fixture`, GPU,
+every run "quiet"), interleaved with main d8e734a:
+
+| KPI (pooled over every sample of the runs) | main d8e734a, 6 runs | this branch f59bfe8, 2 runs | budget |
+|---|---|---|---|
+| `first_paint_ms` p50 / p95 (cold loads) | 88.2 / 117.5 (30) | 109.2 / 126.0 (10) | 1,500 |
+| `scrub_ms` p50 / p95 | 25.2 / 28.6 (180) | 24.0 / 27.0 (60) | 50 |
+| `back_to_live_ms` p50 / p95 | 14.9 / 24.9 (60) | 12.8 / 14.5 (20) | 100 |
+| `idle_traffic_kb_s` (per run) | 25.3-27.0 | 26.9-27.0 | 8 |
+
+The cold load is about 20 ms later than main's (p50): data-ui 5b4e793's core is 428 KB against 324, the classic tree adds its eight
+scripts and three style sheets, and the timeline two live views; not profiled further (the budget is 1,500 ms). The bench's first
+paint read data-ui's old table tree; it times the classic tree since 79bb56a.
+
+### 16.7 Asks of data-ui (none edited here; the page works around 1-3)
+
+1. **Retire only a clock the dashboard made.** `<data-dashboard>.load()` of a new document pauses, unbinds and stops the clock it
+   holds, a host's included (sim2real gap #13), and makes its own (`dashboard/src/index.js` `_setupClock` → `_retireClock`). The page
+   holds its one clock with an own `clock` property and puts following back (`holdClock`).
+2. **`bindLive` lets go of every dataset on a shared clock that it did not bind** (asked in §15.1; still in 5b4e793). `rebind()`.
+3. **Keyed age retention should keep the version in force at the cut** (`live/store.js` `_dropVersions`: `vs[0].t < before` drops
+   it); as it is, a key is missing from every t between the cut and its next change. `_carryForward`.
+4. **The query box wraps** (`filters="query-tokens"`): `.dv-qbox` is `flex-wrap: wrap` with a 100 px text field, so a token that
+   leaves less room puts the field on a second line, and on a narrow bar the box opens over the views and wraps there; the bar is then
+   not one row (§15's note). Measured on a board's Log: 71 px tall at 1280 px (boxes' tops 15 px apart), 76-89 px over the bar at 390.
+5. **The playback proposals other than `bar` have no ● LIVE** (`rerun`, `foxglove`, …): the page draws its own beside them.
+6. **One control height in the bar** (minor): the query box 32 px, a labelled tool 28, an icon-only tool 25, centred; a row is
+   1.5-3.5 px uneven at the top.
+
+### 16.8 Left
+
+- 42989ca's shape reader and 5dae710's raw-line fixture (16.6): the owner's call, not edited here.
+- The old raw lines (before the window) are only on the classic entity Log. Recommendation if they are wanted here: a second,
+  static panel under the Log ("before the window"), whose rows are at or before every t the clock can reach.
+- Explore at 390 px (not part of these asks): the tree pane keeps its 380 px and scrolls inside the page; the Explore bar wraps
+  over the tree's head.
+- The Log proposals' known edges: 1 keeps scope and raw lines a page deep (Display, Filter); 2's level is typed; 5's floors are
+  data-ui's `popular` checkboxes, so two picked floors keep the higher.
+- The temporary pickers (Log toolbar, playback bar) go once Zach picks.
+
