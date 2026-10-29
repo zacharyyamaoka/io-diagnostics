@@ -1,0 +1,27 @@
+/* The placeholder workspaces (layers/layers.js, docs/peps/0002-robotdx-robot-health-super-app.md): tokens only, so every skin and light / dark works. */
+.layers[hidden] { display: none !important; }
+.main.v-deploy > #layers-host, .main.v-teleop > #layers-host, .main.v-data > #layers-host { flex: 1; min-width: 0; min-height: 0; display: block; overflow: auto; background: var(--io-surface-alt); }
+.main.v-deploy > .inspector, .main.v-teleop > .inspector, .main.v-data > .inspector { display: none; }
+/* the page as it was (L0): the tree on the left as in the Tree view; a layout that keeps the tree in its own pane hides the page's */
+.main.v-deploy .left, .main.v-teleop .left, .main.v-data .left { flex: none; width: var(--tree-w, 470px); min-width: 280px; max-width: calc(100% - 366px); }
+.lx #main.v-deploy > .left, .lx #main.v-deploy > .sash, .lx #main.v-teleop > .left, .lx #main.v-teleop > .sash, .lx #main.v-data > .left, .lx #main.v-data > .sash { display: none; }
+
+.ly-root { max-width: 640px; margin: 8vh auto 40px; padding: 0 24px; font-size: 13px; line-height: 1.55; color: var(--io-text); }
+.ly-ic { width: 34px; height: 34px; fill: none; stroke: var(--io-faint); stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.ly-root h1 { margin: 6px 0 6px; font-size: 20px; font-weight: 600; color: var(--io-text-strong); font-family: var(--io-font-display); }
+.ly-root h2 { margin: 0 0 6px; font-size: 11.5px; font-weight: 600; letter-spacing: .3px; text-transform: uppercase; color: var(--io-faint); }
+.ly-root p { margin: 6px 0; }
+.ly-purpose { font-size: 14px; color: var(--io-muted); }
+.ly-sec { margin-top: 22px; }
+.ly-sec ul { margin: 6px 0; padding-left: 18px; }
+.ly-sec li { margin: 3px 0; }
+.ly-sec li b { color: var(--io-text-strong); font-weight: 600; }
+.ly-root a { color: var(--io-accent-text); text-decoration: underline; text-decoration-color: var(--io-accent-line); text-underline-offset: 2px; cursor: pointer; border-radius: var(--io-radius-sm); }
+.ly-root a:hover { text-decoration-color: currentColor; }
+.ly-root a:focus-visible { outline: var(--io-focus-width) solid var(--io-focus); outline-offset: 1px; }
+.ly-today { margin-top: 22px; padding: 10px 14px; border: 1px solid var(--io-border-soft); border-radius: var(--io-radius); background: var(--io-surface); }
+.ly-today p:first-of-type { margin-top: 0; }
+.ly-today p:last-child { margin-bottom: 0; }
+.ly-device { color: var(--io-faint); }
+.l1-crumbs a.l1-view { cursor: default; }
+.l1-crumbs a.l1-view:hover { background: transparent; color: var(--io-muted); }

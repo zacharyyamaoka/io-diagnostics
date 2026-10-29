@@ -31,7 +31,8 @@
 
 const params = new URLSearchParams(location.search);
 // threed: the 3D view (threed/core.js, docs/robot-description.md), the robot's parts coloured by their devices, the tree kept beside it
-const VIEWS = ['tree', 'table', 'activity', 'threed'];
+// deploy / teleop / data: the placeholder workspaces for the layers not built yet (layers/layers.js), the tree kept beside them
+const VIEWS = ['tree', 'table', 'activity', 'threed', 'deploy', 'teleop', 'data'];
 const S = {
   view: VIEWS.includes(params.get('view')) ? params.get('view') : 'tree',
   cam: params.get('cam') || null, // the 3D view's camera pose (threed/scene.js cameraText), part of its history entry
@@ -2141,6 +2142,7 @@ function renderNow() {
   const treeView = S.view === 'tree';
   const tableView = S.view === 'table';
   const threedView = S.view === 'threed'; // the tree stays drawn beside it, as in the Tree view
+  const layersView = Boolean(window.IOLayers) && window.IOLayers.VIEWS.includes(S.view); // Deploy, Teleop, Data: the same
   $('main').className = `main v-${S.view}${treeView && WIDE.has(S.variant) ? ' wide-tree' : ''}${tableView && inspectorShown() ? ' insp-open' : ''}`;
   $('insp-toggle').hidden = !tableView;
   $('insp-toggle').setAttribute('aria-pressed', String(S.inspPinned));
@@ -2155,15 +2157,16 @@ function renderNow() {
   const activityView = S.view === 'activity';
   // WHY keepTree: a layout (layouts/*.js) that holds the tree in a sidebar keeps it drawn beside the Table and Activity
   const keepTree = Boolean(window.IOLayoutHost && window.IOLayoutHost.keepsTree());
-  $('tree-host').hidden = !treeView && !threedView && !keepTree;
-  $('left-other').hidden = treeView || activityView || threedView;
+  $('tree-host').hidden = !treeView && !threedView && !layersView && !keepTree;
+  $('left-other').hidden = treeView || activityView || threedView || layersView;
   $('activity-host').hidden = !activityView;
   $('threed-host').hidden = !threedView;
+  $('layers-host').hidden = !layersView;
   if (!activityView && window.IOActivityLog) window.IOActivityLog.setVisible(false);
-  if (treeView || threedView || keepTree) renderTreePane();
+  if (treeView || threedView || layersView || keepTree) renderTreePane();
   if (activityView) renderActivityView();
-  else if (!treeView && !threedView) $('left-other').innerHTML = renderTable();
-  const noSearch = (treeView || threedView || keepTree) && NO_QUERY.has(S.variant);
+  else if (!treeView && !threedView && !layersView) $('left-other').innerHTML = renderTable();
+  const noSearch = (treeView || threedView || layersView || keepTree) && NO_QUERY.has(S.variant);
   $('search').disabled = noSearch;
   $('search').placeholder = noSearch ? `No search in ${S.variant} · try Table` : 'Search entities, ids, ports…';
   $('search').closest('.search').classList.toggle('off', noSearch);
@@ -2174,6 +2177,7 @@ function renderNow() {
   renderStatusbar();
   updateRunView();
   if (window.IOThreeD) window.IOThreeD.update(threedView);
+  if (window.IOLayers) window.IOLayers.update(S.view);
   if (window.IOLayoutHost) window.IOLayoutHost.update();
 }
 
@@ -2383,6 +2387,19 @@ async function boot() {
         if (path !== S.sel || S.selKey) { select(path); pushNav(); }
         S.view = 'tree';
         S.drill = { ...NO_DRILL };
+        pushNav();
+        render();
+      } });
+  }
+  // the placeholder workspaces (layers/layers.js): the page's selection, URLs and drawing helpers; every link on them is a page that exists
+  if (window.IOLayers) {
+    window.IOLayers.attach({ S, esc, entityLabel,
+      // a link's page, as the URL that would open it (the selection kept), and going there: one history step after the layer's page
+      url: (nav) => navUrl({ ...navNow(), ...nav }),
+      go({ view, page }) {
+        S.view = view || 'tree';
+        S.drill = { ...NO_DRILL, page: page || null };
+        S.menuOpen = false;
         pushNav();
         render();
       } });

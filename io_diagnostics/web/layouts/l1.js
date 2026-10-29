@@ -1,5 +1,6 @@
 // L1 · Obsidian. Zach's own reference (his screenshot of Obsidian's left sidebar, 2026-10-24): match its conventions.
-//   - a vertical RIBBON at the far left carries the views (Devices, 3D, Table, Activity, Runs) and Settings at its foot;
+//   - a vertical RIBBON at the far left carries the views (Devices, 3D, Table, Activity, Runs, then the layers not built yet: Deploy, Teleop,
+//     Data) and Settings at its foot;
 //   - the left PANE has a header, a small toolbar row (collapse all, expand all, View options, visibility), then the SEARCH
 //     FIELD on top of the tree, then the tree;
 //   - the main area is the entity page under a slim view header (back / forward, the breadcrumb of the selection).
@@ -64,7 +65,13 @@
     { id: 'table', icon: 'table', title: 'Table', label: 'Table' },
     { id: 'activity', icon: 'log', title: 'Activity', label: 'Activity' },
     { id: 'runs', icon: 'i-tty', title: 'Runs (the terminal panel)', label: 'Runs' },
+    // WHY: Zach, 2026-10-29 (docs/peps/0002): the layers he decided on and has not built are honest placeholder pages (layers/layers.js)
+    { id: 'deploy', icon: 'i-deploy', title: 'Deploy: software, OTA and config (not built yet)', label: 'Deploy' },
+    { id: 'teleop', icon: 'i-teleop', title: 'Teleop (not built yet)', label: 'Teleop' },
+    { id: 'data', icon: 'i-data', title: 'Data: storage (not built yet)', label: 'Data' },
   ];
+  // the placeholder views and their names: the tree stays beside them, the breadcrumb starts with the name
+  const LAYER_VIEWS = { deploy: 'Deploy', teleop: 'Teleop', data: 'Data' };
 
   // ---- the sidebar style: the store, ported from Clank's workbench/store.ts (RAIL_MODES, toggleRail) ----
   // WHY the store takes its storage: tests/test_rail_mode.js runs it in node over a fake one, as Clank's store.test.ts does.
@@ -115,6 +122,9 @@
       table: { control: '.l1-ribbon [data-l1="table"]', shows: 'table.grid' },
       activity: { control: '.l1-ribbon [data-l1="activity"]', shows: '.act .ev' },
       runs: { control: '.l1-ribbon [data-l1="runs"]', shows: '#runs-root.r1' },
+      deploy: { control: '.l1-ribbon [data-l1="deploy"]', shows: '#layers-host .ly-root[data-layer="deploy"]' },
+      teleop: { control: '.l1-ribbon [data-l1="teleop"]', shows: '#layers-host .ly-root[data-layer="teleop"]' },
+      data: { control: '.l1-ribbon [data-l1="data"]', shows: '#layers-host .ly-root[data-layer="data"]' },
     },
     mount(ctx) {
       ctx.css(CSS);
@@ -148,6 +158,9 @@
           { icon: 'lx-table', label: 'Table', sub: 'Every device in one table', run: () => ctx.go('table') },
           { icon: 'lx-log', label: 'Activity', sub: 'The log, newest first', run: () => ctx.go('activity') },
           { icon: 'i-tty', label: 'Terminal', sub: 'Runs of utilities', run: () => ctx.runs.toggle() },
+          { icon: 'i-deploy', label: 'Deploy', sub: 'Software, OTA and config (not built yet)', run: () => ctx.go('deploy') },
+          { icon: 'i-teleop', label: 'Teleop', sub: 'Take over a stuck robot (not built yet)', run: () => ctx.go('teleop') },
+          { icon: 'i-data', label: 'Data', sub: 'Where recorded data lives (not built yet)', run: () => ctx.go('data') },
         ],
         actions: () => [{ icon: 'lx-sidebar', label: 'Toggle the left pane', sub: 'Ctrl+\\', run: () => sash.toggle() }],
       });
@@ -162,7 +175,7 @@
         button.addEventListener('click', () => {
           if (item.id !== 'runs') closeDashboard();
           if (item.id === 'runs') { ctx.runs.toggle(); return; }
-          if (sash.folded() && (item.id === 'tree' || item.id === 'threed')) sash.fold(false);
+          if (sash.folded() && (item.id === 'tree' || item.id === 'threed' || LAYER_VIEWS[item.id])) sash.fold(false);
           ctx.go(item.id);
         });
         if (item.id === 'runs') button.insertAdjacentHTML('beforeend', '<span class="badge" hidden></span>');
@@ -275,12 +288,14 @@
       s.visible.innerHTML = ctx.ico(hidden && hidden.on ? 'eye' : 'eye-off');
       ctx.$('search').closest('.search').classList.toggle('has-query', Boolean(S.query));
       // the view header: the breadcrumb of the selection (Tree), or the view's own name
-      const crumbs = S.view === 'tree' || S.view === 'threed' ? ctx.crumbs(S.sel) : [];
+      const crumbs = S.view === 'tree' || S.view === 'threed' || LAYER_VIEWS[S.view] ? ctx.crumbs(S.sel) : [];
       // the 3D view: "3D", then the selection's breadcrumb (a crumb selects that row, the view stays 3D)
+      // a placeholder page (Deploy, Teleop, Data) reads the same way: its name, then the selection's breadcrumb
       const threed = S.view === 'threed';
+      const viewName = threed ? '3D' : LAYER_VIEWS[S.view];
       const html = S.view === 'table' ? '<a class="last">Table</a>' : S.view === 'activity' ? '<a class="last">Activity</a>'
-        : threed && !crumbs.length ? '<a class="last">3D</a>'
-        : (threed ? '<a class="l1-view">3D</a><span class="sep">›</span>' : '') + (crumbs.length ? crumbs.map((crumb, at) => `<a${at === crumbs.length - 1 ? ' class="last"' : ` data-go="${ctx.esc(crumb.path)}"`} title="${ctx.esc(crumb.raw)}">${ctx.esc(crumb.name)}</a>`).join('<span class="sep">›</span>')
+        : viewName && !crumbs.length ? `<a class="last">${viewName}</a>`
+        : (viewName ? `<a class="l1-view">${viewName}</a><span class="sep">›</span>` : '') + (crumbs.length ? crumbs.map((crumb, at) => `<a${at === crumbs.length - 1 ? ' class="last"' : ` data-go="${ctx.esc(crumb.path)}"`} title="${ctx.esc(crumb.raw)}">${ctx.esc(crumb.name)}</a>`).join('<span class="sep">›</span>')
           : `<a class="last">${ctx.esc(S.selKey ? 'Group' : 'Devices')}</a>`);
       if (s.crumbsHtml !== html) { s.crumbsHtml = html; s.crumbs.innerHTML = html; }
     },

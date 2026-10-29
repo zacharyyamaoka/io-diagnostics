@@ -35,6 +35,8 @@
 <!-- the 3D view (threed/core.js): its styles; its scene (threed/scene.js) is a module loaded through this importmap only when the view
      opens (three.js and urdf-loader, vendored: vendor/three/NOTICE.md) -->
 <link rel="stylesheet" href="threed/threed.css">
+<!-- the placeholder workspaces for the layers not built yet (layers/layers.js): Deploy, Teleop, Data -->
+<link rel="stylesheet" href="layers/layers.css">
 <script type="importmap">{"imports": {"three": "./vendor/three/build/three.module.js", "three/examples/jsm/": "./vendor/three/examples/jsm/"}}</script>
 </head>
 <body>
@@ -68,7 +70,10 @@
     <symbol id="i-pin" viewBox="0 0 24 24"><path d="M9 4h6l-1 6 3 3H7l3-3ZM12 13v7"/></symbol>
     <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
     <symbol id="i-cube" viewBox="0 0 24 24"><path d="m12 2.5 8.5 4.75v9.5L12 21.5l-8.5-4.75v-9.5Z"/><path d="m3.5 7.25 8.5 4.75 8.5-4.75M12 12v9.5"/></symbol>
-    <symbol id="i-io" viewBox="0 0 24 24"><path d="M3 16h18M6 16v-6M12 16v-6M18 16v-6"/><circle cx="6" cy="7.5" r="2" fill="currentColor"/><circle cx="12" cy="7.5" r="2" fill="currentColor"/><circle cx="18" cy="7.5" r="2" fill="currentColor"/></symbol>
+    <symbol id="i-deploy" viewBox="0 0 24 24"><path d="M12 15V3M7.5 7.5 12 3l4.5 4.5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></symbol>
+    <symbol id="i-teleop" viewBox="0 0 24 24"><rect x="2" y="8" width="20" height="10" rx="5"/><path d="M7 11v4M5 13h4M16 12h.01M18.5 14h.01"/></symbol>
+    <symbol id="i-data" viewBox="0 0 24 24"><ellipse cx="12" cy="5.5" rx="8" ry="3"/><path d="M4 5.5v13c0 1.7 3.6 3 8 3s8-1.3 8-3v-13M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></symbol>
+    <symbol id="i-io"viewBox="0 0 24 24"><path d="M3 16h18M6 16v-6M12 16v-6M18 16v-6"/><circle cx="6" cy="7.5" r="2" fill="currentColor"/><circle cx="12" cy="7.5" r="2" fill="currentColor"/><circle cx="18" cy="7.5" r="2" fill="currentColor"/></symbol>
     <!-- status SHAPES for the table and the detail panel (rule 3: the shape reads without colour) -->
     <symbol id="s-warn" viewBox="0 0 16 16"><path d="M8 1.5c.42 0 .8.22 1.01.58l6.16 10.8c.43.76-.12 1.7-1 1.7H1.83c-.88 0-1.43-.94-1-1.7L6.99 2.08C7.2 1.72 7.58 1.5 8 1.5Z" fill="currentColor"/><path d="M8 6.1v3.6" style="stroke:var(--io-on-status)" stroke-width="1.7" stroke-linecap="round"/><circle cx="8" cy="12" r="1" style="fill:var(--io-on-status)"/></symbol>
     <symbol id="s-error" viewBox="0 0 16 16"><path d="M5.1 1h5.8L15 5.1v5.8L10.9 15H5.1L1 10.9V5.1Z" fill="currentColor" stroke="currentColor" stroke-linejoin="round"/><path d="m5.6 5.6 4.8 4.8m0-4.8-4.8 4.8" style="stroke:var(--io-on-status)" stroke-width="1.8" stroke-linecap="round"/></symbol>
@@ -146,6 +151,8 @@
     </aside>
     <!-- the 3D view (threed/core.js): drawn here, where the entity page sits, while view=threed -->
     <section class="threed" id="threed-host" hidden></section>
+    <!-- the placeholder workspaces (layers/layers.js): drawn here, where the entity page sits, while view=deploy|teleop|data -->
+    <section class="layers" id="layers-host" hidden></section>
   </div>
   <!-- the run view's panel (runs/*.js, docs/runs-v1.md section 7): hidden until a view uses it -->
   <div id="runs-root" hidden></div>
@@ -199,6 +206,7 @@
 <script src="layouts/palette.js"></script>
 <script src="layouts/host.js"></script>
 <script src="threed/core.js"></script>
+<script src="layers/layers.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
