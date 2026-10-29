@@ -14,6 +14,7 @@ Both print ``config`` records, some with an ``expected`` that differs, in ``diag
 
 ``$STATE_NODES`` (default 1): how many boards the joint adapter reports (``can/1`` .. ``can/N``); only ``can/1`` has the driver fault and the
 configuration, the others answer and stream State (the composition fixtures put a 3-joint arm on each of two adapters).
+``$STATE_REPLY_COUNTS`` set: each board's comms status carries ``queries`` / ``replies`` (CAN 1 lost 3 of 200), as moteus's does.
 ``$STATE_ACT_S`` (default 0): how long a real (refused) utility run lasts, so a batch's queue can be watched.
 ``$STATE_LOG`` (a file) gets one JSON line per verb (verb, argv, pid, the frame dir) so a test can see what ran.
 ``$STATE_HOLD_PORT`` set: ``watch`` prints a ``PortBusy`` status and exits (the plugin found the port held itself).
@@ -345,8 +346,11 @@ def diagnose(device: str) -> None:
         emit(record="status", level="ok", name="fixture: ran", path="", stamp=now, expected_period_s=30)
         for number in range(1, NODES + 1):
             node = f"can/{number}"
+            # WHY opt-in: moteus's per-board status carries its reply counts (queries / replies); ordinary fixtures stay shaped as before
+            counts = ({"measurements": [{"key": "queries", "value": 200, "unit": "1"}, {"key": "replies", "value": 197 if number == 1 else 200, "unit": "1"}]}
+                      if os.environ.get("STATE_REPLY_COUNTS") else {})
             emit(record="status", level="ok", name=f"CAN {number}: comms", path=node, message="answers in 1.2 ms", stamp=now, expected_period_s=30,
-                 values=[{"key": "bitrate", "value": "5 Mbit/s BRS"}])
+                 values=[{"key": "bitrate", "value": "5 Mbit/s BRS"}], **counts)
             if number == 1:
                 emit(record="status", level="error", name="CAN 1: driver", path=node, code="MoteusFault.33",
                      message="the driver is in fault", stamp=now, expected_period_s=30,
