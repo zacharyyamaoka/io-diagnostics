@@ -228,8 +228,8 @@ reason = "no mount for it in the model"`;
     T.traySash = sashOf('tray', { axis: 'y', def: 150, min: 70, max: () => Math.max(120, root.getBoundingClientRect().height - 160), varName: '--td-tray-h' });
     root.addEventListener('click', onClick);
     root.addEventListener('dblclick', onDouble);
-    T.el.card.addEventListener('pointerenter', () => clearTimeout(T.hideTimer));
-    T.el.card.addEventListener('pointerleave', () => { if (T.pinned < 0) hideCardSoon(); });
+    T.el.card.addEventListener('pointerenter', () => { T.overCard = true; clearTimeout(T.hideTimer); clearTimeout(T.switchTimer); });
+    T.el.card.addEventListener('pointerleave', () => { T.overCard = false; if (T.pinned < 0) hideCardSoon(); });
     document.addEventListener('keydown', (event) => {
       if (!T.shown || (event.target.closest && event.target.closest('input, select, textarea, [contenteditable], .xterm'))) return;
       if (event.key === 'Escape' && T.pinned >= 0) { T.pinned = -1; paint(); }
@@ -381,7 +381,8 @@ reason = "no mount for it in the model"`;
     const card = T.el.card;
     const tip = T.el.tip;
     const list = parts();
-    const index = T.pinned >= 0 ? T.pinned : T.hover.part;
+    // the pointer on the card keeps it (the page redraws every second; the part under the card is no longer hovered)
+    const index = T.pinned >= 0 ? T.pinned : T.hover.part >= 0 ? T.hover.part : T.overCard && !card.hidden ? Number(card.dataset.part) : -1;
     const part = list[index];
     if (T.variant === 'v5') {
       card.hidden = true;
@@ -409,7 +410,8 @@ reason = "no mount for it in the model"`;
     card.classList.toggle('pinned', T.pinned >= 0);
     card.dataset.part = String(index);
     card.hidden = false;
-    if (T.pinned < 0 || !card.dataset.placed) { place(card, T.hover.x, T.hover.y); card.dataset.placed = T.pinned >= 0 ? '1' : ''; }
+    // placed at the cursor while a part is hovered; kept where it is while the pointer is on it, and once pinned
+    if (T.hover.part === index && (T.pinned < 0 || !card.dataset.placed)) { place(card, T.hover.x, T.hover.y); card.dataset.placed = T.pinned >= 0 ? '1' : ''; }
   }
   function place(el, clientX, clientY) {
     const view = T.el.view.getBoundingClientRect();
@@ -424,7 +426,7 @@ reason = "no mount for it in the model"`;
   }
   function hideCardSoon() {
     clearTimeout(T.hideTimer);
-    T.hideTimer = setTimeout(() => { if (T.pinned < 0 && T.hover.part < 0) { T.el.card.hidden = true; } }, 260);
+    T.hideTimer = setTimeout(() => { if (T.pinned < 0 && T.hover.part < 0 && !T.overCard) { T.el.card.hidden = true; } }, 260);
   }
 
   // v2: callout labels, re-placed on every drawn frame (they follow the camera)
@@ -535,7 +537,27 @@ reason = "no mount for it in the model"`;
     }
     if (frame && T.scene) T.scene.frameParts([index]);
   }
+  // WHY the wait: on the way from a part to its card's Open the pointer can cross another part; a live card (one that already took the
+  // pointer) moves to another part only after the pointer rests there, and stays if the pointer reaches the card first
   function onHover(part, x, y) {
+    const card = T.el.card;
+    const shown = card.hidden ? -1 : Number(card.dataset.part);
+    clearTimeout(T.switchTimer);
+    if (T.variant !== 'v5' && T.pinned < 0 && !card.hidden && card.classList.contains('live') && part >= 0 && part !== shown) {
+      T.switchTimer = setTimeout(() => applyHover(part, x, y), 250);
+      return;
+    }
+    applyHover(part, x, y);
+  }
+  function applyHover(part, x, y) {
+    // WHY a dwell before the card takes the pointer: it sits beside the cursor, so a quick sweep across the model would run into
+    // it and stop hovering; it becomes clickable (Open) once the pointer rests on one part
+    // a new part restarts the wait; leaving a part (onto the card, off the model) or coming back to the card's own part keeps it
+    if (part >= 0 && (T.el.card.hidden || part !== Number(T.el.card.dataset.part))) {
+      T.el.card.classList.remove('live');
+      clearTimeout(T.liveTimer);
+      T.liveTimer = setTimeout(() => T.el.card.classList.add('live'), 350);
+    }
     T.hover = { part, x, y };
     if (part >= 0) clearTimeout(T.hideTimer);
     if (T.pinned >= 0 && T.variant === 'v1') return;
@@ -657,6 +679,6 @@ reason = "no mount for it in the model"`;
     setVariant,
     // tests and the report builder (tests/test_threed_view.js, docs/build_threed_report.js)
     debug: () => ({ variant: T.variant, desc: T.desc, scene: T.scene, states: T.states, pinned: T.pinned, hover: T.hover, loading: T.loading,
-      sceneError: T.sceneError, live: T.live.size, source: Boolean(T.source) }),
+      sceneError: T.sceneError, live: T.live.size, source: Boolean(T.source), overCard: Boolean(T.overCard) }),
   };
 }());

@@ -114,12 +114,15 @@ export function createScene(container, hooks = {}) {
     return true;
   }
   // frame a box: keep the view direction, move so it fills about 70 % of the view
-  function frameBox(box, animate = true) {
+  // margin: 1.25 fills the view (the whole model); a part is framed with its surroundings (WHY: a selected board's part filling the
+  // screen lost where it sits on the robot), and never closer than a tenth of the model
+  function frameBox(box, animate = true, margin = 1.25) {
     if (box.isEmpty()) return;
     const sphere = box.getBoundingSphere(new THREE.Sphere());
-    const radius = Math.max(sphere.radius, 0.02);
+    const whole = st.all.isEmpty() ? 0 : st.all.getBoundingSphere(new THREE.Sphere()).radius;
+    const radius = Math.max(sphere.radius, 0.02, whole * 0.1);
     const fov = THREE.MathUtils.degToRad(camera.fov);
-    const distance = radius / Math.sin(Math.min(fov, fov * camera.aspect) / 2) * 1.25;
+    const distance = radius / Math.sin(Math.min(fov, fov * camera.aspect) / 2) * margin;
     const direction = camera.position.clone().sub(controls.target).normalize();
     if (!Number.isFinite(direction.x) || direction.lengthSq() === 0) direction.set(1, 0.75, 1).normalize();
     const toTarget = sphere.center.clone();
@@ -134,7 +137,7 @@ export function createScene(container, hooks = {}) {
   function frameParts(indexes, animate = true) {
     const box = new THREE.Box3();
     for (const index of indexes) if (st.boxes[index]) box.union(st.boxes[index]);
-    frameBox(box.isEmpty() ? st.all : box, animate);
+    frameBox(box.isEmpty() ? st.all : box, animate, box.isEmpty() ? 1.25 : 2.6);
   }
   // the first view of a model: Fusion's home, from the front-right, a little above
   function home(animate = false) {
@@ -285,11 +288,16 @@ export function createScene(container, hooks = {}) {
       const tint = state.level && colors[state.level] ? new THREE.Color(colors[state.level]) : null;
       // WHY OK is a light tint, not a full green: OK carries no colour on a row (tokens.css); here it only says "mapped and well"
       const color = tint ? (state.level === 'ok' ? base.clone().lerp(tint, 0.38) : tint) : base;
-      if (state.selected) color.lerp(new THREE.Color(colors.select), SELECT_MIX);
+      // WHY only an OK or unreported part takes the blue tint: blue over warn orange reads as the unknown token's purple; a part in a
+      // problem colour keeps it and shows its selection by the blue outline
+      const problem = state.level && state.level !== 'ok' && !state.ghost;
+      if (state.selected && !problem) color.lerp(new THREE.Color(colors.select), SELECT_MIX);
       mat.color.copy(color);
-      mat.emissive.set(state.selected ? colors.select : '#000000');
-      mat.emissiveIntensity = state.selected ? 0.18 : index === st.hover ? HOVER_EMISSIVE : 0;
-      if (index === st.hover && !state.selected) mat.emissive.set('#ffffff');
+      // a problem colour glows a little of its own hue, so shading never turns warn's orange into error's red
+      mat.emissive.set(state.selected && !problem ? colors.select : problem ? tint : '#000000');
+      mat.emissiveIntensity = problem ? 0.32 : state.selected ? 0.18 : 0;
+      if (index === st.hover && !state.selected && !problem) { mat.emissive.set('#ffffff'); mat.emissiveIntensity = HOVER_EMISSIVE; }
+      if (index === st.hover && problem) mat.emissiveIntensity = 0.45;
       const ghost = Boolean(state.ghost);
       mat.transparent = ghost;
       mat.opacity = ghost ? GHOST_OPACITY : 1;

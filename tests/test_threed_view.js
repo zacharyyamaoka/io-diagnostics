@@ -146,9 +146,14 @@ async function treeRow(page, entity) {
     await page.waitForFunction(() => /comms/.test(document.querySelector('.td-card').textContent) && /temperature/.test(document.querySelector('.td-card').textContent), null, { timeout: 6000 }).catch(() => {});
     const rich = await page.$eval('.td-card', (el) => el.textContent);
     check('v1\'s card carries the worst checks and key State values', /comms/.test(rich) && /temperature/.test(rich) && /°C/.test(rich), rich.slice(0, 200));
+    await page.waitForTimeout(450); // the card takes the pointer once it rests on a part (a quick sweep passes under it)
+    check('... and takes the pointer once the cursor rests (Open is clickable)', await page.$eval('.td-card', (el) => getComputedStyle(el).pointerEvents !== 'none'));
     const camOpen = (await debug(page)).cam;
     const openBtn = await rectOf(page, '.td-card [data-td-open]');
-    await page.mouse.move(openBtn.x + openBtn.width / 2, openBtn.y + openBtn.height / 2);
+    // the way a hand gets there: across the model, with a background gap, then a rest on the card past the page's 1 s redraw
+    await page.mouse.move(openBtn.x + openBtn.width / 2, openBtn.y + openBtn.height / 2, { steps: 10 });
+    await page.waitForTimeout(1300);
+    check('the card stays while the pointer is on it (past a redraw)', await page.$eval('.td-card', (el) => !el.hidden && el.dataset.part === '1'));
     await page.mouse.click(openBtn.x + openBtn.width / 2, openBtn.y + openBtn.height / 2);
     await page.waitForFunction((p) => S.view === 'tree' && S.sel === p && S.node && S.node.node.path === p && document.querySelector('.d6-tabs'), ELBOW, { timeout: 15000 }).catch(() => {});
     const page2 = await rectOf(page, '#detail .d6-tabs');
