@@ -98,8 +98,8 @@ restores the default, the arrow keys move a focused one, and each panel folds (`
 ## Load time
 
 The rack's bundle (`examples/one-dof-test-rack/`: 223 visual STL meshes, 1.42 M triangles, ~70 MB) in headless Chrome on this PC with
-software WebGL (SwiftShader), served by `serve` on localhost: the URDF parsed in 0.06 s, **the first frame with geometry at 0.36 s**
-and every mesh at 1.88 s (`tests/test_threed_view.js` and `docs/record_threed.js` print it; the legend shows it). Under the 3 s target,
+software WebGL (SwiftShader), served by `serve` on localhost, over seven loads on 2026-10-29: the URDF parsed in about 0.06 s, **the first
+frame with geometry at 0.16-0.36 s** and every mesh at 1.9-2.7 s (`tests/test_threed_view.js` and `docs/record_threed.js` print it; the legend shows it). Under the 3 s target,
 so meshes are not merged; `scene.mergeByLink()` (merge each link's meshes per material in the browser) is there if a bigger model
 needs it. The bundle is read in place, never converted or copied. Picking is GPU picking (each mesh drawn once in an id colour into a
 1×1 target under the pointer), not a raycast through a million triangles.
