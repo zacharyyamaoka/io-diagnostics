@@ -81,7 +81,7 @@ def test_an_entitys_diagnostics_with_their_values_and_where_each_came_from(serve
     served.host.run_stock_diagnostics()
     item = config_of(served)["driver.board_temp"]
     assert item["diagnostic"] == "stock.box" and item["title"] == "board temperature" and item["kind"] == "stock"
-    assert item["match"] == {"path": "", "model_id": "mjbots-moteus-*"} and item["window_s"] == 2.0 and item["state"] == "motor"
+    assert item["match"] == {"path": "", "model_id": "mjbots-moteus-*", "part": ""} and item["window_s"] == 2.0 and item["state"] == "motor"
     assert item["catalog"]["part"] == "bldc_driver" and item["catalog"]["provenance"] == "his code"
     assert (field(item, "max.warn_high")["value"], field(item, "max.warn_high")["source"]) == (60.0, "toml")
     assert (field(item, "max.warn_low")["value"], field(item, "max.warn_low")["source"]) == (None, "toml")  # its Limits came from the file
@@ -150,5 +150,5 @@ def test_a_host_with_no_file_of_the_persons_keeps_the_change_for_this_run_and_sa
     runner = sd.StockDiagnostics(None)
     answer = runner.set_field("driver.board_temp", "max.warn_high", 50)
     assert answer["state"] == "accepted" and answer["saved"] is False and "not written" in answer["note"]
-    _spec, config = runner.build_config(runner.bindings[0])
+    _spec, config = runner.build_config(next(b for b in runner.bindings if b.id == "driver.board_temp"))
     assert config.max.warn_high == 50.0

@@ -111,10 +111,12 @@ def rig(tmp_path):
 
 def test_the_default_set_is_read_when_the_person_has_no_file(tmp_path):
     runner = sd.StockDiagnostics(tmp_path / sd.DIAGNOSTICS_FILE)
-    assert runner.source == str(sd.DEFAULT_FILE) and runner.problem == ""
-    assert [(b.id, b.diagnostic) for b in runner.bindings] == [("driver.board_temp", "stock.box"), ("driver.faults", "stock.fault_codes")]
+    assert runner.source == str(sd.DEFAULT_DIR) and runner.problem == ""
+    board = runner.bindings_for("host/usb9/port-9-1/usb-9-1/can/1", "mjbots-moteus-c1")
+    assert [(b.id, b.diagnostic) for b in board][:3] == [("driver.faults", "stock.fault_codes"), ("driver.board_temp", "stock.box"),
+                                                         ("driver.bus_voltage", "stock.box")]
     # the default set is the catalog's own driver rows, his numbers: board temperature max 60 / 70 and mean 55 / 65 Cel
-    _spec, config = runner.build_config(runner.bindings[0])
+    _spec, config = runner.build_config(board[1])
     assert (config.max, config.mean) == (Limits(warn_high=60.0, error_high=70.0), Limits(warn_high=55.0, error_high=65.0))
     assert sd.catalog_entry("driver.board_temp").primitive == "stock.box" and sd.catalog_entry("driver.faults").primitive == "stock.fault_codes"
     assert all(dx_registry.REGISTRY[b.diagnostic] for b in runner.bindings)
@@ -262,7 +264,7 @@ def test_the_beat_runs_on_its_own_thread_and_its_rows_go_stale_when_it_stops(tmp
 
 def test_a_broken_file_runs_nothing_and_says_why(tmp_path):
     runner = sd.StockDiagnostics(_write(tmp_path, '[[diagnostic]]\nid = "a"\ndiagnostic = "stock.box"\n'))
-    assert runner.bindings == [] and "neither path nor model_id" in runner.problem
+    assert runner.bindings == [] and "says no path, model_id or part" in runner.problem
 
 
 def test_a_custom_diagnostic_registers_from_the_same_file_with_load_toml(tmp_path):
@@ -327,12 +329,17 @@ def test_the_host_starts_without_numpy_and_each_diagnostic_says_why(tmp_path):
     env = {key: value for key, value in os.environ.items() if key != "VIRTUAL_ENV"}
     env.update(IO_DIAGNOSTICS_CONFIG_DIR=str(tmp_path / "config"), IO_DIAGNOSTICS_STATE_DIR=str(tmp_path / "state"))
     (tmp_path / "config").mkdir()
-    (tmp_path / "config" / sd.DIAGNOSTICS_FILE).write_text(sd.DEFAULT_FILE.read_text())  # a replay runs only the person's file
+    # a replay runs only the person's file: the default set's driver-board file
+    (tmp_path / "config" / sd.DIAGNOSTICS_FILE).write_text((sd.DEFAULT_DIR / "02-bldc_driver.toml").read_text())
     done = subprocess.run(["/home/bam/.local/bin/uv", "run", "--isolated", "--no-dev", "--project", str(root), "python", "-c", HOST_PROBE,
                            str(root / "tests" / "fixtures" / "plugins-state")], capture_output=True, text=True, timeout=300, env=env, cwd=root)
     assert done.returncode == 0, done.stderr[-3000:]
     out = json.loads(done.stdout.strip().splitlines()[-1])
     assert out["numpy"] is False and "stock.box" in out["listed"]
-    board = [row for row in out["found"] if row["path"].endswith("/can/1")]
-    assert {row["name"] for row in board} == {"CAN 1: board temperature", "CAN 1: fault and limiter codes"}
+    found = [row for row in out["found"] if row["path"].endswith("/can/1")]
+    board = [row for row in found if row["code"] != sd.NO_INPUT]
+    assert {row["name"] for row in board} == {"CAN 1: board temperature", "CAN 1: fault and limiter codes", "CAN 1: bus voltage"}
     assert all(row["level"] == "unknown" and row["code"] == "NumpyMissing" and "diagnostics extra" in row["message"] for row in board), board
+    # the ones a State history never feeds (stamps, events, the expected config) say so without numpy, and post no row
+    assert {row["name"] for row in found if row["code"] == sd.NO_INPUT} == {"CAN 1: command / telemetry rate", "CAN 1: CAN reply loss",
+                                                                            "CAN 1: config matches expected"}

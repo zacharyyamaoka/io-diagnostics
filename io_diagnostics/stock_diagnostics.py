@@ -2,11 +2,24 @@
 each Result an ordinary record-v0.2 status on the entity (docs/api-v1.md "Stock diagnostics").
 
 - **Which, where, with what config:** ``<config dir>/diagnostics.toml`` (``[[diagnostic]]`` tables: ``id``, ``diagnostic``, a ``path``
-  and / or ``model_id`` match, ``[diagnostic.config]`` values), else the host's default set (``diagnostics_default.toml``). The file is
-  read with the registry's ``load_toml`` (a table with ``function`` registers a custom diagnostic) and re-read when it changes.
+  and / or ``model_id`` and / or ``part`` match, ``[diagnostic.config]`` values), else the host's default set (``diagnostics_default.d/``, one
+  file per part type, generated from the catalog by ``default_diagnostics.py``). The file is read with the registry's ``load_toml`` (a table
+  with ``function`` registers a custom diagnostic) and re-read when it changes. The keys:
+
+      [[part]]          which entities are a part type: type (catalog.PARTS), model_id / path / composite (lists of patterns;
+                        composite = a composite's kind). An entity may be several types (a RealSense is camera_rgb and camera_rgbd).
+      [[diagnostic]]    one binding: id (the catalog's, "driver.board_temp"), diagnostic (the registry's function, "stock.box"),
+                        title, and at least one of path / model_id (fnmatch) / part; state (the State group, "" = the first with the
+                        columns), window_s (s of State history per evaluation)
+      [diagnostic.config]   the config dataclass's values; a field left out keeps the dataclass default
+      [diagnostic.columns]  (optional) a Trajectory column = the State key it is read from, beside COLUMNS
+- **Whose limits:** a catalog binding whose thresholds are an agent's or proposed (robotdx/diagnostics/defaults.py) reports a crossing as a
+  warning that names the limit as proposed, never an error, until a person sets a limit of their own (catalog.gating / advisory).
   A fixture replay runs only the person's file, never the default set (a recording is replayed as it was).
 - **When:** every ``BEAT_S`` (5 s) on a thread of its own, never on the 10 Hz watch path. Each binding reads the last ``window_s`` of
   the entity's State history (history.py keeps it at 1 Hz at most) through ``stream.monitor`` and keeps the newest window's Result.
+- **What it cannot run:** a binding whose input the State history does not carry (frame stamps, images, events, a target) is not run with
+  code ``NoInput`` and, like ``NoState``, posts no row: the drill-in API lists it with that reason (``state_inputs_missing``).
 - **What it emits:** ``record.to_record`` of the Result (source ``robotdx.diagnostics``, ``dx.*`` values, ``expected_period_s`` = the
   beat, so a stopped beat goes STALE), plus ``dx.binding`` and ``dx.window``. A Result that could not be computed is not_run (level
   unknown), never OK; a diagnostic that raises is not_run with the exception text; numpy missing is not_run with that reason.
@@ -36,21 +49,26 @@ from typing import Any, Mapping
 
 from contract.record import from_dict
 from io_diagnostics.composite import toml_value
+from robotdx.diagnostics import catalog as dx_catalog
 from robotdx.diagnostics import core as dx_core
 from robotdx.diagnostics import record as dx_record
 from robotdx.diagnostics import registry as dx_registry
 from robotdx.diagnostics._numpy import MISSING as NUMPY_MISSING
 
 DIAGNOSTICS_FILE = "diagnostics.toml"
-DEFAULT_FILE = Path(__file__).with_name("diagnostics_default.toml")
+# WHY a directory, one file per part type: 70-odd bindings read best grouped by what they are about (servo, camera_rgbd, ...); they are
+# generated from the catalog by tools/build_default_diagnostics.py, and tests/test_default_diagnostics.py fails when they drift
+DEFAULT_DIR = Path(__file__).with_name("diagnostics_default.d")
 SOURCE = dx_record.SOURCE  # "robotdx.diagnostics": the status's source, which the page keys its drill-in on
 BEAT_S = 5.0
 DEFAULT_WINDOW_S = 60.0
 NO_STATE = "NoState"  # the entity has no State history: not run, and the host posts no row for it
+NO_INPUT = "NoInput"  # the State history does not carry what this diagnostic needs (stamps, images, events, a target): not run, no row
+QUIET = (NO_STATE, NO_INPUT)  # not run for want of an input this host does not have: listed by the drill-in, never a grey row
 MIN_WINDOW_S, MAX_WINDOW_S = 2.0, 86400.0
 LIMIT_PARTS = ("warn_low", "warn_high", "error_low", "error_high")
 HEADER = ("# robotdx.diagnostics on this host (io_diagnostics/stock_diagnostics.py; the default set and every key explained:\n"
-          "# io_diagnostics/diagnostics_default.toml). The entity page's drill-in rewrites this file whole (comments are not kept);\n"
+          "# io_diagnostics/diagnostics_default.d/). The entity page's drill-in rewrites this file whole (comments are not kept);\n"
           "# `edited` lists the fields it changed.\n")
 # The State keys a moteus board sends (moteus_servo.diagnostics state_measurements) -> the Trajectory's PEP 0010 columns. A unit the
 # column does not use is converted (rev -> rad); a binding's [diagnostic.columns] adds or overrides an entry.
@@ -71,21 +89,65 @@ class Binding:
     title: str  # the status name on the entity
     path: str = ""  # fnmatch over the entity path
     model_id: str = ""  # fnmatch over identity.model_id
+    part: str = ""  # a part type (catalog.PARTS) the entity is, by the file's [[part]] tables
     state: str = ""  # the State group it reads; "" = the first with a mapped column
     window_s: float = DEFAULT_WINDOW_S
     config: Mapping[str, Any] = field(default_factory=dict)  # the file's values (plain data)
     columns: Mapping[str, str] = field(default_factory=dict)  # Trajectory column -> State key, beside COLUMNS
     edited: tuple[str, ...] = ()  # fields the page changed ("max.warn_high" for one part of a Limits)
 
-    def matches(self, path: str, model_id: str) -> bool:
+    def matches(self, path: str, model_id: str, parts: tuple[str, ...] = ()) -> bool:
         if self.path and not fnmatch.fnmatchcase(path, self.path):
             return False
         if self.model_id and not fnmatch.fnmatchcase(model_id or "", self.model_id):
             return False
-        return bool(self.path or self.model_id)
+        if self.part and self.part not in parts:
+            return False
+        return bool(self.path or self.model_id or self.part)
 
 
-_BINDING_KEYS = {"id", "diagnostic", "title", "path", "model_id", "state", "window_s", "config", "columns", "edited"}
+@dataclass(frozen=True)
+class PartRule:
+    """``[[part]]``: which entities are a part type, so a binding can say ``part = "camera_rgbd"`` instead of listing models.
+    An entity is the type when any pattern matches: its identity's model_id, its path, or (a composite) its kind."""
+
+    type: str
+    model_id: tuple[str, ...] = ()
+    path: tuple[str, ...] = ()
+    composite: tuple[str, ...] = ()
+
+    def matches(self, path: str, model_id: str, composite_kind: str) -> bool:
+        return (any(fnmatch.fnmatchcase(model_id, pattern) for pattern in self.model_id if model_id)
+                or any(fnmatch.fnmatchcase(path, pattern) for pattern in self.path)
+                or (bool(composite_kind) and composite_kind in self.composite))
+
+
+def parse_parts(document: Mapping[str, Any]) -> list[PartRule]:
+    """The ``[[part]]`` tables of a parsed diagnostics.toml. A broken one raises with its type."""
+
+    from robotdx.diagnostics.catalog import PARTS
+
+    out = []
+    for number, table in enumerate(document.get("part") or [], 1):
+        where = f"[[part]] {table.get('type') if isinstance(table, dict) else number}"
+        if not isinstance(table, dict):
+            raise DiagnosticsError(f"{where} is not a table")
+        unknown = set(table) - {"type", "model_id", "path", "composite"}
+        if unknown:
+            raise DiagnosticsError(f"{where}: unknown key(s) {sorted(unknown)}")
+        if table.get("type") not in PARTS:
+            raise DiagnosticsError(f"{where}: type is one of the catalog's part types ({', '.join(PARTS)})")
+        lists = {}
+        for name in ("model_id", "path", "composite"):
+            value = table.get(name, [])
+            if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
+                raise DiagnosticsError(f"{where}: {name} is a list of patterns")
+            lists[name] = tuple(value)
+        out.append(PartRule(type=table["type"], **lists))
+    return out
+
+
+_BINDING_KEYS = {"id", "diagnostic", "title", "path", "model_id", "part", "state", "window_s", "config", "columns", "edited"}
 
 
 def parse(document: Mapping[str, Any]) -> tuple[list[Binding], list[dict]]:
@@ -109,8 +171,8 @@ def parse(document: Mapping[str, Any]) -> tuple[list[Binding], list[dict]]:
         seen.add(table["id"])
         if not isinstance(table.get("diagnostic"), str) or not table["diagnostic"]:
             raise DiagnosticsError(f"{where}: diagnostic is required (a registry name, like stock.box)")
-        if not table.get("path") and not table.get("model_id"):
-            raise DiagnosticsError(f"{where}: says neither path nor model_id, so it matches no entity")
+        if not table.get("path") and not table.get("model_id") and not table.get("part"):
+            raise DiagnosticsError(f"{where}: says no path, model_id or part, so it matches no entity")
         window = table.get("window_s", DEFAULT_WINDOW_S)
         if isinstance(window, bool) or not isinstance(window, (int, float)) or not MIN_WINDOW_S <= window <= MAX_WINDOW_S:
             raise DiagnosticsError(f"{where}: window_s is a number of seconds, {MIN_WINDOW_S:g} .. {MAX_WINDOW_S:g}")
@@ -121,22 +183,25 @@ def parse(document: Mapping[str, Any]) -> tuple[list[Binding], list[dict]]:
         if not isinstance(edited, list) or not all(isinstance(item, str) for item in edited):
             raise DiagnosticsError(f"{where}: edited is a list of field names")
         bindings.append(Binding(id=table["id"], diagnostic=table["diagnostic"], title=str(table.get("title") or table["id"]),
-                                path=str(table.get("path") or ""), model_id=str(table.get("model_id") or ""),
+                                path=str(table.get("path") or ""), model_id=str(table.get("model_id") or ""), part=str(table.get("part") or ""),
                                 state=str(table.get("state") or ""), window_s=float(window), config=dict(table.get("config") or {}),
                                 columns={str(k): str(v) for k, v in (table.get("columns") or {}).items()}, edited=tuple(edited)))
     return bindings, specs
 
 
-def dump(bindings: list[Binding], specs: list[dict]) -> str:
-    """The file's text; ``parse(tomllib.loads(dump(b, s)))`` gives the same bindings and specs back."""
+def dump(bindings: list[Binding], specs: list[dict], parts: list[PartRule] = ()) -> str:
+    """The file's text; ``parse(tomllib.loads(dump(b, s, p)))`` gives the same bindings and specs back (and ``parse_parts`` the parts)."""
 
     lines = [HEADER.rstrip("\n")]
+    for rule in parts:
+        lines += ["", "[[part]]", f"type = {toml_value(rule.type)}"]
+        lines += [f"{name} = {toml_value(list(getattr(rule, name)))}" for name in ("model_id", "path", "composite") if getattr(rule, name)]
     for table in specs:
         lines += ["", "[[diagnostic]]"] + [f"{_key(key)} = {toml_value(_plain(value))}" for key, value in table.items()]
     for binding in bindings:
         lines += ["", "[[diagnostic]]", f"id = {toml_value(binding.id)}", f"diagnostic = {toml_value(binding.diagnostic)}",
                   f"title = {toml_value(binding.title)}"]
-        for name in ("path", "model_id", "state"):
+        for name in ("path", "model_id", "part", "state"):
             if getattr(binding, name):
                 lines.append(f"{name} = {toml_value(getattr(binding, name))}")
         lines.append(f"window_s = {toml_value(binding.window_s)}")
@@ -280,6 +345,51 @@ def trajectory(series: list[dict], *, columns: Mapping[str, str], run: str, devi
     return Trajectory(t=t, run=run, device=device, situation="real", source="real", **arrays), first
 
 
+# ----- what a State history can feed ------------------------------------------------------------------------------------------
+def _target(column: str) -> str:
+    from robotdx.diagnostics.data import TARGET_OF
+
+    return TARGET_OF.get(column, f"{column} target")
+
+
+# The stock primitives a State history can feed (they take runs), and the columns each reads with its config
+_STATE_NEEDS = {
+    "stock.box": lambda c: (c.channel,),
+    "stock.fault_codes": lambda c: ("fault",),
+    "stock.tracking_error": lambda c: (c.channel, _target(c.channel)),
+    "stock.step_response": lambda c: (c.channel, _target(c.channel)),
+    "stock.stop_error": lambda c: ("q_rad", "q_target_rad", "qd_target_rad_s"),
+    "stock.coverage": lambda c: (c.x, c.y),
+    "stock.feedback_share": lambda c: ("tau_nm", "tau_ff_nm"),
+    "stock.hysteresis_loop": lambda c: ("q_rad", "tau_nm"),
+}
+
+
+def state_fed(name: str) -> bool:
+    """Whether a State history can ever feed diagnostic ``name``: a stock primitive over runs, or any custom diagnostic."""
+
+    return name in _STATE_NEEDS or kind_of(name) == "custom"
+
+
+def state_inputs_missing(name: str, config, run) -> str:
+    """"" when ``run`` (a Trajectory from the State history) carries what diagnostic ``name`` reads, else what it lacks. A stock primitive
+    that takes something other than runs (stamps, events, images, poses, a model's rows) is never fed by State: the whole input is missing.
+    A custom diagnostic is always run."""
+
+    needs = _STATE_NEEDS.get(name)
+    if needs is None and kind_of(name) == "custom":
+        return ""  # WHY: a custom diagnostic says nothing about its inputs; it gets the window and answers for itself, as before
+    if needs is None:
+        spec = dx_registry.REGISTRY.get(name)
+        what = spec.summary if spec is not None and spec.summary else "its own input"
+        return f"the input of {name} ({what})"
+    from robotdx.diagnostics._numpy import np  # WHY after: "State cannot feed it" needs no numpy; only the column check does
+
+    absent = [column for column in needs(config)
+              if run is None or getattr(run, column, None) is None or not np.isfinite(np.asarray(getattr(run, column), float)).any()]
+    return ", ".join(absent)
+
+
 # ----- the runner --------------------------------------------------------------------------------------------------------
 class StockDiagnostics:
     """The bindings (from the person's file, else the default set) and their evaluation. ``path`` None: no file of the person's (a host
@@ -292,6 +402,7 @@ class StockDiagnostics:
         self.defaults = defaults
         self.bindings: list[Binding] = []
         self.specs: list[dict] = []
+        self.parts: list[PartRule] = []
         self.source = ""  # the file the bindings came from
         self.problem = ""  # why the person's file is not used (its bindings are then none, never a guess)
         self._stamp: tuple | None = None
@@ -299,37 +410,53 @@ class StockDiagnostics:
         self.reload_if_changed()
 
     # --- the file ------------------------------------------------------------------------------------------------------
-    def _file(self) -> Path | None:
+    def _files(self) -> tuple[Path | None, list[Path]]:
+        """(what ``source`` names, the files read in order): the person's file, else every part file of the default set."""
+
         if self.path is not None and self.path.is_file():
-            return self.path
-        return DEFAULT_FILE if self.defaults else None
+            return self.path, [self.path]
+        if self.defaults:
+            return DEFAULT_DIR, sorted(DEFAULT_DIR.glob("*.toml"))
+        return None, []
 
     def reload_if_changed(self) -> None:
-        file = self._file()
-        if file is None:
+        source, files = self._files()
+        if source is None:
             with self._lock:
-                self.bindings, self.specs, self.source, self.problem, self._stamp = [], [], "", "", None
+                self.bindings, self.specs, self.parts, self.source, self.problem, self._stamp = [], [], [], "", "", None
             return
-        try:
-            stat = file.stat()
-            stamp = (str(file), stat.st_mtime_ns, stat.st_size)
-        except OSError:
-            stamp = (str(file), None, None)
+        stamp = []
+        for file in files:
+            try:
+                stat = file.stat()
+                stamp.append((str(file), stat.st_mtime_ns, stat.st_size))
+            except OSError:
+                stamp.append((str(file), None, None))
+        stamp = tuple(stamp)
         with self._lock:
             if stamp == self._stamp:
                 return
             self._stamp = stamp
+            bindings, specs, parts, seen = [], [], [], set()
             try:
-                text = file.read_text()
-                bindings, specs = parse(tomllib.loads(text))
-                if specs:
-                    # WHY the registry's own loader: a custom diagnostic is declared like a stock one (registry.load_toml)
-                    dx_registry.load_toml(file)
+                for file in files:
+                    document = tomllib.loads(file.read_text())
+                    found, custom = parse(document)
+                    twice = seen & {binding.id for binding in found}
+                    if twice:
+                        raise DiagnosticsError(f"id(s) {sorted(twice)} are used twice in the set")
+                    seen |= {binding.id for binding in found}
+                    bindings += found
+                    specs += custom
+                    parts += parse_parts(document)
+                    if custom:
+                        # WHY the registry's own loader: a custom diagnostic is declared like a stock one (registry.load_toml)
+                        dx_registry.load_toml(file)
             except (OSError, tomllib.TOMLDecodeError, DiagnosticsError, ValueError, ImportError, AttributeError, TypeError) as error:
-                self.bindings, self.specs, self.source = [], [], str(file)
+                self.bindings, self.specs, self.parts, self.source = [], [], [], str(source)
                 self.problem = f"{file}: {type(error).__name__}: {error}"
                 return
-            self.bindings, self.specs, self.source, self.problem = bindings, specs, str(file), ""
+            self.bindings, self.specs, self.parts, self.source, self.problem = bindings, specs, parts, str(source), ""
 
     def _write(self, bindings: list[Binding]) -> None:
         if self.path is None:
@@ -339,7 +466,7 @@ class StockDiagnostics:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             handle, temporary = tempfile.mkstemp(prefix=f".{self.path.name}.", dir=self.path.parent)
             with os.fdopen(handle, "w") as file:
-                file.write(dump(bindings, self.specs))
+                file.write(dump(bindings, self.specs, self.parts))
                 file.flush()
                 os.fsync(file.fileno())
             os.replace(temporary, self.path)
@@ -349,9 +476,18 @@ class StockDiagnostics:
             raise
 
     # --- which bindings an entity has ------------------------------------------------------------------------------------
-    def bindings_for(self, path: str, model_id: str) -> list[Binding]:
+    def parts_of(self, path: str, model_id: str = "", composite_kind: str = "") -> tuple[str, ...]:
+        """The part types an entity is, by the [[part]] tables (an entity may be several: a RealSense is camera_rgb and camera_rgbd)."""
+
         with self._lock:
-            return [binding for binding in self.bindings if binding.matches(path, model_id)]
+            return tuple(dict.fromkeys(rule.type for rule in self.parts if rule.matches(path, model_id or "", composite_kind or "")))
+
+    def bindings_for(self, path: str, model_id: str, parts: tuple[str, ...] | None = None, composite_kind: str = "") -> list[Binding]:
+        """The bindings that run on the entity at ``path``; ``parts`` None = resolve them from ``model_id`` / ``composite_kind``."""
+
+        parts = self.parts_of(path, model_id, composite_kind) if parts is None else parts
+        with self._lock:
+            return [binding for binding in self.bindings if binding.matches(path, model_id, parts)]
 
     def build_config(self, binding: Binding):
         spec = dx_registry.REGISTRY.get(binding.diagnostic)
@@ -369,18 +505,27 @@ class StockDiagnostics:
         try:
             spec, config = self.build_config(binding)
             columns = {**COLUMNS, **binding.columns}
+            fed = state_fed(binding.diagnostic)
             names = [binding.state] if binding.state else list(groups)
             series = next((groups[name] for name in names if name in groups and any(item["key"] in columns.values() for item in groups[name])), None)
-            if series is None:
+            if not fed:  # WHY first and without numpy: no State history will ever carry this input, so it is the lasting reason
+                result = self._not_run(binding, spec, NO_INPUT, f"{entity_name}'s State history does not carry "
+                                       f"{state_inputs_missing(binding.diagnostic, config, None)}; it runs where that input is recorded "
+                                       "(sim2real, or a driver that reports it)")
+            elif series is None:
                 which = f"State group {binding.state!r}" if binding.state else "State"
                 result = self._not_run(binding, spec, NO_STATE, f"no {which} history on {entity_name} yet: it is kept while the driver reports State")
             else:
                 from robotdx.diagnostics import stream as dx_stream
 
                 run, first = trajectory(series, columns=columns, run=f"history:{path}#{binding.state or 'state'}", device=entity_name)
-                pairs = [] if run is None else dx_stream.monitor(binding.diagnostic, config, run, subject=path, window_s=binding.window_s,
-                                                                 step_s=self.beat_s, wall_start=first)
-                if not pairs:
+                missing = state_inputs_missing(binding.diagnostic, config, run)
+                pairs = [] if run is None or missing else dx_stream.monitor(binding.diagnostic, config, run, subject=path,
+                                                                            window_s=binding.window_s, step_s=self.beat_s, wall_start=first)
+                if missing:
+                    result = self._not_run(binding, spec, NO_INPUT, f"{entity_name}'s State history does not carry {missing}, which "
+                                           f"{binding.diagnostic} needs; it runs where that input is recorded (sim2real, or a driver that reports it)")
+                elif not pairs:
                     held = 0.0 if run is None else float(run.t[-1] - run.t[0])
                     samples = 0 if run is None else int(len(run.t))
                     result = self._not_run(binding, spec, "NotEnoughHistory",
@@ -388,6 +533,8 @@ class StockDiagnostics:
                                            " with at least 2 samples")
                 else:
                     result = pairs[-1][0]  # the newest window: stamped with its end, on the host's clock
+                    if catalog_entry(binding.id) is not None and not dx_catalog.gating(binding.id, config):
+                        result = dx_catalog.advisory(result, binding.id)  # an agent's or proposed limit shows, never gates
                     window_end = result.stamp
                     window = {"from": window_end - binding.window_s, "to": window_end, "window_s": binding.window_s,
                               "state": binding.state, "samples": next((m.value for m in result.measurements if m.key in ("n", "rows")), None)}
@@ -395,6 +542,10 @@ class StockDiagnostics:
             result = self._not_run(binding, spec, "NumpyMissing", NUMPY_MISSING if error.name == "numpy" else f"{error}")
         except Exception as error:  # noqa: BLE001 - a diagnostic that raises is a not_run with its reason, never a crashed host
             result = self._not_run(binding, spec, "DiagnosticRaised", f"{binding.diagnostic} raised {type(error).__name__}: {error}")
+        entry = catalog_entry(binding.id)
+        if entry is not None:  # the entry's own view: its data-ui hint, role and family (rack.uptime draws as a level_history)
+            result = dataclasses.replace(result, hint=entry.the_hint, role=entry.role, family=entry.the_family,
+                                         view_extra=entry.view_extra or result.view_extra)
         # WHY "<entity>: <title>": the page's row model folds "who: what" names into the entity's folder, beside its driver's own checks
         result = dataclasses.replace(result, title=f"{entity_name}: {binding.title}" if entity_name and entity_name != path else binding.title,
                                      subject=path)
@@ -449,11 +600,20 @@ class StockDiagnostics:
         entry = catalog_entry(binding.id)
         return {"id": binding.id, "diagnostic": binding.diagnostic, "title": binding.title,
                 "summary": spec.summary if spec else "", "doc": config_doc(spec.config_type) if spec else "",
-                "kind": kind_of(binding.diagnostic), "match": {"path": binding.path, "model_id": binding.model_id},
+                "kind": kind_of(binding.diagnostic), "match": {"path": binding.path, "model_id": binding.model_id, "part": binding.part},
                 "state": binding.state, "window_s": binding.window_s, "edited": list(binding.edited),
-                "catalog": ({"part": entry.part, "checks": entry.checks, "provenance": entry.prov, "quote": entry.quote, "where": entry.where}
+                "catalog": ({"part": entry.part, "checks": entry.checks, "provenance": entry.prov, "quote": entry.quote, "where": entry.where,
+                             "hint": entry.the_hint, "role": entry.role, "gate": entry.gate,
+                             "limits_provenance": dx_catalog.default(entry.id).limits, "limits_source": dx_catalog.default(entry.id).source,
+                             "gating": self._gating(binding)}
                             if entry else None),
                 "fields": self.fields_json(binding)}
+
+    def _gating(self, binding: Binding) -> bool:
+        try:
+            return dx_catalog.gating(binding.id, self.build_config(binding)[1])
+        except (ValueError, TypeError, LookupError):
+            return dx_catalog.gating(binding.id)
 
     def set_field(self, binding_id: str, field_name: str, value=None, *, reset: bool = False) -> dict:
         """Validate one field against the dataclass (its type, the Limits ordering, the config's own construction) and write the whole
@@ -568,5 +728,5 @@ def binding_of(status) -> str:
     return next((value for key, value in status.values if key == "dx.binding"), "")
 
 
-__all__ = ["StockDiagnostics", "Binding", "DiagnosticsError", "parse", "dump", "schema", "field_docs", "trajectory", "SOURCE",
-           "DIAGNOSTICS_FILE", "DEFAULT_FILE", "BEAT_S", "registry_json", "config_doc", "kind_of", "catalog_parts", "catalog_entry", "window_of", "binding_of"]
+__all__ = ["StockDiagnostics", "Binding", "PartRule", "parse_parts", "state_inputs_missing", "NO_INPUT", "QUIET", "DEFAULT_DIR", "DiagnosticsError", "parse", "dump", "schema", "field_docs", "trajectory", "SOURCE",
+           "DIAGNOSTICS_FILE", "BEAT_S", "registry_json", "config_doc", "kind_of", "catalog_parts", "catalog_entry", "window_of", "binding_of"]

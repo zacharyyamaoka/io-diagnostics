@@ -710,7 +710,7 @@
     const shown = showAll ? fields : fields.filter((f) => f.source !== 'default' || (f.group && f.group === metric) || f.field === 'limits' || f.group === 'limits');
     const hidden = fields.length - shown.length;
     const match = diagnostic.match || {};
-    const scope = [match.model_id ? `model_id <span class="mono">${esc(match.model_id)}</span>` : '', match.path ? `path <span class="mono">${esc(match.path)}</span>` : ''].filter(Boolean).join(' and ');
+    const scope = [match.part ? `every <span class="mono">${esc(match.part)}</span>` : '', match.model_id ? `model_id <span class="mono">${esc(match.model_id)}</span>` : '', match.path ? `path <span class="mono">${esc(match.path)}</span>` : ''].filter(Boolean).join(' and ');
     const doc = [diagnostic.summary, diagnostic.doc].filter(Boolean).map((text) => `<p>${docHtml(text)}</p>`).join('');
     return `<div class="dx-x dxc" data-dxc="${esc(id)}">`
       + `<div class="dxc-h"><b>${esc(diagnostic.title)}</b> <span class="mono dxc-id">${esc(diagnostic.diagnostic)} · ${esc(diagnostic.id)}</span>${diagnostic.kind === 'custom' ? ' <span class="er-chip">custom</span>' : ''}</div>`

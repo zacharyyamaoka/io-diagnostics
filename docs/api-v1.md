@@ -985,14 +985,18 @@ The latest checks (diagnostic statuses) of every entity in one answer (2026-10-2
 
 The host runs the robotdx.diagnostics library (`robotdx/diagnostics/`, lifted from sim2real's reference, 2026-10-28) on its entities
 (`io_diagnostics/stock_diagnostics.py`). Which diagnostic runs on which entity, with what config, is `<config dir>/diagnostics.toml`
-(`~/.config/io-diagnostics/`, `$IO_DIAGNOSTICS_CONFIG_DIR` honoured), else the host's default set (`io_diagnostics/diagnostics_default.toml`,
-which explains every key); a fixture replay runs only the person's file. Every 5 s (a thread of its own, never the 10 Hz watch path) each
+(`~/.config/io-diagnostics/`, `$IO_DIAGNOSTICS_CONFIG_DIR` honoured), else the host's default set (`io_diagnostics/diagnostics_default.d/`,
+one file per part type, generated from the catalog by `io_diagnostics/default_diagnostics.py`; the keys are explained in
+`stock_diagnostics.py`'s docstring); a fixture replay runs only the person's file. A `[[part]]` table says which entities are a part type
+(by `model_id`, `path` or a composite's kind) and a binding's `part = "<type>"` runs on all of them, so an entity of a known type gets the
+catalog's live diagnostics with no file of the person's. A binding whose input the State history does not carry (frame stamps, images,
+events) is not run with code `NoInput` and posts no row; the drill-in still lists it with its reason. Every 5 s (a thread of its own, never the 10 Hz watch path) each
 binding reads the last `window_s` of its entity's State history (kept at 1 Hz at most) through `stream.monitor`, and the newest window's
 Result is an **ordinary record-v0.2 status** on the entity: `source` `robotdx.diagnostics`, `measurements[0]` the headline value with its
 warn / error limits, `values` the library's `dx.*` keys (`dx.diagnostic`, `dx.config`, ...) plus `dx.binding` (the binding's id) and
 `dx.window` (JSON `{"from", "to", "window_s", "state", "samples"}`, host clock), `expected_period_s` the beat (so a stopped beat goes STALE).
 So it is in `/node`'s `checks`, `/checks`, `/history`, the history bar and `/live` with no change to any of them. A result that could not be
-computed is `unknown`, never `ok`: `NotEnoughHistory`, `NoState`, `NoChannel`, `NumpyMissing` (the `diagnostics` extra is not installed),
+computed is `unknown`, never `ok`: `NotEnoughHistory`, `NoState`, `NoInput`, `NoChannel`, `NumpyMissing` (the `diagnostics` extra is not installed),
 `DiagnosticRaised` (the exception's text).
 
 ### `GET /api/v1/diagnostics`
@@ -1023,22 +1027,26 @@ computed is `unknown`, never `ok`: `NotEnoughHistory`, `NoState`, `NoChannel`, `
 ### `GET /api/v1/diagnostics/config?path=<entity path>`
 
 ```json
-{"clock": {"...": "as in /state"}, "path": "host/usb1/port-1-3/usb-1-3/can/1", "model_id": "mjbots-moteus-c1",
+{"clock": {"...": "as in /state"}, "path": "host/usb1/port-1-3/usb-1-3/can/1", "model_id": "mjbots-moteus-c1", "parts": ["bldc_driver"],
  "file": "...", "writes": "...", "problem": "", "defaults": true, "beat_s": 5.0, "numpy": true,
  "diagnostics": [
   {"id": "driver.board_temp", "diagnostic": "stock.box", "title": "board temperature", "summary": "...", "doc": "...", "kind": "stock",
-   "match": {"path": "", "model_id": "mjbots-moteus-*"}, "state": "motor", "window_s": 60.0, "edited": ["max.warn_high"],
-   "catalog": {"part": "bldc_driver", "checks": "FET/board temperature stays inside its band", "provenance": "his code", "quote": "...", "where": "..."},
+   "match": {"path": "", "model_id": "", "part": "bldc_driver"}, "state": "motor", "window_s": 60.0, "edited": ["max.warn_high"],
+   "catalog": {"part": "bldc_driver", "checks": "FET/board temperature stays inside its band", "provenance": "his code", "quote": "...", "where": "...",
+               "hint": "threshold_band", "role": "health", "gate": "", "limits_provenance": "his code", "limits_source": "", "gating": true},
    "fields": [{"field": "max.warn_high", "type": "float|null", "default": null, "unit": "Cel", "doc": "", "group": "max",
                "value": 30.0, "source": "edited", "editable": true}],
    "status": {"name": "board temperature", "level": "warn", "...": "the check exactly as /node gives it"},
    "window": {"from": 1792631490.0, "to": 1792631550.0, "window_s": 60.0, "state": "motor", "samples": 60}}]}
 ```
 
-- One entry per binding that matches the entity (its `path` and / or `model_id` fnmatch); **404** for an entity the host does not know, an empty
+- One entry per binding that matches the entity (its `path` and / or `model_id` fnmatch, and / or its `part` among the entity's `parts`); **404** for an entity the host does not know, an empty
   list for one nothing is configured on. `fields`: the effective value of every config field, and `source`: `default` (the dataclass's),
   `toml` (the file's), `edited` (written by the POST below; the file lists them in the binding's `edited`). A `Limits` field's four parts are
-  `toml` when the file names the field at all. `status` / `window`: the latest result, null before the first beat.
+  `toml` when the file names the field at all. `status` / `window`: the latest result, null before the first beat. `catalog` (null for a
+  binding whose id is not a catalog entry): `hint` is the data-ui view; `limits_provenance` whose thresholds these are (his / his code /
+  agent / proposed / none); `gating` false = a crossing reports as a `Proposed...` warning, never an error (a value the person sets
+  themselves makes it true).
 
 ### `POST /api/v1/diagnostics/config`
 

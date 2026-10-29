@@ -13,8 +13,8 @@ const { check, BOARD, fs, os, path } = H;
 
 const SHOTS = (() => { const at = process.argv.indexOf('--shots'); return at > 0 ? process.argv[at + 1] : path.join(H.ROOT, 'reports', 'media', 'robotdx-diagnostics'); })();
 const VIEWPORT = { width: 1440, height: 900 };
-// the default set's two moteus rows, on a short window so the fixture's 2 s diagnose fills one quickly (a replay never reads the default set)
-const TOML = fs.readFileSync(path.join(H.ROOT, 'io_diagnostics', 'diagnostics_default.toml'), 'utf8').replace(/window_s = 60/g, 'window_s = 6');
+// the default set's driver-board file, on a short window so the fixture's 2 s diagnose fills one quickly (a replay never reads the default set)
+const TOML = fs.readFileSync(path.join(H.ROOT, 'io_diagnostics', 'diagnostics_default.d', '02-bldc_driver.toml'), 'utf8').replace(/window_s = 60/g, 'window_s = 6');
 
 (async () => {
   fs.mkdirSync(SHOTS, { recursive: true });
@@ -41,7 +41,7 @@ const TOML = fs.readFileSync(path.join(H.ROOT, 'io_diagnostics', 'diagnostics_de
     // ---- the chevron: only on the library's rows ---------------------------------------------------------------------------
     const rows = await page.evaluate(() => [...document.querySelectorAll('.dx-r')].map((r) => ({ name: r.querySelector('.dx-nt').textContent, chev: Boolean(r.querySelector('[data-dxc-chev]')) })));
     const chevrons = rows.filter((r) => r.chev).map((r) => r.name).sort();
-    check('a chevron on each robotdx.diagnostics row and on no other', chevrons.join() === 'board temperature,fault and limiter codes' && rows.some((r) => !r.chev), rows);
+    check('a chevron on each robotdx.diagnostics row and on no other', chevrons.join() === 'board temperature,bus voltage,fault and limiter codes' && rows.some((r) => !r.chev), rows);
     await page.screenshot({ path: path.join(SHOTS, '01-diagnostics-tab.png') });
 
     // ---- unfold in place, measured ---------------------------------------------------------------------------------------
@@ -67,7 +67,7 @@ const TOML = fs.readFileSync(path.join(H.ROOT, 'io_diagnostics', 'diagnostics_de
     const max = open.fields.find((f) => f.field === 'max');
     check('its config as a form: a Limits field is one row of four boxes, each value with where it came from', max && max.source === 'toml'
       && max.values['max.warn_high'] === '60' && max.values['max.error_high'] === '70' && max.values['max.warn_low'] === '' && Object.keys(max.values).length === 4
-      && open.fields.some((f) => f.field === 'channel' && f.source === 'toml' && f.values.channel === 'temp_c') && !open.fields.some((f) => f.field === 'min'), open.fields);
+      && !open.fields.some((f) => f.field === 'channel' || f.field === 'min'), open.fields);  // the file names only the catalog's own choices
     await page.click(`${rowOf} [data-dxc-all]`);
     const everything = await page.evaluate(() => [...document.querySelectorAll('.dxc[data-dxc="driver.board_temp"] [data-dxc-row]')].map((f) => [f.dataset.dxcRow, f.querySelector('.dxc-src').textContent]));
     check('Show all: the fields at their dataclass default too', everything.some(([f, src]) => f === 'min' && src === 'default') && everything.some(([f, src]) => f === 'skip_prelude' && src === 'default'), everything);
@@ -109,8 +109,12 @@ const TOML = fs.readFileSync(path.join(H.ROOT, 'io_diagnostics', 'diagnostics_de
     // ---- the other one, folded; and a dark screenshot -----------------------------------------------------------------------
     await page.click('.dx-r:has(.dx-nt:text-is("fault and limiter codes")) .dx-line');
     await page.waitForSelector('.dxc[data-dxc="driver.faults"] .dxc-form', { timeout: 10000 });
-    const faults = await page.evaluate(() => ({ gauge: document.querySelector('.dxc[data-dxc="driver.faults"] .dxc-g').textContent, fields: [...document.querySelectorAll('.dxc[data-dxc="driver.faults"] [data-dxc-row]')].map((f) => f.dataset.dxcRow) }));
-    check('the fault codes drill-in: its value against its limit, its toml value', /faults/.test(faults.gauge) && /error above 0/.test(faults.gauge) && faults.fields.includes('limiter_share_warn'), faults);
+    // his code's table IS the dataclass default, so the file names nothing and Show all lists it, each at "default"
+    await page.click('.dx-r:has(.dx-nt:text-is("fault and limiter codes")) [data-dxc-all]');
+    const faults = await page.evaluate(() => ({ gauge: document.querySelector('.dxc[data-dxc="driver.faults"] .dxc-g').textContent, fields: [...document.querySelectorAll('.dxc[data-dxc="driver.faults"] [data-dxc-row]')].map((f) => [f.dataset.dxcRow, f.querySelector('.dxc-src').textContent]) }));
+    const scope = await page.evaluate(() => document.querySelector('.dxc[data-dxc="driver.faults"]').textContent);
+    check('the drill-in says which entities a change applies to: every bldc_driver', /every entity it matches \(every bldc_driver\)/.test(scope), scope.slice(-300));
+    check('the fault codes drill-in: its value against its limit, its config under Show all', /faults/.test(faults.gauge) && /error above 0/.test(faults.gauge) && faults.fields.some(([f, src]) => f === 'limiter_share_warn' && src === 'default'), faults);
     await page.screenshot({ path: path.join(SHOTS, '05-two-open.png') });
     const dark = await browser.newContext({ viewport: VIEWPORT, colorScheme: 'dark' });
     const darkPage = await dark.newPage();

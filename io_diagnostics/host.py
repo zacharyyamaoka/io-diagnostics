@@ -591,6 +591,15 @@ class _ActPlan:
     new_id: int | None
 
 
+def _diagnostics_match(entity) -> tuple[str, str]:
+    """(model_id, composite kind) of an entity: what diagnostics.toml's model_id and [[part]] tables match on (stock_diagnostics.py).
+    A composite carries its kind as identity "model" (composition.entity_of)."""
+
+    identity = entity.identity or {}
+    kind = str(identity.get("model") or "") if entity.kind == "composite" else ""
+    return str(identity.get("model_id") or ""), kind
+
+
 class Host:
     def __init__(self, *, plugins_dir: Path = PLUGINS_DIR, clock: Clock | None = None, os_source=None,
                  fixture: dict | None = None, plugin_env: dict[str, str] | None = None, enable: tuple[str, ...] = (),
@@ -1400,7 +1409,8 @@ class Host:
         now = view.now
         found: dict[tuple[str, str], DiagnosticStatus] = {}
         for path, entity in view.merged.entities.items():
-            bindings = runner.bindings_for(path, str((entity.identity or {}).get("model_id") or ""))
+            model_id, composite_kind = _diagnostics_match(entity)
+            bindings = runner.bindings_for(path, model_id, composite_kind=composite_kind)
             if not bindings:
                 continue
             # WHY two windows and a beat: stream.windows steps from the slice's first sample, so the newest whole window always fits
@@ -1417,7 +1427,7 @@ class Host:
             self.stock_results = found
         # WHY a board with no State history posts no row (Zach, 2026-10-28, calm UI): an unwatched moteus keeps no State, so every
         # board read a grey 'unknown' forever. Its reason stays in stock_results for the drill-in API; it is never shown as OK.
-        statuses = [status for status in found.values() if status.code != stock_diagnostics_module.NO_STATE]
+        statuses = [status for status in found.values() if status.code not in stock_diagnostics_module.QUIET]
         self.history.sync(stock_diagnostics_module.SOURCE, statuses, now)
         self.faults.observe(statuses, now)
         if changed:  # WHY only on a change: a page's tick is for what it would draw differently, not for every beat
@@ -1472,7 +1482,7 @@ class Host:
             checks = self._attach_checks(merged)
             # the stock diagnostics' latest statuses, on the entities that are still here (stock_diagnostics.py)
             stock = [status for status in self.stock_results.values()
-                     if status.path in merged.entities and status.code != stock_diagnostics_module.NO_STATE]
+                     if status.path in merged.entities and status.code not in stock_diagnostics_module.QUIET]
             if setup.entities or setup.statuses or notes or checks or stock:
                 layer = self._layer_with(setup.entities)
                 merged = tree.merge(layer, jobs, self.os_records + setup.statuses + notes + checks + stock)
@@ -3566,15 +3576,16 @@ class Host:
             return None
         runner = self.stock_diagnostics
         runner.reload_if_changed()
-        model_id = str((entity.identity or {}).get("model_id") or "")
+        model_id, composite_kind = _diagnostics_match(entity)
         out = []
-        for binding in runner.bindings_for(path, model_id):
+        for binding in runner.bindings_for(path, model_id, composite_kind=composite_kind):
             status = next((found for (where, _name), found in self.stock_results.items()
                            if where == path and stock_diagnostics_module.binding_of(found) == binding.id), None)
             out.append({**runner.binding_json(binding),
                         "status": self.check_json(status, view.now) if status is not None else None,
                         "window": stock_diagnostics_module.window_of(status) if status is not None else None})
-        return {"clock": self.clock_json(view.now), "path": path, "model_id": model_id, **runner.about(), "diagnostics": out}
+        return {"clock": self.clock_json(view.now), "path": path, "model_id": model_id,
+                "parts": list(runner.parts_of(path, model_id, composite_kind)), **runner.about(), "diagnostics": out}
 
     def set_diagnostic_config(self, body: dict) -> tuple[dict, int]:
         """``POST /api/v1/diagnostics/config`` ``{path, id, field, value}`` (or ``reset: true``): one value of a diagnostic configured on
@@ -3590,8 +3601,8 @@ class Host:
             return {"refused": "NoSuchEntity", "error": f"no entity {path!r}"}, 404
         runner = self.stock_diagnostics
         runner.reload_if_changed()
-        model_id = str((entity.identity or {}).get("model_id") or "")
-        if binding_id not in {binding.id for binding in runner.bindings_for(path, model_id)}:
+        model_id, composite_kind = _diagnostics_match(entity)
+        if binding_id not in {binding.id for binding in runner.bindings_for(path, model_id, composite_kind=composite_kind)}:
             return {"state": "rejected", "ok": False, "refused": "NoSuchDiagnostic", "path": path, "id": binding_id, "field": field_name,
                     "message": f"{binding_id!r} is not configured on {entity.name or path}"}, 200
         answer = runner.set_field(binding_id, field_name, body.get("value"), reset=reset)
