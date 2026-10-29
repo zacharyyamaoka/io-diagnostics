@@ -774,7 +774,13 @@ class EntityFeed {
     try { a = await this.feed._get(`/activity?${q}`); } catch (_) { this.busy.raw = false; return; }
     this.busy.raw = false;
     const stream = `raw ${this.path}`;
-    const rows = (a.events || []).filter((e) => (e.received ?? e.stamp) > this.rawLast).reverse().map((e) => this.feed._eventRow(e, stream)).filter(Boolean);
+    // WHY inside the host's window, as the activity backlog (§12.1): an entity's raw lines go back to its plug (hours: F1's adapters'
+    // kernel lines are 12 h before the replay), and the page's one clock spans what its datasets hold, so older lines stretched the
+    // time bar from the window to all of that, and the window the page can rewind shrank to a sliver of its track. The classic
+    // entity Log, linked from every tab, keeps them all
+    const from = ((a.clock && Number.isFinite(a.clock.now)) ? a.clock.now : this.feed.hostNow()) - (this.feed.host.window || 900);
+    const rows = (a.events || []).filter((e) => { const t = e.received ?? e.stamp; return t > this.rawLast && t >= from; })
+      .reverse().map((e) => this.feed._eventRow(e, stream)).filter(Boolean);
     if (!rows.length) return;
     rows.sort((x, y) => x.t - y.t);
     this.rawLast = rows[rows.length - 1].t;
