@@ -889,3 +889,21 @@ check §15.1 already saw flake under the suite's load; alone it passed 5 of 5, a
 K2: the classic page's idle traffic fell to 32.9 KB/s with main's performance pass (this page's live feed: 25.3). The bench, two
 more runs interleaved with d8e734a's: `first_paint_ms` 107.7 / 135.4 (p50 / p95), `scrub_ms` 24.0 / 25.6, `back_to_live_ms`
 13.4 / 18.1, `idle_traffic_kb_s` 26.9-27.0.
+
+### 16.10 The five failures, settled (the orchestrator's follow-ups, 2026-10-29)
+
+- 42989ca's two shape checks read the classic tree's `svg.t6-shape.t6-<level>` as well as the old `svg.shape.lv-<level>` (the
+  orchestrator's fix, 948df47). They pass with real comparisons: on F1 5 leaves compared and none wrong; on the stub, stub/0 ▲ warn
+  then and no mark a few seconds later, stub/1 never.
+- 5dae710's three raw-line checks are rewritten (558dd66, with the orchestrator's leave). They had pinned the page holding F1's
+  12 h old kernel lines, the behaviour 15574d7 removed, and F1 has no raw line inside its window to measure the rule with. They now
+  run on the test-only stub (`bench/robotdx_stub.py --raw --raw-from --raw-old`, off by default): while stub/0's raw lines are only
+  three from 12 h back (F1's case), the page holds none of them and the clock's data spans at most the window; both fail on
+  33844b6, the commit before the rule (3 held, a 12 h span). Then, with lines inside the window, the lines draw and rewind (absent
+  half a second before their time, there after it), the breadcrumb's scope keeps the entity's own lines, adds those below it and
+  then those above it, the Level facet's Warn+ leaves warnings and errors, the old lines stay out and the span stays the window,
+  and the rail hides the raw lines.
+- Measured at 558dd66 (rebased on main 591858c): `test_dx_page.js` **101/101**, `test_dx_log_toolbar.js` **46/46**,
+  `test_dx_timeline.js` **27/27**, `test_dx_tree_past.js` **7/7**, `test_dx_time_span.js` **6/6**; pytest (a detached checkout
+  named `io-diagnostics`) **827 passed, 1 skipped**. KPIs: K2 idle 25.3 KB/s against the classic page's 32.9, K5 10 ms software /
+  11 ms GPU, K7 116 ms.
