@@ -876,3 +876,16 @@ paint read data-ui's old table tree; it times the classic tree since 79bb56a.
   data-ui's `popular` checkboxes, so two picked floors keep the higher.
 - The temporary pickers (Log toolbar, playback bar) go once Zach picks.
 
+
+### 16.9 Rebased onto main 591858c (2026-10-29)
+
+Main moved while this was built (13 commits: the 3D view, the classic page's performance pass, Utilities' two states, PEP 0002's
+placeholder workspaces; no file in common with this branch). The branch is rebased onto it, so it lands by fast-forward; the
+version on d8e734a is kept as `lane/robotdx-dx2-on-d8e734a` (dc480ec), and the shas the commit messages name as red are that
+version's. Measured again on the rebased head: `test_dx_page.js` 99/101, `test_dx_timeline.js` 27/27, `test_dx_log_toolbar.js`
+38/41, `test_dx_tree_past.js` 7/7, `test_dx_time_span.js` 6/6 (the same five failures as 16.6); pytest 826 passed, 1 failed, 1
+skipped: the failure is `test_live_feed.py`'s watch-rate gap (two samples events under 99 ms apart by `emitted`), the host timing
+check §15.1 already saw flake under the suite's load; alone it passed 5 of 5, and this branch changes no Python the suite imports.
+K2: the classic page's idle traffic fell to 32.9 KB/s with main's performance pass (this page's live feed: 25.3). The bench, two
+more runs interleaved with d8e734a's: `first_paint_ms` 107.7 / 135.4 (p50 / p95), `scrub_ms` 24.0 / 25.6, `back_to_live_ms`
+13.4 / 18.1, `idle_traffic_kb_s` 26.9-27.0.
