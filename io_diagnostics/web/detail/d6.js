@@ -573,7 +573,7 @@
 .d6-bd { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .d6-bd .shape { width: 12px; height: 12px; }
 .d6-bd.plain { padding: 0 6px; border-radius: var(--io-radius-pill); background: var(--io-control); color: var(--io-muted); }
-.d6-panel { padding: 12px 18px 28px; max-width: 1100px; min-width: 0; }
+.d6-panel { padding: 12px 18px 28px; min-width: 0; }
 .d6-note { display: flex; align-items: center; gap: 6px; margin: 0 0 10px; font-size: 12px; color: var(--io-muted); }
 .d6-note.paused { padding: 6px 10px; border: 1px dashed var(--io-border); border-radius: var(--io-radius-sm); color: var(--io-text-strong); background: var(--io-control); }
 .d6-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--io-text-strong); animation: d6-pulse 1.4s ease-in-out infinite; }

@@ -109,10 +109,10 @@
 .t6-shape.t6-error { color: var(--hc-error, var(--io-error)); }
 .t6-shape.t6-stale { color: var(--hc-stale, var(--io-faint)); }
 .t6-shape.t6-unknown { color: var(--hc-unknown, var(--io-unknown)); }
-/* the roll-up of a collapsed row (same logo as the rows below it); on an open row it is revealed on hover / selection */
+/* the roll-up of a collapsed row (same logo as the rows below it). WHY never on an open row, not even on hover / selection:
+   the children it is derived from are showing (Zach, 2026-10-29: "the roll up icon IF its derived from the children shouldn't show") */
 .t6-mark.t6-roll .t6-shape { opacity: .8; }
-.t6-mark.t6-roll.t6-open { opacity: 0; transition: opacity .12s; }
-.t6-row:hover .t6-mark.t6-roll.t6-open, .t6-row.t6-sel .t6-mark.t6-roll.t6-open { opacity: 1; }
+.t6-mark.t6-roll.t6-open { opacity: 0; }
 
 /* nothing plugged in there (an empty port that flaps): icon, name and id fully greyed; a real problem keeps its shape's colour */
 .t6-row.t6-off .t6-name, .t6-row.t6-off .t6-id { color: var(--io-off); }

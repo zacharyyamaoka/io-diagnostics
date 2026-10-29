@@ -47,7 +47,8 @@
   // The width a layout has to draw in: the detail's reading column (the page's --io-detail-max) inside its padding.
   function widthOf(container, reserve = 0) {
     if (!container || typeof document === 'undefined') return 600 - reserve;
-    const max = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--io-detail-max')) || 760;
+    const token = getComputedStyle(document.documentElement).getPropertyValue('--io-detail-max').trim();
+    const max = token.endsWith('px') ? parseFloat(token) : Infinity;  // 100vw (the page fills the screen): the container decides
     return Math.max(80, Math.min(container.clientWidth - 36, max) - reserve);
   }
 

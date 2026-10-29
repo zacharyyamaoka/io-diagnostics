@@ -109,7 +109,9 @@
   --io-link-decoration: none;       /* links' text-decoration at rest (High contrast: underline) */
   --io-guide-style: none;           /* tree guides: none, or box = box-drawing glyphs (Terminal; read by tree/v6.js) */
   --io-guide-glyph: "│├└─";         /* the box glyphs, in order: bar, tee, corner, dash */
-  --io-detail-max: 760px;           /* the detail page's reading width (round 3: "compact", read in one glance) */
+  /* WHY 100vw, not the round-3 760px reading column: the entity page fills the screen (Zach, 2026-10-29: "the entity page
+     doesn't seem to expand to fill the entire screen") */
+  --io-detail-max: 100vw;
 }
 
 /* Print forces light, whatever the skin and mode: a neutral black-on-white palette with the light status fills
