@@ -128,6 +128,23 @@ def test_if_match_stops_a_stale_tab_from_overwriting(rig):
     assert put(rig, "New.base", "x")[0] == 201  # no If-Match: last write wins, as documented
 
 
+def test_if_none_match_creates_a_file_and_never_overwrites_one(rig):
+    # Add to dashboard's "New dashboard…" (PEP 0001 §17) creates only: a name another tab or person took a moment ago is refused,
+    # never written over (RFC 9110 §13.1.2: a failed If-None-Match on a PUT is 412)
+    first = hashlib.sha256(b"first").hexdigest()
+    status, headers, raw = put(rig, "Fresh.base", "first", **{"If-None-Match": "*"})
+    assert status == 201 and as_json(raw)["etag"] == first and headers["ETag"] == f'"{first}"'
+    status, _, raw = put(rig, "Fresh.base", "second", **{"If-None-Match": "*"})
+    refused = as_json(raw)
+    assert status == 412 and refused["refused"] == "Exists" and refused["etag"] == first
+    assert (rig["folder"] / "Fresh.base").read_text() == "first"
+    assert sorted(path.name for path in rig["folder"].iterdir()) == ["Fresh.base"]  # no temp file left behind
+    # an etag list refuses the write only when it names the file as it is now
+    assert put(rig, "Fresh.base", "third", **{"If-None-Match": f'"{first}", "other"'})[0] == 412
+    assert put(rig, "Fresh.base", "third", **{"If-None-Match": '"other"'})[0] == 200
+    assert (rig["folder"] / "Fresh.base").read_text() == "third"
+
+
 def test_delete_moves_the_file_to_trash(rig):
     put(rig, "A.base", "keep me")
     stale = as_json(call(rig, "GET", "/api/v1/dashboards")[2])["files"][0]["etag"]
