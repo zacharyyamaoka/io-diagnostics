@@ -6,8 +6,9 @@
    datasets of feed.js), Activity, Dashboards (boards.js), Runs and Settings. Every panel is a stock <data-views> or
    <data-dashboard>; this file only routes, binds datasets and keeps the URL.
 
-   Read-only by construction: the only request that is not a GET is watch.js's heartbeat (PEP §12.2). Every write the
-   host offers (utilities, configuration, the expected setup, settings) stays on the classic page, linked per entity. */
+   Read-only by construction: the only requests that are not a GET are watch.js's heartbeat (PEP §12.2) and the person's own
+   dashboard files (boards.js, add.js: PEP §14, §17). Every write the host offers (utilities, configuration, the expected setup,
+   settings) stays on the classic page, linked per entity. */
 
 import { LiveClock, LiveDataset, parseBase, stringifyBase, loadDataset, connectSSE, connectPoll, makeResizable, bindRailSelect, esc, fmtTime, loadView } from '../vendor/data-ui/data-ui.js';
 import '../vendor/data-ui/dashboard.js';
@@ -15,6 +16,7 @@ import { RobotDxFeed, bindingOf } from './feed.js';
 import { startHeartbeat } from './watch.js';
 import { mountDashboards } from './boards.js';
 import { mountTree } from './tree.js';
+import { installAddToDashboard } from './add.js';
 
 // WHY the views' code first, beside the feed's first requests: data-ui's live <data-views> builds its first model before its live
 // feed is attached and keeps serving it while the view's module loads, so a live draw in that window drew an empty tree until the
@@ -170,6 +172,17 @@ function declared(base) {
   return out;
 }
 
+/** Each drawn <data-dashboard>'s datasets: {name: the file its .base declares, resolved}. WHY kept: the page hands every view of a
+    kind one shared dataset (§12.1), whose url says one binding, so the file a panel reads is the one its dashboard declares
+    (Add to dashboard saves that one: add.js). */
+const filesOf = new WeakMap();
+/** The file the dashboard around `view` declares for its panel's dataset (data-ui's el.dashboardPanel names it), else null. */
+function declaredFile(view) {
+  const panel = view && view.dashboardPanel;
+  const files = panel && view.closest ? filesOf.get(view.closest('data-dashboard')) : null;
+  return (files && files[panel.dataset]) || null;
+}
+
 /** Hand a <data-dashboard> the page's clock for good. WHY (data-ui 5b4e793, sim2real gap #13: "a new document gets a new
     clock"): load() of a new document retires the clock the dashboard holds (pause, let go of every dataset, stop) and makes
     one of its own, so the views inside it would follow a clock the tree and the time bar do not. This page has ONE clock for
@@ -209,6 +222,7 @@ export async function openBase(el, text, baseUrl, { keepState = false } = {}) {
   // WHY only what a panel draws: a binding's polls (and, for State, the device's watch) run for a view on screen, never
   // for a dataset a .base merely declares (PEP §12.2)
   const all = declared(base);
+  filesOf.set(el, Object.fromEntries(Object.entries(all).map(([name, d]) => [name, new URL(d.data, baseUrl).href])));
   const viewsByName = new Map((base.views || []).map((v) => [v.name, v]));
   const panels = (base.layout && base.layout.panels) || [];
   const drawn = panels.length ? panels.flatMap((p) => (p.views || (p.view ? [p.view] : [])).map((n) => viewsByName.get(n)).filter(Boolean)) : (base.views || []);
@@ -768,6 +782,9 @@ export function render() {
   });
   return rendering;
 }
+
+// Add to dashboard (data-ui CONTRACT §34): the picker lists the host's dashboards, and the page saves the panel (add.js, PEP §17)
+installAddToDashboard(app, { BOARDS, go, declaredFile });
 
 rail.addEventListener('data-rail-navigate', (e) => {
   if (!DESTS.includes(e.detail.id)) return;   // Classic page is a real link

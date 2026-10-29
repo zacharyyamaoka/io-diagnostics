@@ -4,7 +4,8 @@
    A dashboard is a data-ui .base with layout: (PEP 0004 / 0005 grammar), drawn by a stock <data-dashboard> over the page's
    live datasets (app.js openBase). Yours are files on the host (GET /api/v1/dashboards, GET | PUT | DELETE
    /api/v1/dashboards/<name>.base; the host keeps the text byte for byte and never parses it). Every change is one PUT of
-   the whole text with If-Match, so two tabs never write over each other: a 412 is shown as a conflict, never retried.
+   the whole text with If-Match, so two tabs never write over each other: a 412 is shown as a conflict, never retried
+   (Add to dashboard, add.js, appends its panel to their text once: it only inserts lines).
    On an older host (404) or one with no config dir (503) they stay in this browser (localStorage robotdx.dx.boards), and
    a dashboard left there moves to the host on its first save there. Save as file and Load .base (picker, drop) always work.
    WHY one store interface ({list, read, write, remove, create}) with two backends: the host's store slots in where the
@@ -97,10 +98,13 @@ export class HostStore {
     if (!res.ok) throw new Error(`${res.status} reading ${name}.base`);
     return { text: await res.text(), title: name, etag: (res.headers.get('ETag') || '').replace(/^"|"$/g, '') || null };
   }
-  /** One PUT of the whole text; `etag` null for a new file. {ok, etag} | {conflict, etag} | {tooLarge} | {error}. */
-  async write(name, text, etag) {
+  /** One PUT of the whole text; `etag` null for a new file, `create` for a file that must not be there yet (If-None-Match: *).
+      {ok, etag} | {conflict, etag} | {tooLarge} | {error}. */
+  async write(name, text, etag, { create = false } = {}) {
     const headers = { ...WRITE_HEADERS };
     if (etag) headers['If-Match'] = quoted(etag);
+    // WHY (PEP 0001 §17): a name another tab took between the list and this write is refused (412 Exists), never written over
+    if (create) headers['If-None-Match'] = '*';
     let res;
     try { res = await fetch(fileUrl(name), { method: 'PUT', headers, body: text, cache: 'no-store' }); } catch (err) { return { error: `the host did not answer (${err.message})` }; }
     const body = await res.json().catch(() => ({}));
@@ -120,12 +124,16 @@ export class HostStore {
   }
   /** A new file under a free name from `title`; returns its name, or throws. */
   async create({ title, text }) {
-    await this.list().catch(() => {});
-    const name = nameFor(title, this.taken());
-    const r = await this.write(name, text, null);
-    if (!r.ok) throw new Error(r.tooLarge ? 'over the host\'s 1 MB' : r.error || 'the host refused it');
-    this.files.push({ name, etag: r.etag, mtime: Date.now() / 1000 });
-    return name;
+    // WHY created only (If-None-Match: *) and tried again: two tabs pressing New at once both found "Untitled dashboard" free, and
+    // the second write replaced the first; now the second is refused and takes the next free name
+    for (let tries = 0; tries < 3; tries += 1) {
+      await this.list().catch(() => {});
+      const name = nameFor(title, this.taken());
+      const r = await this.write(name, text, null, { create: true });
+      if (r.ok) { this.files.push({ name, etag: r.etag, mtime: Date.now() / 1000 }); return name; }
+      if (!r.conflict) throw new Error(r.tooLarge ? 'over the host\'s 1 MB' : r.error || 'the host refused it');
+    }
+    throw new Error('another tab kept taking the same name; try again');
   }
 }
 
@@ -147,6 +155,8 @@ async function theStore(BOARDS) {
   if (!store) store = await storeFor((await starters(BOARDS)).map((s) => s.id));
   return store;
 }
+/** The page's one dashboard store (the host's files, or this browser's on an older host): Add to dashboard saves through it (add.js). */
+export const storeOf = theStore;
 // Explore's "Keep as a dashboard" and the checks reach the store here
 window.__dxBoards = { create: async (b) => (await theStore(new URL('dashboards/', import.meta.url).href)).create(b), kind: () => (store ? store.kind : null) };
 
@@ -285,6 +295,36 @@ export async function mountDashboards(root, params, { openBase, go, showTimeBar,
     return true;
   }
   await draw(text);
+  // Add to dashboard (add.js) saved THIS dashboard: its text and etag are the ones written (so this page's next save of it is not
+  // refused as somebody else's), and it is drawn again with the new panel at the bottom (data-ui reloads nothing: the host does,
+  // CONTRACT §34). WHY not at once when the add came from one of this dashboard's own panels: drawing it again replaces that
+  // panel, and the picker inside it, before the picker can say "Added to …"; it says so, and the dashboard is drawn again when the
+  // reader closes it, or 2 s later (asked of data-ui: keep the picker across a reload of the dashboard it came from)
+  let pending = null;   // the redraw waiting for the picker: cancelled when this dashboard leaves the page
+  const onSaved = (e) => {
+    if (!own || own.draft || e.detail.id !== own.id) return;
+    own.etag = e.detail.etag;
+    text = e.detail.text;
+    conflictBox.hidden = true;
+    if (pending) pending.cancel();
+    const pick = el.querySelector('.dv-addpick');
+    if (!pick) { draw(text); return; }
+    const next = text;
+    let timer = null;
+    const watch = new MutationObserver(() => { if (!pick.isConnected) now(); });
+    const cancel = () => { clearTimeout(timer); watch.disconnect(); if (pending && pending.cancel === cancel) pending = null; };
+    function now() {
+      if (!pending || pending.cancel !== cancel) return;
+      cancel();
+      const close = pick.isConnected && pick.querySelector('.dv-addpick-x');
+      if (close) close.click();
+      if (text === next) draw(next);
+    }
+    pending = { cancel };
+    if (pick.parentNode) watch.observe(pick.parentNode, { childList: true });
+    timer = setTimeout(now, 2000);
+  };
+  addEventListener('dx-board-saved', onSaved);
 
   /** Keep `next` as this dashboard's text: a draft's first save moves it to the host; a host file is one PUT with If-Match. */
   async function keep(next) {
@@ -354,7 +394,7 @@ export async function mountDashboards(root, params, { openBase, go, showTimeBar,
       await keep(next);
     }));
   }
-  return { update: (p) => (p.board === params.board ? null : false), unmount() { off(); if (opened) opened.release(); } };
+  return { update: (p) => (p.board === params.board ? null : false), unmount() { off(); removeEventListener('dx-board-saved', onSaved); if (pending) pending.cancel(); if (opened) opened.release(); } };
 }
 
 function alertIn(root, message) {
