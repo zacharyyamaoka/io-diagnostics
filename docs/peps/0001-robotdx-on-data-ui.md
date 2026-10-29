@@ -907,3 +907,128 @@ more runs interleaved with d8e734a's: `first_paint_ms` 107.7 / 135.4 (p50 / p95)
   `test_dx_timeline.js` **27/27**, `test_dx_tree_past.js` **7/7**, `test_dx_time_span.js` **6/6**; pytest (a detached checkout
   named `io-diagnostics`) **827 passed, 1 skipped**. KPIs: K2 idle 25.3 KB/s against the classic page's 32.9, K5 10 ms software /
   11 ms GPU, K7 116 ms.
+
+## 17. Add to dashboard (data-ui CONTRACT §34, PEP 0014), as built (2026-10-29)
+
+*Zach, 2026-10-29 (relayed): "Dashboards are built with data-ui. Humans curate, AI builds." A reader adds what they are looking at to
+a dashboard of theirs, "like the amazon thing of adding to a saved list", and it lands at the bottom, to be arranged later. Branch
+`lane/robotdx-add-to-dashboard` on main 5575808: data-ui re-vendored at `integrate/packet` 0db2785 (96c731c; every check green on
+it before any page change, so no drift), the acceptance committed red first (31a3d3e), the host's one additive change (a222578),
+the page (7720e5d), and At this moment (red 0126d70, b523933).*
+
+- **What the reader gets is data-ui's own:** Add to dashboard… on every panel's ⋯ (Explore's tabs, Activity, Runs, the starters, your
+  dashboards; measured on a table and a plot) and on a KPI card's item menu (measured with a right-click; long-press and the
+  ContextMenu key are data-ui's);
+  the picker with your dashboards, New dashboard… and At this moment; the panel at the bottom, full width. Not on a plot's legend:
+  data-ui's live `plot` draws a static key (below).
+- **The host's half** (`dx/add.js`): `dashboards()` on `#dx-app` maps `GET /api/v1/dashboards` (newest first) to `{id, title, url,
+  text}`, each text read once per etag. The `data-add-to-dashboard` listener appends the panel (data-ui's exported `appendPanel`) and
+  sends one `PUT` with `If-Match`, the etag of the text it appended to. A 412 (another tab or person saved since) reads the file
+  again, appends again and retries once (insert-only, so theirs is kept); a second 412 answers `{ok: false, reason: "<id> changed
+  while you were adding; reload it and add again"}`. New dashboard… is `If-None-Match: *` under the name typed (the host's name rule;
+  a starter's name is refused too): a file of that name is refused, never written over. It answers `{ok: true, title, href}`;
+  "Open ↗" goes to `?go=dashboards&board=<id>` in the page. On a host with no `/api/v1/dashboards` the same is done in this browser's
+  store (§14's fallback).
+- **The panel reads the file its source panel reads.** The page hands every view of a kind one shared dataset (§12.1: checks,
+  config, events, actions for every entity), so a dataset's `url` is whichever binding made it first, most often none: data-ui's
+  panel for a board's Configuration said `/dx/datasets/config.json`, and saved so it read nobody's settings once the page reloaded.
+  The page keeps the files each drawn dashboard declares (`openBase`) and the saved panel reads the one declared for its dataset
+  (`config.json?path=<the board>`). Data paths are written relative to `dashboards/`, the folder the page opens dashboards from, as
+  the starters' are, so a dataset the target already reads is found by its file and not added twice.
+- **A dashboard open on the page is drawn again** with the text and etag saved (so its own next save is not refused as somebody
+  else's). When the add came from one of its own panels, drawing it again replaces that panel and the picker inside it, so the
+  picker first says "Added to …" and the dashboard is drawn again when the reader closes it, or 2 s later.
+- **The host** (docs/api-v1.md): `PUT /api/v1/dashboards/<name>.base` honours `If-None-Match` (additive): `*` with a file there, or
+  an etag list naming the file as it is now, is **412** `Exists` with its etag, and nothing changes. The page's own New, Duplicate,
+  Load and a draft's move now create with it too and take the next free name on a 412: two tabs pressing New at once had both found
+  "Untitled dashboard" free, and the second write replaced the first.
+- **At this moment stands at its t** (b523933; red first, 0126d70). data-ui gives a pinned panel (a layout panel's `t`) a plain
+  `Clock` paused at t, but a view of a live dataset that finds a clock that is not live follows a `LiveClock` of its own
+  (`live/feed.js` `_clock`), and every dataset here is live: the panel said "at t = …" and drew the newest data (measured: its clock
+  4.3 s past t, its card 0.2228 where the host had −0.2307 at t). After each dashboard draws (`openBase`, and a microtask after
+  `data-dashboard-live` for its own redraws, Arrange), `holdPins` pauses each pinned panel's views' own clocks at t
+  (`LiveClock.restore({t})`); a clock already standing there is left alone, so nothing is needed from here once data-ui pins a live
+  panel itself.
+
+### 17.1 Asks of data-ui (none edited here; the page works around 2-4)
+
+1. **The live `plot`'s legend is a static key** (CONTRACT §26's own "Not yet": not §31's interactive legend), so no plot on /dx/ has
+   a series item menu, and Add “velocity” to dashboard… is not offered (the one failing check, below). With §31's legend on `plot`,
+   the page needs nothing more: a series panel reads the same file as its plot.
+2. **In a dashboard, `panelSpec()`'s `dataset.data` should be the file the dashboard declares for the panel's dataset**, not the
+   dataset object's `url`: a host may hand one object to several declared files (this page's shared datasets, §12.1). The page
+   puts the declared file back before it appends (`dx/add.js`).
+3. **Pin a live panel with a `LiveClock`** restored at its t (`_pinnedClock`), or let `live/feed.js` `_clock` honour a paused plain
+   clock. The page pauses the views' clocks (`holdPins`).
+4. **Keep the picker across a reload of the dashboard it came from**, or say "Added to …" where it outlives the panel: a host that
+   reloads the dashboard it shows (§34's own advice) replaces the panel and the picker inside it before the picker can say anything.
+   The page draws its dashboard again when the picker closes, or 2 s after it said so.
+5. **Write t as the clock writes it** (minor): "At this moment t = 1792631514.923 s" in the picker and "at t = 1792631514.923 s" on
+   the panel, on a wall clock; the playback card already writes wall-clock times for t ≥ 10⁹ s.
+
+### 17.2 Measured (2026-10-29, this PC, load 4-15 on 24 CPUs from other sessions)
+
+**The acceptance** (`tests/test_dx_add_to_dashboard.js`, against a fixture host; the oracles are the host's folder on disk and its own
+`GET /api/v1/dashboards`, the requests Chrome sent, data-ui's exported `appendPanel`, and getBoundingClientRect for "at the bottom"):
+**3/17 red** at 31a3d3e (data-ui's items are there; nothing listed, nothing saved), **16/17** at 7720e5d (three runs) and at b523933.
+
+| Check | Measured at b523933 |
+|---|---|
+| a table panel's ⋯ → Add to dashboard… → the picker lists the host's dashboards in its order | PASS (Clash, Retry, Servos) |
+| a plot panel's ⋯, the same | PASS |
+| a KPI card's item menu (right-click) → "Add “position (rev)” to dashboard…", the same | PASS |
+| a legend series' item menu → "Add “velocity” to dashboard…" | **FAIL**: the entry is the live plot's static `.dv-plot-key`, no item menu (17.1, 1) |
+| existing: exactly one PUT, `If-Match` = the sha256 of the text appended to, 200 | PASS |
+| existing: the file is `appendPanel(old, panel)` byte for byte, the panel reading the board's `config.json?path=` (Servos already declared it: found by its file, not added twice) | PASS |
+| "Added to Servos" with Open ↗ to `/dx/?go=dashboards&board=Servos` | PASS |
+| Open lands there; the new panel below every other (rects); its rows the source's 8 | PASS |
+| after a reload, the same 8 rows, still at the bottom | PASS |
+| one 412 (the file changed between the list and the PUT): two PUTs (412 with the old etag, 200 with the new), the file `appendPanel(theirs, panel)`, "Added to Retry" | PASS |
+| two 412s: two PUTs, no third; "Could not add to Clash: Clash changed while you were adding; reload it and add again"; the other writer's text kept | PASS |
+| New dashboard… "Fresh adds": one PUT with `If-None-Match: *`, 201, the file `appendPanel('', panel)` | PASS |
+| New dashboard… "Servos": one PUT with `If-None-Match: *`, 412; Servos.base unchanged, no other file | PASS |
+| the dashboard open when an add to it lands: one more panel, at the bottom, its text the host's file, the URL unchanged | PASS |
+| every write is the watch heartbeat or a dashboard PUT; no page or console error but the asked 412s | PASS |
+
+**The gate fails when it should:** without the declared-file rule the same test is 11/17 (the three byte-for-byte checks, the open
+dashboard, and the reload: the added Configuration panel read no rows). Open's own check passes on that mutant, since the page still
+held the board's settings: only the reload shows it, which is why the test reloads.
+`tests/test_dx_add_at_moment.js` **2/4 red** at 7720e5d (the panel's clock 4.3 s past t, following) and **4/4** at b523933: the
+panel's views stand at t while the page's clock is 4 s on, and its card is −0.1046, the host's own value at t (its history and
+/values ring, read by the test). Ad hoc, not in a test: the pin holds through Arrange and a reload beside a live panel; and on a
+host that 404s `/api/v1/dashboards`, the picker lists this browser's dashboards by title, adds and creates there, nothing is sent
+to the host.
+
+**The rest, at b523933** (all as on main 5575808): `test_dx_page.js` **101/101**, `test_dx_log_toolbar.js` **46/46**,
+`test_dx_timeline.js` **27/27**, `test_dx_tree_past.js` **7/7**, `test_dx_time_span.js` **6/6**; K2 idle 25.3 KB/s on the live feed
+against 33.2 for the classic page, K5 8 ms software / 13 ms GPU, K7 125 ms. pytest (a detached checkout named `io-diagnostics`):
+**827 passed, 1 failed, 1 skipped**: the failure is `test_live_feed.py`'s watch-rate gap (two samples events under 99 ms apart by
+`emitted`), the host timing check §15.1 and §16.9 saw flake under the suite's load; alone it passed 5 of 5, and the lane's Python is
+the dashboard PUT only (`test_dashboard_files.py` 42/42, one new).
+
+**The bench** (`tools/bench_robotdx.py --phases fixture`, GPU, every run "quiet"), two runs each, interleaved with main 5575808 from a
+detached checkout of it:
+
+| KPI (pooled over every sample of the runs) | main 5575808 | this branch b523933 | budget |
+|---|---|---|---|
+| `first_paint_ms` p50 / p95 (cold loads) | 114.0 / 135.8 (10) | 130.2 / 180.3 (10) | 1,500 |
+| `scrub_ms` p50 / p95 | 24.9 / 28.0 (60) | 25.0 / 32.8 (60) | 50 |
+| `back_to_live_ms` p50 / p95 | 15.1 / 25.3 (20) | 16.1 / 28.5 (20) | 100 |
+| `idle_traffic_kb_s` (per run) | 27, 27 | 27, 27 | 8 |
+
+The first paint's gap did not hold when the loads were paired: single cold loads alternated across main, the re-vendor alone (96c731c)
+and this branch, 20 each in a random order per round (each build's own `tools/dx_demo.py`, load 10.9-12): p50 **130.0 / 126.9 /
+122.1 ms**; the 330-500 ms loads fell in the same rounds for all three. Interleaving whole runs was too coarse at that load (one of
+this branch's later runs had five loads at 240-564 ms, the re-vendor's beside it up to 165).
+
+### 17.3 Left
+
+- **The legend series** (the one failing check): data-ui's (17.1, 1). Nothing to change here once the live `plot` has §31's legend.
+- **The picker reads each dashboard's text once** on its first open (one GET each, then only a file whose etag moved): fine for tens
+  of dashboards. A host that answered the list with the texts, or data-ui reading a listed `url` only when it is picked while
+  keeping a separate `base`, would make it one request.
+- **Not measured on /dx/**: the picker at 390 px, the keyboard routes (ContextMenu, Shift+F10) and long-press, and a peek field's item
+  (this page turns a row's click into a selection); data-ui's own 70 checks cover them on its fixture.
+- **Two choices made here, reversible:** a New dashboard… name that is taken (a file, or a starter's) is refused with the reason,
+  not renamed (the reader typed it; New on the Dashboards list still takes the next free name); a dashboard that the add came from is
+  drawn again on the picker's close, or 2 s after "Added".
