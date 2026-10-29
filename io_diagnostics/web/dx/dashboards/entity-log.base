@@ -1,18 +1,21 @@
-# An entity's Log tab (§16; d6 Log: this entity and everything below it), newest first, as of the page clock's t.
+# An entity's Log tab (§16; d6 Log), newest first, as of the page clock's t: the host's events and the entity's raw lines (kernel
+# lines, run output; ?path= reads them while the tab shows). The page draws it on data-ui's one-row bar in one of five proposals
+# (app.js logText, Zach 2026-10-29: "we don't want to tool bar to split onto two lines"): the classic log's level floor (Debug+,
+# Info+, Warn+, Error+), its scope (+ children, this only, + path to host) and its raw lines become data-ui's views, filter
+# clauses, query tokens or facets. This view is what every proposal's tables show; the page fills in {path}.
 datasets:
   events:
-    data: "../datasets/events.json"
+    data: "../datasets/events.json?path={path}"
 layout:
   columns: 12
   rowHeight: 56
   panels:
-    - { view: Log, w: 12, h: 11, key: log }
+    - { view: Log, w: 12, h: 11, key: log, toolbar: bar, style: { title: none } }
 views:
   - type: table
     name: Log
     from: events
-    filters: 'path == "{path}" || path.startsWith("{path}/")'
-    order: [t, severity, message, name, type, code, source, port]
+    order: [t, severity, message, name, channel, type, code, source, port]
     sort:
       - { property: t, direction: DESC }
     limit: 2000

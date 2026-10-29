@@ -54,6 +54,7 @@ views:
   - type: table
     name: Recent
     from: events
+    filters: 'channel != "raw"'
     order: [t, severity, message, name, code]
     sort:
       - { property: t, direction: DESC }

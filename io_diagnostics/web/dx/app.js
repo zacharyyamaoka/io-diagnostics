@@ -28,6 +28,11 @@ const rail = document.getElementById('dx-rail');
 const timeBar = document.getElementById('dx-time');
 const BOARDS = new URL('dashboards/', import.meta.url).href;
 const DESTS = ['explore', 'activity', 'dashboards', 'runs', 'settings'];
+// this browser's choices (a private window: this visit only)
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch (_) { return null; } },
+  set(k, v) { try { if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (_) { /* private window: this visit only */ } },
+};
 
 // ---- the one clock -------------------------------------------------------------------------------------------------------
 // WHY on the app element: clockFor() walks up from any <data-views> to the first element with a clock, so every view in
@@ -252,10 +257,11 @@ barPick.addEventListener('change', () => { store.set(BAR_KEY, barPick.value === 
 const lagText = (s) => (s < 60 ? `${s.toFixed(1)} s` : s < 3600 ? `${Math.round(s / 60)} min` : `${(s / 3600).toFixed(1)} h`);
 let liveDrawnAt = 0;
 function drawLive() {
+  liveDrawnAt = performance.now();
+  drawClockWord();
   const show = barVariant() !== 'bar' && clock.live && !timeBar.hidden;
   liveBtn.hidden = !show;
   if (!show) return;
-  liveDrawnAt = performance.now();
   liveBtn.setAttribute('aria-pressed', String(clock.following));
   const text = clock.following ? '● LIVE' : `○ LIVE −${lagText(clock.lag)}`;
   if (liveBtn.textContent !== text) liveBtn.textContent = text;
@@ -263,6 +269,91 @@ function drawLive() {
 clock.addEventListener('live', () => { if (performance.now() - liveDrawnAt > 200) drawLive(); });
 clock.addEventListener('state', drawLive);
 liveBtn.addEventListener('click', () => { clock.goLive(); drawLive(); });
+
+// ---- the timeline: a panel that rises from the bottom (Zach, 2026-10-29: "The playback/rewind bar becomes a panel that rises
+// from the bottom of the page, collapses, and is brought back from the bottom status bar, like the Terminal panel on the classic
+// page ... It is live by default, like a system monitor, and you can rewind at any moment. Its height is draggable and remembered,
+// and it stays collapsed or open across reloads"). The classic Terminal panel's conventions (web/runs/r1.js): its top edge drags
+// (remembered, double-click resets, arrow keys move it by 16 px, 120 px to the window less 220), a hide chevron in its head, a
+// status-bar toggle that says what it does (aria-pressed / aria-expanded / aria-controls), Ctrl+` both ways, open or not kept.
+// Inside: the page's one time bar, and the rack's history under it as a system monitor draws it (data-ui's levels and plot over
+// the summary dataset: the worst level per bin, the problem counts), both as of the clock's t. Collapsing it never moves the
+// clock: the status bar's toggle says LIVE, or how far behind.
+const TL_OPEN = 'robotdx.dx.timeline.open';
+const TL_HEIGHT = 'robotdx.dx.timeline.height';
+const TL_DEFAULT = 200, TL_MIN = 120;
+const timeline = document.getElementById('dx-timeline');
+const tlSash = timeline.querySelector('.dx-tl-sash');
+const tlToggle = document.getElementById('dx-tl-toggle');
+const tlClock = document.getElementById('dx-tl-clock');
+let tlHeight = TL_DEFAULT;
+function tlApply(height, persist) {
+  const max = Math.max(TL_MIN, innerHeight - 220);
+  tlHeight = Math.round(Math.max(TL_MIN, Math.min(height, max)));
+  timeline.style.setProperty('--dx-tl-h', `${tlHeight}px`);
+  if (persist) store.set(TL_HEIGHT, String(tlHeight));
+  return tlHeight;
+}
+function tlOpen(open) {
+  timeline.hidden = !open;
+  tlToggle.setAttribute('aria-pressed', String(open));
+  tlToggle.setAttribute('aria-expanded', String(open));
+  // WHY only a closed panel is written: open is the default, so a reader who never closes it never has a stored choice
+  store.set(TL_OPEN, open ? null : '0');
+}
+/** The status bar's word for the clock: ● LIVE while following, else how far behind (the toggle says it with the panel closed). */
+function drawClockWord() {
+  const text = !clock.live ? '' : clock.following ? '● LIVE' : `○ −${lagText(clock.lag)}`;
+  if (tlClock.textContent !== text) tlClock.textContent = text;
+  tlClock.dataset.following = String(Boolean(clock.live && clock.following));
+}
+tlApply(Number(store.get(TL_HEIGHT)) || TL_DEFAULT, false);
+tlOpen(store.get(TL_OPEN) !== '0');
+tlToggle.addEventListener('click', () => tlOpen(timeline.hidden));
+timeline.querySelector('[data-tl="hide"]').addEventListener('click', () => { tlOpen(false); tlToggle.focus(); });
+document.addEventListener('keydown', (e) => {
+  if (e.ctrlKey && !e.altKey && !e.metaKey && (e.key === '`' || e.code === 'Backquote')) { e.preventDefault(); tlOpen(timeline.hidden); }
+}, true);
+{
+  let drag = null;
+  tlSash.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    drag = { id: e.pointerId };
+    tlSash.setPointerCapture(e.pointerId);
+    document.body.classList.add('dx-resizing');
+    e.preventDefault();
+  });
+  tlSash.addEventListener('pointermove', (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    drag.height = tlApply(timeline.getBoundingClientRect().bottom - e.clientY, false);
+  });
+  const end = (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    if (drag.height !== undefined) tlApply(drag.height, true);
+    drag = null;
+    document.body.classList.remove('dx-resizing');
+  };
+  tlSash.addEventListener('pointerup', end);
+  tlSash.addEventListener('pointercancel', end);
+  tlSash.addEventListener('dblclick', () => { store.set(TL_HEIGHT, null); tlApply(TL_DEFAULT, false); });
+  tlSash.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    tlApply(tlHeight + (e.key === 'ArrowUp' ? 16 : -16), true);
+    e.preventDefault();
+  });
+  addEventListener('resize', () => tlApply(tlHeight, false));
+}
+/** The rack's history in the panel: the worst level per bin, and the problem counts, over the host's window ending at t. */
+function drawHistory() {
+  const at = `${Math.round(feed.host.window || 900)}s`;
+  const health = document.getElementById('dx-tl-health');
+  const counts = document.getElementById('dx-tl-counts');
+  health.base = { properties: { level: { displayName: 'Rack' } }, views: [{ type: 'levels', name: 'Rack health', at,
+    levels: { state: 'level', label: 'health', order: ['ok', 'warn', 'unknown', 'stale', 'error'], tones: { ok: 'good', warn: 'warn', unknown: 'muted', stale: 'muted', error: 'bad' }, bar: 3 } }] };
+  health.data = feed.dataset('summary');
+  counts.base = { views: [{ type: 'plot', name: 'Problems', at, plot: { y: ['errors', 'warns', 'stales', 'unknowns'] } }] };
+  counts.data = feed.dataset('summary');
+}
 
 // ---- Explore: the tree and the selected entity -------------------------------------------------------------------------------
 
@@ -279,10 +370,6 @@ const TABLE_BASE = {
 };
 
 const FOLD = 'robotdx.dx.tree.folded';
-const store = {
-  get(k) { try { return localStorage.getItem(k); } catch (_) { return null; } },
-  set(k, v) { try { if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (_) { /* private window: this visit only */ } },
-};
 
 async function template(name) {
   const res = await fetch(new URL(name, BOARDS), { cache: 'no-store' });
@@ -311,6 +398,7 @@ function exploreText(tpl, path, entity) {
     value as the overview does; every other tab is its template with {path} filled in, every panel kept (a tab is always there). */
 function tabText(tab, tpl, path, entity) {
   if (tab.id === 'overview') return exploreText(tpl, path, entity);
+  if (tab.id === 'log') return logText(logVariant(), tpl, path, logScope());
   if (tab.id !== 'state') return tpl.replaceAll('{path}', path);
   const base = parseBase(tpl.replaceAll('{path}', path));
   const keys = entity ? [...entity.keys.entries()] : [];
@@ -322,6 +410,101 @@ function tabText(tab, tpl, path, entity) {
   return stringifyBase(base);
 }
 const templates = new Map();   // a tab's template text, read once
+
+// ---- the Log tab's toolbar: five one-line proposals (Zach, 2026-10-29: "If you are using data-ui then the ways of doing this are
+// already quite supported. for example we don't want to tool bar to split onto two lines"). The classic Log tab wraps: its count,
+// level segment, Raw, search and Live, then "Log of CAN 13 + children / this only / + path to host" on a second line. Here every
+// proposal is data-ui's one-row bar (CONTRACT §15: toolbar="bar", never wrapping; its presets are attributes) and the log's
+// controls are data-ui's own things: the level floor a view, a facet or a clause typed in the query box (level:>=2), the scope a
+// view, a filter clause or the breadcrumb, the raw lines a channel the filters keep or drop (-channel:raw), the count data-ui's
+// status line, and Live the page's one LIVE
+// (the timeline, the status bar: Rerun's single way back). A temporary bottom-right picker switches them live and remembers the
+// pick on this device; variant 1 is the default (memory feedback_prototype_switch_in_app, feedback_default_to_variants).
+const LOGS = [['overflow', '1 · Overflow menu'], ['chip', '2 · Scope as a chip'], ['search', '3 · Search on focus'], ['crumb', '4 · Scope in the breadcrumb'], ['facet', '5 · Level as a facet']];
+const LOG_KEY = 'robotdx.dx.log-toolbar';
+const LOG_SCOPE = 'robotdx.dx.log-scope';
+// the classic log's floors (web/activity/core.js FLOORS, its labels) and scopes (web/activity/log.js SCOPE_MODES)
+const FLOORS = [['Debug+', 0], ['Info+', 1], ['Warn+', 2], ['Error+', 3]];
+const FLOOR_DEFAULT = 'Info+';
+const SCOPES = [['children', '+ children'], ['self', 'this only'], ['host', '+ path to host']];
+// each proposal's data-ui bar (CONTRACT §15): views as the chip (Bases) or tabs (Notion); promote="" leaves Display the one menu
+// (Shopify); filters="expanded" keeps the clauses off a second row (no pill row); search "icon" folds the box until it is used;
+// labels "icons" keeps every tool to its icon. WHY no query-tokens: a token for the scope wrapped the query box onto a second and
+// third line, on a board's Log at 1280 px and at 390 (data-ui's .dv-qbox wraps; written down for data-ui)
+const LOG_BARS = {
+  overflow: { views: 'dropdown', promote: '', filters: 'expanded', search: 'box', labels: 'auto' },
+  chip: { views: 'dropdown', promote: '', filters: 'expanded', search: 'box', labels: 'auto' },
+  search: { views: 'dropdown', promote: 'filter', filters: 'expanded', search: 'icon', labels: 'icons' },
+  crumb: { views: 'tabs', promote: 'filter', filters: 'expanded', search: 'box', labels: 'auto' },
+  facet: { views: 'tabs', promote: '', filters: 'expanded', search: 'box', labels: 'auto' },
+};
+const FLOOR_VIEWS = new Set(['overflow', 'search', 'crumb']);   // the proposals whose views are the floors
+const logPick = document.getElementById('dx-log-variant');
+function logVariant() { const v = store.get(LOG_KEY); return LOGS.some(([id]) => id === v) ? v : 'overflow'; }
+function logScope() { const v = store.get(LOG_SCOPE); return SCOPES.some(([id]) => id === v) ? v : 'children'; }
+logPick.innerHTML = LOGS.map(([id, name]) => `<option value="${id}">${esc(name)}</option>`).join('');
+logPick.value = logVariant();
+logPick.addEventListener('change', () => { store.set(LOG_KEY, logPick.value === 'overflow' ? null : logPick.value); dispatchEvent(new CustomEvent('dx-log-variant')); });
+
+/** The scope as one Bases expression (web/activity/core.js inScope): the entity, what is below it, and the path up to the host.
+    WHY lineage (feed.js: each row's path and the paths above it): "+ children" is then one clause with a short token form,
+    lineage:<path>, where path == p || path.startsWith(p + "/") drew as a token that took the query box onto a second line. */
+function scopeExpr(path, scope) {
+  const q = (s) => JSON.stringify(s);
+  if (scope === 'self') return `path == ${q(path)}`;
+  const below = `lineage.contains(${q(path)})`;
+  if (scope === 'children') return below;
+  const up = [];
+  for (let p = path; p.includes('/');) { p = p.slice(0, p.lastIndexOf('/')); up.push(`path == ${q(p)}`); }
+  return [below, ...up].join(' || ');
+}
+
+/** The Log tab's .base in one proposal: the template's table as the floors (or the scopes), with the scope, the default floor
+    and the facets where that proposal keeps them. */
+function logText(variant, tpl, path, scope) {
+  const base = parseBase(tpl.replaceAll('{path}', path));
+  const table = (base.views || []).find((v) => v.type === 'table');
+  const view = (name, filters) => ({ ...table, name, ...(filters ? { filters } : {}) });
+  const floors = (scoped) => FLOORS.map(([name, n]) => view(name, scoped ? `(${scoped}) && sev >= ${n}` : `sev >= ${n}`));
+  const entry = base.datasets.events;
+  const ds = typeof entry === 'string' ? { data: entry } : { ...entry };
+  const scopes = () => SCOPES.map(([id, label]) => view(label, scopeExpr(path, id)));
+  if (variant === 'facet') {
+    // the level and the raw lines in the dashboard's own rail (a stock <data-facets>, CONTRACT §7, §17); the scopes as tabs (the
+    // classic chip's segment)
+    base.views = scopes();
+    ds.filters = `sev >= ${FLOORS.find(([n]) => n === FLOOR_DEFAULT)[1]}`;
+    ds.facets = [
+      { as: 'popular', label: 'Level', options: FLOORS.map(([name, n]) => ({ label: name, filter: `sev >= ${n}` })) },
+      { property: 'channel', as: 'toggle', value: 'activity', text: 'Hide raw lines', label: 'Raw lines' },
+    ];
+  } else if (variant === 'chip') {
+    // the scope is the view chip; the level and the raw lines are typed in the query box (level:>=2, -channel:raw), with data-ui's
+    // hints: the classic search's own words (level:warn), as Shopify's query builder takes them
+    base.views = scopes();
+  } else if (variant === 'crumb') {
+    // the scope is the breadcrumb's, in each view's own filter: nothing of it on the bar
+    base.views = floors(scopeExpr(path, scope));
+  } else {
+    // the scope is a clause of the all-views filter: kept in Display (1), behind Filter (3)
+    base.views = floors();
+    ds.filters = scopeExpr(path, 'children');
+  }
+  base.datasets.events = ds;
+  const panel = { ...base.layout.panels[0], views: base.views.map((v) => v.name) };
+  delete panel.view;
+  base.layout.panels = [panel];
+  return stringifyBase(base);
+}
+
+/** After the Log tab's dashboard is drawn: its table gets the proposal's bar, the default floor, and the detail says which. */
+function dressLog(detail, variant, { fresh }) {
+  detail.dataset.logVariant = variant;
+  const t = detail.querySelector('#dx-detail-log');
+  if (!t) return;
+  for (const [name, value] of Object.entries(LOG_BARS[variant])) if (t.getAttribute(name) !== value) t.setAttribute(name, value);
+  if (fresh && FLOOR_VIEWS.has(variant) && typeof t.selectView === 'function') t.selectView(FLOOR_DEFAULT);
+}
 
 function withoutPlayback(text) {
   const base = parseBase(text);
@@ -378,6 +561,14 @@ async function mountExplore(root, params) {
   root.append(mark);
   const markTable = (path) => { mark.textContent = path ? `#dx-tree-table tr[data-id="${CSS.escape(path)}"] { background: var(--dv-hover); box-shadow: inset 3px 0 0 var(--dv-accent); }` : ''; };
 
+  /** The entity's name and path; on its Log in proposal 4, the Log's scope beside them ("Log of + children", the classic chip). */
+  function drawCrumbs(path, e, page) {
+    crumbs.innerHTML = path ? `<b>${esc((e && e.name) || path)}</b> <span>${esc(path)}</span>` : 'Pick an entity in the tree';
+    if (path && page === 'log' && logVariant() === 'crumb') {
+      crumbs.insertAdjacentHTML('beforeend', ` <label class="dx-crumb-scope">Log of <select data-log-scope aria-label="Log scope" title="Whose lines the Log shows">${SCOPES.map(([id, label]) => `<option value="${id}"${id === logScope() ? ' selected' : ''}>${esc(label)}</option>`).join('')}</select></label>`);
+    }
+  }
+
   let current = { path: null, release: null, seq: 0, hold: null, sig: '' };
   // what decides Explore's panels for an entity: its State keys (in order) and whether it has settings
   const sigOf = (entity) => (entity ? `${[...entity.keys.keys()].join(',')}|${Boolean(entity.node && (entity.node.config || []).length)}` : '');
@@ -395,7 +586,7 @@ async function mountExplore(root, params) {
     for (const b of tabBar.querySelectorAll('[data-dx-tab]')) b.setAttribute('aria-selected', String(b.dataset.dxTab === page));
     // the classic page's own tab of the same name (the overview is this page's)
     classic.href = path ? `/?sel=${encodeURIComponent(path)}${page && page !== 'overview' ? `&page=${page}` : ''}` : '/';
-    crumbs.innerHTML = path ? `<b>${esc((e && e.name) || path)}</b> <span>${esc(path)}</span>` : 'Pick an entity in the tree';
+    drawCrumbs(path, e, page);
     keep.hidden = !path;
     let text, url = BOARDS;
     if (path) {
@@ -411,6 +602,11 @@ async function mountExplore(root, params) {
       const was = current.release;
       current.release = null;
       const opened = await openBase(detail, text, url);
+      if (tab.id === 'log') {
+        // the proposal drawn is the one the text was made in (a pick that came while the entity was loading is in it)
+        dressLog(detail, logVariant(), { fresh: true });
+        drawCrumbs(path, e, page);
+      } else delete detail.dataset.logVariant;
       if (was) was();
       for (const k of kinds) feed.release(k, path);
       const hold = { panels: opened };
@@ -421,6 +617,7 @@ async function mountExplore(root, params) {
       if (seq !== current.seq) return;
       const was = current.release;
       const opened = await openBase(detail, text, url);
+      delete detail.dataset.logVariant;
       if (was) was();
       current = { ...current, path: null, page: '', urlPage: '', tab: null, hold: null, sig: '', release: () => opened.release(), text };
     }
@@ -440,11 +637,16 @@ async function mountExplore(root, params) {
     const text = tabText(current.tab, templates.get(current.tab.file), current.path, entity);
     current.sig = sig;
     if (text === current.text) return;
+    await redraw(text);
+  }
+  /** The same tab drawn again from new text, the reader's state kept (tabs, rails, t). */
+  async function redraw(text) {
     refreshing = true;
     const { hold, seq } = current;
     try {
       const opened = await openBase(detail, text, BOARDS, { keepState: true });
       if (seq !== current.seq) { opened.release(); return; }
+      if (current.tab && current.tab.id === 'log') dressLog(detail, logVariant(), { fresh: false });
       const old = hold.panels;
       hold.panels = opened;
       old.release();
@@ -454,6 +656,16 @@ async function mountExplore(root, params) {
   }
   feed.addEventListener('values', refresh);
   feed.addEventListener('node', refresh);
+  // the Log's breadcrumb scope (proposal 4): kept on this device, the Log drawn again with its tab and t
+  crumbs.addEventListener('change', (e) => {
+    const s = e.target.closest('[data-log-scope]');
+    if (!s || !current.path || !current.tab || current.tab.id !== 'log') return;
+    store.set(LOG_SCOPE, s.value === 'children' ? null : s.value);
+    redraw(tabText(current.tab, templates.get(current.tab.file), current.path, feed.entity(current.path)));
+  });
+  // another Log proposal picked: the Log tab drawn in it now (its crumbs too), nothing else moves
+  const onLogVariant = () => { if (current.path && current.tab && current.tab.id === 'log') select(current.path, current.urlPage); };
+  addEventListener('dx-log-variant', onLogVariant);
   keep.addEventListener('click', async () => {
     if (!current.path || !window.__dxBoards) return;
     const e = feed.dataset('entities').latestAt(Infinity, current.path);
@@ -466,7 +678,7 @@ async function mountExplore(root, params) {
   return {
     mark(p) { tree.select(p.sel || null); markTable(p.sel || null); },
     update(p) { if (p.sel !== (current.path || '') || (p.sel && (p.page || '') !== (current.urlPage || ''))) return select(p.sel, p.page); return null; },
-    unmount() { feed.removeEventListener('values', refresh); feed.removeEventListener('node', refresh); if (current.release) current.release(); current.seq += 1; tree.destroy(); if (sizer) sizer.destroy(); },
+    unmount() { feed.removeEventListener('values', refresh); feed.removeEventListener('node', refresh); removeEventListener('dx-log-variant', onLogVariant); if (current.release) current.release(); current.seq += 1; tree.destroy(); if (sizer) sizer.destroy(); },
   };
 }
 
@@ -576,6 +788,7 @@ function readT() {
   barPick.value = barVariant();
   drawTimeBar();
   timeBar.data = feed.dataset('summary');
+  drawHistory();
   await render();
   const t = readT();
   if (t !== null) clock.seek(t, { source: 'url' });

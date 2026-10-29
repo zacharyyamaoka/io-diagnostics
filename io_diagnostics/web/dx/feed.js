@@ -23,9 +23,11 @@ import { LiveDataset } from '../vendor/data-ui/data-ui.js';
 const API = '/api/v1';
 const MARK = { warn: '▲ warn', unknown: '? unknown', stale: '◷ stale', error: '✖ error' };
 const RANK = { ok: 0, warn: 1, unknown: 2, stale: 3, error: 4 };
+const SEV = { debug: 0, info: 1, warn: 2, error: 3, fatal: 3 };   // an event's severity as the Log's floors count it
+const RAW_EVERY_MS = 5000;       // an entity's raw lines while its Log is on screen (the classic log reads them every 2-5 s)
 const KINDS = ['entities', 'summary', 'attention', 'runs', 'events', 'faults', 'checks', 'config', 'actions', 'levels', 'samples'];
 const PER_ENTITY = new Set(['levels', 'samples']);       // one dataset per entity
-const WATCHED = new Set(['checks', 'config', 'actions', 'levels', 'samples', 'peek']);   // a binding with ?path= makes the entity watched
+const WATCHED = new Set(['checks', 'config', 'actions', 'levels', 'samples', 'peek', 'raw']);   // a binding with ?path= makes the entity watched
 // 'peek' reads an entity's /node and /values (what it has: its State keys, its settings) and is never State on screen: no heartbeat
 const STATE_EVERY_MS = 2000;     // /state at most this often (a tick asks sooner than that only once)
 const STATE_IDLE_MS = 5000;      // and this often with no tick at all
@@ -196,8 +198,10 @@ export class RobotDxFeed extends EventTarget {
     let ds = this._sets.get(name);
     if (ds) return ds;
     const schema = this.schemas[kind] || { properties: {} };
+    // WHY events in streams: the activity backlog and its stream come in time order, and so does each entity's raw lines (its
+    // Log tab reads them); one stream each keeps every write in order (an append dataset drops a row older than a sealed chunk)
     const spec = { entities: { key: 'path' }, summary: { key: 'host' }, attention: { key: 'path' }, runs: { key: 'id' },
-      faults: { key: 'id' }, checks: { key: 'id' }, config: { key: 'id' }, actions: { key: 'id' }, events: {}, levels: { stream: 'check' },
+      faults: { key: 'id' }, checks: { key: 'id' }, config: { key: 'id' }, actions: { key: 'id' }, events: { stream: 'stream' }, levels: { stream: 'check' },
       samples: { stream: 'key' } }[kind];
     const age = this.host.window || 900;
     ds = new LiveDataset({
@@ -221,6 +225,8 @@ export class RobotDxFeed extends EventTarget {
   /** A view needs this kind of data (of this entity): start (or keep) its polls. */
   use(kind, path) {
     if (kind === 'faults') { this._faultUses += 1; this._kick(); return; }
+    // an events binding with ?path= is an entity's Log: the shared events, and that entity's raw lines read beside them
+    if (kind === 'events' && path) kind = 'raw';
     // a checks binding with no ?path= is every entity's checks: one GET /checks for the rack (PEP 0001 §15)
     if (kind === 'checks' && !path) { this._allChecks.uses += 1; this._allChecks.due = true; this._kick(); return; }
     if (!WATCHED.has(kind) || !path) return;
@@ -232,6 +238,7 @@ export class RobotDxFeed extends EventTarget {
 
   release(kind, path) {
     if (kind === 'faults') { this._faultUses = Math.max(0, this._faultUses - 1); return; }
+    if (kind === 'events' && path) kind = 'raw';
     if (kind === 'checks' && !path) { const a = this._allChecks; a.uses = Math.max(0, a.uses - 1); if (!a.uses) a.released = Date.now(); return; }
     const e = this._entities.get(path);
     if (e) e.release(kind);
@@ -453,6 +460,7 @@ export class RobotDxFeed extends EventTarget {
     const entities = this.dataset('entities');
     if (changed.length) entities.upsert(changed);
     if (gone.length) entities.remove(gone, t);
+    if (changed.length || gone.length) this._labelPaths();
     // the summary (the chip's question), one row
     const sum = s.summary || {};
     const counts = sum.counts || {};
@@ -510,6 +518,22 @@ export class RobotDxFeed extends EventTarget {
       }
     }
     if (versions.length) this.dataset('entities').upsert(versions.sort((a, b) => a.t - b.t));
+    // the rack's own level then: the root row's bar is the summary's level before the page opened (the timeline's Rack strip);
+    // the counts and the chip are not kept for the past, so they stay empty there
+    const root = first < 0 ? null : rows.find((r) => r.path === 'host') || rows.find((r) => !String(r.path).includes('/'));
+    const rack = [];
+    if (root) {
+      let last;
+      for (let i = first; i < root.bar.length; i += 1) {
+        const t = h.from + i * h.bin_s;
+        if (t >= this.openedAt) break;
+        const level = root.bar[i] ?? null;
+        if (i > first && level === last) continue;
+        last = level;
+        rack.push({ host: 'host', level, health: health(level), needs: null, errors: null, warns: null, unknowns: null, stales: null, devices: null, entities: null, chip: '', t });
+      }
+    }
+    if (rack.length) this.dataset('summary').upsert(rack);
     this.treeBack = { supported: true, from: first < 0 ? null : h.from + first * h.bin_s, bin_s: h.bin_s, versions: versions.length };
     this.dispatchEvent(new CustomEvent('tree-back', { detail: this.treeBack }));
   }
@@ -537,6 +561,22 @@ export class RobotDxFeed extends EventTarget {
     }
     diffChecks(this._seenChecks, rows, this.dataset('checks'), nowHost, () => true);
     this.dispatchEvent(new CustomEvent('checks', { detail: { at: nowHost, checks: rows.size } }));
+  }
+
+  /** Each entity path's name as the events' lineage shows it (data-ui draws a stored value by its property's `labels`: a Log's
+      scope token reads "Under has CAN 1 · port 1-3", not the path). Two entities of one name get their port. */
+  _labelPaths() {
+    const rows = [...this._seen.values()];
+    const count = new Map();
+    for (const r of rows) count.set(r.name, (count.get(r.name) || 0) + 1);
+    const labels = {};
+    for (const r of rows) {
+      const port = (r.path.split('/').reverse().find((s) => s.startsWith('port-')) || '').replace(/^port-/, 'port ');
+      labels[r.path] = count.get(r.name) > 1 && port ? `${r.name} · ${port}` : r.name || r.path;
+    }
+    const ds = this.dataset('events');
+    const was = ds.properties.lineage;
+    if (was && !same(was.labels, labels)) ds.properties.lineage = { ...was, labels };
   }
 
   /** Upsert what changed in `now` against `seen`, remove what left. */
@@ -573,11 +613,17 @@ export class RobotDxFeed extends EventTarget {
   /** An event as a row; null for one already held. WHY no provisional rows: the host relabels a provisional plug in
       place once the kernel confirms it (the same id), and an append dataset cannot replace a row, so the log takes the
       confirmed one only and one fact stays one row (E31); the tree still shows the plug at once (a udev tick). */
-  _eventRow(e) {
+  _eventRow(e, stream = 'activity') {
     if (!e || e.provisional || this._seenEvents.has(e.id)) return null;
     this._seenEvents.add(e.id);
-    return { t: e.received ?? e.stamp, id: e.id, time: e.time || '', severity: e.severity || 'info', type: e.type || '', code: e.code || '',
-      kind: e.kind || '', message: e.message || '', path: e.path || '', name: usb(e.name || ''), port: e.port || '', source: e.source || '', count: e.count || 1 };
+    const severity = e.severity || 'info';
+    // sev: the level as a number, so a Log's floor is one clause (sev >= 2: warnings and worse; the classic log's FLOORS)
+    const path = e.path || '';
+    // lineage: the path and each one above it, so "this entity and what is below it" is one short clause (lineage:<path>)
+    const lineage = path ? path.split('/').map((_, i, parts) => parts.slice(0, i + 1).join('/')) : [];
+    return { t: e.received ?? e.stamp, id: e.id, time: e.time || '', severity, sev: SEV[severity] ?? 1, channel: e.channel || 'activity', stream,
+      type: e.type || '', code: e.code || '', kind: e.kind || '', message: e.message || '', path, lineage, name: usb(e.name || ''), port: e.port || '',
+      source: e.source || '', count: e.count || 1 };
   }
 
   _connectEvents() {
@@ -605,12 +651,14 @@ class EntityFeed {
   constructor(feed, path) {
     this.feed = feed;
     this.path = path;
-    this.uses = { checks: 0, config: 0, actions: 0, levels: 0, samples: 0, peek: 0 };
-    this.released = { checks: 0, config: 0, actions: 0, levels: 0, samples: 0, peek: 0 };   // when each kind's last view left
+    this.uses = { checks: 0, config: 0, actions: 0, levels: 0, samples: 0, peek: 0, raw: 0 };
+    this.released = { checks: 0, config: 0, actions: 0, levels: 0, samples: 0, peek: 0, raw: 0 };   // when each kind's last view left
     this.nodeAt = 0;
     this.historyAt = 0;
     this.valuesAt = 0;
-    this.busy = { node: false, history: false, values: false };
+    this.rawAt = 0;
+    this.rawLast = -Infinity;    // the newest raw line appended (its stream takes them in time order)
+    this.busy = { node: false, history: false, values: false, raw: false };
     this.watchSupported = false;
     this.watch = null;
     this.cursor = null;          // /values' serial cursor; null until the backlog is in
@@ -646,6 +694,9 @@ class EntityFeed {
   tick(now) {
     // WHY linger: Explore's detail is rebuilt on a selection and a dashboard on a reload; its polls must not restart
     const want = (k) => this._want(k, now);
+    if (!['checks', 'config', 'actions', 'levels', 'samples', 'peek', 'raw'].some(want)) return;
+    // the raw lines of its Log (kernel lines, run output): read while the Log is on screen, the classic log's pace
+    if (this.uses.raw > 0 && !this.busy.raw && now - this.rawAt >= RAW_EVERY_MS) this._raw();
     if (!['checks', 'config', 'actions', 'levels', 'samples', 'peek'].some(want)) return;
     const live = this.feed.mode === 'live';
     // WHY on a change with /live: a row is upserted when a report arrives, so a rig that reports every 30 s is read every 30 s,
@@ -679,6 +730,24 @@ class EntityFeed {
     this.paceAt = at;
     if (brought > 0) this.feedFirst += 1;
     if (this.paceRun >= CADENCE_RUN) this.feedKeepsUp = true;
+  }
+
+  /** This entity's raw lines (GET /activity's raw channel, as the classic entity log reads them), the widest scope (the entity,
+      what is below it and the path to the host), so every Log scope is a filter of what is held. WHY a stream of their own:
+      each read is in time order by itself, while another entity's lines may be older than these. */
+  async _raw() {
+    this.busy.raw = true;
+    this.rawAt = Date.now();
+    let a;
+    const q = new URLSearchParams({ fold: '1', channel: 'raw', limit: '1000', severity: 'debug', path: this.path, scope: 'host' });
+    try { a = await this.feed._get(`/activity?${q}`); } catch (_) { this.busy.raw = false; return; }
+    this.busy.raw = false;
+    const stream = `raw ${this.path}`;
+    const rows = (a.events || []).filter((e) => (e.received ?? e.stamp) > this.rawLast).reverse().map((e) => this.feed._eventRow(e, stream)).filter(Boolean);
+    if (!rows.length) return;
+    rows.sort((x, y) => x.t - y.t);
+    this.rawLast = rows[rows.length - 1].t;
+    this.feed.dataset('events').append(rows);
   }
 
   async _node() {

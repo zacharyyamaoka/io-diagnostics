@@ -14,6 +14,16 @@
    "type": "text",
    "label": "Severity"
   },
+  "sev": {
+   "type": "number",
+   "label": "Level",
+   "note": "The severity as a number: 0 debug, 1 info, 2 warn, 3 error (and fatal). A Log's floor is sev >= N."
+  },
+  "channel": {
+   "type": "text",
+   "label": "Channel",
+   "note": "activity: the host's coded events; raw: an entity's uncoded lines (kernel lines, run output), read for its Log."
+  },
   "message": {
    "type": "text",
    "label": "Message"
@@ -55,9 +65,19 @@
    "type": "text",
    "label": "Path"
   },
+  "lineage": {
+   "type": "list",
+   "label": "Under",
+   "note": "The row's path and every path above it (host, host/usb1, …): a Log's scope is lineage.contains(the entity's path)."
+  },
   "id": {
    "type": "text",
    "label": "Id"
+  },
+  "stream": {
+   "type": "text",
+   "label": "Stream",
+   "note": "Where the page read the row: the activity log, or one entity's raw lines (each in time order)."
   }
  },
  "rows": []

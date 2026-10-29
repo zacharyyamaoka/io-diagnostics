@@ -54,16 +54,40 @@
   </data-rail>
   <div class="dx-column">
     <main id="dx-main" data-dest="" tabindex="-1"><p class="dx-loading">Connecting to the host…</p></main>
-    <footer class="dx-foot">
-      <!-- the page's one time bar (Rerun's time panel): a playback card on the page clock; hidden where a dashboard has its own -->
-      <data-views id="dx-time" toolbar="none" no-url aria-label="Time"></data-views>
-      <!-- the page's own way back to live beside a bar that has none (Rerun's, Foxglove's: data-ui's proposals predate its live tier) -->
-      <button type="button" id="dx-live" class="dx-live" hidden aria-pressed="false" title="Back to the newest data (End)">● LIVE</button>
+    <div class="dx-bottom">
       <span id="dx-before" role="note" hidden></span>
-      <data-live-status id="dx-status" for="dx-app"></data-live-status>
-      <!-- TEMPORARY: the playback bar to compare (Zach, 2026-10-28); switches live, remembered on this device, never a URL flag -->
-      <label class="dx-proto" title="Try the playback bars: today's, Rerun's simple time panel, Foxglove's bar (remembered on this device)"><span>Playback</span><select id="dx-playback-variant" aria-label="Playback bar"></select></label>
-    </footer>
+      <!-- the timeline: a panel that rises from the bottom, like the classic page's Terminal panel (app.js "the timeline") -->
+      <section id="dx-timeline" class="dx-tl" role="region" aria-label="Timeline">
+        <div class="dx-tl-sash" role="separator" aria-orientation="horizontal" aria-label="Resize the timeline" tabindex="0" title="Drag to resize · double-click to reset"></div>
+        <div class="dx-tl-head">
+          <span class="dx-tl-name">Timeline</span>
+          <span class="dx-tl-note">live, and rewinds to any moment: drag the bar, or Space, ← →, Home, End</span>
+          <span class="dx-grow"></span>
+          <button type="button" class="dx-tl-hide" data-tl="hide" title="Hide the timeline (Ctrl+`)" aria-label="Hide the timeline"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+        </div>
+        <div class="dx-tl-body">
+          <div class="dx-tl-play">
+            <!-- the page's one time bar (Rerun's time panel): a playback card on the page clock; hidden where a dashboard has its own -->
+            <data-views id="dx-time" toolbar="none" no-url aria-label="Time"></data-views>
+            <!-- the page's own way back to live beside a bar that has none (Rerun's, Foxglove's: data-ui's proposals predate its live tier) -->
+            <button type="button" id="dx-live" class="dx-live" hidden aria-pressed="false" title="Back to the newest data (End)">● LIVE</button>
+          </div>
+          <!-- the rack over the host's window, as a system monitor draws it: the worst level per bin, the problem counts -->
+          <data-views id="dx-tl-health" toolbar="none" status="off" no-url aria-label="Rack health over time"></data-views>
+          <data-views id="dx-tl-counts" toolbar="none" status="off" no-url aria-label="Problems over time"></data-views>
+        </div>
+      </section>
+      <footer id="dx-statusbar" class="dx-statusbar">
+        <data-live-status id="dx-status" for="dx-app"></data-live-status>
+        <button type="button" id="dx-tl-toggle" class="dx-tl-toggle" aria-pressed="true" aria-expanded="true" aria-controls="dx-timeline" title="Timeline: show or hide it (Ctrl+`)"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span class="dx-tl-word">Timeline</span><span id="dx-tl-clock" class="dx-tl-clock"></span></button>
+        <span class="dx-grow"></span>
+        <!-- TEMPORARY: proposals to compare (Zach, 2026-10-28 and 10-29); each switches live and is remembered on this device, never a URL flag -->
+        <div class="dx-proto" title="Proposals to compare: your picks are remembered on this device">
+          <label title="The Log tab's toolbar: five one-line proposals"><span>Log</span><select id="dx-log-variant" aria-label="Log toolbar"></select></label>
+          <label title="Try the playback bars: today's, Rerun's simple time panel, Foxglove's bar"><span>Playback</span><select id="dx-playback-variant" aria-label="Playback bar"></select></label>
+        </div>
+      </footer>
+    </div>
   </div>
 </div>
 </body>

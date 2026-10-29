@@ -9,23 +9,57 @@ body.data-ui { background: var(--dv-bg); color: var(--dv-fg); font: 14px/1.45 va
 .dx-column { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
 #dx-main { flex: 1 1 auto; min-height: 0; overflow: auto; outline: none; position: relative; }
 .dx-loading, .dx-empty { color: var(--dv-muted); padding: 24px; margin: 0; }
-.dx-foot { flex: none; display: flex; align-items: center; gap: 12px; border-top: 1px solid var(--dv-border); padding: 4px 12px 4px 4px; min-height: 0; background: var(--dv-bg); }
-#dx-time { flex: 1 1 auto; min-width: 0; --dv-height: auto; }
-#dx-time[hidden] { display: none; }
-.dx-foot:has(#dx-time[hidden]) { justify-content: flex-end; }
-/* WHY a fixed width: the line's text comes ~a frame after load and its "last data N s ago" changes length every second; a width
-   that followed it moved and resized the time bar's track under a scrub (PEP 0001 §15.1). The full text is its title */
-#dx-status { flex: none; color: var(--dv-muted); font-size: 12px; white-space: nowrap; width: min(52ch, 40vw); overflow: hidden; text-overflow: ellipsis; }
-#dx-status[hidden] { display: block; visibility: hidden; }   /* nothing to say yet: its room stays, the track does not move */
-/* WHY over the bar and not in it: in the row it would narrow the track the moment a scrub crosses the page's first
-   moment, and the track must never move under the pointer */
-.dx-foot { position: relative; }
+/* the bottom of the page: the timeline panel (it rises from here, app.js "the timeline") on the status bar */
+.dx-bottom { flex: none; position: relative; display: flex; flex-direction: column; min-width: 0; }
+/* WHY over the panel and not in it: in a row it would narrow the track the moment a scrub crosses the page's first moment, and
+   the track must never move under the pointer; above the status bar when the panel is folded */
 #dx-before { position: absolute; left: 8px; bottom: calc(100% + 6px); max-width: min(560px, calc(100% - 16px)); z-index: 5;
   font-size: 12px; line-height: 1.35; color: var(--dv-fg); background: var(--dv-bg); border: 1px solid var(--dv-border);
   border-radius: var(--dv-radius); padding: 6px 10px; box-shadow: 0 2px 10px color-mix(in srgb, #000 12%, transparent); }
 #dx-before[hidden] { display: none; }
+/* the panel: the classic Terminal panel's shape (web/runs/r1.js) in data-ui's tokens */
+#dx-timeline { position: relative; flex: none; display: flex; flex-direction: column; height: var(--dx-tl-h, 200px); min-height: 0;
+  border-top: 1px solid var(--dv-border); background: var(--dv-bg); }
+#dx-timeline[hidden] { display: none; }
+.dx-tl-sash { position: absolute; left: 0; right: 0; top: -4px; height: 8px; z-index: 6; cursor: row-resize; touch-action: none; outline: none; }
+.dx-tl-sash::before { content: ""; position: absolute; left: 0; right: 0; top: 3px; height: 1px; background: transparent; transition: background .1s, height .1s, top .1s; }
+.dx-tl-sash:hover::before, .dx-tl-sash:focus-visible::before, body.dx-resizing .dx-tl-sash::before { top: 2px; height: 3px; background: var(--dv-accent); }
+body.dx-resizing { cursor: row-resize; user-select: none; }
+.dx-tl-head { flex: none; display: flex; align-items: center; gap: 10px; height: 28px; padding: 0 6px 0 12px; font-size: 12px; color: var(--dv-muted); white-space: nowrap; min-width: 0; }
+.dx-tl-name { color: var(--dv-fg); font-weight: 600; }
+.dx-tl-note { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.dx-tl-hide { flex: none; width: 24px; height: 24px; display: inline-grid; place-items: center; border: 0; border-radius: var(--dv-radius); background: transparent; color: var(--dv-muted); cursor: pointer; padding: 0; }
+.dx-tl-hide:hover { background: var(--dv-hover); color: var(--dv-fg); }
+.dx-tl-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.dx-tl-play { flex: none; display: flex; align-items: center; gap: 12px; padding: 0 12px 0 4px; min-width: 0; }
+#dx-time { flex: 1 1 auto; min-width: 0; --dv-height: auto; }
+#dx-time[hidden] { display: none; }
 /* the time bar reads no rows: its row count would only say "0 of 0 rows" */
 #dx-time .dv-status { display: none; }
+#dx-tl-health { flex: none; min-width: 0; --dv-height: auto; padding: 0 12px; }
+#dx-tl-counts { flex: 1 1 auto; min-height: 0; min-width: 0; --dv-height: 100%; padding: 0 12px 6px; }
+/* the status bar: the classic page's (web/app.css .statusbar: 32 px, the connection line, the panel's toggle, the pickers) */
+.dx-statusbar { flex: none; height: 32px; box-sizing: border-box; display: flex; align-items: center; gap: 12px; padding: 0 8px 0 12px; border-top: 1px solid var(--dv-border);
+  background: var(--dv-subtle); color: var(--dv-muted); font-size: 12px; min-width: 0; white-space: nowrap; }
+/* WHY a fixed width: the line's text comes ~a frame after load and its "last data N s ago" changes length every second; a width
+   that followed it moved what is beside it (PEP 0001 §15.1). The full text is its title */
+#dx-status { flex: none; color: var(--dv-muted); font-size: 12px; white-space: nowrap; width: min(52ch, 34vw); overflow: hidden; text-overflow: ellipsis; }
+#dx-status[hidden] { display: block; visibility: hidden; }   /* nothing to say yet: its room stays */
+.dx-tl-toggle { flex: none; display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; color: var(--dv-muted); font: inherit; font-size: 12px;
+  padding: 3px 8px; border-radius: var(--dv-radius); cursor: pointer; }
+.dx-tl-toggle:hover { background: var(--dv-hover); color: var(--dv-fg); }
+.dx-tl-toggle[aria-pressed="true"] { color: var(--dv-fg); }
+.dx-tl-toggle svg { flex: none; }
+.dx-tl-clock { font-weight: 600; font-variant-numeric: tabular-nums; min-width: 6.5em; text-align: left; color: var(--dv-muted); }
+.dx-tl-clock[data-following="true"] { color: var(--dv-accent); }
+.dx-statusbar .dx-grow { flex: 1 1 auto; min-width: 0; }
+/* a phone: the connection line gives the toggle and the pickers the row (its state is the toggle's word) */
+@media (max-width: 700px) {
+  #dx-status, .dx-tl-note, .dx-tl-word, .dx-proto > label > span { display: none; }
+  .dx-statusbar { gap: 6px; padding: 0 6px; }
+  .dx-tl-toggle { padding: 3px 4px; }
+  .dx-tl-clock { min-width: 0; }
+}
 
 /* a bar of plain controls: the destination's title and its actions */
 .dx-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 12px; border-bottom: 1px solid var(--dv-border); min-height: 44px; box-sizing: border-box; }
@@ -42,6 +76,9 @@ body.data-ui { background: var(--dv-bg); color: var(--dv-fg); font: 14px/1.45 va
 .dx-link:hover { text-decoration: underline; }
 .dx-crumbs { color: var(--dv-muted); font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dx-crumbs b { color: var(--dv-fg); font-weight: 600; }
+/* the Log's scope in the breadcrumb (proposal 4): the classic chip's words, one quiet select */
+.dx-crumb-scope { margin-left: 6px; color: var(--dv-muted); }
+.dx-crumb-scope select { font: inherit; font-size: 12.5px; color: var(--dv-fg); background: var(--dv-bg); border: 1px solid var(--dv-border); border-radius: var(--dv-radius); padding: 1px 4px; }
 
 /* Explore: the tree pane (a side panel: drags, remembers, resets, folds) beside the selected entity */
 .dx-explore { display: flex; flex-direction: column; height: 100%; min-height: 0; }
@@ -141,7 +178,8 @@ data-dashboard[data-arranging] .dd-panel.grid-stack-item:not([gs-h]) { height: v
   background: var(--dv-bg); color: var(--dv-muted); cursor: pointer; white-space: nowrap; }
 .dx-live[aria-pressed="true"] { background: var(--dv-accent); border-color: transparent; color: #fff; }
 .dx-live[hidden] { display: none; }
-/* WHY over the bar's right end, not in it: in the row it took the time bar's track from 417 px to 206 px */
-.dx-proto { position: absolute; right: 12px; bottom: calc(100% + 6px); z-index: 5; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dv-muted);
-  padding: 3px 6px; background: var(--dv-bg); border: 1px dashed var(--dv-border); border-radius: var(--dv-radius); box-shadow: 0 2px 8px color-mix(in srgb, #000 8%, transparent); }
-.dx-proto select { font: inherit; font-size: 12px; color: var(--dv-fg); background: var(--dv-bg); border: 1px solid var(--dv-border); border-radius: calc(var(--dv-radius) - 2px); padding: 1px 4px; }
+/* the temporary pickers, at the status bar's right end as the classic page's Prototype group is (dashed: not for keeps) */
+.dx-proto { flex: none; display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--dv-muted); padding: 1px 6px; border: 1px dashed var(--dv-border); border-radius: var(--dv-radius); }
+.dx-proto label { display: inline-flex; align-items: center; gap: 4px; }
+.dx-proto select { font: inherit; font-size: 12px; color: var(--dv-fg); background: var(--dv-bg); border: 1px solid var(--dv-border); border-radius: calc(var(--dv-radius) - 2px); padding: 1px 4px; max-width: 13em; }
+@media (max-width: 700px) { .dx-proto { padding: 1px 3px; gap: 4px; min-width: 0; } .dx-proto select { max-width: 6.5em; } }

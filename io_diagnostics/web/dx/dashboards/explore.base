@@ -70,7 +70,7 @@ views:
   - type: table
     name: Log
     from: events
-    filters: 'path == "{path}" || path.startsWith("{path}/")'
+    filters: '(path == "{path}" || path.startsWith("{path}/")) && channel != "raw"'
     order: [t, severity, message, name, code]
     sort:
       - { property: t, direction: DESC }

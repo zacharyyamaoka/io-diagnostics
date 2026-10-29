@@ -19,6 +19,8 @@ views:
   - type: table
     name: Log
     from: events
+    # the host's coded events; an entity's raw lines are its Log tab's (as the classic Activity log keeps Raw off)
+    filters: 'channel != "raw"'
     order: [t, severity, message, name, type, code, source, port]
     sort:
       - { property: t, direction: DESC }
