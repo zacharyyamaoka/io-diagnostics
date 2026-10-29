@@ -30,7 +30,9 @@ async function start(page, base, query = '') {
   await page.waitForFunction(() => typeof S !== 'undefined' && S.data && S.built && document.querySelector('.l1-ribbon [data-l1="tree"]'), null, { timeout: 30000 });
   await page.waitForTimeout(500);
 }
-const waitView = (page, view) => page.waitForFunction((v) => S.view === v, view, { timeout: 8000 });
+// WHY the class too: since the perf work a popstate renders in the next animation frame, so S.view changes a frame before the page is drawn;
+// #main's v-<view> class is set by the render that draws the view, so waiting on both measures the page, not the state
+const waitView = (page, view) => page.waitForFunction((v) => S.view === v && document.getElementById('main').classList.contains(`v-${v}`), view, { timeout: 8000 });
 async function openPalette(page, text) {
   await page.keyboard.press('Control+k');
   await page.waitForSelector('.lx-pal-back:not([hidden]) input');
