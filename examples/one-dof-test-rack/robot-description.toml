@@ -1,0 +1,96 @@
+# RobotDx · robot description of the One Dof Test Rack (docs/robot-description.md). Install it as
+# ~/.config/io-diagnostics/robot-description.toml to draw the rack in the 3D view.
+#
+# Model: the Windows Cad2Robot export, bundle a7b1095 (Fusion "One Dof Test Rack" v39, exported 2026-10-10): 20 links, 19 joints,
+# 267 STL meshes (~70 MB). No newer bundle exists on disk (2026-10-29).
+# Devices: /home/bam/.config/io-diagnostics/expected.toml (adapter 272813EF: CAN 1/14/15; adapter 0607623A: CAN 21/11/12/13; two D405s).
+#
+# Only two devices could be tied to a link from a written source; the rest are listed under [[unmapped_device]] with the reason, never
+# guessed. Two things make the join thin in this bundle:
+#   - The ArUco ids the boards were camera-matched to (tags 0-2, 5-12, 21) are not in the mesh names. The names carry Fusion's
+#     occurrence index ("GIM43 Aruco Tag:1", "Aruco Marker:3"), which is not the tag id: deployment.json pairs tag 21 with
+#     "GIM43 Aruco Tag:1", not tag 1.
+#   - The GIM43 plate's three joints (CAN 1/14/15) are not joints in the v1 export (deployment.json, 2026-10-21), and robot.json has a
+#     CAN id for one joint only (revolute_2 = CAN 12).
+# Sources cited below:
+#   robot.json      = <bundle>/robot.json (cad2robot/1 manifest)
+#   frames.json     = <bundle>/frames.json
+#   deployment.json = /home/bam/bam_ws/.claude/worktrees/traj-sim2real-rack/src/dev/bam_rack_twin/records/one-dof-test-rack/deployment.json
+#   chat 10-21      = ~/zach_brain/Sources/Chats/Claude Code/2026-10-21 — bc1ac6cc (CHAT).md (the CAN -> tag table after the 10-21 re-tag)
+version = 1
+urdf = "/home/bam/.cache/cad2robot-build/bundles/a7b1095/fixtures/cad2robot/one_dof_test_rack/urdf/one_dof_test_rack.urdf"
+
+# CAN 12 on fdcanusb 0607623A -> link one_dof_arm (the child of revolute_2, the One Dof Test Rig's JMC servo arm).
+# Source: robot.json joints[revolute_2].can_id = 12 (from the drive file robots/one_dof_test_rack.py:57), 10:1 (stepperonline_ad60_g10);
+# expected.toml agrees on the ratio (can/12 "tag 7 · 10:1", rotor_to_output_ratio 0.1). The arm link moves with the joint the board drives.
+[[part]]
+name = "CAN 12 · one-DOF arm"
+link = "one_dof_arm"
+hardware_id = "usb:0483:5740:0607623A"
+node = "can/12"
+note = "robot.json revolute_2 can_id 12"
+
+# CAN 14 on fdcanusb 272813EF -> link v6shs_..._x0_5, the only link holding the "SteadyWin GIM43 Plate:1 + GIM43 Aruco Tag:1" holder
+# (mesh SteadyWin_GIM43_Plate_1__GIM43_Aruco_Tag_1__Holder_1__0.stl). Source: deployment.json components[can14].camera_tags = tag 1 and
+# tag 21, part "SteadyWin GIM43 Plate:1 + GIM43 Aruco Tag:1" (camera-confirmed 2026-10-21; chat 10-21 line 459: "CAN 14 = tag 1").
+# That link is the tag's holder, welded to the base in this export: the most specific link the source names for this board.
+[[part]]
+name = "CAN 14 · GIM43 tag holder"
+link = "v6shs_x2_540e673a58f3_x0_x2_5b8988c556fe_x0_5"
+hardware_id = "usb:0483:5740:272813EF"
+node = "can/14"
+note = "deployment.json can14 tag 21 = GIM43 Aruco Tag:1"
+
+# ---- devices that could not be placed (listed in the 3D view, never drawn) ------------------------------------------------------------
+[[unmapped_device]]
+name = "CAN 1 on fdcanusb 272813EF"
+hardware_id = "usb:0483:5740:272813EF"
+node = "can/1"
+reason = "GIM43 plate upper-left joint (tag 0): not a joint in the v1 export (deployment.json can1, cad_joint null); its GIM4305 motor mesh cannot be told from the plate's other two by name"
+
+[[unmapped_device]]
+name = "CAN 15 on fdcanusb 272813EF"
+hardware_id = "usb:0483:5740:272813EF"
+node = "can/15"
+reason = "GIM43 plate lower-right joint (tag 2, by elimination): not a joint in the v1 export (deployment.json can15, cad_joint null)"
+
+[[unmapped_device]]
+name = "CAN 21 on fdcanusb 0607623A"
+hardware_id = "usb:0483:5740:0607623A"
+node = "can/21"
+reason = "drives tag 5, direct (chat 10-21); no CAD link carries tag 5 by name, and robot.json gives no joint can_id 21"
+
+[[unmapped_device]]
+name = "CAN 11 on fdcanusb 0607623A"
+hardware_id = "usb:0483:5740:0607623A"
+node = "can/11"
+reason = "drives the link with tags 8-12, 10:1 (chat 10-21); no CAD link carries those tags by name, and robot.json gives no joint can_id 11"
+
+[[unmapped_device]]
+name = "CAN 13 on fdcanusb 0607623A"
+hardware_id = "usb:0483:5740:0607623A"
+node = "can/13"
+reason = "drives tag 6, 10:1 (chat 10-21); no CAD link carries tag 6 by name (frames.json's 'GIM43 Aruco Tag:6' is an occurrence index), and robot.json gives no joint can_id 13"
+
+[[unmapped_device]]
+name = "fdcanusb 272813EF"
+hardware_id = "usb:0483:5740:272813EF"
+reason = "the adapter is not in the CAD model"
+
+[[unmapped_device]]
+name = "fdcanusb 0607623A"
+hardware_id = "usb:0483:5740:0607623A"
+reason = "the adapter is not in the CAD model"
+
+[[unmapped_device]]
+name = "RealSense D405 218622274411"
+serial = "218622274411"
+reason = "the model has no D405 mount (its one camera link is intel_realsense_d435)"
+
+[[unmapped_device]]
+name = "RealSense D405 218622276036"
+serial = "218622276036"
+reason = "the model has no D405 mount (its one camera link is intel_realsense_d435)"
+
+# The model's camera link intel_realsense_d435 stays unmapped (grey): robot.json cameras[0].serial is unset ("serial": "unset"), and
+# expected.toml lists no D435, so no serial ties a device to it.
