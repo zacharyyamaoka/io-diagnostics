@@ -14,6 +14,15 @@ synthetic /api/v1 whose GET /api/v1/live speaks the real feed's shape (docs/api-
   --tick      seconds between the change ticks that send every other entity's new points (the host's ~1 s)
   --past-warn seconds: in /history/tree, stub/0 (and the host row above it) was "warn" for this long after the stub
               started, and is OK since (a past that differs from now, for the tree's rewind check; 0, the default: OK)
+  --raw       seconds between an entity's raw lines in GET /api/v1/activity?channel=raw (0, the default: none). Each line
+              is at its own time from the start, at the entity's path, a path below it or the path above it ("stub") in
+              turn, info, warn, info, error in turn; the host's path= and scope= (self, children, host), severity= and limit=
+              filter them as the host does. For the Log tab's raw lines inside the window (F1 has none: its kernel lines
+              are from the rack's boot, 12 h before the replay)
+  --raw-old   seconds before the start of three raw lines per entity (a boot long ago, as F1's kernel lines; 0: none):
+              the host keeps them, the page must not (it holds its window)
+  --raw-from  seconds after the start of the first --raw line (default 0): until then an entity's raw lines are only the old
+              ones, as every entity's are on F1
 
 An entity is watched for 10 s after a POST /api/v1/watch {path} (the page's heartbeat, every 3 s while its State is on
 screen), as the host's watch is. Every event carries `emitted` (5cdb4b9: the stub's wall clock at send, unix ms; in the
@@ -51,7 +60,8 @@ class Stream:
 
     RING_S = 2.0   # /values' backlog: the last 2 s of points per entity
 
-    def __init__(self, entities: int, keys: int, rate: float, tick: float, coalesce: float, past_warn: float = 0.0):
+    def __init__(self, entities: int, keys: int, rate: float, tick: float, coalesce: float, past_warn: float = 0.0,
+                 raw: float = 0.0, raw_old: float = 0.0, raw_from: float = 0.0):
         self.paths = [f"stub/{i}" for i in range(entities)]
         self.keys = [f"s{k}" for k in range(keys)]
         self.rate, self.tick, self.coalesce = rate, tick, coalesce
@@ -63,6 +73,7 @@ class Stream:
         self.next_t = {p: self.t0 + self.period for p in self.paths}   # every key of an entity takes a point at the same t
         self.watched: dict[str, float] = {}   # path -> until (a heartbeat holds the watch 10 s, as the host's grace_s)
         self.past_warn = past_warn
+        self.raw, self.raw_old, self.raw_from = raw, raw_old, raw_from
 
     def is_watched(self, path: str, now: float) -> bool:
         return self.watched.get(path, 0.0) > now
@@ -110,6 +121,48 @@ class Stream:
         return {"name": "stub: stream", "level": "ok", "effective_level": "ok", "stale": False, "message": f"{self.rate:g} samples/s in all (synthetic)",
                 "code": "", "mode": None, "source": "bench-stub", "hardware_id": "", "stamp": self.t0, "received": self.t0, "received_iso": "",
                 "age_s": now - self.t0, "expected_period_s": None, "stale_after_s": None, "uptime_s": None, "caused_by": [], "values": [], "measurements": []}
+
+    RAW_WHERE = ("{p}", "{p}/port", "stub")            # the entity, a path below it, the path above it
+    RAW_LEVELS = ("info", "warn", "info", "error")
+    RANK = {"debug": 0, "info": 1, "warn": 2, "error": 3, "fatal": 3}
+
+    @staticmethod
+    def raw_line(entity: str, k, t: float, where: str, severity: str, message: str) -> dict:
+        return {"stamp": t, "received": t, "iso": "", "time": "", "code": "", "kind": "kernel", "type": "raw", "id": f"raw:{entity}:{k}",
+                "provisional": False, "severity": severity, "message": message, "path": where, "name": where, "hardware_id": "", "port": "",
+                "source": "kernel", "seq": None, "args": {}, "channel": "raw", "count": 1, "last_stamp": None, "last_iso": None,
+                "last_time": "", "received_iso": "", "badges": [], "members": []}
+
+    def raw_json(self, now: float, q: dict) -> dict:
+        """GET /api/v1/activity?channel=raw: the synthetic raw lines, newest first, by the host's path / scope / severity / limit."""
+        lines = []
+        for p in self.paths:
+            if self.raw_old > 0:
+                lines += [self.raw_line(p, f"boot{k}", self.t0 - self.raw_old + k, p, "info", f"{p}: enumerated at boot (synthetic), line {k}") for k in range(3)]
+            first = self.t0 + self.raw_from
+            if self.raw > 0 and now >= first:
+                n = int((now - first) / self.raw)
+                for k in range(max(0, n - int(900 / self.raw)), n + 1):
+                    where = self.RAW_WHERE[k % 3].format(p=p)
+                    lines.append(self.raw_line(p, k, first + k * self.raw, where, self.RAW_LEVELS[k % 4], f"{where}: raw line {k} (synthetic)"))
+        path, scope = q.get("path", ""), q.get("scope", "children")
+
+        def inside(where: str) -> bool:
+            if not path:
+                return True
+            if scope == "self":
+                return where == path
+            if where == path or where.startswith(path + "/"):
+                return True
+            return scope == "host" and path.startswith(where + "/")
+        floor = self.RANK.get(q.get("severity", "info"), 1)
+        lines = [x for x in lines if inside(x["path"]) and self.RANK.get(x["severity"], 1) >= floor]
+        lines.sort(key=lambda x: x["received"], reverse=True)
+        try:
+            limit = max(1, int(q.get("limit", "200")))
+        except ValueError:
+            limit = 200
+        return {"clock": clock_json(now), "events": lines[:limit], "faults": [], "link_health": []}
 
     def checks_json(self, now: float) -> dict:
         return {"clock": clock_json(now), "checks": {p: [self.check(p, now)] for p in self.paths}}
@@ -270,6 +323,8 @@ def handler(stream: Stream, feed: Feed, base_text: str):
             if p == "/api/v1/plugins":
                 return self.json({"plugins": [{"name": "bench-stub", "note": "synthetic, no device"}]})
             if p == "/api/v1/activity":
+                if q.get("channel") == "raw":
+                    return self.json(stream.raw_json(now, q))
                 return self.json({"clock": {"now": now}, "events": [], "faults": [], "link_health": []})
             if p == "/api/v1/node":
                 path = q.get("path", "")
@@ -376,8 +431,11 @@ def main(argv=None) -> int:
     ap.add_argument("--coalesce", type=float, default=0.1, help="seconds between a watched entity's samples events (0: they wait for the tick)")
     ap.add_argument("--past-warn", type=float, default=0.0, help="seconds stub/0 was warn after the start, in /history/tree")
     ap.add_argument("--window", default="10s", help="each plot's at: window")
+    ap.add_argument("--raw", type=float, default=0.0, help="seconds between an entity's raw lines (GET /activity?channel=raw); 0: none")
+    ap.add_argument("--raw-old", type=float, default=0.0, help="seconds before the start of three raw lines per entity (a boot long ago); 0: none")
+    ap.add_argument("--raw-from", type=float, default=0.0, help="seconds after the start of the first --raw line (until then only the old ones)")
     args = ap.parse_args(argv)
-    stream = Stream(args.entities, args.keys, args.rate, args.tick, args.coalesce, args.past_warn)
+    stream = Stream(args.entities, args.keys, args.rate, args.tick, args.coalesce, args.past_warn, args.raw, args.raw_old, args.raw_from)
     feed = Feed(stream)
     server = ThreadingHTTPServer((args.bind, args.port), handler(stream, feed, bench_base(stream, args.window)))
     server.daemon_threads = True

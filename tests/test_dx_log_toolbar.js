@@ -15,7 +15,9 @@
 //                                        dashboard's rail
 //
 // Live is the page's one LIVE in every proposal (the timeline and the status bar: Rerun's single way back), the count data-ui's
-// status line under the table.
+// status line under the table. The raw lines are kept inside the host's window (PEP 0001 §16.5); that rule, and what the scope, the
+// level and the raw-lines controls keep, are measured on the test-only stub (bench/robotdx_stub.py --raw --raw-from --raw-old), whose
+// entity has raw lines from a boot 12 h back and, a little later, inside the window: F1 has none inside its window.
 //
 // A temporary bottom-right picker switches them live and remembers the pick (variant 1 by default). Written before the code; every
 // claim measured in the REAL page on a fixture host (getBoundingClientRect, computed style, the table's own rows):
@@ -61,6 +63,28 @@ const ONE_LINE = () => {
 };
 const oneLine = (page) => page.evaluate(`(${ONE_LINE})()`);
 const pick = async (page, v) => { await page.selectOption('#dx-log-variant', v); return logShown(page, v); };
+// the test-only stub (bench/robotdx_stub.py: synthetic State and raw lines, no plugin, no device) on a free port of 5600-5699
+const STUB = H.path.join(H.ROOT, 'bench', 'robotdx_stub.py');
+async function freePort(first = 5600, last = 5699) {
+  const net = require('net');
+  for (let port = first; port <= last; port += 1) {
+    const ok = await new Promise((res) => { const s = net.createServer(); s.once('error', () => res(false)); s.listen(port, '127.0.0.1', () => s.close(() => res(true))); });
+    if (ok) return port;
+  }
+  throw new Error('no free port in 5600-5699');
+}
+async function startStub(args) {
+  const port = await freePort();
+  const child = require('child_process').spawn('/usr/bin/python3', [STUB, '--port', String(port), ...args], { cwd: H.ROOT, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  return new Promise((resolve, reject) => {
+    let out = '';
+    const timer = setTimeout(() => { H.stopServer(child); reject(new Error(`the stub did not start: ${out}`)); }, 20000);
+    const on = (chunk) => { out += chunk; const m = out.match(/bench stub on (http:\/\/\S+?)\/ /); if (m) { clearTimeout(timer); resolve({ child, base: m[1] }); } };
+    child.stdout.on('data', on);
+    child.stderr.on('data', on);
+    child.on('exit', (code) => { clearTimeout(timer); reject(new Error(`the stub exited (${code}): ${out}`)); });
+  });
+}
 
 (async () => {
   let host;
@@ -168,19 +192,7 @@ const pick = async (page, v) => { await page.selectOption('#dx-log-variant', v);
     });
     check('…the scope is a picker in the breadcrumb (+ children, this only, + path to host), none in the bar; the levels are tabs',
       crumb && crumb.options.join() === 'children,self,host' && crumb.value === 'children' && crumb.inCrumbs && crumb.tokens === 0 && crumb.tabs >= 4, crumb);
-    const scoped = {};
-    for (const s of ['self', 'children', 'host']) {
-      await page.selectOption('#dx-crumbs [data-log-scope]', s);
-      await page.waitForTimeout(700);
-      scoped[s] = await rows(page);
-    }
-    const above = (p) => p !== ADAPTER && ADAPTER.startsWith(`${p}/`);
-    check('…this only is the adapter\'s own lines, + children adds what is below it, + path to host what is above it',
-      scoped.self && scoped.self.length > 0 && scoped.self.every((r) => r.path === ADAPTER) && scoped.children.length >= scoped.self.length
-        && scoped.children.every((r) => r.path === ADAPTER || r.path.startsWith(`${ADAPTER}/`)) && scoped.host.length > scoped.children.length && scoped.host.some((r) => above(r.path)),
-      { self: scoped.self && scoped.self.length, children: scoped.children && scoped.children.length, host: scoped.host && scoped.host.length });
-    await page.selectOption('#dx-crumbs [data-log-scope]', 'children');
-    await page.waitForTimeout(400);
+    // (what each scope keeps is measured on the stub below, whose entity has lines inside the window)
 
     // 5 · facet: the scope as tabs; the level and the raw lines as facets in the dashboard's rail (a side panel, no toolbar row)
     check('5 · Level as a facet: drawn live from the picker', await pick(page, 'facet'));
@@ -197,18 +209,6 @@ const pick = async (page, v) => { await page.selectOption('#dx-log-variant', v);
     const r1 = await rail();
     check('…a facet rail beside the table holds Level (Debug+ … Error+) and the raw lines (the one filter: no Filter on the bar), and the scopes are tabs',
       r1.shown && r1.beside && r1.level && r1.raw && !r1.filterWord && ['+ children', 'this only', '+ path to host'].every((x) => r1.tabs.includes(x)), r1);
-    const withRaw = await rows(page);
-    await page.locator('#dx-detail data-facets').getByText('Warn+', { exact: true }).first().click();
-    await page.waitForTimeout(600);
-    const warnOnly = await rows(page);
-    check('…its Level facet\'s Warn+ leaves warnings and errors only', warnOnly && warnOnly.length > 0 && warnOnly.length < withRaw.length && warnOnly.every((r) => SEV[r.severity] >= 2), { before: withRaw && withRaw.length, after: warnOnly && warnOnly.length });
-    await page.locator('#dx-detail data-facets').getByText('Warn+', { exact: true }).first().click();   // back to every level
-    await page.waitForTimeout(400);
-    const rawShown = (await rows(page)).filter((r) => r.channel === 'raw').length;
-    await page.locator('#dx-detail data-facets').getByText(/hide raw/i).first().click();
-    await page.waitForTimeout(600);
-    const rawHidden = (await rows(page)).filter((r) => r.channel === 'raw').length;
-    check('…the raw lines (the adapter\'s kernel lines) are in its own log, and the rail hides them', rawShown > 0 && rawHidden === 0, { shown: rawShown, hidden: rawHidden });
     // the rail is a side panel (Zach's standing rule: it drags, CONTRACT §11), so the facets never take a row of the toolbar
     const railBox = async () => page.evaluate(() => { const r = document.querySelector('#dx-detail .dd-rail'); if (!r) return null; const b = r.getBoundingClientRect(); return { x: b.x, y: b.y, w: b.width, h: b.height }; });
     const edgeBox = await page.evaluate(() => { const s = document.querySelector('#dx-detail .dd-rail + .dv-splitter'); if (!s) return null; const b = s.getBoundingClientRect(); return { x: b.x, y: b.y, w: b.width, h: b.height }; });
@@ -229,6 +229,87 @@ const pick = async (page, v) => { await page.selectOption('#dx-log-variant', v);
     const kept = await logShown(page, 'facet');
     check('the pick is remembered across a reload (this browser), drawn with it', kept && (await page.evaluate(() => document.querySelector('#dx-log-variant').value)) === 'facet');
     await ctx.close();
+
+    // ---- raw lines and the host's window (PEP 0001 §16.5), on the test-only stub. Its entity stub/0 has three raw lines from a boot 12 h
+    // back, and from 25 s after the stub starts a line every 2 s at its own path, below it and above it ("stub"), info, warn and error.
+    // WHY the stub and not F1: F1's kernel lines are all from the rack's boot, 12 h before the replay, so on F1 no Log has a line inside
+    // the window. WHY the old lines first and alone: that is F1's case (an entity whose raw lines are all older than the window), the one
+    // where the page held them and its time bar spanned 12 h; once newer lines of the same stream come, data-ui's own retention takes
+    // older chunks, so a check made only then could not tell the page's rule from data-ui's
+    {
+      const stub = await startStub(['--rate', '50', '--entities', '2', '--keys', '5', '--raw', '2', '--raw-from', '25', '--raw-old', '43200']);
+      const c = await H.newContext(browser, 'light');
+      try {
+        const p = await c.newPage();
+        errors.push(H.watchErrors(p, stub.base));
+        const q = new URLSearchParams({ fold: '1', channel: 'raw', limit: '1000', severity: 'debug', path: 'stub/0', scope: 'host' });
+        const answer = async () => { const a = await H.getJson(stub.base, `/api/v1/activity?${q}`); const t0 = a.clock.now - 900; return { now: a.clock.now, inside: a.events.filter((e) => e.received >= t0), older: a.events.filter((e) => e.received < t0) }; };
+        const rawRows = () => p.evaluate(() => { const t = document.querySelector('#dx-detail-log'); return t && t.model ? t.model.rows.filter((r) => r.channel === 'raw').map((r) => ({ t: r.t, path: r.path, severity: r.severity })) : []; });
+        const clockOf = () => p.evaluate(() => { const k = window.robotdx.clock; return { t: k.t, liveStart: k.liveStart, liveEnd: k.liveEnd, following: k.following, window: window.robotdx.feed.host.window }; });
+        const heldIds = () => p.evaluate(() => window.robotdx.feed.dataset('events').snapshot(Infinity, { at: 'all', limit: 100000 }).map((r) => String(r.id)));
+        await p.goto(`${stub.base}${DX}?go=explore&sel=stub/0&page=log`);
+        await ready(p);
+        await p.waitForFunction(() => { const s = window.robotdx.feed.stats()['/activity']; return s && s.requests >= 2; }, null, { timeout: 10000 });
+        await p.waitForTimeout(1500);
+        const first = await answer();
+        check('stub: the host\'s raw answer for stub/0\'s Log is three lines from 12 h back and none inside the window (F1\'s case)',
+          first.inside.length === 0 && first.older.length === 3 && first.older.every((e) => e.received < first.now - 43000), { inside: first.inside.length, older: first.older.length });
+        const held0 = await heldIds(), k0 = await clockOf();
+        check('the lines older than the window are not held by the page (the host\'s three 12 h old lines are in no row it keeps)',
+          first.older.every((e) => !held0.includes(e.id)) && (await rawRows()).length === 0, { olderIds: first.older.map((e) => e.id), held: held0.length });
+        check('…and the time bar\'s span is not stretched by them: the clock\'s data spans at most the window', k0.liveEnd - k0.liveStart <= k0.window + 60, k0);
+        // the lines inside the window, from 25 s on: a few of each kind by 40 s
+        await H.waitFor(async () => (await answer()).inside.length >= 7, 45000, 1000);
+        await pick(p, 'crumb');
+        await H.waitFor(async () => (await rawRows()).length >= 3, 12000, 300);
+        // 4 · the breadcrumb's scope: what each keeps is where a line is
+        const scoped = {};
+        for (const sc of ['self', 'children', 'host']) {
+          await p.selectOption('#dx-crumbs [data-log-scope]', sc);
+          await p.waitForTimeout(700);
+          scoped[sc] = await rows(p);
+        }
+        const below = (x) => x === 'stub/0' || x.startsWith('stub/0/');
+        check('4 · on a host with lines inside its window: this only is the entity\'s own lines, + children adds the ones below it, + path to host the ones above it',
+          scoped.self.length > 0 && scoped.self.every((r) => r.path === 'stub/0') && scoped.children.length > scoped.self.length && scoped.children.every((r) => below(r.path))
+            && scoped.host.length > scoped.children.length && scoped.host.some((r) => r.path === 'stub'),
+          { self: scoped.self.length, children: scoped.children.length, host: scoped.host.length });
+        await p.selectOption('#dx-crumbs [data-log-scope]', 'children');
+        await p.waitForTimeout(400);
+        // 5 · the Level facet narrows them
+        await pick(p, 'facet');
+        await p.waitForTimeout(700);
+        const every = await rows(p);
+        await p.locator('#dx-detail data-facets').getByText('Warn+', { exact: true }).first().click();
+        await p.waitForTimeout(600);
+        const warnOnly = await rows(p);
+        check('5 · its Level facet\'s Warn+ leaves warnings and errors only', warnOnly.length > 0 && warnOnly.length < every.length && warnOnly.every((r) => SEV[r.severity] >= 2),
+          { before: every.length, after: warnOnly.length });
+        await p.locator('#dx-detail data-facets').getByText('Warn+', { exact: true }).first().click();   // back to Info+
+        await p.waitForTimeout(500);
+        // the lines inside the window draw in the Log and rewind with the clock
+        const live = await rawRows();
+        const newest = Math.max(...live.map((r) => r.t));
+        const at = async (x) => { await p.evaluate((y) => window.robotdx.clock.seek(y), x); await p.waitForTimeout(600); return (await rawRows()).some((r) => r.t === newest); };
+        const before = await at(newest - 0.5), after = await at(newest + 0.3);
+        await p.evaluate(() => window.robotdx.clock.goLive());
+        await p.waitForTimeout(400);
+        const k1 = await clockOf();
+        check('raw lines inside the host\'s window draw in the entity\'s Log and rewind with the clock (not there half a second before their time, there after it)',
+          live.length > 0 && live.every((r) => r.t >= k1.liveEnd - k1.window - 1) && !before && after, { lines: live.length, newest, before, after });
+        const held1 = await heldIds();
+        check('…and still, with them, the old lines are not held and the time bar spans at most the window',
+          first.older.every((e) => !held1.includes(e.id)) && k1.liveEnd - k1.liveStart <= k1.window + 60, { held: held1.length, span: k1.liveEnd - k1.liveStart });
+        // the rail's Raw lines facet hides them
+        await p.locator('#dx-detail data-facets').getByText(/hide raw/i).first().click();
+        await p.waitForTimeout(600);
+        const hidden = (await rawRows()).length;
+        check('…and the rail\'s Raw lines facet hides them', live.length > 0 && hidden === 0, { shown: live.length, hidden });
+      } finally {
+        await c.close().catch(() => {});
+        H.stopServer(stub.child);
+      }
+    }
 
     // ---- one line, every proposal, at 1280 and 390 px, light and dark, on a board's Log (the classic example: "Log of CAN 13") -----
     for (const [width, height] of [[1280, 900], [390, 844]]) {
