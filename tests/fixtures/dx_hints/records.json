@@ -1,0 +1,3931 @@
+{
+ "frames": {
+  "A": [
+   {
+    "dress": {
+     "basis": "computed",
+     "better": "lower",
+     "caused_by": [],
+     "code": "",
+     "config": {
+      "channel": "temp_c",
+      "headline": "max",
+      "max": {
+       "error_high": 70.0,
+       "error_low": null,
+       "warn_high": 60.0,
+       "warn_low": null
+      },
+      "mean": {
+       "error_high": 65.0,
+       "error_low": null,
+       "warn_high": 55.0,
+       "warn_low": null
+      },
+      "min": {
+       "error_high": null,
+       "error_low": null,
+       "warn_high": null,
+       "warn_low": null
+      },
+      "skip_prelude": false,
+      "std": {
+       "error_high": null,
+       "error_low": null,
+       "warn_high": null,
+       "warn_low": null
+      },
+      "unit": "Cel"
+     },
+     "diagnostic": "driver.board_temp",
+     "emits": "series",
+     "evidence": [
+      {
+       "key": "temp_c",
+       "note": "",
+       "path": "fixture A"
+      }
+     ],
+     "family": "health",
+     "hint": "threshold_band",
+     "limits": {
+      "error_high": 70.0,
+      "error_low": null,
+      "warn_high": 60.0,
+      "warn_low": null
+     },
+     "measurements": [
+      {
+       "key": "min",
+       "unit": "Cel",
+       "value": 48.0
+      },
+      {
+       "key": "mean",
+       "unit": "Cel",
+       "value": 50.0
+      },
+      {
+       "key": "std",
+       "unit": "Cel",
+       "value": 1.1741086293211236
+      },
+      {
+       "key": "n",
+       "unit": "1",
+       "value": 60
+      }
+     ],
+     "message": "temp_c: min 48, max 52, mean 50, std 1.17 Cel",
+     "metric": "max",
+     "payload": {
+      "bands": {
+       "max": [
+        null,
+        60.0,
+        null,
+        70.0
+       ],
+       "mean": [
+        null,
+        55.0,
+        null,
+        65.0
+       ],
+       "min": [
+        null,
+        null,
+        null,
+        null
+       ],
+       "std": [
+        null,
+        null,
+        null,
+        null
+       ]
+      },
+      "x": [
+       0.0,
+       1.0,
+       2.0,
+       3.0,
+       4.0,
+       5.0,
+       6.0,
+       7.0,
+       8.0,
+       9.0,
+       10.0,
+       11.0,
+       12.0,
+       13.0,
+       14.0,
+       15.0,
+       16.0,
+       17.0,
+       18.0,
+       19.0,
+       20.0,
+       21.0,
+       22.0,
+       23.0,
+       24.0,
+       25.0,
+       26.0,
+       27.0,
+       28.0,
+       29.0,
+       30.0,
+       31.0,
+       32.0,
+       33.0,
+       34.0,
+       35.0,
+       36.0,
+       37.0,
+       38.0,
+       39.0,
+       40.0,
+       41.0,
+       42.0,
+       43.0,
+       44.0,
+       45.0,
+       46.0,
+       47.0,
+       48.0,
+       49.0,
+       50.0,
+       51.0,
+       52.0,
+       53.0,
+       54.0,
+       55.0,
+       56.0,
+       57.0,
+       58.0,
+       59.0
+      ],
+      "x_label": "t (s, runs end to end)",
+      "y": [
+       48.0,
+       48.067796610169495,
+       48.13559322033898,
+       48.20338983050848,
+       48.271186440677965,
+       48.33898305084746,
+       48.40677966101695,
+       48.47457627118644,
+       48.54237288135593,
+       48.610169491525426,
+       48.67796610169491,
+       48.74576271186441,
+       48.813559322033896,
+       48.88135593220339,
+       48.94915254237288,
+       49.016949152542374,
+       49.08474576271186,
+       49.152542372881356,
+       49.220338983050844,
+       49.28813559322034,
+       49.35593220338983,
+       49.42372881355932,
+       49.49152542372882,
+       49.559322033898304,
+       49.6271186440678,
+       49.69491525423729,
+       49.76271186440678,
+       49.83050847457627,
+       49.898305084745765,
+       49.96610169491525,
+       50.03389830508475,
+       50.101694915254235,
+       50.16949152542373,
+       50.23728813559322,
+       50.30508474576271,
+       50.3728813559322,
+       50.440677966101696,
+       50.50847457627118,
+       50.57627118644068,
+       50.64406779661017,
+       50.71186440677966,
+       50.779661016949156,
+       50.847457627118644,
+       50.91525423728814,
+       50.983050847457626,
+       51.05084745762712,
+       51.11864406779661,
+       51.186440677966104,
+       51.25423728813559,
+       51.32203389830509,
+       51.389830508474574,
+       51.45762711864407,
+       51.52542372881356,
+       51.59322033898305,
+       51.66101694915254,
+       51.728813559322035,
+       51.79661016949152,
+       51.86440677966102,
+       51.932203389830505,
+       52.0
+      ],
+      "y_label": "temp_c (Cel)"
+     },
+     "role": "health",
+     "run": "",
+     "stamp": 1792631500.0,
+     "subject": "host/usb1/port-1-3/usb-1-3/can/1",
+     "t0": null,
+     "t1": null,
+     "target": 70.0,
+     "title": "board temperature",
+     "unit": "Cel",
+     "value": 52.0,
+     "verdict": "pass",
+     "view_extra": "",
+     "why": ""
+    },
+    "entry": "driver.board_temp",
+    "hint": "threshold_band",
+    "record": {
+     "expected_period_s": 30.0,
+     "level": "ok",
+     "measurements": [
+      {
+       "error_high": 70.0,
+       "key": "max",
+       "unit": "Cel",
+       "value": 52.0,
+       "warn_high": 60.0
+      },
+      {
+       "key": "min",
+       "unit": "Cel",
+       "value": 48.0
+      },
+      {
+       "key": "mean",
+       "unit": "Cel",
+       "value": 50.0
+      },
+      {
+       "key": "std",
+       "unit": "Cel",
+       "value": 1.1741086293211236
+      },
+      {
+       "key": "n",
+       "unit": "1",
+       "value": 60
+      }
+     ],
+     "message": "temp_c: min 48, max 52, mean 50, std 1.17 Cel",
+     "name": "board temperature",
+     "path": "host/usb1/port-1-3/usb-1-3/can/1",
+     "record": "status",
+     "schema": "diagnostics-record/0",
+     "source": "robotdx.diagnostics",
+     "stamp": 1792631500.0,
+     "values": [
+      {
+       "key": "dx.diagnostic",
+       "value": "driver.board_temp"
+      },
+      {
+       "key": "dx.family",
+       "value": "health"
+      },
+      {
+       "key": "dx.role",
+       "value": "health"
+      },
+      {
+       "key": "dx.hint",
+       "value": "threshold_band"
+      },
+      {
+       "key": "dx.emits",
+       "value": "series"
+      },
+      {
+       "key": "dx.better",
+       "value": "lower"
+      },
+      {
+       "key": "dx.basis",
+       "value": "computed"
+      },
+      {
+       "key": "dx.target",
+       "value": "70.0"
+      },
+      {
+       "key": "dx.config",
+       "value": "{\"channel\":\"temp_c\",\"headline\":\"max\",\"max\":{\"error_high\":70.0,\"error_low\":null,\"warn_high\":60.0,\"warn_low\":null},\"mean\":{\"error_high\":65.0,\"error_low\":null,\"warn_high\":55.0,\"warn_low\":null},\"min\":{\"error_high\":null,\"error_low\":null,\"warn_high\":null,\"warn_low\":null},\"skip_prelude\":false,\"std\":{\"error_high\":null,\"error_low\":null,\"warn_high\":null,\"warn_low\":null},\"unit\":\"Cel\"}"
+      },
+      {
+       "key": "dx.payload",
+       "value": "{\"bands\":{\"max\":[null,60.0,null,70.0],\"mean\":[null,55.0,null,65.0],\"min\":[null,null,null,null],\"std\":[null,null,null,null]},\"x\":[0.0,1.0,2.0,3.0,4.0,5.0,6.0,7.0,8.0,9.0,10.0,11.0,12.0,13.0,14.0,15.0,16.0,17.0,18.0,19.0,20.0,21.0,22.0,23.0,24.0,25.0,26.0,27.0,28.0,29.0,30.0,31.0,32.0,33.0,34.0,35.0,36.0,37.0,38.0,39.0,40.0,41.0,42.0,43.0,44.0,45.0,46.0,47.0,48.0,49.0,50.0,51.0,52.0,53.0,54.0,55.0,56.0,57.0,58.0,59.0],\"x_label\":\"t (s, runs end to end)\",\"y\":[48.0,48.067796610169495,48.13559322033898,48.20338983050848,48.271186440677965,48.33898305084746,48.40677966101695,48.47457627118644,48.54237288135593,48.610169491525426,48.67796610169491,48.74576271186441,48.813559322033896,48.88135593220339,48.94915254237288,49.016949152542374,49.08474576271186,49.152542372881356,49.220338983050844,49.28813559322034,49.35593220338983,49.42372881355932,49.49152542372882,49.559322033898304,49.6271186440678,49.69491525423729,49.76271186440678,49.83050847457627,49.898305084745765,49.96610169491525,50.03389830508475,50.101694915254235,50.16949152542373,50.23728813559322,50.30508474576271,50.3728813559322,50.440677966101696,50.50847457627118,50.57627118644068,50.64406779661017,50.71186440677966,50.779661016949156,50.847457627118644,50.91525423728814,50.983050847457626,51.05084745762712,51.11864406779661,51.186440677966104,51.25423728813559,51.32203389830509,51.389830508474574,51.45762711864407,51.52542372881356,51.59322033898305,51.66101694915254,51.728813559322035,51.79661016949152,51.86440677966102,51.932203389830505,52.0],\"y_label\":\"temp_c (Cel)\"}"
+      },
+      {
+       "key": "dx.evidence",
+       "value": "[[\"fixture A\",\"temp_c\",\"\"]]"
+      }
+     ]
+    }
+   },
+   {
+    "dress": {
+     "basis": "computed",
+     "better": "lower",
+     "caused_by": [],
+     "code": "",
+     "config": {
+      "better": "lower",
+      "confidence": 0.95,
+      "judge_on": "share",
+      "limits": {
+       "error_high": 10.0,
+       "error_low": null,
+       "warn_high": 1.0,
+       "warn_low": null
+      },
+      "min_events": 1,
+      "scale": 100.0,
+      "slice_by": "",
+      "statistic": "share",
+      "unit": "%"
+     },
+     "diagnostic": "driver.link_loss",
+     "emits": "scalar",
+     "evidence": [],
+     "family": "real_vs_target",
+     "hint": "kpi_trend",
+     "limits": {
+      "error_high": 10.0,
+      "error_low": null,
+      "warn_high": 1.0,
+      "warn_low": null
+     },
+     "measurements": [
+      {
+       "key": "events",
+       "unit": "1",
+       "value": 200
+      },
+      {
+       "key": "true",
+       "unit": "1",
+       "value": 1
+      },
+      {
+       "key": "wilson_low",
+       "unit": "%",
+       "value": 0.08831687156009763
+      },
+      {
+       "key": "wilson_high",
+       "unit": "%",
+       "value": 2.7773704397892924
+      }
+     ],
+     "message": "1 of 200 true: 0.5 % (Wilson 95%: 0.08832 to 2.777)",
+     "metric": "share",
+     "payload": null,
+     "role": "health",
+     "run": "",
+     "stamp": 1792631500.0,
+     "subject": "host/usb1/port-1-3/usb-1-3/can/1",
+     "t0": null,
+     "t1": null,
+     "target": 10.0,
+     "title": "CAN reply loss",
+     "unit": "%",
+     "value": 0.5,
+     "verdict": "pass",
+     "view_extra": "",
+     "why": ""
+    },
+    "entry": "driver.link_loss",
+    "hint": "kpi_trend",
+    "record": {
+     "expected_period_s": 30.0,
+     "level": "ok",
+     "measurements": [
+      {
+       "error_high": 10.0,
+       "key": "share",
+       "unit": "%",
+       "value": 0.5,
+       "warn_high": 1.0
+      },
+      {
+       "key": "events",
+       "unit": "1",
+       "value": 200
+      },
+      {
+       "key": "true",
+       "unit": "1",
+       "value": 1
+      },
+      {
+       "key": "wilson_low",
+       "unit": "%",
+       "value": 0.08831687156009763
+      },
+      {
+       "key": "wilson_high",
+       "unit": "%",
+       "value": 2.7773704397892924
+      }
+     ],
+     "message": "1 of 200 true: 0.5 % (Wilson 95%: 0.08832 to 2.777)",
+     "name": "CAN reply loss",
+     "path": "host/usb1/port-1-3/usb-1-3/can/1",
+     "record": "status",
+     "schema": "diagnostics-record/0",
+     "source": "robotdx.diagnostics",
+     "stamp": 1792631500.0,
+     "values": [
+      {
+       "key": "dx.diagnostic",
+       "value": "driver.link_loss"
+      },
+      {
+       "key": "dx.family",
+       "value": "real_vs_target"
+      },
+      {
+       "key": "dx.role",
+       "value": "health"
+      },
+      {
+       "key": "dx.hint",
+       "value": "kpi_trend"
+      },
+      {
+       "key": "dx.emits",
+       "value": "scalar"
+      },
+      {
+       "key": "dx.better",
+       "value": "lower"
+      },
+      {
+       "key": "dx.basis",
+       "value": "computed"
+      },
+      {
+       "key": "dx.target",
+       "value": "10.0"
+      },
+      {
+       "key": "dx.config",
+       "value": "{\"better\":\"lower\",\"confidence\":0.95,\"judge_on\":\"share\",\"limits\":{\"error_high\":10.0,\"error_low\":null,\"warn_high\":1.0,\"warn_low\":null},\"min_events\":1,\"scale\":100.0,\"slice_by\":\"\",\"statistic\":\"share\",\"unit\":\"%\"}"
+      }
+     ]
+    }
+   },
+   {
+    "dress": {
+     "basis": "computed",
+     "better": "lower",
+     "caused_by": [],
+     "code": "",
+     "config": {
+      "fault_codes": [
+       32,
+       50
+      ],
+      "limiter_codes": [
+       96,
+       105
+      ],
+      "limiter_share_warn": 0.02,
+      "timeout_is_fault": true
+     },
+     "diagnostic": "driver.faults",
+     "emits": "series",
+     "evidence": [
+      {
+       "key": "fault",
+       "note": "",
+       "path": "fixture A"
+      }
+     ],
+     "family": "health",
+     "hint": "level_history",
+     "limits": {
+      "error_high": 0,
+      "error_low": null,
+      "warn_high": null,
+      "warn_low": null
+     },
+     "measurements": [
+      {
+       "key": "timeouts",
+       "unit": "1",
+       "value": 0
+      },
+      {
+       "key": "rows",
+       "unit": "1",
+       "value": 60
+      }
+     ],
+     "message": "0 hard fault(s), 0 watchdog timeout(s) over 1 runs; limiters: none",
+     "metric": "faults",
+     "payload": {
+      "x": [],
+      "x_label": "limiter code",
+      "y": [],
+      "y_label": "share of rows"
+     },
+     "role": "health",
+     "run": "",
+     "stamp": 1792631500.0,
+     "subject": "host/usb1/port-1-3/usb-1-3/can/1",
+     "t0": null,
+     "t1": null,
+     "target": 0,
+     "title": "fault and limiter codes",
+     "unit": "1",
+     "value": 0,
+     "verdict": "pass",
+     "view_extra": "",
+     "why": ""
+    },
+    "entry": "driver.faults",
+    "hint": "level_history",
+    "record": {
+     "expected_period_s": 30.0,
+     "level": "ok",
+     "measurements": [
+      {
+       "error_high": 0,
+       "key": "faults",
+       "unit": "1",
+       "value": 0
+      },
+      {
+       "key": "timeouts",
+       "unit": "1",
+       "value": 0
+      },
+      {
+       "key": "rows",
+       "unit": "1",
+       "value": 60
+      }
+     ],
+     "message": "0 hard fault(s), 0 watchdog timeout(s) over 1 runs; limiters: none",
+     "name": "fault and limiter codes",
+     "path": "host/usb1/port-1-3/usb-1-3/can/1",
+     "record": "status",
+     "schema": "diagnostics-record/0",
+     "source": "robotdx.diagnostics",
+     "stamp": 1792631500.0,
+     "values": [
+      {
+       "key": "dx.diagnostic",
+       "value": "driver.faults"
+      },
+      {
+       "key": "dx.family",
+       "value": "health"
+      },
+      {
+       "key": "dx.role",
+       "value": "health"
+      },
+      {
+       "key": "dx.hint",
+       "value": "level_history"
+      },
+      {
+       "key": "dx.emits",
+       "value": "series"
+      },
+      {
+       "key": "dx.better",
+       "value": "lower"
+      },
+      {
+       "key": "dx.basis",
+       "value": "computed"
+      },
+      {
+       "key": "dx.target",
+       "value": "0"
+      },
+      {
+       "key": "dx.config",
+       "value": "{\"fault_codes\":[32,50],\"limiter_codes\":[96,105],\"limiter_share_warn\":0.02,\"timeout_is_fault\":true}"
+      },
+      {
+       "key": "dx.payload",
+       "value": "{\"x\":[],\"x_label\":\"limiter code\",\"y\":[],\"y_label\":\"share of rows\"}"
+      },
+      {
+       "key": "dx.evidence",
+       "value": "[[\"fixture A\",\"fault\",\"\"]]"
+      }
+     ]
+    }
+   },
+   {
+    "dress": {
+     "basis": "computed",
+     "better": "lower",
+     "caused_by": [],
+     "code": "MeasuredOnEncoderSide",
+     "config": {
+      "dwell_min_s": 0.25,
+      "limits": {
+       "error_high": 3.6,
+       "error_low": null,
+       "warn_high": null,
+       "warn_low": null
+      },
+      "percentile": 90.0,
+      "require_side": "output",
+      "scale": 1000.0,
+      "settle_window_s": 0.05,
+      "side": "encoder",
+      "skip_prelude": true,
+      "unit": "mrad"
+     },
+     "diagnostic": "servo.stop_error",
+     "emits": "series",
+     "evidence": [
+      {
+       "key": "q_rad - q_target_rad at dwells",
+       "note": "",
+       "path": "fixture A"
+      }
+     ],
+     "family": "real_vs_target",
+     "hint": "distribution",
+     "limits": {
+      "error_high": 3.6,
+      "error_low": null,
+      "warn_high": null,
+      "warn_low": null
+     },
+     "measurements": [
+      {
+       "key": "n",
+       "unit": "1",
+       "value": 3
+      },
+      {
+       "key": "median",
+       "unit": "mrad",
+       "value": 0.39999999999995595
+      },
+      {
+       "key": "max",
+       "unit": "mrad",
+       "value": 0.8999999999999009
+      },
+      {
+       "key": "mean_signed",
+       "unit": "mrad",
+       "value": 0.49999999999994493
+      },
+      {
+       "key": "runs",
+       "unit": "1",
+       "value": 1
+      }
+     ],
+     "message": "p90 0.8 mrad over 3 stops in 1 runs (encoder side); within the limit, but measured on the encoder side, not the output",
+     "metric": "p90",
+     "payload": {
+      "group": [
+       "fixture A",
+       "fixture A",
+       "fixture A"
+      ],
+      "x": [
+       0,
+       1,
+       2
+      ],
+      "x_label": "stop",
+      "y": [
+       0.39999999999995595,
+       0.8999999999999009,
+       0.19999999999997797
+      ],
+      "y_label": "signed stop error (mrad)"
+     },
+     "role": "driver",
+     "run": "fixture A",
+     "stamp": 1792631500.0,
+     "subject": "host/usb1/port-1-3/usb-1-3/can/1",
+     "t0": 2.5,
+     "t1": 2.99,
+     "target": 3.6,
+     "title": "stop error p90",
+     "unit": "mrad",
+     "value": 0.7999999999999119,
+     "verdict": "warn",
+     "view_extra": "",
+     "why": "the stop band is about (Coulomb friction + unbalanced gravity) / kp: try Coulomb feed-forward (ff_study) before gains; an encoder-side pass still needs the output side (camera)"
+    },
+    "entry": "servo.stop_error",
+    "hint": "distribution",
+    "record": {
+     "code": "MeasuredOnEncoderSide",
+     "expected_period_s": 30.0,
+     "level": "warn",
+     "measurements": [
+      {
+       "error_high": 3.6,
+       "key": "p90",
+       "unit": "mrad",
+       "value": 0.7999999999999119
+      },
+      {
+       "key": "n",
+       "unit": "1",
+       "value": 3
+      },
+      {
+       "key": "median",
+       "unit": "mrad",
+       "value": 0.39999999999995595
+      },
+      {
+       "key": "max",
+       "unit": "mrad",
+       "value": 0.8999999999999009
+      },
+      {
+       "key": "mean_signed",
+       "unit": "mrad",
+       "value": 0.49999999999994493
+      },
+      {
+       "key": "runs",
+       "unit": "1",
+       "value": 1
+      }
+     ],
+     "message": "p90 0.8 mrad over 3 stops in 1 runs (encoder side); within the limit, but measured on the encoder side, not the output",
+     "name": "stop error p90",
+     "path": "host/usb1/port-1-3/usb-1-3/can/1",
+     "record": "status",
+     "schema": "diagnostics-record/0",
+     "source": "robotdx.diagnostics",
+     "stamp": 1792631500.0,
+     "values": [
+      {
+       "key": "dx.diagnostic",
+       "value": "servo.stop_error"
+      },
+      {
+       "key": "dx.family",
+       "value": "real_vs_target"
+      },
+      {
+       "key": "dx.role",
+       "value": "driver"
+      },
+      {
+       "key": "dx.hint",
+       "value": "distribution"
+      },
+      {
+       "key": "dx.emits",
+       "value": "series"
+      },
+      {
+       "key": "dx.better",
+       "value": "lower"
+      },
+      {
+       "key": "dx.run",
+       "value": "fixture A"
+      },
+      {
+       "key": "dx.why",
+       "value": "the stop band is about (Coulomb friction + unbalanced gravity) / kp: try Coulomb feed-forward (ff_study) before gains; an encoder-side pass still needs the output side (camera)"
+      },
+      {
+       "key": "dx.basis",
+       "value": "computed"
+      },
+      {
+       "key": "dx.target",
+       "value": "3.6"
+      },
+      {
+       "key": "dx.t0",
+       "value": "2.5"
+      },
+      {
+       "key": "dx.t1",
+       "value": "2.99"
+      },
+      {
+       "key": "dx.config",
+       "value": "{\"dwell_min_s\":0.25,\"limits\":{\"error_high\":3.6,\"error_low\":null,\"warn_high\":null,\"warn_low\":null},\"percentile\":90.0,\"require_side\":\"output\",\"scale\":1000.0,\"settle_window_s\":0.05,\"side\":\"encoder\",\"skip_prelude\":true,\"unit\":\"mrad\"}"
+      },
+      {
+       "key": "dx.payload",
+       "value": "{\"group\":[\"fixture A\",\"fixture A\",\"fixture A\"],\"x\":[0,1,2],\"x_label\":\"stop\",\"y\":[0.39999999999995595,0.8999999999999009,0.19999999999997797],\"y_label\":\"signed stop error (mrad)\"}"
+      },
+      {
+       "key": "dx.evidence",
+       "value": "[[\"fixture A\",\"q_rad - q_target_rad at dwells\",\"\"]]"
+      }
+     ]
+    }
+   },
+   {
+    "dress": {
+     "basis": "computed",
+     "better": "",
+     "caused_by": [],
+     "code": "",
+     "config": {
+      "channel": "q_rad",
+      "clock": "common",
+      "dt": 0.002,
+      "limits": {
+       "error_high": null,
+       "error_low": null,
+       "warn_high": null,
+       "warn_low": null
+      },
+      "min_repeats": 5,
+      "relative_to_target": true,
+      "scale": 1000.0,
+      "skip_prelude": true,
+      "unit": "mrad"
+     },
+     "diagnostic": "servo.floor",
+     "emits": "matrix",
+     "evidence": [
+      {
+       "key": "q_rad",
+       "note": "",
+       "path": "repeat 0"
+      },
+      {
+       "key": "q_rad",
+       "note": "",
+       "path": "repeat 1"
+      },
+      {
+       "key": "q_rad",
+       "note": "",
+       "path": "repeat 2"
+      },
+      {
+       "key": "q_rad",
+       "note": "",
+       "path": "repeat 3"
+      },
+      {
+       "key": "q_rad",
+       "note": "",
+       "path": "repeat 4"
+      }
+     ],
+     "family": "repeatability",
+     "hint": "evidence",
+     "limits": {
+      "error_high": null,
+      "error_low": null,
+      "warn_high": null,
+      "warn_low": null
+     },
+     "measurements": [
+      {
+       "key": "repeats",
+       "unit": "1",
+       "value": 5
+      },
+      {
+       "key": "pairs",
+       "unit": "1",
+       "value": 10
+      },
+      {
+       "key": "max_pair",
+       "unit": "mrad",
+       "value": 4.000000000000004
+      }
+     ],
+     "message": "median of 10 pairwise RMS over 5 repeats: 2 mrad",
+     "metric": "floor",
+     "payload": {
+      "cells": [
+       [
+        0.0,
+        0.999999999999936,
+        1.9999999999999836,
+        2.9999999999999565,
+        4.000000000000004
+       ],
+       [
+        0.999999999999936,
+        0.0,
+        1.0000000000000473,
+        2.000000000000021,
+        3.0000000000000675
+       ],
+       [
+        1.9999999999999836,
+        1.0000000000000473,
+        0.0,
+        0.9999999999999734,
+        2.000000000000021
+       ],
+       [
+        2.9999999999999565,
+        2.000000000000021,
+        0.9999999999999734,
+        0.0,
+        1.0000000000000473
+       ],
+       [
+        4.000000000000004,
+        3.0000000000000675,
+        2.000000000000021,
+        1.0000000000000473,
+        0.0
+       ]
+      ],
+      "cols": [
+       "repeat 0",
+       "repeat 1",
+       "repeat 2",
+       "repeat 3",
+       "repeat 4"
+      ],
+      "rows": [
+       "repeat 0",
+       "repeat 1",
+       "repeat 2",
+       "repeat 3",
+       "repeat 4"
+      ]
+     },
+     "role": "driver",
+     "run": "repeat 0",
+     "stamp": 1792631500.0,
+     "subject": "host/usb1/port-1-3/usb-1-3/can/1",
+     "t0": 0.0,
+     "t1": 5.99,
+     "target": null,
+     "title": "repeatability floor",
+     "unit": "mrad",
+     "value": 2.000000000000002,
+     "verdict": "pass",
+     "view_extra": "",
+     "why": ""
+    },
+    "entry": "servo.floor",
+    "hint": "evidence",
+    "record": {
+     "expected_period_s": 30.0,
+     "level": "ok",
+     "measurements": [
+      {
+       "key": "floor",
+       "unit": "mrad",
+       "value": 2.000000000000002
+      },
+      {
+       "key": "repeats",
+       "unit": "1",
+       "value": 5
+      },
+      {
+       "key": "pairs",
+       "unit": "1",
+       "value": 10
+      },
+      {
+       "key": "max_pair",
+       "unit": "mrad",
+       "value": 4.000000000000004
+      }
+     ],
+     "message": "median of 10 pairwise RMS over 5 repeats: 2 mrad",
+     "name": "repeatability floor",
+     "path": "host/usb1/port-1-3/usb-1-3/can/1",
+     "record": "status",
+     "schema": "diagnostics-record/0",
+     "source": "robotdx.diagnostics",
+     "stamp": 1792631500.0,
+     "values": [
+      {
+       "key": "dx.diagnostic",
+       "value": "servo.floor"
+      },
+      {
+       "key": "dx.family",
+       "value": "repeatability"
+      },
+      {
+       "key": "dx.role",
+       "value": "driver"
+      },
+      {
+       "key": "dx.hint",
+       "value": "evidence"
+      },
+      {
+       "key": "dx.emits",
+       "value": "matrix"
+      },
+      {
+       "key": "dx.run",
+       "value": "repeat 0"
+      },
+      {
+       "key": "dx.basis",
+       "value": "computed"
+      },
+      {
+       "key": "dx.t0",
+       "value": "0.0"
+      },
+      {
+       "key": "dx.t1",
+       "value": "5.99"
+      },
+      {
+       "key": "dx.config",
+       "value": "{\"channel\":\"q_rad\",\"clock\":\"common\",\"dt\":0.002,\"limits\":{\"error_high\":null,\"error_low\":null,\"warn_high\":null,\"warn_low\":null},\"min_repeats\":5,\"relative_to_target\":true,\"scale\":1000.0,\"skip_prelude\":true,\"unit\":\"mrad\"}"
+      },
+      {
+       "key": "dx.payload",
+       "value": "{\"cells\":[[0.0,0.999999999999936,1.9999999999999836,2.9999999999999565,4.000000000000004],[0.999999999999936,0.0,1.0000000000000473,2.000000000000021,3.0000000000000675],[1.9999999999999836,1.0000000000000473,0.0,0.9999999999999734,2.000000000000021],[2.9999999999999565,2.000000000000021,0.9999999999999734,0.0,1.0000000000000473],[4.000000000000004,3.0000000000000675,2.000000000000021,1.0000000000000473,0.0]],\"cols\":[\"repeat 0\",\"repeat 1\",\"repeat 2\",\"repeat 3\",\"repeat 4\"],\"rows\":[\"repeat 0\",\"repeat 1\",\"repeat 2\",\"repeat 3\",\"repeat 4\"]}"
+      },
+      {
+       "key": "dx.evidence",
+       "value": "[[\"repeat 0\",\"q_rad\",\"\"],[\"repeat 1\",\"q_rad\",\"\"],[\"repeat 2\",\"q_rad\",\"\"],[\"repeat 3\",\"q_rad\",\"\"],[\"repeat 4\",\"q_rad\",\"\"]]"
+      }
+     ]
+    }
+   },
+   {
+    "dress": {
+     "basis": "computed",
+     "better": "",
+     "caused_by": [],
+     "code": "",
+     "config": {
+      "not_run_is": "warn",
+      "title": "joints",
+      "tolerate_fail": 0
+     },
+     "diagnostic": "arm.joints",
+     "emits": "series",
+     "evidence": [],
+     "family": "rollup",
+     "hint": "rollup_tree",
+     "limits": {
+      "error_high": null,
+      "error_low": null,
+      "warn_high": null,
+      "warn_low": null
+     },
+     "measurements": [
+      {
+       "key": "members",
+       "unit": "1",
+       "value": 3
+      },
+      {
+       "key": "failing",
+       "unit": "1",
+       "value": 0
+      },
+      {
+       "key": "not_run",
+       "unit": "1",
+       "value": 0
+      }
+     ],
+     "message": "3/3 pass; 0 fail, 0 warn, 0 not run",
+     "metric": "passing",
+     "payload": {
+      "group": [
+       "pass",
+       "pass",
+       "pass"
+      ],
+      "x": [
+       "host/usb1/port-1-3/usb-1-3/can/1 \u00b7 J1",
+       "host/usb1/port-1-3/usb-1-3/can/1 \u00b7 J2",
+       "host/usb1/port-1-3/usb-1-3/can/1 \u00b7 J3"
+      ],
+      "x_label": "member",
+      "y": [
+       0,
+       0,
+       0
+      ],
+      "y_label": "verdict rank"
+     },
+     "role": "health",
+     "run": "",
+     "stamp": 1792631500.0,
+     "subject": "host/usb1/port-1-3/usb-1-3/can/1",
+     "t0": null,
+     "t1": null,
+     "target": null,
+     "title": "joint rollup",
+     "unit": "1",
+     "value": 3,
+     "verdict": "pass",
+     "view_extra": "",
+     "why": ""
+    },
+    "entry": "arm.joints",
+    "hint": "rollup_tree",
+    "record": {
+     "expected_period_s": 30.0,
+     "level": "ok",
+     "measurements": [
+      {
+       "key": "passing",
+       "unit": "1",
+       "value": 3
+      },
+      {
+       "key": "members",
+       "unit": "1",
+       "value": 3
+      },
+      {
+       "key": "failing",
+       "unit": "1",
+       "value": 0
+      },
+      {
+       "key": "not_run",
+       "unit": "1",
+       "value": 0
+      }
+     ],
+     "message": "3/3 pass; 0 fail, 0 warn, 0 not run",
+     "name": "joint rollup",
+     "path": "host/usb1/port-1-3/usb-1-3/can/1",
+     "record": "status",
+     "schema": "diagnostics-record/0",
+     "source": "robotdx.diagnostics",
+     "stamp": 1792631500.0,
+     "values": [
+      {
+       "key": "dx.diagnostic",
+       "value": "arm.joints"
+      },
+      {
+       "key": "dx.family",
+       "value": "rollup"
+      },
+      {
+       "key": "dx.role",
+       "value": "health"
+      },
+      {
+       "key": "dx.hint",
+       "value": "rollup_tree"
+      },
+      {
+       "key": "dx.emits",
+       "value": "series"
+      },
+      {
+       "key": "dx.basis",
+       "value": "computed"
+      },
+      {
+       "key": "dx.config",
+       "value": "{\"not_run_is\":\"warn\",\"title\":\"joints\",\"tolerate_fail\":0}"
+      },
+      {
+       "key": "dx.payload",
+       "value": "{\"group\":[\"pass\",\"pass\",\"pass\"],\"x\":[\"host/usb1/port-1-3/usb-1-3/can/1 \\u00b7 J1\",\"host/usb1/port-1-3/usb-1-3/can/1 \\u00b7 J2\",\"host/usb1/port-1-3/usb-1-3/can/1 \\u00b7 J3\"],\"x_label\":\"member\",\"y\":[0,0,0],\"y_label\":\"verdict rank\"}"
+      }
+     ]
+    }
+   },
+   {
+    "dress": {
+     "basis": "computed",
+     "better": "",
+     "caused_by": [
+      "host/usb1/port-1-3/usb-1-3/can/1"
+     ],
+     "code": "CellsNotRun",
+     "config": {
+      "gates": [
+       "T1",
+       "T2",
+       "T3",
+       "T4",
+       "T5",
+       "T6",
+       "T7",
+       "T8"
+      ],
+      "subjects": [],
+      "title": "hard gates"
+     },
+     "diagnostic": "rack.gate_matrix",
+     "emits": "matrix",
+     "evidence": [],
+     "family": "rollup",
+     "hint": "gate_matrix",
+     "limits": {
+      "error_high": null,
+      "error_low": null,
+      "warn_high": null,
+      "warn_low": null
+     },
+     "measurements": [
+      {
+       "key": "cells",
+       "unit": "1",
+       "value": 16
+      },
+      {
+       "key": "not_run",
+       "unit": "1",
+       "value": 11
+      }
+     ],
+     "message": "4 of 16 cells pass",
+     "metric": "cells_passing",
+     "payload": {
+      "cells": [
+       [
+        "pass",
+        "pass",
+        "warn",
+        "not_run",
+        "not_run",
+        "not_run",
+        "not_run",
+        "not_run"
+       ],
+       [
+        "pass",
+        "pass",
+        "not_run",
+        "not_run",
+        "not_run",
+        "not_run",
+        "not_run",
+        "not_run"
+       ]
+      ],
+      "cols": [
+       "T1",
+       "T2",
+       "T3",
+       "T4",
+       "T5",
+       "T6",
+       "T7",
+       "T8"
+      ],
+      "rows": [
+       "CAN 1",
+       "CAN 2"
+      ],
+      "values": [
+       [
+        1.0,
+        1.0,
+        1.0,
+        null,
+        null,
+        null,
+        null,
+        null
+       ],
+       [
+        1.0,
+        1.0,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+       ]
+      ]
+     },
+     "role": "headline",
+     "run": "",
+     "stamp": 1792631500.0,
+     "subject": "host/usb1/port-1-3/usb-1-3/can/1",
+     "t0": null,
+     "t1": null,
+     "target": null,
+     "title": "hard gates passing",
+     "unit": "1",
+     "value": 4,
+     "verdict": "not_run",
+     "view_extra": "",
+     "why": ""
+    },
+    "entry": "rack.gate_matrix",
+    "hint": "gate_matrix",
+    "record": {
+     "caused_by": [
+      "host/usb1/port-1-3/usb-1-3/can/1"
+     ],
+     "code": "CellsNotRun",
+     "expected_period_s": 30.0,
+     "level": "unknown",
+     "measurements": [
+      {
+       "key": "cells_passing",
+       "unit": "1",
+       "value": 4
+      },
+      {
+       "key": "cells",
+       "unit": "1",
+       "value": 16
+      },
+      {
+       "key": "not_run",
+       "unit": "1",
+       "value": 11
+      }
+     ],
+     "message": "4 of 16 cells pass",
+     "name": "hard gates passing",
+     "path": "host/usb1/port-1-3/usb-1-3/can/1",
+     "record": "status",
+     "schema": "diagnostics-record/0",
+     "source": "robotdx.diagnostics",
+     "stamp": 1792631500.0,
+     "values": [
+      {
+       "key": "dx.diagnostic",
+       "value": "rack.gate_matrix"
+      },
+      {
+       "key": "dx.family",
+       "value": "rollup"
+      },
+      {
+       "key": "dx.role",
+       "value": "headline"
+      },
+      {
+       "key": "dx.hint",
+       "value": "gate_matrix"
+      },
+      {
+       "key": "dx.emits",
+       "value": "matrix"
+      },
+      {
+       "key": "dx.basis",
+       "value": "computed"
+      },
+      {
+       "key": "dx.config",
+       "value": "{\"gates\":[\"T1\",\"T2\",\"T3\",\"T4\",\"T5\",\"T6\",\"T7\",\"T8\"],\"subjects\":[],\"title\":\"hard gates\"}"
+      },
+      {
+       "key": "dx.payload",
+       "value": "{\"cells\":[[\"pass\",\"pass\",\"warn\",\"not_run\",\"not_run\",\"not_run\",\"not_run\",\"not_run\"],[\"pass\",\"pass\",\"not_run\",\"not_run\",\"not_run\",\"not_run\",\"not_run\",\"not_run\"]],\"cols\":[\"T1\",\"T2\",\"T3\",\"T4\",\"T5\",\"T6\",\"T7\",\"T8\"],\"rows\":[\"CAN 1\",\"CAN 2\"],\"values\":[[1.0,1.0,1.0,null,null,null,null,null],[1.0,1.0,null,null,null,null,null,null]]}"
+      }
+     ]
+    }
+   },
+   {
+    "dress": {
+     "basis": "computed",
+     "better": "lower",
+     "caused_by": [],
+     "code": "",
+     "config": {
+      "dwell_min_s": 0.25,
+      "limits": {
+       "error_high": 5.0,
+       "error_low": null,
+       "warn_high": null,
+       "warn_low": null
+      },
+      "percentile": 90.0,
+      "require_side": "output",
+      "scale": 1.0,
+      "settle_window_s": 0.05,
+      "side": "output",
+      "skip_prelude": true,
+      "unit": "mm"
+     },
+     "diagnostic": "arm.tool_error_at_stop",
+     "emits": "series",
+     "evidence": [
+      {
+       "key": "q_rad - q_target_rad at dwells",
+       "note": "",
+       "path": "fixture A"
+      }
+     ],
+     "family": "real_vs_target",
+     "hint": "path_overlay",
+     "limits": {
+      "error_high": 5.0,
+      "error_low": null,
+      "warn_high": null,
+      "warn_low": null
+     },
+     "measurements": [
+      {
+       "key": "n",
+       "unit": "1",
+       "value": 3
+      },
+      {
+       "key": "median",
+       "unit": "mm",
+       "value": 0.00039999999999995595
+      },
+      {
+       "key": "max",
+       "unit": "mm",
+       "value": 0.0008999999999999009
+      },
+      {
+       "key": "mean_signed",
+       "unit": "mm",
+       "value": 0.0004999999999999449
+      },
+      {
+       "key": "runs",
+       "unit": "1",
+       "value": 1
+      }
+     ],
+     "message": "p90 0.0008 mm over 3 stops in 1 runs (output side)",
+     "metric": "p90",
+     "payload": {
+      "group": [
+       "fixture A",
+       "fixture A",
+       "fixture A"
+      ],
+      "x": [
+       0,
+       1,
+       2
+      ],
+      "x_label": "stop",
+      "y": [
+       0.00039999999999995595,
+       0.0008999999999999009,
+       0.00019999999999997797
+      ],
+      "y_label": "signed stop error (mm)"
+     },
+     "role": "headline",
+     "run": "fixture A",
+     "stamp": 1792631500.0,
+     "subject": "host/usb1/port-1-3/usb-1-3/can/1",
+     "t0": 2.5,
+     "t1": 2.99,
+     "target": 5.0,
+     "title": "tool error at stop",
+     "unit": "mm",
+     "value": 0.0007999999999999119,
+     "verdict": "pass",
+     "view_extra": "",
+     "why": ""
+    },
+    "entry": "arm.tool_error_at_stop",
+    "hint": "path_overlay",
+    "record": {
+     "expected_period_s": 30.0,
+     "level": "ok",
+     "measurements": [
+      {
+       "error_high": 5.0,
+       "key": "p90",
+       "unit": "mm",
+       "value": 0.0007999999999999119
+      },
+      {
+       "key": "n",
+       "unit": "1",
+       "value": 3
+      },
+      {
+       "key": "median",
+       "unit": "mm",
+       "value": 0.00039999999999995595
+      },
+      {
+       "key": "max",
+       "unit": "mm",
+       "value": 0.0008999999999999009
+      },
+      {
+       "key": "mean_signed",
+       "unit": "mm",
+       "value": 0.0004999999999999449
+      },
+      {
+       "key": "runs",
+       "unit": "1",
+       "value": 1
+      }
+     ],
+     "message": "p90 0.0008 mm over 3 stops in 1 runs (output side)",
+     "name": "tool error at stop",
+     "path": "host/usb1/port-1-3/usb-1-3/can/1",
+     "record": "status",
+     "schema": "diagnostics-record/0",
+     "source": "robotdx.diagnostics",
+     "stamp": 1792631500.0,
+     "values": [
+      {
+       "key": "dx.diagnostic",
+       "value": "arm.tool_error_at_stop"
+      },
+      {
+       "key": "dx.family",
+       "value": "real_vs_target"
+      },
+      {
+       "key": "dx.role",
+       "value": "headline"
+      },
+      {
+       "key": "dx.hint",
+       "value": "path_overlay"
+      },
+      {
+       "key": "dx.emits",
+       "value": "series"
+      },
+      {
+       "key": "dx.better",
+       "value": "lower"
+      },
+      {
+       "key": "dx.run",
+       "value": "fixture A"
+      },
+      {
+       "key": "dx.basis",
+       "value": "computed"
+      },
+      {
+       "key": "dx.target",
+       "value": "5.0"
+      },
+      {
+       "key": "dx.t0",
+       "value": "2.5"
+      },
+      {
+       "key": "dx.t1",
+       "value": "2.99"
+      },
+      {
+       "key": "dx.config",
+       "value": "{\"dwell_min_s\":0.25,\"limits\":{\"error_high\":5.0,\"error_low\":null,\"warn_high\":null,\"warn_low\":null},\"percentile\":90.0,\"require_side\":\"output\",\"scale\":1.0,\"settle_window_s\":0.05,\"side\":\"output\",\"skip_prelude\":true,\"unit\":\"mm\"}"
+      },
+      {
+       "key": "dx.payload",
+       "value": "{\"group\":[\"fixture A\",\"fixture A\",\"fixture A\"],\"x\":[0,1,2],\"x_label\":\"stop\",\"y\":[0.00039999999999995595,0.0008999999999999009,0.00019999999999997797],\"y_label\":\"signed stop error (mm)\"}"
+      },
+      {
+       "key": "dx.evidence",
+       "value": "[[\"fixture A\",\"q_rad - q_target_rad at dwells\",\"\"]]"
+      }
+     ]
+    }
+   },
+   {
+    "dress": {
+     "basis": "computed",
+     "better": "lower",
+     "caused_by": [],
+     "code": "",
+     "config": {
+      "channel": "temp_c",
+      "headline": "max",
+      "max": {
+       "error_high": 70.0,
+       "error_low": null,
+       "warn_high": 60.0,
+       "warn_low": null
+      },
+      "mean": {
+       "error_high": 65.0,
+       "error_low": null,
+       "warn_high": 55.0,
+       "warn_low": null
+      },
+      "min": {
+       "error_high": null,
+       "error_low": null,
+       "warn_high": null,
+       "warn_low": null
+      },
+      "skip_prelude": false,
+      "std": {
+       "error_high": null,
+       "error_low": null,
+       "warn_high": null,
+       "warn_low": null
+      },
+      "unit": "Cel"
+     },
+     "diagnostic": "fixture.unknown_hint",
+     "emits": "series",
+     "evidence": [
+      {
+       "key": "temp_c",
+       "note": "",
+       "path": "fixture A"
+      }
+     ],
+     "family": "health",
+     "hint": "radar_sweep",
+     "limits": {
+      "error_high": 70.0,
+      "error_low": null,
+      "warn_high": 60.0,
+      "warn_low": null
+     },
+     "measurements": [
+      {
+       "key": "min",
+       "unit": "Cel",
+       "value": 48.0
+      },
+      {
+       "key": "mean",
+       "unit": "Cel",
+       "value": 50.0
+      },
+      {
+       "key": "std",
+       "unit": "Cel",
+       "value": 1.1741086293211236
+      },
+      {
+       "key": "n",
+       "unit": "1",
+       "value": 60
+      }
+     ],
+     "message": "temp_c: min 48, max 52, mean 50, std 1.17 Cel",
+     "metric": "max",
+     "payload": {
+      "bands": {
+       "max": [
+        null,
+        60.0,
+        null,
+        70.0
+       ],
+       "mean": [
+        null,
+        55.0,
+        null,
+        65.0
+       ],
+       "min": [
+        null,
+        null,
+        null,
+        null
+       ],
+       "std": [
+        null,
+        null,
+        null,
+        null
+       ]
+      },
+      "x": [
+       0.0,
+       1.0,
+       2.0,
+       3.0,
+       4.0,
+       5.0,
+       6.0,
+       7.0,
+       8.0,
+       9.0,
+       10.0,
+       11.0,
+       12.0,
+       13.0,
+       14.0,
+       15.0,
+       16.0,
+       17.0,
+       18.0,
+       19.0,
+       20.0,
+       21.0,
+       22.0,
+       23.0,
+       24.0,
+       25.0,
+       26.0,
+       27.0,
+       28.0,
+       29.0,
+       30.0,
+       31.0,
+       32.0,
+       33.0,
+       34.0,
+       35.0,
+       36.0,
+       37.0,
+       38.0,
+       39.0,
+       40.0,
+       41.0,
+       42.0,
+       43.0,
+       44.0,
+       45.0,
+       46.0,
+       47.0,
+       48.0,
+       49.0,
+       50.0,
+       51.0,
+       52.0,
+       53.0,
+       54.0,
+       55.0,
+       56.0,
+       57.0,
+       58.0,
+       59.0
+      ],
+      "x_label": "t (s, runs end to end)",
+      "y": [
+       48.0,
+       48.067796610169495,
+       48.13559322033898,
+       48.20338983050848,
+       48.271186440677965,
+       48.33898305084746,
+       48.40677966101695,
+       48.47457627118644,
+       48.54237288135593,
+       48.610169491525426,
+       48.67796610169491,
+       48.74576271186441,
+       48.813559322033896,
+       48.88135593220339,
+       48.94915254237288,
+       49.016949152542374,
+       49.08474576271186,
+       49.152542372881356,
+       49.220338983050844,
+       49.28813559322034,
+       49.35593220338983,
+       49.42372881355932,
+       49.49152542372882,
+       49.559322033898304,
+       49.6271186440678,
+       49.69491525423729,
+       49.76271186440678,
+       49.83050847457627,
+       49.898305084745765,
+       49.96610169491525,
+       50.03389830508475,
+       50.101694915254235,
+       50.16949152542373,
+       50.23728813559322,
+       50.30508474576271,
+       50.3728813559322,
+       50.440677966101696,
+       50.50847457627118,
+       50.57627118644068,
+       50.64406779661017,
+       50.71186440677966,
+       50.779661016949156,
+       50.847457627118644,
+       50.91525423728814,
+       50.983050847457626,
+       51.05084745762712,
+       51.11864406779661,
+       51.186440677966104,
+       51.25423728813559,
+       51.32203389830509,
+       51.389830508474574,
+       51.45762711864407,
+       51.52542372881356,
+       51.59322033898305,
+       51.66101694915254,
+       51.728813559322035,
+       51.79661016949152,
+       51.86440677966102,
+       51.932203389830505,
+       52.0
+      ],
+      "y_label": "temp_c (Cel)"
+     },
+     "role": "health",
+     "run": "",
+     "stamp": 1792631500.0,
+     "subject": "host/usb1/port-1-3/usb-1-3/can/1",
+     "t0": null,
+     "t1": null,
+     "target": 70.0,
+     "title": "board temperature, an unknown view",
+     "unit": "Cel",
+     "value": 52.0,
+     "verdict": "pass",
+     "view_extra": "",
+     "why": ""
+    },
+    "entry": null,
+    "hint": "radar_sweep",
+    "note": "a copy of driver.board_temp's record with dx.hint and dx.diagnostic replaced: not the library's",
+    "record": {
+     "expected_period_s": 30.0,
+     "level": "ok",
+     "measurements": [
+      {
+       "error_high": 70.0,
+       "key": "max",
+       "unit": "Cel",
+       "value": 52.0,
+       "warn_high": 60.0
+      },
+      {
+       "key": "min",
+       "unit": "Cel",
+       "value": 48.0
+      },
+      {
+       "key": "mean",
+       "unit": "Cel",
+       "value": 50.0
+      },
+      {
+       "key": "std",
+       "unit": "Cel",
+       "value": 1.1741086293211236
+      },
+      {
+       "key": "n",
+       "unit": "1",
+       "value": 60
+      }
+     ],
+     "message": "temp_c: min 48, max 52, mean 50, std 1.17 Cel",
+     "name": "board temperature, an unknown view",
+     "path": "host/usb1/port-1-3/usb-1-3/can/1",
+     "record": "status",
+     "schema": "diagnostics-record/0",
+     "source": "robotdx.diagnostics",
+     "stamp": 1792631500.0,
+     "values": [
+      {
+       "key": "dx.diagnostic",
+       "value": "fixture.unknown_hint"
+      },
+      {
+       "key": "dx.family",
+       "value": "health"
+      },
+      {
+       "key": "dx.role",
+       "value": "health"
+      },
+      {
+       "key": "dx.hint",
+       "value": "radar_sweep"
+      },
+      {
+       "key": "dx.emits",
+       "value": "series"
+      },
+      {
+       "key": "dx.better",
+       "value": "lower"
+      },
+      {
+       "key": "dx.basis",
+       "value": "computed"
+      },
+      {
+       "key": "dx.target",
+       "value": "70.0"
+      },
+      {
+       "key": "dx.config",
+       "value": "{\"channel\":\"temp_c\",\"headline\":\"max\",\"max\":{\"error_high\":70.0,\"error_low\":null,\"warn_high\":60.0,\"warn_low\":null},\"mean\":{\"error_high\":65.0,\"error_low\":null,\"warn_high\":55.0,\"warn_low\":null},\"min\":{\"error_high\":null,\"error_low\":null,\"warn_high\":null,\"warn_low\":null},\"skip_prelude\":false,\"std\":{\"error_high\":null,\"error_low\":null,\"warn_high\":null,\"warn_low\":null},\"unit\":\"Cel\"}"
+      },
+      {
+       "key": "dx.payload",
+       "value": "{\"bands\":{\"max\":[null,60.0,null,70.0],\"mean\":[null,55.0,null,65.0],\"min\":[null,null,null,null],\"std\":[null,null,null,null]},\"x\":[0.0,1.0,2.0,3.0,4.0,5.0,6.0,7.0,8.0,9.0,10.0,11.0,12.0,13.0,14.0,15.0,16.0,17.0,18.0,19.0,20.0,21.0,22.0,23.0,24.0,25.0,26.0,27.0,28.0,29.0,30.0,31.0,32.0,33.0,34.0,35.0,36.0,37.0,38.0,39.0,40.0,41.0,42.0,43.0,44.0,45.0,46.0,47.0,48.0,49.0,50.0,51.0,52.0,53.0,54.0,55.0,56.0,57.0,58.0,59.0],\"x_label\":\"t (s, runs end to end)\",\"y\":[48.0,48.067796610169495,48.13559322033898,48.20338983050848,48.271186440677965,48.33898305084746,48.40677966101695,48.47457627118644,48.54237288135593,48.610169491525426,48.67796610169491,48.74576271186441,48.813559322033896,48.88135593220339,48.94915254237288,49.016949152542374,49.08474576271186,49.152542372881356,49.220338983050844,49.28813559322034,49.35593220338983,49.42372881355932,49.49152542372882,49.559322033898304,49.6271186440678,49.69491525423729,49.76271186440678,49.83050847457627,49.898305084745765,49.96610169491525,50.03389830508475,50.101694915254235,50.16949152542373,50.23728813559322,50.30508474576271,50.3728813559322,50.440677966101696,50.50847457627118,50.57627118644068,50.64406779661017,50.71186440677966,50.779661016949156,50.847457627118644,50.91525423728814,50.983050847457626,51.05084745762712,51.11864406779661,51.186440677966104,51.25423728813559,51.32203389830509,51.389830508474574,51.45762711864407,51.52542372881356,51.59322033898305,51.66101694915254,51.728813559322035,51.79661016949152,51.86440677966102,51.932203389830505,52.0],\"y_label\":\"temp_c (Cel)\"}"
+      },
+      {
+       "key": "dx.evidence",
+       "value": "[[\"fixture A\",\"temp_c\",\"\"]]"
+      }
+     ]
+    }
+   }
+  ],
+  "B": [
+   {
+    "dress": {
+     "basis": "computed",
+     "better": "lower",
+     "caused_by": [],
+     "code": "MaxAboveWarnLimit",
+     "config": {
+      "channel": "temp_c",
+      "headline": "max",
+      "max": {
+       "error_high": 70.0,
+       "error_low": null,
+       "warn_high": 60.0,
+       "warn_low": null
+      },
+      "mean": {
+       "error_high": 65.0,
+       "error_low": null,
+       "warn_high": 55.0,
+       "warn_low": null
+      },
+      "min": {
+       "error_high": null,
+       "error_low": null,
+       "warn_high": null,
+       "warn_low": null
+      },
+      "skip_prelude": false,
+      "std": {
+       "error_high": null,
+       "error_low": null,
+       "warn_high": null,
+       "warn_low": null
+      },
+      "unit": "Cel"
+     },
+     "diagnostic": "driver.board_temp",
+     "emits": "series",
+     "evidence": [
+      {
+       "key": "temp_c",
+       "note": "",
+       "path": "fixture B"
+      }
+     ],
+     "family": "health",
+     "hint": "threshold_band",
+     "limits": {
+      "error_high": 70.0,
+      "error_low": null,
+      "warn_high": 60.0,
+      "warn_low": null
+     },
+     "measurements": [
+      {
+       "key": "min",
+       "unit": "Cel",
+       "value": 48.0
+      },
+      {
+       "key": "mean",
+       "unit": "Cel",
+       "value": 56.0
+      },
+      {
+       "key": "std",
+       "unit": "Cel",
+       "value": 4.696434517284495
+      },
+      {
+       "key": "n",
+       "unit": "1",
+       "value": 60
+      }
+     ],
+     "message": "temp_c: min 48, max 64, mean 56, std 4.7 Cel (max out of bounds)",
+     "metric": "max",
+     "payload": {
+      "bands": {
+       "max": [
+        null,
+        60.0,
+        null,
+        70.0
+       ],
+       "mean": [
+        null,
+        55.0,
+        null,
+        65.0
+       ],
+       "min": [
+        null,
+        null,
+        null,
+        null
+       ],
+       "std": [
+        null,
+        null,
+        null,
+        null
+       ]
+      },
+      "x": [
+       0.0,
+       1.0,
+       2.0,
+       3.0,
+       4.0,
+       5.0,
+       6.0,
+       7.0,
+       8.0,
+       9.0,
+       10.0,
+       11.0,
+       12.0,
+       13.0,
+       14.0,
+       15.0,
+       16.0,
+       17.0,
+       18.0,
+       19.0,
+       20.0,
+       21.0,
+       22.0,
+       23.0,
+       24.0,
+       25.0,
+       26.0,
+       27.0,
+       28.0,
+       29.0,
+       30.0,
+       31.0,
+       32.0,
+       33.0,
+       34.0,
+       35.0,
+       36.0,
+       37.0,
+       38.0,
+       39.0,
+       40.0,
+       41.0,
+       42.0,
+       43.0,
+       44.0,
+       45.0,
+       46.0,
+       47.0,
+       48.0,
+       49.0,
+       50.0,
+       51.0,
+       52.0,
+       53.0,
+       54.0,
+       55.0,
+       56.0,
+       57.0,
+       58.0,
+       59.0
+      ],
+      "x_label": "t (s, runs end to end)",
+      "y": [
+       48.0,
+       48.271186440677965,
+       48.54237288135593,
+       48.813559322033896,
+       49.08474576271186,
+       49.35593220338983,
+       49.6271186440678,
+       49.898305084745765,
+       50.16949152542373,
+       50.440677966101696,
+       50.71186440677966,
+       50.983050847457626,
+       51.25423728813559,
+       51.52542372881356,
+       51.79661016949152,
+       52.067796610169495,
+       52.33898305084746,
+       52.610169491525426,
+       52.88135593220339,
+       53.152542372881356,
+       53.42372881355932,
+       53.69491525423729,
+       53.96610169491525,
+       54.23728813559322,
+       54.50847457627118,
+       54.77966101694915,
+       55.05084745762712,
+       55.32203389830509,
+       55.59322033898305,
+       55.86440677966102,
+       56.13559322033898,
+       56.40677966101695,
+       56.67796610169491,
+       56.94915254237288,
+       57.22033898305085,
+       57.49152542372882,
+       57.76271186440678,
+       58.03389830508475,
+       58.30508474576271,
+       58.57627118644068,
+       58.847457627118644,
+       59.11864406779661,
+       59.389830508474574,
+       59.66101694915254,
+       59.932203389830505,
+       60.20338983050847,
+       60.47457627118644,
+       60.74576271186441,
+       61.016949152542374,
+       61.28813559322034,
+       61.559322033898304,
+       61.83050847457627,
+       62.101694915254235,
+       62.37288135593221,
+       62.64406779661017,
+       62.91525423728814,
+       63.186440677966104,
+       63.45762711864407,
+       63.728813559322035,
+       64.0
+      ],
+      "y_label": "temp_c (Cel)"
+     },
+     "role": "health",
+     "run": "",
+     "stamp": 1792631500.0,
+     "subject": "host/usb1/port-1-3/usb-1-3/can/1",
+     "t0": null,
+     "t1": null,
+     "target": 70.0,
+     "title": "board temperature",
+     "unit": "Cel",
+     "value": 64.0,
+     "verdict": "warn",
+     "view_extra": "",
+     "why": ""
+    },
+    "entry": "driver.board_temp",
+    "hint": "threshold_band",
+    "record": {
+     "code": "MaxAboveWarnLimit",
+     "expected_period_s": 30.0,
+     "level": "warn",
+     "measurements": [
+      {
+       "error_high": 70.0,
+       "key": "max",
+       "unit": "Cel",
+       "value": 64.0,
+       "warn_high": 60.0
+      },
+      {
+       "key": "min",
+       "unit": "Cel",
+       "value": 48.0
+      },
+      {
+       "key": "mean",
+       "unit": "Cel",
+       "value": 56.0
+      },
+      {
+       "key": "std",
+       "unit": "Cel",
+       "value": 4.696434517284495
+      },
+      {
+       "key": "n",
+       "unit": "1",
+       "value": 60
+      }
+     ],
+     "message": "temp_c: min 48, max 64, mean 56, std 4.7 Cel (max out of bounds)",
+     "name": "board temperature",
+     "path": "host/usb1/port-1-3/usb-1-3/can/1",
+     "record": "status",
+     "schema": "diagnostics-record/0",
+     "source": "robotdx.diagnostics",
+     "stamp": 1792631500.0,
+     "values": [
+      {
+       "key": "dx.diagnostic",
+       "value": "driver.board_temp"
+      },
+      {
+       "key": "dx.family",
+       "value": "health"
+      },
+      {
+       "key": "dx.role",
+       "value": "health"
+      },
+      {
+       "key": "dx.hint",
+       "value": "threshold_band"
+      },
+      {
+       "key": "dx.emits",
+       "value": "series"
+      },
+      {
+       "key": "dx.better",
+       "value": "lower"
+      },
+      {
+       "key": "dx.basis",
+       "value": "computed"
+      },
+      {
+       "key": "dx.target",
+       "value": "70.0"
+      },
+      {
+       "key": "dx.config",
+       "value": "{\"channel\":\"temp_c\",\"headline\":\"max\",\"max\":{\"error_high\":70.0,\"error_low\":null,\"warn_high\":60.0,\"warn_low\":null},\"mean\":{\"error_high\":65.0,\"error_low\":null,\"warn_high\":55.0,\"warn_low\":null},\"min\":{\"error_high\":null,\"error_low\":null,\"warn_high\":null,\"warn_low\":null},\"skip_prelude\":false,\"std\":{\"error_high\":null,\"error_low\":null,\"warn_high\":null,\"warn_low\":null},\"unit\":\"Cel\"}"
+      },
+      {
+       "key": "dx.payload",
+       "value": "{\"bands\":{\"max\":[null,60.0,null,70.0],\"mean\":[null,55.0,null,65.0],\"min\":[null,null,null,null],\"std\":[null,null,null,null]},\"x\":[0.0,1.0,2.0,3.0,4.0,5.0,6.0,7.0,8.0,9.0,10.0,11.0,12.0,13.0,14.0,15.0,16.0,17.0,18.0,19.0,20.0,21.0,22.0,23.0,24.0,25.0,26.0,27.0,28.0,29.0,30.0,31.0,32.0,33.0,34.0,35.0,36.0,37.0,38.0,39.0,40.0,41.0,42.0,43.0,44.0,45.0,46.0,47.0,48.0,49.0,50.0,51.0,52.0,53.0,54.0,55.0,56.0,57.0,58.0,59.0],\"x_label\":\"t (s, runs end to end)\",\"y\":[48.0,48.271186440677965,48.54237288135593,48.813559322033896,49.08474576271186,49.35593220338983,49.6271186440678,49.898305084745765,50.16949152542373,50.440677966101696,50.71186440677966,50.983050847457626,51.25423728813559,51.52542372881356,51.79661016949152,52.067796610169495,52.33898305084746,52.610169491525426,52.88135593220339,53.152542372881356,53.42372881355932,53.69491525423729,53.96610169491525,54.23728813559322,54.50847457627118,54.77966101694915,55.05084745762712,55.32203389830509,55.59322033898305,55.86440677966102,56.13559322033898,56.40677966101695,56.67796610169491,56.94915254237288,57.22033898305085,57.49152542372882,57.76271186440678,58.03389830508475,58.30508474576271,58.57627118644068,58.847457627118644,59.11864406779661,59.389830508474574,59.66101694915254,59.932203389830505,60.20338983050847,60.47457627118644,60.74576271186441,61.016949152542374,61.28813559322034,61.559322033898304,61.83050847457627,62.101694915254235,62.37288135593221,62.64406779661017,62.91525423728814,63.186440677966104,63.45762711864407,63.728813559322035,64.0],\"y_label\":\"temp_c (Cel)\"}"
+      },
+      {
+       "key": "dx.evidence",
+       "value": "[[\"fixture B\",\"temp_c\",\"\"]]"
+      }
+     ]
+    }
+   },
+   {
+    "dress": {
+     "basis": "computed",
+     "better": "lower",
+     "caused_by": [],
+     "code": "AboveWarnLimit",
+     "config": {
+      "better": "lower",
+      "confidence": 0.95,
+      "judge_on": "share",
+      "limits": {
+       "error_high": 10.0,
+       "error_low": null,
+       "warn_high": 1.0,
+       "warn_low": null
+      },
+      "min_events": 1,
+      "scale": 100.0,
+      "slice_by": "",
+      "statistic": "share",
+      "unit": "%"
+     },
+     "diagnostic": "driver.link_loss",
+     "emits": "scalar",
+     "evidence": [],
+     "family": "real_vs_target",
+     "hint": "kpi_trend",
+     "limits": {
+      "error_high": 10.0,
+      "error_low": null,
+      "warn_high": 1.0,
+      "warn_low": null
+     },
+     "measurements": [
+      {
+       "key": "events",
+       "unit": "1",
+       "value": 200
+      },
+      {
+       "key": "true",
+       "unit": "1",
+       "value": 6
+      },
+      {
+       "key": "wilson_low",
+       "unit": "%",
+       "value": 1.3820314340111346
+      },
+      {
+       "key": "wilson_high",
+       "unit": "%",
+       "value": 6.3894292454519235
+      }
+     ],
+     "message": "6 of 200 true: 3 % (Wilson 95%: 1.382 to 6.389)",
+     "metric": "share",
+     "payload": null,
+     "role": "health",
+     "run": "",
+     "stamp": 1792631500.0,
+     "subject": "host/usb1/port-1-3/usb-1-3/can/1",
+     "t0": null,
+     "t1": null,
+     "target": 10.0,
+     "title": "CAN reply loss",
+     "unit": "%",
+     "value": 3.0,
+     "verdict": "warn",
+     "view_extra": "",
+     "why": "look at the slices: a share that is low in one class or speed bin is a coverage or tuning problem there"
+    },
+    "entry": "driver.link_loss",
+    "hint": "kpi_trend",
+    "record": {
+     "code": "AboveWarnLimit",
+     "expected_period_s": 30.0,
+     "level": "warn",
+     "measurements": [
+      {
+       "error_high": 10.0,
+       "key": "share",
+       "unit": "%",
+       "value": 3.0,
+       "warn_high": 1.0
+      },
+      {
+       "key": "events",
+       "unit": "1",
+       "value": 200
+      },
+      {
+       "key": "true",
+       "unit": "1",
+       "value": 6
+      },
+      {
+       "key": "wilson_low",
+       "unit": "%",
+       "value": 1.3820314340111346
+      },
+      {
+       "key": "wilson_high",
+       "unit": "%",
+       "value": 6.3894292454519235
+      }
+     ],
+     "message": "6 of 200 true: 3 % (Wilson 95%: 1.382 to 6.389)",
+     "name": "CAN reply loss",
+     "path": "host/usb1/port-1-3/usb-1-3/can/1",
+     "record": "status",
+     "schema": "diagnostics-record/0",
+     "source": "robotdx.diagnostics",
+     "stamp": 1792631500.0,
+     "values": [
+      {
+       "key": "dx.diagnostic",
+       "value": "driver.link_loss"
+      },
+      {
+       "key": "dx.family",
+       "value": "real_vs_target"
+      },
+      {
+       "key": "dx.role",
+       "value": "health"
+      },
+      {
+       "key": "dx.hint",
+       "value": "kpi_trend"
+      },
+      {
+       "key": "dx.emits",
+       "value": "scalar"
+      },
+      {
+       "key": "dx.better",
+       "value": "lower"
+      },
+      {
+       "key": "dx.why",
+       "value": "look at the slices: a share that is low in one class or speed bin is a coverage or tuning problem there"
+      },
+      {
+       "key": "dx.basis",
+       "value": "computed"
+      },
+      {
+       "key": "dx.target",
+       "value": "10.0"
+      },
+      {
+       "key": "dx.config",
+       "value": "{\"better\":\"lower\",\"confidence\":0.95,\"judge_on\":\"share\",\"limits\":{\"error_high\":10.0,\"error_low\":null,\"warn_high\":1.0,\"warn_low\":null},\"min_events\":1,\"scale\":100.0,\"slice_by\":\"\",\"statistic\":\"share\",\"unit\":\"%\"}"
+      }
+     ]
+    }
+   },
+   {
+    "dress": {
+     "basis": "computed",
+     "better": "lower",
+     "caused_by": [],
+     "code": "HardFault",
+     "config": {
+      "fault_codes": [
+       32,
+       50
+      ],
+      "limiter_codes": [
+       96,
+       105
+      ],
+      "limiter_share_warn": 0.02,
+      "timeout_is_fault": true
+     },
+     "diagnostic": "driver.faults",
+     "emits": "series",
+     "evidence": [
+      {
+       "key": "fault",
+       "note": "",
+       "path": "fixture B"
+      }
+     ],
+     "family": "health",
+     "hint": "level_history",
+     "limits": {
+      "error_high": 0,
+      "error_low": null,
+      "warn_high": null,
+      "warn_low": null
+     },
+     "measurements": [
+      {
+       "key": "timeouts",
+       "unit": "1",
+       "value": 0
+      },
+      {
+       "key": "rows",
+       "unit": "1",
+       "value": 60
+      }
+     ],
+     "message": "1 hard fault(s), 0 watchdog timeout(s) over 1 runs; limiters: none",
+     "metric": "faults",
+     "payload": {
+      "x": [],
+      "x_label": "limiter code",
+      "y": [],
+      "y_label": "share of rows"
+     },
+     "role": "health",
+     "run": "",
+     "stamp": 1792631500.0,
+     "subject": "host/usb1/port-1-3/usb-1-3/can/1",
+     "t0": null,
+     "t1": null,
+     "target": 0,
+     "title": "fault and limiter codes",
+     "unit": "1",
+     "value": 1,
+     "verdict": "fail",
+     "view_extra": "",
+     "why": ""
+    },
+    "entry": "driver.faults",
+    "hint": "level_history",
+    "record": {
+     "code": "HardFault",
+     "expected_period_s": 30.0,
+     "level": "error",
+     "measurements": [
+      {
+       "error_high": 0,
+       "key": "faults",
+       "unit": "1",
+       "value": 1
+      },
+      {
+       "key": "timeouts",
+       "unit": "1",
+       "value": 0
+      },
+      {
+       "key": "rows",
+       "unit": "1",
+       "value": 60
+      }
+     ],
+     "message": "1 hard fault(s), 0 watchdog timeout(s) over 1 runs; limiters: none",
+     "name": "fault and limiter codes",
+     "path": "host/usb1/port-1-3/usb-1-3/can/1",
+     "record": "status",
+     "schema": "diagnostics-record/0",
+     "source": "robotdx.diagnostics",
+     "stamp": 1792631500.0,
+     "values": [
+      {
+       "key": "dx.diagnostic",
+       "value": "driver.faults"
+      },
+      {
+       "key": "dx.family",
+       "value": "health"
+      },
+      {
+       "key": "dx.role",
+       "value": "health"
+      },
+      {
+       "key": "dx.hint",
+       "value": "level_history"
+      },
+      {
+       "key": "dx.emits",
+       "value": "series"
+      },
+      {
+       "key": "dx.better",
+       "value": "lower"
+      },
+      {
+       "key": "dx.basis",
+       "value": "computed"
+      },
+      {
+       "key": "dx.target",
+       "value": "0"
+      },
+      {
+       "key": "dx.config",
+       "value": "{\"fault_codes\":[32,50],\"limiter_codes\":[96,105],\"limiter_share_warn\":0.02,\"timeout_is_fault\":true}"
+      },
+      {
+       "key": "dx.payload",
+       "value": "{\"x\":[],\"x_label\":\"limiter code\",\"y\":[],\"y_label\":\"share of rows\"}"
+      },
+      {
+       "key": "dx.evidence",
+       "value": "[[\"fixture B\",\"fault\",\"\"]]"
+      }
+     ]
+    }
+   },
+   {
+    "dress": {
+     "basis": "computed",
+     "better": "lower",
+     "caused_by": [],
+     "code": "MeasuredOnEncoderSide",
+     "config": {
+      "dwell_min_s": 0.25,
+      "limits": {
+       "error_high": 3.6,
+       "error_low": null,
+       "warn_high": null,
+       "warn_low": null
+      },
+      "percentile": 90.0,
+      "require_side": "output",
+      "scale": 1000.0,
+      "settle_window_s": 0.05,
+      "side": "encoder",
+      "skip_prelude": true,
+      "unit": "mrad"
+     },
+     "diagnostic": "servo.stop_error",
+     "emits": "series",
+     "evidence": [
+      {
+       "key": "q_rad - q_target_rad at dwells",
+       "note": "",
+       "path": "fixture B"
+      }
+     ],
+     "family": "real_vs_target",
+     "hint": "distribution",
+     "limits": {
+      "error_high": 3.6,
+      "error_low": null,
+      "warn_high": null,
+      "warn_low": null
+     },
+     "measurements": [
+      {
+       "key": "n",
+       "unit": "1",
+       "value": 3
+      },
+      {
+       "key": "median",
+       "unit": "mrad",
+       "value": 1.1999999999999789
+      },
+      {
+       "key": "max",
+       "unit": "mrad",
+       "value": 2.0999999999999908
+      },
+      {
+       "key": "mean_signed",
+       "unit": "mrad",
+       "value": 1.3333333333332975
+      },
+      {
+       "key": "runs",
+       "unit": "1",
+       "value": 1
+      }
+     ],
+     "message": "p90 1.92 mrad over 3 stops in 1 runs (encoder side); within the limit, but measured on the encoder side, not the output",
+     "metric": "p90",
+     "payload": {
+      "group": [
+       "fixture B",
+       "fixture B",
+       "fixture B"
+      ],
+      "x": [
+       0,
+       1,
+       2
+      ],
+      "x_label": "stop",
+      "y": [
+       1.1999999999999789,
+       2.0999999999999908,
+       0.6999999999999229
+      ],
+      "y_label": "signed stop error (mrad)"
+     },
+     "role": "driver",
+     "run": "fixture B",
+     "stamp": 1792631500.0,
+     "subject": "host/usb1/port-1-3/usb-1-3/can/1",
+     "t0": 2.5,
+     "t1": 2.99,
+     "target": 3.6,
+     "title": "stop error p90",
+     "unit": "mrad",
+     "value": 1.9199999999999884,
+     "verdict": "warn",
+     "view_extra": "",
+     "why": "the stop band is about (Coulomb friction + unbalanced gravity) / kp: try Coulomb feed-forward (ff_study) before gains; an encoder-side pass still needs the output side (camera)"
+    },
+    "entry": "servo.stop_error",
+    "hint": "distribution",
+    "record": {
+     "code": "MeasuredOnEncoderSide",
+     "expected_period_s": 30.0,
+     "level": "warn",
+     "measurements": [
+      {
+       "error_high": 3.6,
+       "key": "p90",
+       "unit": "mrad",
+       "value": 1.9199999999999884
+      },
+      {
+       "key": "n",
+       "unit": "1",
+       "value": 3
+      },
+      {
+       "key": "median",
+       "unit": "mrad",
+       "value": 1.1999999999999789
+      },
+      {
+       "key": "max",
+       "unit": "mrad",
+       "value": 2.0999999999999908
+      },
+      {
+       "key": "mean_signed",
+       "unit": "mrad",
+       "value": 1.3333333333332975
+      },
+      {
+       "key": "runs",
+       "unit": "1",
+       "value": 1
+      }
+     ],
+     "message": "p90 1.92 mrad over 3 stops in 1 runs (encoder side); within the limit, but measured on the encoder side, not the output",
+     "name": "stop error p90",
+     "path": "host/usb1/port-1-3/usb-1-3/can/1",
+     "record": "status",
+     "schema": "diagnostics-record/0",
+     "source": "robotdx.diagnostics",
+     "stamp": 1792631500.0,
+     "values": [
+      {
+       "key": "dx.diagnostic",
+       "value": "servo.stop_error"
+      },
+      {
+       "key": "dx.family",
+       "value": "real_vs_target"
+      },
+      {
+       "key": "dx.role",
+       "value": "driver"
+      },
+      {
+       "key": "dx.hint",
+       "value": "distribution"
+      },
+      {
+       "key": "dx.emits",
+       "value": "series"
+      },
+      {
+       "key": "dx.better",
+       "value": "lower"
+      },
+      {
+       "key": "dx.run",
+       "value": "fixture B"
+      },
+      {
+       "key": "dx.why",
+       "value": "the stop band is about (Coulomb friction + unbalanced gravity) / kp: try Coulomb feed-forward (ff_study) before gains; an encoder-side pass still needs the output side (camera)"
+      },
+      {
+       "key": "dx.basis",
+       "value": "computed"
+      },
+      {
+       "key": "dx.target",
+       "value": "3.6"
+      },
+      {
+       "key": "dx.t0",
+       "value": "2.5"
+      },
+      {
+       "key": "dx.t1",
+       "value": "2.99"
+      },
+      {
+       "key": "dx.config",
+       "value": "{\"dwell_min_s\":0.25,\"limits\":{\"error_high\":3.6,\"error_low\":null,\"warn_high\":null,\"warn_low\":null},\"percentile\":90.0,\"require_side\":\"output\",\"scale\":1000.0,\"settle_window_s\":0.05,\"side\":\"encoder\",\"skip_prelude\":true,\"unit\":\"mrad\"}"
+      },
+      {
+       "key": "dx.payload",
+       "value": "{\"group\":[\"fixture B\",\"fixture B\",\"fixture B\"],\"x\":[0,1,2],\"x_label\":\"stop\",\"y\":[1.1999999999999789,2.0999999999999908,0.6999999999999229],\"y_label\":\"signed stop error (mrad)\"}"
+      },
+      {
+       "key": "dx.evidence",
+       "value": "[[\"fixture B\",\"q_rad - q_target_rad at dwells\",\"\"]]"
+      }
+     ]
+    }
+   },
+   {
+    "dress": {
+     "basis": "computed",
+     "better": "",
+     "caused_by": [],
+     "code": "",
+     "config": {
+      "channel": "q_rad",
+      "clock": "common",
+      "dt": 0.002,
+      "limits": {
+       "error_high": null,
+       "error_low": null,
+       "warn_high": null,
+       "warn_low": null
+      },
+      "min_repeats": 5,
+      "relative_to_target": true,
+      "scale": 1000.0,
+      "skip_prelude": true,
+      "unit": "mrad"
+     },
+     "diagnostic": "servo.floor",
+     "emits": "matrix",
+     "evidence": [
+      {
+       "key": "q_rad",
+       "note": "",
+       "path": "repeat 0"
+      },
+      {
+       "key": "q_rad",
+       "note": "",
+       "path": "repeat 1"
+      },
+      {
+       "key": "q_rad",
+       "note": "",
+       "path": "repeat 2"
+      },
+      {
+       "key": "q_rad",
+       "note": "",
+       "path": "repeat 3"
+      },
+      {
+       "key": "q_rad",
+       "note": "",
+       "path": "repeat 4"
+      }
+     ],
+     "family": "repeatability",
+     "hint": "evidence",
+     "limits": {
+      "error_high": null,
+      "error_low": null,
+      "warn_high": null,
+      "warn_low": null
+     },
+     "measurements": [
+      {
+       "key": "repeats",
+       "unit": "1",
+       "value": 5
+      },
+      {
+       "key": "pairs",
+       "unit": "1",
+       "value": 10
+      },
+      {
+       "key": "max_pair",
+       "unit": "mrad",
+       "value": 5.999999999999987
+      }
+     ],
+     "message": "median of 10 pairwise RMS over 5 repeats: 3 mrad",
+     "metric": "floor",
+     "payload": {
+      "cells": [
+       [
+        0.0,
+        1.50000000000002,
+        2.9999999999999565,
+        4.499999999999977,
+        5.999999999999987
+       ],
+       [
+        1.50000000000002,
+        0.0,
+        1.4999999999999365,
+        2.9999999999999565,
+        4.499999999999967
+       ],
+       [
+        2.9999999999999565,
+        1.4999999999999365,
+        0.0,
+        1.5000000000000198,
+        3.00000000000003
+       ],
+       [
+        4.499999999999977,
+        2.9999999999999565,
+        1.5000000000000198,
+        0.0,
+        1.50000000000001
+       ],
+       [
+        5.999999999999987,
+        4.499999999999967,
+        3.00000000000003,
+        1.50000000000001,
+        0.0
+       ]
+      ],
+      "cols": [
+       "repeat 0",
+       "repeat 1",
+       "repeat 2",
+       "repeat 3",
+       "repeat 4"
+      ],
+      "rows": [
+       "repeat 0",
+       "repeat 1",
+       "repeat 2",
+       "repeat 3",
+       "repeat 4"
+      ]
+     },
+     "role": "driver",
+     "run": "repeat 0",
+     "stamp": 1792631500.0,
+     "subject": "host/usb1/port-1-3/usb-1-3/can/1",
+     "t0": 0.0,
+     "t1": 5.99,
+     "target": null,
+     "title": "repeatability floor",
+     "unit": "mrad",
+     "value": 2.9999999999999565,
+     "verdict": "pass",
+     "view_extra": "",
+     "why": ""
+    },
+    "entry": "servo.floor",
+    "hint": "evidence",
+    "record": {
+     "expected_period_s": 30.0,
+     "level": "ok",
+     "measurements": [
+      {
+       "key": "floor",
+       "unit": "mrad",
+       "value": 2.9999999999999565
+      },
+      {
+       "key": "repeats",
+       "unit": "1",
+       "value": 5
+      },
+      {
+       "key": "pairs",
+       "unit": "1",
+       "value": 10
+      },
+      {
+       "key": "max_pair",
+       "unit": "mrad",
+       "value": 5.999999999999987
+      }
+     ],
+     "message": "median of 10 pairwise RMS over 5 repeats: 3 mrad",
+     "name": "repeatability floor",
+     "path": "host/usb1/port-1-3/usb-1-3/can/1",
+     "record": "status",
+     "schema": "diagnostics-record/0",
+     "source": "robotdx.diagnostics",
+     "stamp": 1792631500.0,
+     "values": [
+      {
+       "key": "dx.diagnostic",
+       "value": "servo.floor"
+      },
+      {
+       "key": "dx.family",
+       "value": "repeatability"
+      },
+      {
+       "key": "dx.role",
+       "value": "driver"
+      },
+      {
+       "key": "dx.hint",
+       "value": "evidence"
+      },
+      {
+       "key": "dx.emits",
+       "value": "matrix"
+      },
+      {
+       "key": "dx.run",
+       "value": "repeat 0"
+      },
+      {
+       "key": "dx.basis",
+       "value": "computed"
+      },
+      {
+       "key": "dx.t0",
+       "value": "0.0"
+      },
+      {
+       "key": "dx.t1",
+       "value": "5.99"
+      },
+      {
+       "key": "dx.config",
+       "value": "{\"channel\":\"q_rad\",\"clock\":\"common\",\"dt\":0.002,\"limits\":{\"error_high\":null,\"error_low\":null,\"warn_high\":null,\"warn_low\":null},\"min_repeats\":5,\"relative_to_target\":true,\"scale\":1000.0,\"skip_prelude\":true,\"unit\":\"mrad\"}"
+      },
+      {
+       "key": "dx.payload",
+       "value": "{\"cells\":[[0.0,1.50000000000002,2.9999999999999565,4.499999999999977,5.999999999999987],[1.50000000000002,0.0,1.4999999999999365,2.9999999999999565,4.499999999999967],[2.9999999999999565,1.4999999999999365,0.0,1.5000000000000198,3.00000000000003],[4.499999999999977,2.9999999999999565,1.5000000000000198,0.0,1.50000000000001],[5.999999999999987,4.499999999999967,3.00000000000003,1.50000000000001,0.0]],\"cols\":[\"repeat 0\",\"repeat 1\",\"repeat 2\",\"repeat 3\",\"repeat 4\"],\"rows\":[\"repeat 0\",\"repeat 1\",\"repeat 2\",\"repeat 3\",\"repeat 4\"]}"
+      },
+      {
+       "key": "dx.evidence",
+       "value": "[[\"repeat 0\",\"q_rad\",\"\"],[\"repeat 1\",\"q_rad\",\"\"],[\"repeat 2\",\"q_rad\",\"\"],[\"repeat 3\",\"q_rad\",\"\"],[\"repeat 4\",\"q_rad\",\"\"]]"
+      }
+     ]
+    }
+   },
+   {
+    "dress": {
+     "basis": "computed",
+     "better": "",
+     "caused_by": [
+      "host/usb1/port-1-3/usb-1-3/can/1"
+     ],
+     "code": "MembersDegraded",
+     "config": {
+      "not_run_is": "warn",
+      "title": "joints",
+      "tolerate_fail": 0
+     },
+     "diagnostic": "arm.joints",
+     "emits": "series",
+     "evidence": [],
+     "family": "rollup",
+     "hint": "rollup_tree",
+     "limits": {
+      "error_high": null,
+      "error_low": null,
+      "warn_high": null,
+      "warn_low": null
+     },
+     "measurements": [
+      {
+       "key": "members",
+       "unit": "1",
+       "value": 3
+      },
+      {
+       "key": "failing",
+       "unit": "1",
+       "value": 0
+      },
+      {
+       "key": "not_run",
+       "unit": "1",
+       "value": 0
+      }
+     ],
+     "message": "2/3 pass; 0 fail, 1 warn, 0 not run",
+     "metric": "passing",
+     "payload": {
+      "group": [
+       "pass",
+       "warn",
+       "pass"
+      ],
+      "x": [
+       "host/usb1/port-1-3/usb-1-3/can/1 \u00b7 J1",
+       "host/usb1/port-1-3/usb-1-3/can/1 \u00b7 J2",
+       "host/usb1/port-1-3/usb-1-3/can/1 \u00b7 J3"
+      ],
+      "x_label": "member",
+      "y": [
+       0,
+       1,
+       0
+      ],
+      "y_label": "verdict rank"
+     },
+     "role": "health",
+     "run": "",
+     "stamp": 1792631500.0,
+     "subject": "host/usb1/port-1-3/usb-1-3/can/1",
+     "t0": null,
+     "t1": null,
+     "target": null,
+     "title": "joint rollup",
+     "unit": "1",
+     "value": 2,
+     "verdict": "warn",
+     "view_extra": "",
+     "why": ""
+    },
+    "entry": "arm.joints",
+    "hint": "rollup_tree",
+    "record": {
+     "caused_by": [
+      "host/usb1/port-1-3/usb-1-3/can/1"
+     ],
+     "code": "MembersDegraded",
+     "expected_period_s": 30.0,
+     "level": "warn",
+     "measurements": [
+      {
+       "key": "passing",
+       "unit": "1",
+       "value": 2
+      },
+      {
+       "key": "members",
+       "unit": "1",
+       "value": 3
+      },
+      {
+       "key": "failing",
+       "unit": "1",
+       "value": 0
+      },
+      {
+       "key": "not_run",
+       "unit": "1",
+       "value": 0
+      }
+     ],
+     "message": "2/3 pass; 0 fail, 1 warn, 0 not run",
+     "name": "joint rollup",
+     "path": "host/usb1/port-1-3/usb-1-3/can/1",
+     "record": "status",
+     "schema": "diagnostics-record/0",
+     "source": "robotdx.diagnostics",
+     "stamp": 1792631500.0,
+     "values": [
+      {
+       "key": "dx.diagnostic",
+       "value": "arm.joints"
+      },
+      {
+       "key": "dx.family",
+       "value": "rollup"
+      },
+      {
+       "key": "dx.role",
+       "value": "health"
+      },
+      {
+       "key": "dx.hint",
+       "value": "rollup_tree"
+      },
+      {
+       "key": "dx.emits",
+       "value": "series"
+      },
+      {
+       "key": "dx.basis",
+       "value": "computed"
+      },
+      {
+       "key": "dx.config",
+       "value": "{\"not_run_is\":\"warn\",\"title\":\"joints\",\"tolerate_fail\":0}"
+      },
+      {
+       "key": "dx.payload",
+       "value": "{\"group\":[\"pass\",\"warn\",\"pass\"],\"x\":[\"host/usb1/port-1-3/usb-1-3/can/1 \\u00b7 J1\",\"host/usb1/port-1-3/usb-1-3/can/1 \\u00b7 J2\",\"host/usb1/port-1-3/usb-1-3/can/1 \\u00b7 J3\"],\"x_label\":\"member\",\"y\":[0,1,0],\"y_label\":\"verdict rank\"}"
+      }
+     ]
+    }
+   },
+   {
+    "dress": {
+     "basis": "computed",
+     "better": "",
+     "caused_by": [
+      "host/usb1/port-1-3/usb-1-3/can/1"
+     ],
+     "code": "CellsFailing",
+     "config": {
+      "gates": [
+       "T1",
+       "T2",
+       "T3",
+       "T4",
+       "T5",
+       "T6",
+       "T7",
+       "T8"
+      ],
+      "subjects": [],
+      "title": "hard gates"
+     },
+     "diagnostic": "rack.gate_matrix",
+     "emits": "matrix",
+     "evidence": [],
+     "family": "rollup",
+     "hint": "gate_matrix",
+     "limits": {
+      "error_high": null,
+      "error_low": null,
+      "warn_high": null,
+      "warn_low": null
+     },
+     "measurements": [
+      {
+       "key": "cells",
+       "unit": "1",
+       "value": 16
+      },
+      {
+       "key": "not_run",
+       "unit": "1",
+       "value": 11
+      }
+     ],
+     "message": "3 of 16 cells pass",
+     "metric": "cells_passing",
+     "payload": {
+      "cells": [
+       [
+        "pass",
+        "fail",
+        "warn",
+        "not_run",
+        "not_run",
+        "not_run",
+        "not_run",
+        "not_run"
+       ],
+       [
+        "pass",
+        "pass",
+        "not_run",
+        "not_run",
+        "not_run",
+        "not_run",
+        "not_run",
+        "not_run"
+       ]
+      ],
+      "cols": [
+       "T1",
+       "T2",
+       "T3",
+       "T4",
+       "T5",
+       "T6",
+       "T7",
+       "T8"
+      ],
+      "rows": [
+       "CAN 1",
+       "CAN 2"
+      ],
+      "values": [
+       [
+        1.0,
+        1.0,
+        1.0,
+        null,
+        null,
+        null,
+        null,
+        null
+       ],
+       [
+        1.0,
+        1.0,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+       ]
+      ]
+     },
+     "role": "headline",
+     "run": "",
+     "stamp": 1792631500.0,
+     "subject": "host/usb1/port-1-3/usb-1-3/can/1",
+     "t0": null,
+     "t1": null,
+     "target": null,
+     "title": "hard gates passing",
+     "unit": "1",
+     "value": 3,
+     "verdict": "fail",
+     "view_extra": "",
+     "why": ""
+    },
+    "entry": "rack.gate_matrix",
+    "hint": "gate_matrix",
+    "record": {
+     "caused_by": [
+      "host/usb1/port-1-3/usb-1-3/can/1"
+     ],
+     "code": "CellsFailing",
+     "expected_period_s": 30.0,
+     "level": "error",
+     "measurements": [
+      {
+       "key": "cells_passing",
+       "unit": "1",
+       "value": 3
+      },
+      {
+       "key": "cells",
+       "unit": "1",
+       "value": 16
+      },
+      {
+       "key": "not_run",
+       "unit": "1",
+       "value": 11
+      }
+     ],
+     "message": "3 of 16 cells pass",
+     "name": "hard gates passing",
+     "path": "host/usb1/port-1-3/usb-1-3/can/1",
+     "record": "status",
+     "schema": "diagnostics-record/0",
+     "source": "robotdx.diagnostics",
+     "stamp": 1792631500.0,
+     "values": [
+      {
+       "key": "dx.diagnostic",
+       "value": "rack.gate_matrix"
+      },
+      {
+       "key": "dx.family",
+       "value": "rollup"
+      },
+      {
+       "key": "dx.role",
+       "value": "headline"
+      },
+      {
+       "key": "dx.hint",
+       "value": "gate_matrix"
+      },
+      {
+       "key": "dx.emits",
+       "value": "matrix"
+      },
+      {
+       "key": "dx.basis",
+       "value": "computed"
+      },
+      {
+       "key": "dx.config",
+       "value": "{\"gates\":[\"T1\",\"T2\",\"T3\",\"T4\",\"T5\",\"T6\",\"T7\",\"T8\"],\"subjects\":[],\"title\":\"hard gates\"}"
+      },
+      {
+       "key": "dx.payload",
+       "value": "{\"cells\":[[\"pass\",\"fail\",\"warn\",\"not_run\",\"not_run\",\"not_run\",\"not_run\",\"not_run\"],[\"pass\",\"pass\",\"not_run\",\"not_run\",\"not_run\",\"not_run\",\"not_run\",\"not_run\"]],\"cols\":[\"T1\",\"T2\",\"T3\",\"T4\",\"T5\",\"T6\",\"T7\",\"T8\"],\"rows\":[\"CAN 1\",\"CAN 2\"],\"values\":[[1.0,1.0,1.0,null,null,null,null,null],[1.0,1.0,null,null,null,null,null,null]]}"
+      }
+     ]
+    }
+   },
+   {
+    "dress": {
+     "basis": "computed",
+     "better": "lower",
+     "caused_by": [],
+     "code": "",
+     "config": {
+      "dwell_min_s": 0.25,
+      "limits": {
+       "error_high": 5.0,
+       "error_low": null,
+       "warn_high": null,
+       "warn_low": null
+      },
+      "percentile": 90.0,
+      "require_side": "output",
+      "scale": 1.0,
+      "settle_window_s": 0.05,
+      "side": "output",
+      "skip_prelude": true,
+      "unit": "mm"
+     },
+     "diagnostic": "arm.tool_error_at_stop",
+     "emits": "series",
+     "evidence": [
+      {
+       "key": "q_rad - q_target_rad at dwells",
+       "note": "",
+       "path": "fixture B"
+      }
+     ],
+     "family": "real_vs_target",
+     "hint": "path_overlay",
+     "limits": {
+      "error_high": 5.0,
+      "error_low": null,
+      "warn_high": null,
+      "warn_low": null
+     },
+     "measurements": [
+      {
+       "key": "n",
+       "unit": "1",
+       "value": 3
+      },
+      {
+       "key": "median",
+       "unit": "mm",
+       "value": 0.0011999999999999789
+      },
+      {
+       "key": "max",
+       "unit": "mm",
+       "value": 0.0020999999999999908
+      },
+      {
+       "key": "mean_signed",
+       "unit": "mm",
+       "value": 0.0013333333333332975
+      },
+      {
+       "key": "runs",
+       "unit": "1",
+       "value": 1
+      }
+     ],
+     "message": "p90 0.00192 mm over 3 stops in 1 runs (output side)",
+     "metric": "p90",
+     "payload": {
+      "group": [
+       "fixture B",
+       "fixture B",
+       "fixture B"
+      ],
+      "x": [
+       0,
+       1,
+       2
+      ],
+      "x_label": "stop",
+      "y": [
+       0.0011999999999999789,
+       0.0020999999999999908,
+       0.0006999999999999229
+      ],
+      "y_label": "signed stop error (mm)"
+     },
+     "role": "headline",
+     "run": "fixture B",
+     "stamp": 1792631500.0,
+     "subject": "host/usb1/port-1-3/usb-1-3/can/1",
+     "t0": 2.5,
+     "t1": 2.99,
+     "target": 5.0,
+     "title": "tool error at stop",
+     "unit": "mm",
+     "value": 0.0019199999999999883,
+     "verdict": "pass",
+     "view_extra": "",
+     "why": ""
+    },
+    "entry": "arm.tool_error_at_stop",
+    "hint": "path_overlay",
+    "record": {
+     "expected_period_s": 30.0,
+     "level": "ok",
+     "measurements": [
+      {
+       "error_high": 5.0,
+       "key": "p90",
+       "unit": "mm",
+       "value": 0.0019199999999999883
+      },
+      {
+       "key": "n",
+       "unit": "1",
+       "value": 3
+      },
+      {
+       "key": "median",
+       "unit": "mm",
+       "value": 0.0011999999999999789
+      },
+      {
+       "key": "max",
+       "unit": "mm",
+       "value": 0.0020999999999999908
+      },
+      {
+       "key": "mean_signed",
+       "unit": "mm",
+       "value": 0.0013333333333332975
+      },
+      {
+       "key": "runs",
+       "unit": "1",
+       "value": 1
+      }
+     ],
+     "message": "p90 0.00192 mm over 3 stops in 1 runs (output side)",
+     "name": "tool error at stop",
+     "path": "host/usb1/port-1-3/usb-1-3/can/1",
+     "record": "status",
+     "schema": "diagnostics-record/0",
+     "source": "robotdx.diagnostics",
+     "stamp": 1792631500.0,
+     "values": [
+      {
+       "key": "dx.diagnostic",
+       "value": "arm.tool_error_at_stop"
+      },
+      {
+       "key": "dx.family",
+       "value": "real_vs_target"
+      },
+      {
+       "key": "dx.role",
+       "value": "headline"
+      },
+      {
+       "key": "dx.hint",
+       "value": "path_overlay"
+      },
+      {
+       "key": "dx.emits",
+       "value": "series"
+      },
+      {
+       "key": "dx.better",
+       "value": "lower"
+      },
+      {
+       "key": "dx.run",
+       "value": "fixture B"
+      },
+      {
+       "key": "dx.basis",
+       "value": "computed"
+      },
+      {
+       "key": "dx.target",
+       "value": "5.0"
+      },
+      {
+       "key": "dx.t0",
+       "value": "2.5"
+      },
+      {
+       "key": "dx.t1",
+       "value": "2.99"
+      },
+      {
+       "key": "dx.config",
+       "value": "{\"dwell_min_s\":0.25,\"limits\":{\"error_high\":5.0,\"error_low\":null,\"warn_high\":null,\"warn_low\":null},\"percentile\":90.0,\"require_side\":\"output\",\"scale\":1.0,\"settle_window_s\":0.05,\"side\":\"output\",\"skip_prelude\":true,\"unit\":\"mm\"}"
+      },
+      {
+       "key": "dx.payload",
+       "value": "{\"group\":[\"fixture B\",\"fixture B\",\"fixture B\"],\"x\":[0,1,2],\"x_label\":\"stop\",\"y\":[0.0011999999999999789,0.0020999999999999908,0.0006999999999999229],\"y_label\":\"signed stop error (mm)\"}"
+      },
+      {
+       "key": "dx.evidence",
+       "value": "[[\"fixture B\",\"q_rad - q_target_rad at dwells\",\"\"]]"
+      }
+     ]
+    }
+   },
+   {
+    "dress": {
+     "basis": "computed",
+     "better": "lower",
+     "caused_by": [],
+     "code": "MaxAboveWarnLimit",
+     "config": {
+      "channel": "temp_c",
+      "headline": "max",
+      "max": {
+       "error_high": 70.0,
+       "error_low": null,
+       "warn_high": 60.0,
+       "warn_low": null
+      },
+      "mean": {
+       "error_high": 65.0,
+       "error_low": null,
+       "warn_high": 55.0,
+       "warn_low": null
+      },
+      "min": {
+       "error_high": null,
+       "error_low": null,
+       "warn_high": null,
+       "warn_low": null
+      },
+      "skip_prelude": false,
+      "std": {
+       "error_high": null,
+       "error_low": null,
+       "warn_high": null,
+       "warn_low": null
+      },
+      "unit": "Cel"
+     },
+     "diagnostic": "fixture.unknown_hint",
+     "emits": "series",
+     "evidence": [
+      {
+       "key": "temp_c",
+       "note": "",
+       "path": "fixture B"
+      }
+     ],
+     "family": "health",
+     "hint": "radar_sweep",
+     "limits": {
+      "error_high": 70.0,
+      "error_low": null,
+      "warn_high": 60.0,
+      "warn_low": null
+     },
+     "measurements": [
+      {
+       "key": "min",
+       "unit": "Cel",
+       "value": 48.0
+      },
+      {
+       "key": "mean",
+       "unit": "Cel",
+       "value": 56.0
+      },
+      {
+       "key": "std",
+       "unit": "Cel",
+       "value": 4.696434517284495
+      },
+      {
+       "key": "n",
+       "unit": "1",
+       "value": 60
+      }
+     ],
+     "message": "temp_c: min 48, max 64, mean 56, std 4.7 Cel (max out of bounds)",
+     "metric": "max",
+     "payload": {
+      "bands": {
+       "max": [
+        null,
+        60.0,
+        null,
+        70.0
+       ],
+       "mean": [
+        null,
+        55.0,
+        null,
+        65.0
+       ],
+       "min": [
+        null,
+        null,
+        null,
+        null
+       ],
+       "std": [
+        null,
+        null,
+        null,
+        null
+       ]
+      },
+      "x": [
+       0.0,
+       1.0,
+       2.0,
+       3.0,
+       4.0,
+       5.0,
+       6.0,
+       7.0,
+       8.0,
+       9.0,
+       10.0,
+       11.0,
+       12.0,
+       13.0,
+       14.0,
+       15.0,
+       16.0,
+       17.0,
+       18.0,
+       19.0,
+       20.0,
+       21.0,
+       22.0,
+       23.0,
+       24.0,
+       25.0,
+       26.0,
+       27.0,
+       28.0,
+       29.0,
+       30.0,
+       31.0,
+       32.0,
+       33.0,
+       34.0,
+       35.0,
+       36.0,
+       37.0,
+       38.0,
+       39.0,
+       40.0,
+       41.0,
+       42.0,
+       43.0,
+       44.0,
+       45.0,
+       46.0,
+       47.0,
+       48.0,
+       49.0,
+       50.0,
+       51.0,
+       52.0,
+       53.0,
+       54.0,
+       55.0,
+       56.0,
+       57.0,
+       58.0,
+       59.0
+      ],
+      "x_label": "t (s, runs end to end)",
+      "y": [
+       48.0,
+       48.271186440677965,
+       48.54237288135593,
+       48.813559322033896,
+       49.08474576271186,
+       49.35593220338983,
+       49.6271186440678,
+       49.898305084745765,
+       50.16949152542373,
+       50.440677966101696,
+       50.71186440677966,
+       50.983050847457626,
+       51.25423728813559,
+       51.52542372881356,
+       51.79661016949152,
+       52.067796610169495,
+       52.33898305084746,
+       52.610169491525426,
+       52.88135593220339,
+       53.152542372881356,
+       53.42372881355932,
+       53.69491525423729,
+       53.96610169491525,
+       54.23728813559322,
+       54.50847457627118,
+       54.77966101694915,
+       55.05084745762712,
+       55.32203389830509,
+       55.59322033898305,
+       55.86440677966102,
+       56.13559322033898,
+       56.40677966101695,
+       56.67796610169491,
+       56.94915254237288,
+       57.22033898305085,
+       57.49152542372882,
+       57.76271186440678,
+       58.03389830508475,
+       58.30508474576271,
+       58.57627118644068,
+       58.847457627118644,
+       59.11864406779661,
+       59.389830508474574,
+       59.66101694915254,
+       59.932203389830505,
+       60.20338983050847,
+       60.47457627118644,
+       60.74576271186441,
+       61.016949152542374,
+       61.28813559322034,
+       61.559322033898304,
+       61.83050847457627,
+       62.101694915254235,
+       62.37288135593221,
+       62.64406779661017,
+       62.91525423728814,
+       63.186440677966104,
+       63.45762711864407,
+       63.728813559322035,
+       64.0
+      ],
+      "y_label": "temp_c (Cel)"
+     },
+     "role": "health",
+     "run": "",
+     "stamp": 1792631500.0,
+     "subject": "host/usb1/port-1-3/usb-1-3/can/1",
+     "t0": null,
+     "t1": null,
+     "target": 70.0,
+     "title": "board temperature, an unknown view",
+     "unit": "Cel",
+     "value": 64.0,
+     "verdict": "warn",
+     "view_extra": "",
+     "why": ""
+    },
+    "entry": null,
+    "hint": "radar_sweep",
+    "note": "a copy of driver.board_temp's record with dx.hint and dx.diagnostic replaced: not the library's",
+    "record": {
+     "code": "MaxAboveWarnLimit",
+     "expected_period_s": 30.0,
+     "level": "warn",
+     "measurements": [
+      {
+       "error_high": 70.0,
+       "key": "max",
+       "unit": "Cel",
+       "value": 64.0,
+       "warn_high": 60.0
+      },
+      {
+       "key": "min",
+       "unit": "Cel",
+       "value": 48.0
+      },
+      {
+       "key": "mean",
+       "unit": "Cel",
+       "value": 56.0
+      },
+      {
+       "key": "std",
+       "unit": "Cel",
+       "value": 4.696434517284495
+      },
+      {
+       "key": "n",
+       "unit": "1",
+       "value": 60
+      }
+     ],
+     "message": "temp_c: min 48, max 64, mean 56, std 4.7 Cel (max out of bounds)",
+     "name": "board temperature, an unknown view",
+     "path": "host/usb1/port-1-3/usb-1-3/can/1",
+     "record": "status",
+     "schema": "diagnostics-record/0",
+     "source": "robotdx.diagnostics",
+     "stamp": 1792631500.0,
+     "values": [
+      {
+       "key": "dx.diagnostic",
+       "value": "fixture.unknown_hint"
+      },
+      {
+       "key": "dx.family",
+       "value": "health"
+      },
+      {
+       "key": "dx.role",
+       "value": "health"
+      },
+      {
+       "key": "dx.hint",
+       "value": "radar_sweep"
+      },
+      {
+       "key": "dx.emits",
+       "value": "series"
+      },
+      {
+       "key": "dx.better",
+       "value": "lower"
+      },
+      {
+       "key": "dx.basis",
+       "value": "computed"
+      },
+      {
+       "key": "dx.target",
+       "value": "70.0"
+      },
+      {
+       "key": "dx.config",
+       "value": "{\"channel\":\"temp_c\",\"headline\":\"max\",\"max\":{\"error_high\":70.0,\"error_low\":null,\"warn_high\":60.0,\"warn_low\":null},\"mean\":{\"error_high\":65.0,\"error_low\":null,\"warn_high\":55.0,\"warn_low\":null},\"min\":{\"error_high\":null,\"error_low\":null,\"warn_high\":null,\"warn_low\":null},\"skip_prelude\":false,\"std\":{\"error_high\":null,\"error_low\":null,\"warn_high\":null,\"warn_low\":null},\"unit\":\"Cel\"}"
+      },
+      {
+       "key": "dx.payload",
+       "value": "{\"bands\":{\"max\":[null,60.0,null,70.0],\"mean\":[null,55.0,null,65.0],\"min\":[null,null,null,null],\"std\":[null,null,null,null]},\"x\":[0.0,1.0,2.0,3.0,4.0,5.0,6.0,7.0,8.0,9.0,10.0,11.0,12.0,13.0,14.0,15.0,16.0,17.0,18.0,19.0,20.0,21.0,22.0,23.0,24.0,25.0,26.0,27.0,28.0,29.0,30.0,31.0,32.0,33.0,34.0,35.0,36.0,37.0,38.0,39.0,40.0,41.0,42.0,43.0,44.0,45.0,46.0,47.0,48.0,49.0,50.0,51.0,52.0,53.0,54.0,55.0,56.0,57.0,58.0,59.0],\"x_label\":\"t (s, runs end to end)\",\"y\":[48.0,48.271186440677965,48.54237288135593,48.813559322033896,49.08474576271186,49.35593220338983,49.6271186440678,49.898305084745765,50.16949152542373,50.440677966101696,50.71186440677966,50.983050847457626,51.25423728813559,51.52542372881356,51.79661016949152,52.067796610169495,52.33898305084746,52.610169491525426,52.88135593220339,53.152542372881356,53.42372881355932,53.69491525423729,53.96610169491525,54.23728813559322,54.50847457627118,54.77966101694915,55.05084745762712,55.32203389830509,55.59322033898305,55.86440677966102,56.13559322033898,56.40677966101695,56.67796610169491,56.94915254237288,57.22033898305085,57.49152542372882,57.76271186440678,58.03389830508475,58.30508474576271,58.57627118644068,58.847457627118644,59.11864406779661,59.389830508474574,59.66101694915254,59.932203389830505,60.20338983050847,60.47457627118644,60.74576271186441,61.016949152542374,61.28813559322034,61.559322033898304,61.83050847457627,62.101694915254235,62.37288135593221,62.64406779661017,62.91525423728814,63.186440677966104,63.45762711864407,63.728813559322035,64.0],\"y_label\":\"temp_c (Cel)\"}"
+      },
+      {
+       "key": "dx.evidence",
+       "value": "[[\"fixture B\",\"temp_c\",\"\"]]"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ "made_by": "tests/fixtures/dx_hints/make_records.py",
+ "robotdx": {
+  "catalog_dress": true,
+  "ref": "lane/stock-functions 29f03b2e9b1d58592c7631bfcb60a0cd11e7df3a (git archive robotdx contract)"
+ },
+ "schema": "robotdx-dx-hints-fixture/1",
+ "subject": "host/usb1/port-1-3/usb-1-3/can/1"
+}

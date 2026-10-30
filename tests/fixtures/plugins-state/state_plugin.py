@@ -17,6 +17,9 @@ configuration, the others answer and stream State (the composition fixtures put 
 ``$STATE_ACT_S`` (default 0): how long a real (refused) utility run lasts, so a batch's queue can be watched.
 ``$STATE_LOG`` (a file) gets one JSON line per verb (verb, argv, pid, the frame dir) so a test can see what ran.
 ``$STATE_HOLD_PORT`` set: ``watch`` prints a ``PortBusy`` status and exits (the plugin found the port held itself).
+``$STATE_DX_RECORDS`` (a JSON file, ``{"records": [...]}``): ``diagnose`` also prints those status records on ``can/1``, each stamped with
+this plugin's clock, read again every run so a test moves the fixture on by rewriting the file (tests/fixtures/dx_hints: robotdx.diagnostics'
+dressed Results, one per data-ui view hint).
 """
 
 from __future__ import annotations
@@ -312,6 +315,19 @@ def extra_configs(path: str, now: float) -> list[dict]:
              "unit": "", "type": "float", "writable": False, "stamp": now} for index in range(count)]
 
 
+def dx_records() -> list[dict]:
+    """``$STATE_DX_RECORDS``'s status records, or none (unset, missing or not JSON: an ordinary fixture run)."""
+
+    file = os.environ.get("STATE_DX_RECORDS")
+    if not file:
+        return []
+    try:
+        with open(file, encoding="utf-8") as handle:
+            return [line for line in json.load(handle).get("records") or [] if isinstance(line, dict)]
+    except (OSError, ValueError, AttributeError):
+        return []
+
+
 def diagnose(device: str) -> None:
     now = clock()
     # $STATE_BUS_S / $STATE_CONFIG_S: the seconds a real driver spends on its bus check, then on reading the configuration
@@ -343,6 +359,9 @@ def diagnose(device: str) -> None:
             time.sleep(float(os.environ.get("STATE_CONFIG_S") or 0))
             for row in [*configs("can/1", clock()), *extra_configs("can/1", clock())]:
                 emit(**{key: value for key, value in row.items() if key != "schema"})
+        # WHY each stamped now: a re-sent stamp is the same report to the host, and its history keeps one point per evaluation
+        for line in dx_records():
+            emit(**{**{key: value for key, value in line.items() if key != "schema"}, "path": "can/1", "stamp": clock()})
     else:
         emit(record="entity", path="", name="RealSense D405 fixture", kind="camera",
              identity={"manufacturer": "Intel", "model": "D405", "model_id": "intel-realsense-d405", "serial_number": "219323070276",
