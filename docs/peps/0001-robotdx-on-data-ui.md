@@ -1032,3 +1032,39 @@ this branch's later runs had five loads at 240-564 ms, the re-vendor's beside it
 - **Two choices made here, reversible:** a New dashboard… name that is taken (a file, or a starter's) is refused with the reason,
   not renamed (the reader typed it; New on the Dashboards list still takes the next free name); a dashboard that the add came from is
   drawn again on the picker's close, or 2 s after "Added".
+
+### 17.4 data-ui answered §17.1 (integrate/packet 20bbafe), and the page's workarounds went (2026-10-29)
+
+data-ui 20bbafe merges lane/dx-asks 72a899a: the five asks of §17.1 (CONTRACT §26's, §31's and §34's addenda), with P5's view
+hints (§35) beside them. Re-vendored alone first (60f1fba): every check green with the page's workarounds still in
+(`test_dx_add_to_dashboard.js` **17/17**: the legend series now has its item menu; the rest as at b523933), so the vendor drifts
+nothing for the page. Then the page (eed9fd8):
+
+- **`el.baseUrl = baseUrl` before `el.load()`** in `openBase` (§34: "a host that draws a .base itself with load() sets baseUrl to
+  where it lives"). panelSpec's file is then the one the dashboard declares (`dashboardPanel.file`), `config.json?path=<the board>`,
+  so the declared-file swap in `dx/add.js` and app.js's `filesOf` / `declaredFile` went. The gate fails without the line: **10/17**
+  (the panel says `/datasets/config.json?path=…`, resolved against `/dx/`; the byte-for-byte, Open, reload, 412, New and
+  open-dashboard checks fail, with 404s).
+- **holdPins went**: a pinned panel's clock is data-ui's own `LiveClock`, restored at its t, which stays there on this page's live
+  data. The `data-dashboard-live` listener is `rebind` alone again.
+- **A dashboard an add saved is drawn again at once**, also when the add came from one of its own panels: data-ui's picker waits for
+  the element of the same id the redraw makes, moves into it and says "Added to …" there. The picker-close / 2 s wait went
+  (§17.3's second reversible choice is gone with it).
+
+**Measured at eed9fd8** (this PC, load 5-13 on 24 CPUs): `test_dx_add_to_dashboard.js` **17/17** (unedited), `test_dx_add_at_moment.js`
+**4/4**, `test_dx_page.js` **101/101**, `test_dx_log_toolbar.js` **46/46**, `test_dx_timeline.js` **27/27**, `test_dx_tree_past.js`
+**7/7**, `test_dx_time_span.js` **6/6**; pytest (a detached checkout named `io-diagnostics`) **828 passed, 1 skipped**. The bench
+(`tools/bench_robotdx.py --phases fixture`, GPU, every run "quiet"), two runs each interleaved with main from a detached checkout
+of it, every sample pooled:
+
+| KPI | main 5575808 | this branch eed9fd8 | budget |
+|---|---|---|---|
+| `first_paint_ms` p50 / p95 (cold loads) | 124.7 / 146.2 (10) | 119.1 / 154.9 (10) | 1,500 |
+| `scrub_ms` p50 / p95 | 24.7 / 26.7 (60) | 24.3 / 26.8 (60) | 50 |
+| `back_to_live_ms` p50 / p95 | 14.0 / 23.6 (20) | 17.1 / 25.7 (20) | 100 |
+| `idle_traffic_kb_s` (per run) | 27, 27 | 27, 27 | 8 |
+| `ingest_to_pixel_ms` on the fixture host p50 / p95 (emitted) | 9.7 / 18.6 (400) | 10.7 / 18.5 (399) | 30 |
+
+The same within the runs' spread. **Still worked around** (§16.7, not answered by 20bbafe, read in its source): a dashboard's
+`load()` of a new document still retires the clock it holds, a host's included (`_retireClock`: `holdClock` stays), and `bindLive`
+still lets go of every dataset on its clock that it did not bind (`rebind` stays).
