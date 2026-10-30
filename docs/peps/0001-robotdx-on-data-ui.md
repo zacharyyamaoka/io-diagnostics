@@ -1193,3 +1193,12 @@ The same within the runs' spread.
 - **The peek's dashes** for a plain check (18.4, 3). A reversible choice made here: one table for every check, its peek the stock
   diagnostic's sections, rather than a second table of the stock diagnostics alone.
 - **Not measured on /dx/**: the tab at 390 px, dark mode, and a real host's own bindings (the fixture plugin prints the records).
+
+### 18.6 The 24th check is green (2026-10-29)
+
+The one failing check in 18.3 (threshold_band's warn and error limits) passes: data-ui answered 18.4, 1 at main `e798a90` (a live plot
+draws its §35 limits), and the vendored copy is now that commit (`937d0df`; `VERSION` names it) with nothing else changed here.
+`tests/test_dx_diagnostics_hints.js` is **24/24** unedited (the plot's newest value 52, `limits` warn_hi 60 and error_hi 70; frame B 64
+with the same limits). The rest at 937d0df: `test_dx_page.js` 101/101, `test_dx_log_toolbar.js` 46/46, `test_dx_timeline.js` 27/27,
+`test_dx_tree_past.js` 7/7, `test_dx_time_span.js` 6/6, `test_dx_add_to_dashboard.js` 17/17, `test_dx_add_at_moment.js` 4/4; pytest
+(a detached checkout named `io-diagnostics`, the repo's `.venv`) 828 passed, 1 skipped. 18.4, 1 and the first bullet of 18.5 are closed.
