@@ -12,25 +12,21 @@
      creates with If-None-Match: *, so a name already there is refused, never written over. "Added to <name>" links the dashboard
      on this page; a dashboard open here is drawn again (boards.js, dx-board-saved).
 
-   WHY the page appends the panel itself (data-ui's exported appendPanel) rather than saving the text data-ui made: the new panel
-   must read the file its source panel reads. This page hands every view of a kind one shared dataset (PEP §12.1: checks, config,
-   events, … for every entity), so a dataset's own url is whichever binding made it first, often none (config.json, no entity):
-   saved as data-ui sees it, a board's Configuration panel would read nobody's settings. The file the source panel's dashboard
-   declares for its dataset is the binding (config.json?path=<entity>). Asked of data-ui: in a dashboard, panelSpec's file should
-   be the one the dashboard declares for the panel's dataset.
+   WHY the page appends the panel itself (data-ui's exported appendPanel) rather than saving the text data-ui made: the append goes
+   on the text as the host holds it now (a 412 reads it again), and the data path is written against where the file lives. The
+   panel is data-ui's own: in a dashboard it names the file that dashboard declares for its dataset (CONTRACT §34's
+   dashboardPanel.file; openBase sets the dashboard's baseUrl), which on this page is the binding (config.json?path=<entity>), not
+   the shared dataset's url (PEP §12.1: one dataset per kind, whose url is whichever binding made it first).
    WHY base = dashboards/<name>.base: every dashboard this page writes names its data relative to the folder it opens dashboards
    from (app.js BOARDS), as the starters do, so appendPanel finds a dataset the dashboard already reads by its file. */
 
 import { appendPanel } from '../vendor/data-ui/data-ui.js';
 import { storeOf, nameFor } from './boards.js';
 
-/** A URL as a dashboard names a file: its path from the site's root on this origin (data-ui's panelSpec writes it so), else as is. */
-const sitePath = (href) => { const u = new URL(href, location.href); return u.origin === location.origin ? `${u.pathname}${u.search}` : u.href; };
 const why = (r) => (r.tooLarge ? 'the text would be over the host\'s 1 MB' : r.error || 'the host refused it');
 
-/** Install the picker's list and the save on `app` (the element every view of the page is inside). `declaredFile(view)`: the file
-    the dashboard around `view` declares for its panel's dataset, else null (app.js). */
-export function installAddToDashboard(app, { BOARDS, go, declaredFile }) {
+/** Install the picker's list and the save on `app` (the element every view of the page is inside). */
+export function installAddToDashboard(app, { BOARDS, go }) {
   const boardUrl = (id) => new URL(`${encodeURIComponent(id)}.base`, BOARDS).href;
   const texts = new Map();   // id -> {text, etag}: each dashboard's text as last read or written here
 
@@ -52,9 +48,7 @@ export function installAddToDashboard(app, { BOARDS, go, declaredFile }) {
 
   app.addEventListener('data-add-to-dashboard', (e) => {
     const { dashboard, panel } = e.detail;
-    const file = declaredFile(e.target);
-    const spec = file ? { ...panel, dataset: { ...panel.dataset, data: sitePath(file) } } : panel;
-    e.detail.respondWith(add(dashboard, spec));
+    e.detail.respondWith(add(dashboard, panel));
   });
 
   async function add(dashboard, panel) {

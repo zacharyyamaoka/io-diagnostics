@@ -296,33 +296,16 @@ export async function mountDashboards(root, params, { openBase, go, showTimeBar,
   }
   await draw(text);
   // Add to dashboard (add.js) saved THIS dashboard: its text and etag are the ones written (so this page's next save of it is not
-  // refused as somebody else's), and it is drawn again with the new panel at the bottom (data-ui reloads nothing: the host does,
-  // CONTRACT §34). WHY not at once when the add came from one of this dashboard's own panels: drawing it again replaces that
-  // panel, and the picker inside it, before the picker can say "Added to …"; it says so, and the dashboard is drawn again when the
-  // reader closes it, or 2 s later (asked of data-ui: keep the picker across a reload of the dashboard it came from)
-  let pending = null;   // the redraw waiting for the picker: cancelled when this dashboard leaves the page
+  // refused as somebody else's), and it is drawn again at once with the new panel at the bottom (data-ui reloads nothing: the host
+  // does, CONTRACT §34). An add from one of this dashboard's own panels is drawn again at once too: the redraw replaces that panel,
+  // and data-ui's picker waits for the element of the same id the redraw makes, moves into it and says "Added to …" there
+  // (CONTRACT §34's addendum, data-ui 20bbafe; until then the page waited for the picker to close, or 2 s, PEP 0001 §17)
   const onSaved = (e) => {
     if (!own || own.draft || e.detail.id !== own.id) return;
     own.etag = e.detail.etag;
     text = e.detail.text;
     conflictBox.hidden = true;
-    if (pending) pending.cancel();
-    const pick = el.querySelector('.dv-addpick');
-    if (!pick) { draw(text); return; }
-    const next = text;
-    let timer = null;
-    const watch = new MutationObserver(() => { if (!pick.isConnected) now(); });
-    const cancel = () => { clearTimeout(timer); watch.disconnect(); if (pending && pending.cancel === cancel) pending = null; };
-    function now() {
-      if (!pending || pending.cancel !== cancel) return;
-      cancel();
-      const close = pick.isConnected && pick.querySelector('.dv-addpick-x');
-      if (close) close.click();
-      if (text === next) draw(next);
-    }
-    pending = { cancel };
-    if (pick.parentNode) watch.observe(pick.parentNode, { childList: true });
-    timer = setTimeout(now, 2000);
+    draw(text);
   };
   addEventListener('dx-board-saved', onSaved);
 
@@ -394,7 +377,7 @@ export async function mountDashboards(root, params, { openBase, go, showTimeBar,
       await keep(next);
     }));
   }
-  return { update: (p) => (p.board === params.board ? null : false), unmount() { off(); removeEventListener('dx-board-saved', onSaved); if (pending) pending.cancel(); if (opened) opened.release(); } };
+  return { update: (p) => (p.board === params.board ? null : false), unmount() { off(); removeEventListener('dx-board-saved', onSaved); if (opened) opened.release(); } };
 }
 
 function alertIn(root, message) {
