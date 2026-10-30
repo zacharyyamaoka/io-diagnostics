@@ -167,32 +167,32 @@
    "sha256": "b3161124f021b52d62db0e361aeb60f73932843f3825b32e3a7259bc3bc6377e"
   },
   "dashboard-arrange.js": {
-   "bytes": 102243,
-   "sha256": "056cdd0d2240ceb34b633dff7d3638ded0c8f5aa2eca46d6728c0c6f2d5fe743"
+   "bytes": 102485,
+   "sha256": "d94cd0e3f0db780a1e0627bf051897e8aa1e60da56f52d30d3858e77eaa7924d"
   },
   "dashboard-arrange.js.map": {
-   "bytes": 516458,
-   "sha256": "582740f75438a7165e42c7bc612e772f8a91bf75aaf9bdd00b1d036322f00eff"
+   "bytes": 518499,
+   "sha256": "e2eb33de4fe1fd829b25e5e54b2453c864f09ba7b74a4171066c38397e06f0cf"
   },
   "dashboard.js": {
-   "bytes": 74266,
-   "sha256": "8c187c9c1eed9026910a96376c2127c8fb14860e3c5b3b9220524f54039311e1"
+   "bytes": 76541,
+   "sha256": "725c563a1e8776f72fb2bc8192c70f6a01158682645deff5d6df1cddb5170082"
   },
   "dashboard.js.map": {
-   "bytes": 237175,
-   "sha256": "f000e104a313ae267a30e0dc3ecb5b37f3114691fb7894d339ba488cbfadfcbe"
+   "bytes": 248123,
+   "sha256": "9600dae0b9d42ac71d3058add2059f7ee8938bbc6fc4c1e3566c8bab8465b85c"
   },
   "data-ui.css": {
    "bytes": 79283,
    "sha256": "7fc1a2c2f8684a6a7f24393b1c9c2e49bee8e993eed0a650ee6bf317de7e31d3"
   },
   "data-ui.js": {
-   "bytes": 474820,
-   "sha256": "1ee7cc4b9835cd364819c80119fe4c6425fa762bb13def20a51c737dd5975832"
+   "bytes": 478200,
+   "sha256": "0263d58935226ccec59745c10c38952f8e00e1cc61083d904ecafac77f833298"
   },
   "data-ui.js.map": {
-   "bytes": 1835634,
-   "sha256": "3b53bfe17a61b47537706f670b835ca613eb06eaf39d8fc24ef455db5210a47f"
+   "bytes": 1853102,
+   "sha256": "9670387aa1847285f8ef02acc3c99129636e8f4db0a565b968e5a33de1612fe7"
   },
   "python/data_ui_analysis.py": {
    "bytes": 8670,
@@ -1179,12 +1179,12 @@
    "sha256": "5338cd0689f2fad4ffba4a1cef942e49c6ce3e750b4ec66dbf926dfdb615d197"
   },
   "views/live.js": {
-   "bytes": 78153,
-   "sha256": "da388b562ab1bb3a0a8f4f37ecffb856af8f570b06437d6bc01a28ba02d9a442"
+   "bytes": 79422,
+   "sha256": "2706288218862e1b06aa13467411aa4a6a523672ce026d702ba916fdfe7f2a40"
   },
   "views/live.js.map": {
-   "bytes": 363050,
-   "sha256": "adc2d8a363dd6a6f2fcff66c5a703673ddf992de016c80ba07c57437a85bd035"
+   "bytes": 368750,
+   "sha256": "dbcadadce39480cea46a9da9bc07f05dc9881bab4bfea0f79904e5dc0676e773"
   },
   "views/map.js": {
    "bytes": 1333100,
@@ -1247,12 +1247,12 @@
    "sha256": "3f4d44ad2bfe0e3c37fdc6bbd48359f277eb01196eb0db90d5df6c69683bbcd2"
   },
   "views/table.js": {
-   "bytes": 39829,
-   "sha256": "8e64d007aca8fe8c9061cec393c90422fff818ded6a8689c0aba25463fd02a2c"
+   "bytes": 39952,
+   "sha256": "14f4037f97e4ddaa9555eb1b80fbe11c0613dbec57b2dd25207046b795bae415"
   },
   "views/table.js.map": {
-   "bytes": 114337,
-   "sha256": "1bd6213d7bca50405f8227cf446297874488e1c08354e24ee8ced61b465c22b6"
+   "bytes": 115942,
+   "sha256": "e6fdc682ec55cc230fdfe4c7fe6a82a8939eaf746643e0104fc361e8a490e934"
   },
   "views/timeline.js": {
    "bytes": 596853,

@@ -1,27 +1,24 @@
-data-ui 0.1.0, vendored 2026-10-29 15:56 PDT by tools/vendor_data_ui.py
+data-ui 0.1.0, vendored 2026-10-29 23:18 PDT by tools/vendor_data_ui.py
 repo      /home/bam/data-ui
-ref       integrate/packet  (exported with git archive and built by this tool)
-commit    20bbafe8f565ba08ead030e832b3cd5c7836fa86
-a merge of:
-  92a8c1c1b4b5c9715be0d5a56301ae9de663cf41  integrate/packet~1  test(perf oracle): the rail digest is recorded per ICU version (orchestrator fix)
-  72a899afeade77216b09db03ecfe408f525d5051  lane/dx-asks  fix(dx asks): RobotDx's five asks of data-ui (RobotDx PEP 0001 §17.1; CONTRACT §26, §31, §
+ref       main  (exported with git archive and built by this tool)
+commit    e798a9024e48b71d31137d48d1c7def05585cb94
 views     table, list, cards, kpi, live, playback, record, chart, media
 
 files (sha256, from the build's own dist/manifest.json):
-  1ee7cc4b9835cd364819c80119fe4c6425fa762bb13def20a51c737dd5975832  data-ui.js
+  0263d58935226ccec59745c10c38952f8e00e1cc61083d904ecafac77f833298  data-ui.js
   7fc1a2c2f8684a6a7f24393b1c9c2e49bee8e993eed0a650ee6bf317de7e31d3  data-ui.css
-  8c187c9c1eed9026910a96376c2127c8fb14860e3c5b3b9220524f54039311e1  dashboard.js
-  056cdd0d2240ceb34b633dff7d3638ded0c8f5aa2eca46d6728c0c6f2d5fe743  dashboard-arrange.js
+  725c563a1e8776f72fb2bc8192c70f6a01158682645deff5d6df1cddb5170082  dashboard.js
+  d94cd0e3f0db780a1e0627bf051897e8aa1e60da56f52d30d3858e77eaa7924d  dashboard-arrange.js
   63e67cdeecd66fba1354543302985db2fe9dfea52b7ba815a616c22803afc518  rowmodel-worker.js
   16e34c260f1e4453a20c4af03d092fa7a2fabe06e17e6de4ab08af535e7c2b38  resize.js
   65c4e719d3fbdc06b0d1fec663f0ad08dd38a52d83295dedc0f4fbcae4e1d062  LICENSES.md
-  288833b033ebcaba13b0ff8afe79b107f5f3610df77008344a923213fb6445bb  manifest.json
-  8e64d007aca8fe8c9061cec393c90422fff818ded6a8689c0aba25463fd02a2c  views/table.js
+  834a0258dd10b6b7cbc1b9de11b2beab9315476fbcedf799e76164abbdf1bc64  manifest.json
+  14f4037f97e4ddaa9555eb1b80fbe11c0613dbec57b2dd25207046b795bae415  views/table.js
   40537a9fffa417c69e73b7a9a1c588594c23e353d82c972123a88520b057e73b  views/list.js
   59ab603e000be2c6688a9c9063270f232e22a29ba0e5b1c330c28b53e06e7b71  views/cards.js
   9496ddf1c47049a9a7766785a9e165558df96eed46225b373c6e50c987d38879  views/cards-lightbox-73HOFVSJ.js
   49313a5a1ddd421ceb46986e76c0631069f2fa8965dcf92219ef9d7cab448e69  views/kpi.js
-  da388b562ab1bb3a0a8f4f37ecffb856af8f570b06437d6bc01a28ba02d9a442  views/live.js
+  2706288218862e1b06aa13467411aa4a6a523672ce026d702ba916fdfe7f2a40  views/live.js
   ffdf9fd9cb84ef23336bd5b298976b2ab2139620834353955f6f49d315c1b2bc  views/playback.js
   05186d2064458538a8d2b8b954ac13ad1e7b74775ca9e1dc1085c8a90ad0de93  views/record.js
   0a25396076dfa9a32ea204595772914f6f70307f57a3e3a7813e4191c4f52281  views/chart.js
