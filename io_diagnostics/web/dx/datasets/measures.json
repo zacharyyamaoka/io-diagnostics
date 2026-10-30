@@ -1,0 +1,68 @@
+{
+ "id": "measures",
+ "title": "Diagnostic readings",
+ "titleProperty": "check",
+ "properties": {
+  "t": {
+   "type": "number",
+   "unit": "s",
+   "label": "Received",
+   "display": "clock"
+  },
+  "check": {
+   "type": "text",
+   "label": "Check",
+   "note": "The stream: one per stock diagnostic of the entity."
+  },
+  "reading": {
+   "label": "Reading",
+   "note": "The headline with its unit, {value, unit} (a KPI card's number and unit). WHY no type: a number column keeps only the value (data-ui live/store.js), and the card would lose the unit."
+  },
+  "value": {
+   "type": "number",
+   "label": "Value",
+   "note": "The headline number at this evaluation (the host's history)."
+  },
+  "unit": {
+   "type": "text",
+   "label": "Unit"
+  },
+  "warn_lo": {
+   "type": "number",
+   "label": "Warn below"
+  },
+  "warn_hi": {
+   "type": "number",
+   "label": "Warn above"
+  },
+  "error_lo": {
+   "type": "number",
+   "label": "Error below"
+  },
+  "error_hi": {
+   "type": "number",
+   "label": "Error above"
+  },
+  "target": {
+   "type": "number",
+   "label": "Target"
+  },
+  "better": {
+   "type": "text",
+   "label": "Better"
+  },
+  "key": {
+   "type": "text",
+   "label": "Headline"
+  },
+  "hint": {
+   "type": "text",
+   "label": "View"
+  },
+  "id": {
+   "type": "text",
+   "label": "Check id"
+  }
+ },
+ "rows": []
+}

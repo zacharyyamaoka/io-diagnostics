@@ -1,0 +1,92 @@
+{
+ "id": "parts",
+ "title": "Diagnostic parts",
+ "titleProperty": "label",
+ "properties": {
+  "t": {
+   "type": "number",
+   "unit": "s",
+   "label": "Seen",
+   "display": "clock"
+  },
+  "label": {
+   "type": "text",
+   "label": "Part",
+   "note": "What the part is: a cell's row and column, a point's x, a roll-up member."
+  },
+  "level": {
+   "type": "text",
+   "label": "Level",
+   "note": "A roll-up's node: the check's own level, or the member's verdict as the producer judged it."
+  },
+  "verdict": {
+   "type": "text",
+   "label": "Verdict",
+   "note": "A gate matrix cell's verdict (pass, warn, fail, not_run)."
+  },
+  "value": {
+   "type": "number",
+   "label": "Value",
+   "note": "A cell's number, or a point's y."
+  },
+  "row": {
+   "type": "text",
+   "label": "Row"
+  },
+  "column": {
+   "type": "text",
+   "label": "Column"
+  },
+  "x": {
+   "type": "text",
+   "label": "x"
+  },
+  "y": {
+   "type": "number",
+   "label": "y"
+  },
+  "group": {
+   "type": "text",
+   "label": "Group"
+  },
+  "rank": {
+   "type": "number",
+   "label": "Rank"
+  },
+  "parent": {
+   "type": "text",
+   "label": "Parent"
+  },
+  "order": {
+   "type": "number",
+   "label": "Order"
+  },
+  "part": {
+   "type": "text",
+   "label": "Kind",
+   "note": "cell (a matrix's), point (a series'), node (a roll-up's tree)."
+  },
+  "name": {
+   "type": "text",
+   "label": "Check"
+  },
+  "check": {
+   "type": "text",
+   "label": "Check id",
+   "note": "The checks row the part belongs to (its id)."
+  },
+  "hint": {
+   "type": "text",
+   "label": "View"
+  },
+  "path": {
+   "type": "text",
+   "label": "Path"
+  },
+  "id": {
+   "type": "text",
+   "label": "Id"
+  }
+ },
+ "rows": []
+}

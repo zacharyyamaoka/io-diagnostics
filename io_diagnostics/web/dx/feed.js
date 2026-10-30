@@ -28,9 +28,10 @@ const SEV = { debug: 0, info: 1, warn: 2, error: 3, fatal: 3 };   // an event's 
 const CARRIED = ['entities', 'summary'];
 const CARRY_EVERY_MS = 2000, CARRY_AHEAD_S = 6, CARRY_SOON_S = 4;
 const RAW_EVERY_MS = 5000;       // an entity's raw lines while its Log is on screen (the classic log reads them every 2-5 s)
-const KINDS = ['entities', 'summary', 'attention', 'runs', 'events', 'faults', 'checks', 'config', 'actions', 'levels', 'samples'];
-const PER_ENTITY = new Set(['levels', 'samples']);       // one dataset per entity
-const WATCHED = new Set(['checks', 'config', 'actions', 'levels', 'samples', 'peek', 'raw']);   // a binding with ?path= makes the entity watched
+// parts: the stock diagnostics' payloads as rows (partsOf); measures: their headline readings over the host's window (/history)
+const KINDS = ['entities', 'summary', 'attention', 'runs', 'events', 'faults', 'checks', 'config', 'actions', 'levels', 'samples', 'parts', 'measures'];
+const PER_ENTITY = new Set(['levels', 'samples', 'measures']);       // one dataset per entity
+const WATCHED = new Set(['checks', 'config', 'actions', 'levels', 'samples', 'peek', 'raw', 'parts', 'measures']);   // a binding with ?path= makes the entity watched
 // 'peek' reads an entity's /node and /values (what it has: its State keys, its settings) and is never State on screen: no heartbeat
 const STATE_EVERY_MS = 2000;     // /state at most this often (a tick asks sooner than that only once)
 const STATE_IDLE_MS = 5000;      // and this often with no tick at all
@@ -114,18 +115,71 @@ function entityRow(n) {
   };
 }
 
-/** One check as the checks dataset holds it (from /node's `checks` or /checks' lists: the same check_json). */
+const numberOr = (v) => { if (v === null || v === undefined || v === '') return null; const n = Number(v); return Number.isFinite(n) ? n : null; };
+const parsed = (text) => { if (typeof text !== 'string' || !text) return null; try { return JSON.parse(text); } catch (_) { return null; } };
+
+/** One check as the checks dataset holds it (from /node's `checks` or /checks' lists: the same check_json). A stock diagnostic's
+    row also keeps what robotdx.diagnostics' catalog.dress put on its Result, which record.to_record writes as `dx.*` values: its
+    view (`diagnostic`, the entry's id; the check's `name`, its title; `role`, `family`, `hint`, the data-ui view that shows it),
+    its headline (measurements[0]: `metric`, `value`, `unit`, the four limits), `target`, `better`, the evidence window and every
+    measurement (`_measurements`) and its payload (`_payload`: the small series or matrix behind the number). WHY (Codex audit
+    2026-10-29, round 2): the row dropped them, so the Diagnostics tab could only list the checks (PEP 0001 §18). The names are
+    PEP 0010 §10's diagnostic row's; units stay as the record writes them (UCUM: Cel), the views write them for people. */
 function checkRow(path, entity, c) {
   const level = c.effective_level || c.level;
+  const dx = {};
+  for (const v of c.values || []) if (typeof v.key === 'string' && v.key.startsWith('dx.')) dx[v.key.slice(3)] = v.value;
+  const ms = (c.measurements || []).map((m) => ({ key: m.key, value: m.value ?? null, unit: m.unit || '', text: m.text || '', level: m.level ?? null,
+    warn_low: m.warn_low ?? null, warn_high: m.warn_high ?? null, error_low: m.error_low ?? null, error_high: m.error_high ?? null }));
+  const head = ms[0] || null;
   return { id: `${path}#${c.name}`, path, entity, name: c.name, health: health(level), level, said: c.level, rank: rank(level),
     message: c.message || '', code: c.code || '', received: c.received ?? null, period: c.expected_period_s ?? null, source: c.source || '',
-    why: (c.values || []).filter((v) => v.key === 'what_to_check' || v.key === 'fault_meaning').map((v) => v.value).join(' · ') };
+    why: [...(c.values || []).filter((v) => v.key === 'what_to_check' || v.key === 'fault_meaning').map((v) => v.value), dx.why].filter(Boolean).join(' · '),
+    diagnostic: dx.diagnostic || '', binding: dx.binding || '', role: dx.role || '', family: dx.family || '', hint: dx.hint || '', emits: dx.emits || '',
+    metric: head ? head.key : '', value: head ? head.value : null, unit: head ? head.unit : '',
+    warn_lo: head ? head.warn_low : null, warn_hi: head ? head.warn_high : null, error_lo: head ? head.error_low : null, error_hi: head ? head.error_high : null,
+    target: numberOr(dx.target), better: dx.better || '', t0: numberOr(dx.t0), t1: numberOr(dx.t1), run: dx.run || '', basis: dx.basis || '',
+    measured: ms.map((m) => m.text || `${m.key} ${m.value ?? '—'}${m.unit ? ` ${m.unit}` : ''}`).join(' · '),
+    _measurements: ms, _payload: parsed(dx.payload) };
+}
+
+/** A stock diagnostic's payload as rows (the parts dataset): a matrix's cells (rows × cols: a gate matrix's verdicts and values, a
+    repeatability floor's pairwise numbers), a series' points (x, y: a distribution's stops), and for a roll-up the tree its own
+    rows say (the roll-up, then each member with its verdict). WHY rows: every data-ui view reads rows (PEP 0010 §10: "producers
+    write them as rows"), and the producer's own verdicts arrive as they were judged; the page computes none of them. */
+function partsOf(row) {
+  const p = row._payload;
+  const out = new Map();
+  if (!p || typeof p !== 'object') return out;
+  const base = { path: row.path, check: row.id, name: row.name, hint: row.hint };
+  const put = (id, part) => out.set(`${row.id}|${id}`, { id: `${row.id}|${id}`, ...base, ...part });
+  const list = (v) => (Array.isArray(v) ? v : []);
+  if (row.hint === 'rollup_tree' && Array.isArray(p.x)) {
+    // RobotDx's causal roll-up stays the producer's (CONTRACT §35): the root is the check's own level, each member its verdict
+    put('root', { part: 'node', parent: null, label: row.name, level: row.level, rank: row.rank, order: -1 });
+    p.x.forEach((label, i) => put(`m${i}`, { part: 'node', parent: `${row.id}|root`, label: String(label), level: list(p.group)[i] ?? null, rank: numberOr(list(p.y)[i]), order: i }));
+    return out;
+  }
+  if (Array.isArray(p.cells)) {
+    p.cells.forEach((cells, i) => list(cells).forEach((cell, j) => {
+      const r = list(p.rows)[i] ?? i, c = list(p.cols)[j] ?? j;
+      const value = typeof cell === 'number' ? cell : numberOr(list(list(p.values)[i])[j]);
+      put(`${i}.${j}`, { part: 'cell', row: String(r), column: String(c), label: `${r} · ${c}`, verdict: typeof cell === 'string' ? cell : null, value, order: j });
+    }));
+    return out;
+  }
+  if (Array.isArray(p.x) && Array.isArray(p.y)) {
+    p.x.forEach((x, i) => put(i, { part: 'point', x, y: numberOr(p.y[i]), value: numberOr(p.y[i]), group: list(p.group)[i] ?? null,
+      label: `${p.x_label || 'x'} ${x}`, order: i }));
+  }
+  return out;
 }
 
 /** Upsert the checks that changed (a new report at its receive time; a change with no arrival, going stale, at the host's now)
     and remove those of `scope` that left. WHY one `seen` for every reader (a /node per entity, /checks for the rack): one check
-    is then one row whoever read it, and reading it twice is not a second version. */
-function diffChecks(seen, now, ds, nowHost, scope) {
+    is then one row whoever read it, and reading it twice is not a second version. A check's parts (its payload as rows, partsOf)
+    change with it, at its time, so they rewind with the check. */
+function diffChecks(seen, now, ds, nowHost, scope, parts) {
   const up = [];
   for (const [k, r] of now) {
     const was = seen.get(k);
@@ -136,6 +190,18 @@ function diffChecks(seen, now, ds, nowHost, scope) {
   // the store wants each key's versions in time order; a version older than the key's newest goes in at its place
   if (up.length) ds.upsert(up.sort((a, b) => a.t - b.t));
   if (gone.length) ds.remove(gone, nowHost);
+  if (!parts) return;
+  const pUp = [], pGone = [];
+  for (const r of up) {
+    const had = parts.seen.get(r.id) || new Map();
+    const next = partsOf(r);
+    for (const [id, part] of next) if (!same(had.get(id), part)) pUp.push({ ...part, t: r.t });
+    for (const id of had.keys()) if (!next.has(id)) pGone.push([id, r.t]);
+    if (next.size) parts.seen.set(r.id, next); else parts.seen.delete(r.id);
+  }
+  for (const k of gone) { for (const id of (parts.seen.get(k) || new Map()).keys()) pGone.push([id, nowHost]); parts.seen.delete(k); }
+  if (pUp.length) parts.ds.upsert(pUp.sort((a, b) => a.t - b.t));
+  for (const [id, t] of pGone.sort((a, b) => a[1] - b[1])) parts.ds.remove([id], t);
 }
 
 export class RobotDxFeed extends EventTarget {
@@ -170,6 +236,7 @@ export class RobotDxFeed extends EventTarget {
     this.treeBack = null;            // the tree's past: {supported, from, bin_s} once GET /history/tree answered
     this._carriedAt = 0;             // the last _carryForward
     this._seenChecks = new Map();    // checks: id -> the row last written, shared by every reader (diffChecks)
+    this._seenParts = new Map();     // parts: check id -> Map(part id -> the part last written) (diffChecks, partsOf)
     this._allChecks = { uses: 0, released: 0, at: 0, busy: false, due: true, supported: null };   // GET /checks (no ?path=)
     this._onVisible = () => { if (!hidden()) { this._state.wanted = true; this._kick(); } };
     this.addEventListener('watch', (e) => { const ent = this._entities.get(e.detail.path); if (ent) ent.watch = e.detail.watch; });
@@ -206,14 +273,14 @@ export class RobotDxFeed extends EventTarget {
     // Log tab reads them); one stream each keeps every write in order (an append dataset drops a row older than a sealed chunk)
     const spec = { entities: { key: 'path' }, summary: { key: 'host' }, attention: { key: 'path' }, runs: { key: 'id' },
       faults: { key: 'id' }, checks: { key: 'id' }, config: { key: 'id' }, actions: { key: 'id' }, events: { stream: 'stream' }, levels: { stream: 'check' },
-      samples: { stream: 'key' } }[kind];
+      samples: { stream: 'key' }, parts: { key: 'id' }, measures: { stream: 'check' } }[kind];
     const age = this.host.window || 900;
     ds = new LiveDataset({
       id: name, title: schema.title || kind, titleProperty: schema.titleProperty, properties: schema.properties, time: 't',
       ...spec,
       // WHY the host's window: the host keeps levels and measurements that long (§5c4), so rewind covers the same span
       // (the entities too since §16: each version now carries its node, and PEP §12.1 always said the keyed ones keep the window)
-      retention: kind === 'samples' || kind === 'levels' || kind === 'events' || kind === 'summary' || kind === 'entities' ? { age } : {},
+      retention: kind === 'samples' || kind === 'levels' || kind === 'measures' || kind === 'events' || kind === 'summary' || kind === 'entities' ? { age } : {},
       // WHY 0: staleness is the host's call (PEP §5a8); the page says reconnecting itself when the host goes away
       stale: 0, url: new URL(`${kind}.json${path ? `?path=${encodeURIComponent(path)}` : ''}`, this.schemaBase).href,
     });
@@ -225,6 +292,9 @@ export class RobotDxFeed extends EventTarget {
 
   /** Every dataset the page holds now: {name: LiveDataset}. */
   datasets() { return Object.fromEntries(this._sets); }
+
+  /** The parts dataset and what was last written to it (diffChecks). */
+  _parts() { return { ds: this.dataset('parts'), seen: this._seenParts }; }
 
   /** A view needs this kind of data (of this entity): start (or keep) its polls. */
   use(kind, path) {
@@ -269,7 +339,7 @@ export class RobotDxFeed extends EventTarget {
     await schemas;
     const s = await settings;
     if (s && s.history_window_s) this.host.window = s.history_window_s;
-    for (const kind of ['entities', 'summary', 'attention', 'runs', 'events', 'faults', 'checks', 'config', 'actions']) this.dataset(kind);
+    for (const kind of ['entities', 'summary', 'attention', 'runs', 'events', 'faults', 'checks', 'config', 'actions', 'parts']) this.dataset(kind);
     this._liveReady = true;
     for (const [type, data] of this._liveQueue.splice(0)) this._liveEvent(type, data);
     if ((await live) === 'live') this.mode = 'live';
@@ -590,7 +660,7 @@ export class RobotDxFeed extends EventTarget {
       const entity = (this._seen.get(path) || {}).name || usb(path);
       for (const c of list || []) { const r = checkRow(path, entity, c); rows.set(r.id, r); }
     }
-    diffChecks(this._seenChecks, rows, this.dataset('checks'), nowHost, () => true);
+    diffChecks(this._seenChecks, rows, this.dataset('checks'), nowHost, () => true, this._parts());
     this.dispatchEvent(new CustomEvent('checks', { detail: { at: nowHost, checks: rows.size } }));
   }
 
@@ -682,8 +752,8 @@ class EntityFeed {
   constructor(feed, path) {
     this.feed = feed;
     this.path = path;
-    this.uses = { checks: 0, config: 0, actions: 0, levels: 0, samples: 0, peek: 0, raw: 0 };
-    this.released = { checks: 0, config: 0, actions: 0, levels: 0, samples: 0, peek: 0, raw: 0 };   // when each kind's last view left
+    this.uses = { checks: 0, config: 0, actions: 0, levels: 0, samples: 0, peek: 0, raw: 0, parts: 0, measures: 0 };
+    this.released = { checks: 0, config: 0, actions: 0, levels: 0, samples: 0, peek: 0, raw: 0, parts: 0, measures: 0 };   // when each kind's last view left
     this.nodeAt = 0;
     this.historyAt = 0;
     this.valuesAt = 0;
@@ -696,6 +766,7 @@ class EntityFeed {
     this.seenConfig = new Map();
     this.seenActions = new Map();
     this.lastLevel = new Map();  // check -> {from, level}
+    this.lastMeasure = new Map(); // check -> t of its newest reading appended (measures)
     this.lastPoint = new Map();  // key -> t of the newest point appended
     this.nodeOk = false;
     this.valuesOk = false;
@@ -725,10 +796,10 @@ class EntityFeed {
   tick(now) {
     // WHY linger: Explore's detail is rebuilt on a selection and a dashboard on a reload; its polls must not restart
     const want = (k) => this._want(k, now);
-    if (!['checks', 'config', 'actions', 'levels', 'samples', 'peek', 'raw'].some(want)) return;
+    if (!['checks', 'config', 'actions', 'levels', 'samples', 'peek', 'raw', 'parts', 'measures'].some(want)) return;
     // the raw lines of its Log (kernel lines, run output): read while the Log is on screen, the classic log's pace
     if (this.uses.raw > 0 && !this.busy.raw && now - this.rawAt >= RAW_EVERY_MS) this._raw();
-    if (!['checks', 'config', 'actions', 'levels', 'samples', 'peek'].some(want)) return;
+    if (!['checks', 'config', 'actions', 'levels', 'samples', 'peek', 'parts', 'measures'].some(want)) return;
     const live = this.feed.mode === 'live';
     // WHY on a change with /live: a row is upserted when a report arrives, so a rig that reports every 30 s is read every 30 s,
     // not every 2 s; the slow beat catches what changes with no arrival (a check going stale)
@@ -737,7 +808,7 @@ class EntityFeed {
     if (!this.nodeOk) return;
     // the host's level history: the health strips (levels), and once, the checks' own past (so Diagnostics rewinds too)
     const historyDue = !this.historyAt || (live ? (this.historyDue && now - this.historyAt >= HISTORY_ON_CHANGE_MS) || now - this.historyAt >= HISTORY_LIVE_EVERY_MS : now - this.historyAt >= HISTORY_EVERY_MS);
-    if ((want('levels') || (want('checks') && !this.checksBack)) && !this.busy.history && historyDue) { this.historyDue = false; this._history(); }
+    if ((want('levels') || want('measures') || (want('checks') && !this.checksBack)) && !this.busy.history && historyDue) { this.historyDue = false; this._history(); }
     if ((want('samples') || want('peek')) && this.watchSupported && !this.busy.values) {
       // with /live, the backlog is read here and what comes after arrives as the feed's samples (ingest).
       // WHY a poll beside the feed while the watch runs, until the feed shows the watch's pace: a host before 5cc429f sends a
@@ -801,7 +872,7 @@ class EntityFeed {
     const checks = new Map((n.checks || []).map((c) => { const r = checkRow(this.path, name, c); return [r.id, r]; }));
     const nowHost = (n.heard && n.heard.received !== null && n.heard.age_s !== null) ? n.heard.received + n.heard.age_s : this.feed.host.now;
     // the rack's /checks may hold the same checks: one map of what was written, this entity's part of it
-    diffChecks(this.feed._seenChecks, checks, this.feed.dataset('checks'), nowHost, (r) => r && r.path === this.path);
+    diffChecks(this.feed._seenChecks, checks, this.feed.dataset('checks'), nowHost, (r) => r && r.path === this.path, this.feed._parts());
     const config = new Map();
     for (const c of n.config || []) {
       const id = `${this.path}#${c.key}`;
@@ -838,11 +909,14 @@ class EntityFeed {
   async _history() {
     this.busy.history = true;
     this.historyAt = Date.now();
-    const first = !this.lastLevel.size;
+    const measures = this._want('measures');
+    // the whole window until a kind that wants it has its backlog, then the last minute (what came since)
+    const first = !this.lastLevel.size || (measures && !this.lastMeasure.size);
     let h;
     try { h = await this.feed._get(`/history?path=${encodeURIComponent(this.path)}${first ? '' : '&window=60s'}`); } catch (_) { this.busy.history = false; return; }
     this.busy.history = false;
     if (!this.checksBack) this._checksBack(h);
+    if (measures) this._measures(h);
     if (!(this.uses.levels > 0 || Date.now() - this.released.levels <= LINGER_MS)) return;
     const ds = this.feed.dataset('levels', this.path);
     const rows = [];
@@ -860,6 +934,34 @@ class EntityFeed {
     this._history0 = this._history0 || h;
   }
 
+  /** Each stock diagnostic's headline over the host's window (its /history measurement of the row's `metric`, a point per
+      evaluation at its receive time) into the entity's measures dataset, one stream per check: what a threshold_band plot and a
+      kpi_trend card draw over time (PEP 0001 §18). WHY the host's history and not the page's own versions: it holds the window
+      before the page opened, and it is the host's (one point per evaluation, PEP §5c4). The check's target, better side and hint
+      are its row's now; the limits are the history's (the host keeps the latest). */
+  _measures(h) {
+    const rows = [];
+    for (const s of h.statuses || []) {
+      if (s.state) continue;
+      const check = this.feed._seenChecks.get(`${this.path}#${s.name}`);
+      if (!check || !check.hint || !check.metric) continue;
+      const m = (s.measurements || []).find((x) => x.key === check.metric);
+      if (!m) continue;
+      const after = this.lastMeasure.get(s.name) ?? -Infinity;
+      let newest = after;
+      for (const [t, value] of m.points || []) {
+        if (!(t > after)) continue;
+        const v = typeof value === 'number' ? value : null;
+        rows.push({ t, check: s.name, id: check.id, key: m.key, value: v, reading: { value: v, unit: unitText(m.unit || check.unit) }, unit: m.unit || check.unit || '',
+          warn_lo: m.warn_low ?? null, warn_hi: m.warn_high ?? null, error_lo: m.error_low ?? null, error_hi: m.error_high ?? null,
+          target: check.target, better: check.better, hint: check.hint });
+        newest = Math.max(newest, t);
+      }
+      if (newest > after) this.lastMeasure.set(s.name, newest);
+    }
+    if (rows.length) this.feed.dataset('measures', this.path).append(rows.sort((a, b) => a.t - b.t));
+  }
+
   /** The checks' past from the host's level spans (its 15 min window): a version per span at its start, the no-data
       spans as removals. WHY: the host keeps each check's level and message per span (PEP §5c4), so Diagnostics can show
       a moment before this page opened; what_to_check and the receive times are not kept, so those cells are empty then.
@@ -871,7 +973,14 @@ class EntityFeed {
     for (const s of h.statuses || []) {
       if (s.state) continue;
       const id = `${this.path}#${s.name}`;
+      // WHY strictly before /node's own version (its receive time, diffChecks): a span that starts at that report is the same
+      // moment, and a later write at the same t is the newer version of the key, so the span's row (no what_to_check, no receive
+      // time, no stock diagnostic's view) replaced /node's until the check's next report (up to its period; found by
+      // test_dx_diagnostics_hints.js: every stock diagnostic's row lost its hint and measurements right after the page opened)
+      const shown = this.feed._seenChecks.get(id);
+      const until = shown && Number.isFinite(shown.received) ? shown.received : Infinity;
       for (const span of s.levels || []) {
+        if (!(span.from < until)) continue;
         if (span.level === null || span.level === undefined) { removals.push([id, span.from]); continue; }
         versions.push({ id, path: this.path, entity: name, name: s.name, health: health(span.level), level: span.level, said: span.level, rank: rank(span.level),
           message: span.message || '', code: span.code || '', received: null, period: s.expected_period_s ?? null, source: '', why: '', t: span.from });

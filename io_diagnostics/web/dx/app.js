@@ -12,7 +12,7 @@
 
 import { LiveClock, LiveDataset, parseBase, stringifyBase, loadDataset, connectSSE, connectPoll, makeResizable, bindRailSelect, esc, fmtTime, loadView } from '../vendor/data-ui/data-ui.js';
 import '../vendor/data-ui/dashboard.js';
-import { RobotDxFeed, bindingOf } from './feed.js';
+import { RobotDxFeed, bindingOf, unitText } from './feed.js';
 import { startHeartbeat } from './watch.js';
 import { mountDashboards } from './boards.js';
 import { mountTree } from './tree.js';
@@ -404,11 +404,94 @@ function exploreText(tpl, path, entity) {
   return stringifyBase(base);
 }
 
+// ---- the Diagnostics tab: each stock diagnostic in data-ui's view for its hint (PEP 0001 §18; data-ui CONTRACT §35, PEP 0010 §10) --
+// WHY (Codex audit 2026-10-29, round 2): the tab was "a generic checks table and health history", while robotdx.diagnostics'
+// catalog.dress names the stock view each diagnostic is read in. The view is data-ui's, the numbers the producer's: the page draws
+// rows (the checks, their payloads as parts, their readings over the window as measures) and computes no verdict.
+
+/** The entity's stock diagnostics as the page holds them now (each check's newest row with a hint), in name order. */
+function stockChecks(path) {
+  return feed.dataset('checks').snapshot(Infinity, { at: 'latest', limit: Infinity, filter: (r) => r.path === path && Boolean(r.hint) })
+    .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+}
+/** What decides the tab's stock views: each stock diagnostic's name and hint, and a matrix's rows and columns (written into its view).
+    WHY kept per write of the checks: Explore asks on every State event (sigOf, at the watch's rate), and only a write changes it. */
+let hintsSeen = { path: null, seq: -1, sig: '' };
+function hintSig(path) {
+  const ds = feed.dataset('checks');
+  if (hintsSeen.path === path && hintsSeen.seq === ds.seq) return hintsSeen.sig;
+  const sig = stockChecks(path).map((c) => `${c.name}:${c.hint}${c.hint === 'gate_matrix' && c._payload ? JSON.stringify([c._payload.rows, c._payload.cols]) : ''}${c.hint === 'distribution' && c._payload ? `:${Array.isArray(c._payload.cells) ? 'cells' : 'points'}` : ''}`).join('|');
+  hintsSeen = { path, seq: ds.seq, sig };
+  return sig;
+}
+// WHY no trajectory3d: /api/v1 carries no pose for any entity (State values are numbers per key), and a path_overlay draws a path
+// of poses (data-ui PEP 0010 §4, §5.2); the scene3d bundle (784 KB) is not vendored for a view no entity can fill. Said in the tab.
+const HAS_POSE = false;
+
+/** The Diagnostics tab's .base: the template (every check worst first, its peek's evidence, the Health strips) and below it a
+    stock view per hint present: kpi_trend a KPI card per check (its readings' spark, its own target and better side),
+    threshold_band a plot per check with its warn / error limits, gate_matrix a tracker matrix per check (its gates as columns,
+    its subjects as rows), rollup_tree a table tree of the roll-ups (the producer's verdicts as status badges), distribution a
+    chart per check (a histogram of a series' points, a heatmap of a matrix). level_history is the Health strip each check has;
+    evidence is the row's side peek; path_overlay and any hint data-ui has no view for stay in the table (the first with a word
+    why). */
+function diagnosticsText(tpl, path) {
+  const base = parseBase(tpl.replaceAll('{path}', path));
+  const checks = stockChecks(path);
+  const of = (hint) => checks.filter((c) => c.hint === hint);
+  const q = (s) => JSON.stringify(String(s));
+  base.views = base.views || [];
+  base.datasets = base.datasets || {};
+  const panels = base.layout.panels;
+  // a view is named for its check (the panel's title), and never takes a name the tab already has
+  const taken = new Set(base.views.map((v) => v.name));
+  const named = (want) => { let n = want, i = 2; while (taken.has(n)) n = `${want} (${i++})`; taken.add(n); return n; };
+  const add = (view, panel) => { view.name = named(view.name); base.views.push(view); panels.push({ view: view.name, ...panel }); };
+  const span = `${Math.round(feed.host.window || 900)}s`;   // the host's history window, as far back as the readings go
+  if (of('kpi_trend').length || of('threshold_band').length) base.datasets.measures = { data: `../datasets/measures.json?path=${path}` };
+  if (of('kpi_trend').length) {
+    add({ type: 'kpi', name: 'Trends', from: 'measures', at: span, limit: 4000, filters: 'hint == "kpi_trend"', groupBy: { property: 'check' },
+      kpi: { value: { property: 'reading' }, spark: { x: 't', y: 'value' }, target: 'target', compare: { against: 'target', better: 'better' } } }, { w: 12, h: 3, key: 'trends' });
+  }
+  for (const c of of('threshold_band')) {
+    // WHY §35's limits by property, though they draw nothing here yet: data-ui's live plot draws limits from the rows a view holds,
+    // and it gives a plot on a live dataset none (live/feed.js LIVE_NATIVE: it reads typed arrays), so on this page the band is not
+    // drawn until data-ui reads them from the store (asked, PEP 0001 §18). The key is the contract's: nothing here changes then
+    add({ type: 'plot', name: c.name, from: 'measures', at: span, filters: `check == ${q(c.name)}`,
+      plot: { y: ['value'], series: 'check', only: [c.name], unit: unitText(c.unit) || undefined, limits: { warn: ['warn_lo', 'warn_hi'], error: ['error_lo', 'error_hi'] } } }, { w: 6, h: 4 });
+  }
+  for (const c of of('gate_matrix')) {
+    const p = c._payload || {};
+    add({ type: 'tracker', name: c.name, from: 'parts', filters: `check == ${q(c.id)}`, groupBy: { property: 'row' },
+      ...(Array.isArray(p.rows) ? { groupOrder: p.rows.map(String) } : {}),
+      tracker: { state: 'verdict', column: 'column', ...(Array.isArray(p.cols) ? { columns: p.cols.map(String) } : {}), label: 'value' } }, { w: 12, h: 3 });
+  }
+  if (of('rollup_tree').length) {
+    add({ type: 'table', name: 'Roll-up', from: 'parts', filters: `hint == "rollup_tree" && part == "node" && path == ${q(path)}`, tree: { parent: 'parent' }, fold: 'open',
+      order: ['label', 'level', 'rank'], columnSize: { label: 260 }, display: { level: 'status' }, sort: [{ property: 'order', direction: 'ASC' }] }, { w: 6, h: 4, key: 'rollup' });
+  }
+  for (const c of of('distribution')) {
+    const p = c._payload || {};
+    const chart = Array.isArray(p.cells)
+      ? { mark: 'rect', encoding: { x: { field: 'column', type: 'ordinal', title: p.col_label || 'column' }, y: { field: 'row', type: 'ordinal', title: p.row_label || 'row' }, color: { field: 'value', type: 'quantitative', title: c.metric || 'value' } } }
+      : { mark: 'bar', encoding: { x: { field: 'y', bin: true, title: p.y_label || c.metric || 'y' }, y: { aggregate: 'count', title: 'count' } } };
+    add({ type: 'chart', name: c.name, from: 'parts', filters: `check == ${q(c.id)}`, chart }, { w: 6, h: 4 });
+  }
+  const overlay = HAS_POSE ? [] : of('path_overlay');
+  if (overlay.length) {
+    const who = ((feed.dataset('entities').latestAt(Infinity, path) || {}).name) || path;
+    panels.push({ text: `${overlay.map((c) => `**${c.name}**`).join(', ')} ${overlay.length === 1 ? 'is' : 'are'} drawn on a 3D path (data-ui's trajectory3d, the path_overlay hint); ${who} reports no pose here, so ${overlay.length === 1 ? 'it is' : 'they are'} in the table above.`, w: 12 });
+  }
+  return stringifyBase(base);
+}
+
 /** A tab's .base for one entity: the overview is exploreText's (empty panels left out); the State tab gets a Signals tab per
-    value as the overview does; every other tab is its template with {path} filled in, every panel kept (a tab is always there). */
+    value as the overview does; the Diagnostics tab a stock view per hint (diagnosticsText); every other tab is its template with
+    {path} filled in, every panel kept (a tab is always there). */
 function tabText(tab, tpl, path, entity) {
   if (tab.id === 'overview') return exploreText(tpl, path, entity);
   if (tab.id === 'log') return logText(logVariant(), tpl, path, logScope());
+  if (tab.id === 'diagnostics') return diagnosticsText(tpl, path);
   if (tab.id !== 'state') return tpl.replaceAll('{path}', path);
   const base = parseBase(tpl.replaceAll('{path}', path));
   const keys = entity ? [...entity.keys.entries()] : [];
@@ -580,8 +663,8 @@ async function mountExplore(root, params) {
   }
 
   let current = { path: null, release: null, seq: 0, hold: null, sig: '' };
-  // what decides Explore's panels for an entity: its State keys (in order) and whether it has settings
-  const sigOf = (entity) => (entity ? `${[...entity.keys.keys()].join(',')}|${Boolean(entity.node && (entity.node.config || []).length)}` : '');
+  // what decides Explore's panels for an entity: its State keys (in order), whether it has settings, and its stock diagnostics' hints
+  const sigOf = (entity, path) => (entity ? `${[...entity.keys.keys()].join(',')}|${Boolean(entity.node && (entity.node.config || []).length)}|${hintSig(path)}` : '');
   async function select(path, urlPage = '') {
     const seq = ++current.seq;
     tree.select(path);
@@ -620,7 +703,7 @@ async function mountExplore(root, params) {
       if (was) was();
       for (const k of kinds) feed.release(k, path);
       const hold = { panels: opened };
-      current = { ...current, path, page, urlPage, tab, hold, sig: sigOf(entity), release: () => { hold.panels.release(); feed.release('peek', path); }, text };
+      current = { ...current, path, page, urlPage, tab, hold, sig: sigOf(entity, path), release: () => { hold.panels.release(); feed.release('peek', path); }, text };
     } else {
       // nothing picked: the Overview starter, without its own time bar (Explore's is the page's)
       text = withoutPlayback(await template('overview.base'));
@@ -641,7 +724,7 @@ async function mountExplore(root, params) {
   async function refresh(e) {
     if (refreshing || !current.path || !current.hold || (e && e.detail && e.detail.path !== current.path)) return;
     const entity = feed.entity(current.path);
-    const sig = sigOf(entity);
+    const sig = sigOf(entity, current.path);
     if (sig === current.sig) return;
     if (!current.tab) return;
     const text = tabText(current.tab, templates.get(current.tab.file), current.path, entity);

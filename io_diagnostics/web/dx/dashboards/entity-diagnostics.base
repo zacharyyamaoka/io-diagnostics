@@ -1,10 +1,15 @@
 # An entity's Diagnostics tab (docs/peps/0001-robotdx-on-data-ui.md §16; the classic entity page's d6 Diagnostics: health only):
-# its checks worst first, and each check's level over the host's window. Both are as of the page clock's t.
+# its checks worst first, and each check's level over the host's window. Both are as of the page clock's t. A row opens its side
+# peek: the check, what it measured, the evidence (the data a stock diagnostic was judged on, its payload as rows) and which stock
+# diagnostic it is. Below them the page adds data-ui's stock view for each stock diagnostic's hint (PEP 0001 §18: app.js
+# diagnosticsText; data-ui CONTRACT §35): a level_history is the Health strip it already has.
 datasets:
   checks:
     data: "../datasets/checks.json?path={path}"
   levels:
     data: "../datasets/levels.json?path={path}"
+  parts:
+    data: "../datasets/parts.json?path={path}"
 layout:
   columns: 12
   rowHeight: 56
@@ -19,6 +24,16 @@ views:
     order: [name, health, message, code, why, received, period, source]
     sort:
       - { property: rank, direction: DESC }
+    # evidence (CONTRACT §35: record.sections[].view): one diagnostic, its value, limits, window and provenance, then the data
+    # (the peek's head already shows the table's columns, so the first section is only the level in words)
+    record:
+      sections:
+        - { properties: [health] }
+        - { name: Measured, properties: [measured, value, unit, warn_lo, warn_hi, error_lo, error_hi, target, better] }
+        - name: Evidence
+          properties: [t0, t1, run, basis]
+          view: { type: table, name: The data it was judged on, from: parts, filters: 'check == this.id', order: [label, value, verdict, level, group], sort: [{ property: order, direction: ASC }] }
+        - { name: Stock diagnostic, properties: [diagnostic, binding, hint, family, role] }
   - type: levels
     name: Health
     from: levels

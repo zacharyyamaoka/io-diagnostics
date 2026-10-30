@@ -72,6 +72,97 @@
   "id": {
    "type": "text",
    "label": "Id"
+  },
+  "measured": {
+   "type": "text",
+   "label": "Measured",
+   "note": "Every measurement as the host writes it, the headline first."
+  },
+  "value": {
+   "type": "number",
+   "label": "Value",
+   "note": "The headline number (the first measurement), in its unit."
+  },
+  "unit": {
+   "type": "text",
+   "label": "Unit",
+   "note": "As the record writes it (UCUM: Cel, mrad, 1)."
+  },
+  "warn_lo": {
+   "type": "number",
+   "label": "Warn below"
+  },
+  "warn_hi": {
+   "type": "number",
+   "label": "Warn above"
+  },
+  "error_lo": {
+   "type": "number",
+   "label": "Error below"
+  },
+  "error_hi": {
+   "type": "number",
+   "label": "Error above"
+  },
+  "target": {
+   "type": "number",
+   "label": "Target"
+  },
+  "better": {
+   "type": "text",
+   "label": "Better",
+   "note": "lower or higher: which way the number improves."
+  },
+  "metric": {
+   "type": "text",
+   "label": "Headline",
+   "note": "The headline measurement's key (p90, max, share)."
+  },
+  "t0": {
+   "type": "number",
+   "unit": "s",
+   "label": "Window from",
+   "note": "The evidence window in its run, s from the run's start."
+  },
+  "t1": {
+   "type": "number",
+   "unit": "s",
+   "label": "Window to"
+  },
+  "run": {
+   "type": "text",
+   "label": "Run"
+  },
+  "basis": {
+   "type": "text",
+   "label": "Basis"
+  },
+  "diagnostic": {
+   "type": "text",
+   "label": "Diagnostic",
+   "note": "The stock diagnostic's id (robotdx.diagnostics' catalog entry), empty for a check no stock diagnostic made."
+  },
+  "binding": {
+   "type": "text",
+   "label": "Binding",
+   "note": "The host's binding that ran it (diagnostics.toml)."
+  },
+  "hint": {
+   "type": "text",
+   "label": "View",
+   "note": "The data-ui view that shows it (CONTRACT §35: gate_matrix, threshold_band, kpi_trend, rollup_tree, evidence, distribution, level_history, path_overlay)."
+  },
+  "family": {
+   "type": "text",
+   "label": "Family"
+  },
+  "role": {
+   "type": "text",
+   "label": "Role"
+  },
+  "emits": {
+   "type": "text",
+   "label": "Emits"
   }
  },
  "rows": []
