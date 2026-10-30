@@ -1068,3 +1068,128 @@ of it, every sample pooled:
 The same within the runs' spread. **Still worked around** (§16.7, not answered by 20bbafe, read in its source): a dashboard's
 `load()` of a new document still retires the clock it holds, a host's included (`_retireClock`: `holdClock` stays), and `bindLive`
 still lets go of every dataset on its clock that it did not bind (`rebind` stays).
+
+## 18. The Diagnostics tab: each stock diagnostic in data-ui's view for its hint (2026-10-29)
+
+*WHY (Codex audit 2026-10-29, round 2, gap 4): "The newer data-ui Diagnostics tab uses a generic checks table and health history; its
+check-row conversion drops the diagnostic view hints and measurements." And Zach, 2026-10-28 (data-ui CONTRACT §35): "Data-UI should
+have standard views for showing diagnostics data. Also for showing gates, and KPIs etc. RobotDx should be using those stock parts".
+On `lane/robotdx-add-to-dashboard` after §17.4: the acceptance first, red (ac442a0), then the page (606d082). data-ui is the §17.4
+vendor (20bbafe, which has P5's §35).*
+
+### 18.1 The row keeps the stock diagnostic
+
+A stock diagnostic's record carries what robotdx.diagnostics' `catalog.dress` put on its Result (`record.to_record`: `dx.*` values and
+the measurements, the headline first). `feed.js` `checkRow` now keeps it on the check's row, under PEP 0010 §10's names: `diagnostic`
+(the catalog entry's id), the title (the row's `name`), `role`, `family`, `hint`, `emits`, `binding`; the headline (`metric`, `value`,
+`unit`, `warn_lo`, `warn_hi`, `error_lo`, `error_hi`); `target`, `better`, `t0`, `t1`, `run`, `basis`, `dx.why` beside what_to_check
+under `why`; `measured` (every measurement as the host writes it), `_measurements` (each: key, value, unit, text, level, limits) and
+`_payload` (the series or matrix behind the number). Units stay UCUM (`Cel`); the views write them for people. Every check keeps its
+measurements, a stock diagnostic or not. Two derived datasets carry what the views draw:
+
+- **`parts`** (keyed, page-wide): each payload as rows, written with its check at the check's time, so they rewind with it: a matrix's
+  cells (a gate matrix's verdicts and values, a repeatability floor's pairwise numbers), a series' points (x, y), and a roll-up's tree
+  as the producer's own rows (the roll-up with its level, each member with its verdict). The page judges nothing.
+- **`measures`** (append, per entity, a stream per check): each stock diagnostic's headline over the host's window, from `/history`
+  (a point per evaluation; the window before the page opened too).
+
+**Found by the new test, and fixed:** `_checksBack` (the checks' past from the host's level spans, §15) wrote each span's version at
+the span's start, and a span that starts at the report `/node` had just written is the same t: the later write is the newer version
+of the key, so right after the page opened every check showed the span's thinner row (no what_to_check, no receive time, and now no
+stock view or measurements) until its next report (a plugin that reports every 30 s: up to 30 s). A span's version is now written only
+before `/node`'s own. 14/24 before the fix (the nine row checks), 23/24 after.
+
+### 18.2 The views
+
+`app.js` `diagnosticsText` writes the tab: the checks table (every check, worst first) and the Health strips as before, then a stock
+view per hint the entity's checks carry; the tab is written again when they change (`sigOf`, kept per write of the checks).
+
+| Hint (§35) | data-ui view | On /dx/ | Measured on the fixture |
+|---|---|---|---|
+| `gate_matrix` | `tracker` + `column` / `columns` | a matrix per check over its parts: `groupBy` the payload's rows (in their order), `columns` its gates | 8 columns T1-T8, rows CAN 1, CAN 2, all 16 cells the payload's verdicts, 4 pass = `cells_passing` |
+| status | `display: status` | the roll-up tree's levels and verdicts; the matrix's cells carry the vocabulary's glyphs | every badge a glyph and its word |
+| `threshold_band` | `plot` + `limits: {warn, error}` | a live plot per check over its readings, §35's limits by property | the value over time (newest 52 = the headline); **the band is not drawn** (18.4, 1) |
+| `kpi_trend` | `kpi` + `spark` + `target` | a KPI card per check over its readings: `target` and `better` its row's own | 0.5 %, the spark, "target 10%", "−9.5 pts vs target" |
+| `rollup_tree` | `table` + `tree: {parent}` + roll-up | a table tree over the roll-up's parts: the producer's roll-up (§35: "RobotDx's causal roll-up … arrives as rows"), not §17's Max of rank (18.4, 2) | the roll-up ok, its 3 members pass, aria-level 1 then 2 |
+| `evidence` | `record.sections[].view` | the checks table's side peek: the level, Measured, Evidence (window, run, basis, and a table of the data it was judged on), Stock diagnostic | the floor's 25 pairwise numbers, the largest = `max_pair` |
+| `level_history` | `levels` | the Health strip every check already has | its newest bin = the check's level |
+| `distribution` | `chart` (histogram / box) | a chart per check: a histogram of a series' points, a heatmap of a matrix's cells | exactly the payload's 3 stop errors (`n` 3) |
+| `path_overlay` | `trajectory3d` + `color` / `tolerance` | **left out**: no entity reports a pose path with an error per point (State is numbers per key; the nearest is the arm composite's planar end effector x / y); the scene3d bundle (784 KB) is not vendored for it, and the tab says why beside the check | no 3D view; in the table; the note |
+| (a hint with no data-ui view) | none | the checks table (and its Health strip), nothing else | `radar_sweep`: in the table only |
+
+### 18.3 Measured (2026-10-29, this PC, load 5-14 on 24 CPUs from other sessions)
+
+**The acceptance** (`tests/test_dx_diagnostics_hints.js`, a fixture host with the state plugins, headless Chrome; written before the
+code and not edited after it). Its oracle is `tests/fixtures/dx_hints/records.json`: one catalog entry per hint (driver.board_temp,
+driver.link_loss, driver.faults, servo.stop_error, servo.floor, arm.joints, rack.gate_matrix, arm.tool_error_at_stop) run on small
+synthetic inputs and dressed by `catalog.dress`, kept as the dressed Result and as its record, in two frames whose numbers differ, plus
+one record that is not the library's (the board temperature's under the hint `radar_sweep`). `catalog.dress` is on
+`lane/stock-functions` (14b6320) and not on main yet, so the file was made from `git archive lane/stock-functions robotdx contract` at
+29f03b2 by `make_records.py` beside it (`--check` compares it again). The state fixture plugin prints a frame on its CAN 1 when
+`$STATE_DX_RECORDS` names the file (opt-in; it merges cleanly with stock-functions' own change to that plugin, `git merge-tree`).
+**4/24 red** at ac442a0 (the host serves the fixture; level_history is the Health strip already there; the unknown hint's fallback held
+trivially; no errors), **14/24** before the `_checksBack` fix, **23/24** at 606d082:
+
+| Check | Measured at 606d082 |
+|---|---|
+| the host serves the fixture's 9 stock diagnostics on CAN 1, each with its `dx.hint` (its own `/node`) | PASS |
+| row, for each of the 9 (8 hints and `radar_sweep`): the row keeps the dressed view (diagnostic, title, role, family, hint), its headline (metric, value, unit, four limits, target, better) and every measurement | PASS ×9 |
+| threshold_band: a plot of the check over time, on screen, its newest value the headline, a warn and an error limit at the limits | **FAIL**: the plot draws the value (newest 52 = the headline) and no limit (`guides` []; 18.4, 1) |
+| kpi_trend: a KPI card, its number the headline, its spark, its target | PASS (0.5 %, "target 10%") |
+| level_history: a levels strip, its newest bin the check's level | PASS (ok) |
+| gate_matrix: a tracker matrix, columns the gates, rows the subjects, every cell the payload's verdict, as many pass as the headline | PASS (T1-T8 × CAN 1, CAN 2; 4 pass) |
+| rollup_tree: a table tree, the roll-up with its level, each member under it with its verdict, as many as `members` | PASS (ok; 3 × pass) |
+| status: those levels are data-ui's badges, a glyph and the word | PASS |
+| distribution: a chart drawing exactly the payload's points, as many as `n` | PASS (3) |
+| evidence: the row's peek embeds a view of its data, its values the payload's, the largest `max_pair` | PASS (25 rows) |
+| a hint with no data-ui view falls back to the checks table, no stock view draws it | PASS |
+| path_overlay with no pose data: no 3D view, in the table, the tab says why | PASS |
+| the fixture moved on: live, frame B (the KPI, the plot's newest value, the matrix) | PASS |
+| rewind: at a t between the frames (the host's own `/history`: its last A and first B point, 2.0 s apart), every view frame A, each drawn at t (table, levels, kpi, plot, tracker, chart) | PASS |
+| …and back to live, frame B | PASS |
+| no page error, console error or failed request | PASS |
+
+**The rest at 606d082:** `test_dx_page.js` **101/101** (K2 idle 25.3 KB/s against 33.2 for the classic page, K5 10.3 ms software / 13.1 ms GPU, K7 127 ms),
+`test_dx_log_toolbar.js` **46/46**, `test_dx_timeline.js` **27/27**, `test_dx_tree_past.js` **7/7**, `test_dx_time_span.js` **6/6**,
+`test_dx_add_to_dashboard.js` **17/17**, `test_dx_add_at_moment.js` **4/4**; pytest (a detached checkout named `io-diagnostics`) **828 passed, 1 skipped** (a second run: the first, at load 14, had `test_live_feed.py`'s watch-rate gap fail, the host timing flake §15.1, §16.9 and §17.2 record, and alone it passed 5 of 5). The bench
+(`tools/bench_robotdx.py --phases fixture`, GPU, every run "quiet"; F1 has no stock diagnostic, so it measures that nothing else
+moved), two runs each interleaved with main 5575808:
+
+| KPI (pooled over every sample of the runs) | main 5575808 | this branch 606d082 | budget |
+|---|---|---|---|
+| `first_paint_ms` p50 / p95 (cold loads) | 126.0 / 161.0 (10) | 123.0 / 144.2 (10) | 1,500 |
+| `scrub_ms` p50 / p95 | 24.8 / 28.3 (60) | 24.2 / 29.3 (60) | 50 |
+| `back_to_live_ms` p50 / p95 | 15.8 / 26.0 (20) | 15.0 / 20.5 (20) | 100 |
+| `idle_traffic_kb_s` (per run) | 27, 27 | 27, 27 | 8 |
+| `ingest_to_pixel_ms` on the fixture host p50 / p95 (emitted) | 9.4 / 18.7 (399) | 10.4 / 18.6 (404) | 30 |
+
+The same within the runs' spread.
+
+### 18.4 Asks of data-ui (none edited here)
+
+1. **The live plot draws no §35 limits on live data.** It draws limits (and property rules and bands) from the rows a view holds, and a
+   plot on a `LiveDataset` gets none (`core/src/live/feed.js`: `LIVE_NATIVE` views read typed arrays, `rows: []`), so `guides.js`
+   `limitGuides` finds no series and returns nothing, for numbers as for properties (its series and x extent come from those rows).
+   Numeric `rules` are drawn without rows, but y takes in only the property guides' range, so a rule away from the data is off the
+   plot: no stand-in either. Measured on /dx/: the board temperature's plot, `input.rows` 0 with 45 readings in its store,
+   `plotView.guides` []. Ask: compute a live plot's limits from the store (each stream's rows in its window, or `latestAt`), and take
+   its rules into y. The page already writes §35's key, so nothing changes here then, and the one failing check passes.
+2. **§17's dataset roll-up reads a `LiveDataset`'s newest rows, not the rows at t** (`dashboard/src/model.js` `applyRollups`: `rows` is
+   `snapshot(Infinity)`), and writes its cells onto those row objects, so a roll-up on live data does not rewind. RobotDx's roll-up is
+   the producer's anyway (§35); a computed one would need this.
+3. **A peek section with nothing for its row still draws** (`record.sections`: "—" for each field, an embedded view's "No rows match
+   this view."). The Diagnostics table holds plain checks beside stock diagnostics, so a plain check's peek carries three sections of
+   dashes and an empty table. Ask: fold a section whose fields and view are empty for the peeked row (or a `when:` on a section).
+4. (minor) A rich cell (`{value, unit}`) in a number column keeps only its value (`live/store.js`), so a KPI card's unit rides a
+   column with no type (`measures.reading`).
+
+### 18.5 Left
+
+- **threshold_band's band**: data-ui's (18.4, 1). Until then the plot draws the value; the limits are in the row's peek.
+- **catalog.dress on main**: the fixture is frozen from stock-functions 29f03b2; once it lands, `make_records.py --check` re-derives it.
+  On main today the host's own bindings write the primitive's hint and its name as `dx.diagnostic` (`stock.box`); stock-functions' host
+  writes the catalog entry's hint, role and family, and keeps the entry's id in `dx.binding`. The page keeps both as written.
+- **path_overlay**: when an entity reports a pose path with an error per point, vendor scene3d and draw `trajectory3d`.
+- **The peek's dashes** for a plain check (18.4, 3). A reversible choice made here: one table for every check, its peek the stock
+  diagnostic's sections, rather than a second table of the stock diagnostics alone.
+- **Not measured on /dx/**: the tab at 390 px, dark mode, and a real host's own bindings (the fixture plugin prints the records).

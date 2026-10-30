@@ -424,8 +424,10 @@ function hintSig(path) {
   hintsSeen = { path, seq: ds.seq, sig };
   return sig;
 }
-// WHY no trajectory3d: /api/v1 carries no pose for any entity (State values are numbers per key), and a path_overlay draws a path
-// of poses (data-ui PEP 0010 §4, §5.2); the scene3d bundle (784 KB) is not vendored for a view no entity can fill. Said in the tab.
+// WHY no trajectory3d: a path_overlay draws a path of poses coloured by an error the producer wrote on each pose (data-ui PEP 0010
+// §4, §5.2; CONTRACT §35), and no RobotDx entity reports one: State is numbers per key, the nearest being an arm composite's planar
+// "end effector x / y" (position only, no error per point). So the scene3d bundle (784 KB) is not vendored for a view nothing can
+// fill, and the tab says why beside the check (PEP 0001 §18)
 const HAS_POSE = false;
 
 /** The Diagnostics tab's .base: the template (every check worst first, its peek's evidence, the Health strips) and below it a
