@@ -717,6 +717,17 @@ class JobCache:
     serial: int = 0
     fresh_states: list[State] = field(default_factory=list)  # what the latest apply() found new
     fresh_frames: list[Frame] = field(default_factory=list)
+    # WHY two rings beside the latest-per-key maps: the stock diagnostics' rates and delays count every State and frame record
+    # (stock_diagnostics.py Inputs), not the 1 Hz history; metadata only, appended here, never an image read on the watch path
+    arrivals: dict[tuple[str, str], collections.deque] = field(default_factory=dict)  # (path, group) -> each State record's received
+    frame_log: dict[tuple[str, str], collections.deque] = field(default_factory=dict)  # (path, stream) -> its recent Frame records
+
+    @staticmethod
+    def _ring(rings: dict, key, item, at: float) -> None:
+        ring = rings.setdefault(key, collections.deque(maxlen=SERIES_MAX_POINTS))
+        ring.append(item)
+        while len(ring) > 1 and at - (ring[0].received if isinstance(ring[0], Frame) else ring[0]) > SERIES_MAX_AGE_S:
+            ring.popleft()
 
     def _point(self, path: str, group: str, measurement: Measurement, at: float) -> None:
         points = self.series.setdefault((path, group, measurement.key), collections.deque())
@@ -764,6 +775,7 @@ class JobCache:
                 stamped = dataclasses.replace(record, received=at)
                 self.states[(stamped.path, stamped.name)] = stamped
                 self.fresh_states.append(stamped)
+                self._ring(self.arrivals, (stamped.path, stamped.name), at, at)
                 for measurement in stamped.measurements:
                     self._point(stamped.path, stamped.name, measurement, at)
             elif isinstance(record, Config):
@@ -772,6 +784,7 @@ class JobCache:
                 stamped = dataclasses.replace(record, received=at)
                 self.frames[(stamped.path, stamped.stream)] = stamped
                 self.fresh_frames.append(stamped)
+                self._ring(self.frame_log, (stamped.path, stamped.stream), stamped, at)
             elif isinstance(record, Event):
                 if record.stamp is None:
                     record = dataclasses.replace(record, stamp=received)

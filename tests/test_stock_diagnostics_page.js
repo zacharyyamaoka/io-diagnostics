@@ -40,8 +40,11 @@ const TOML = fs.readFileSync(path.join(H.ROOT, 'io_diagnostics', 'diagnostics_de
 
     // ---- the chevron: only on the library's rows ---------------------------------------------------------------------------
     const rows = await page.evaluate(() => [...document.querySelectorAll('.dx-r')].map((r) => ({ name: r.querySelector('.dx-nt').textContent, chev: Boolean(r.querySelector('[data-dxc-chev]')) })));
-    const chevrons = rows.filter((r) => r.chev).map((r) => r.name).sort();
-    check('a chevron on each robotdx.diagnostics row and on no other', chevrons.join() === 'board temperature,bus voltage,fault and limiter codes' && rows.some((r) => !r.chev), rows);
+    const chevrons = rows.filter((r) => r.chev).map((r) => r.name);
+    // the board's own checks have none; the library's have one each, its State-fed three and whatever its other sources feed on this board
+    const own = rows.filter((r) => !r.chev).map((r) => r.name).sort().join();
+    check('a chevron on each robotdx.diagnostics row and on no other', own === 'comms,driver,firmware'
+      && ['board temperature', 'bus voltage', 'fault and limiter codes'].every((name) => chevrons.includes(name)), rows);
     await page.screenshot({ path: path.join(SHOTS, '01-diagnostics-tab.png') });
 
     // ---- unfold in place, measured ---------------------------------------------------------------------------------------

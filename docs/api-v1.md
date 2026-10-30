@@ -989,14 +989,21 @@ The host runs the robotdx.diagnostics library (`robotdx/diagnostics/`, lifted fr
 one file per part type, generated from the catalog by `io_diagnostics/default_diagnostics.py`; the keys are explained in
 `stock_diagnostics.py`'s docstring); a fixture replay runs only the person's file. A `[[part]]` table says which entities are a part type
 (by `model_id`, `path` or a composite's kind) and a binding's `part = "<type>"` runs on all of them, so an entity of a known type gets the
-catalog's live diagnostics with no file of the person's. A binding whose input the State history does not carry (frame stamps, images,
-events) is not run with code `NoInput` and posts no row; the drill-in still lists it with its reason. Every 5 s (a thread of its own, never the 10 Hz watch path) each
+catalog's live diagnostics with no file of the person's. Each binding reads one typed input out of what the entity publishes
+(`stock_diagnostics.SOURCES`): its State history; every State record's arrival (a rate); its frame records (stamp vs received); the
+newest image of its colour stream (decoded on the beat with the stdlib and numpy: PNG only, a JPEG is `NoDecoder`); the fault memory's
+`FaultConfirmed` events (a composite's: its leaves', never the stock diagnostics' own) with the history's operating time; link events;
+its status's `queries` / `replies`; config records with an `expected` value; a composite's members' levels; its statuses' stamps. A
+binding whose input no source on the entity carries is not run with code `NoSource` and the message "no <input> source on <entity>:
+<what would provide it>": a row (unknown, never OK) where the entity reports State, none where it reports no State at all (value
+`dx.quiet`); `NotStreaming` (its stream has sent nothing in the window: frames and records arrive while a page watches) and `NoState`
+post no row. The drill-in always lists them. Every 5 s (a thread of its own, never the 10 Hz watch path) each
 binding reads the last `window_s` of its entity's State history (kept at 1 Hz at most) through `stream.monitor`, and the newest window's
 Result is an **ordinary record-v0.2 status** on the entity: `source` `robotdx.diagnostics`, `measurements[0]` the headline value with its
 warn / error limits, `values` the library's `dx.*` keys (`dx.diagnostic`, `dx.config`, ...) plus `dx.binding` (the binding's id) and
-`dx.window` (JSON `{"from", "to", "window_s", "state", "samples"}`, host clock), `expected_period_s` the beat (so a stopped beat goes STALE).
+`dx.window` (JSON `{"from", "to", "window_s", "state", "samples", "source"}`, host clock; `source` the input kind it was fed from), `expected_period_s` the beat (so a stopped beat goes STALE).
 So it is in `/node`'s `checks`, `/checks`, `/history`, the history bar and `/live` with no change to any of them. A result that could not be
-computed is `unknown`, never `ok`: `NotEnoughHistory`, `NoState`, `NoInput`, `NoChannel`, `NumpyMissing` (the `diagnostics` extra is not installed),
+computed is `unknown`, never `ok`: `NotEnoughHistory`, `NoState`, `NoSource`, `NotStreaming`, `NoDecoder`, `NoChannel`, `NumpyMissing` (the `diagnostics` extra is not installed),
 `DiagnosticRaised` (the exception's text).
 
 ### `GET /api/v1/diagnostics`
@@ -1034,12 +1041,14 @@ computed is `unknown`, never `ok`: `NotEnoughHistory`, `NoState`, `NoInput`, `No
    "match": {"path": "", "model_id": "", "part": "bldc_driver"}, "state": "motor", "window_s": 60.0, "edited": ["max.warn_high"],
    "catalog": {"part": "bldc_driver", "checks": "FET/board temperature stays inside its band", "provenance": "his code", "quote": "...", "where": "...",
                "hint": "threshold_band", "role": "health", "gate": "", "limits_provenance": "his code", "limits_source": "", "gating": true},
+   "source": {"kind": "state", "input": "the board temperature", "from": "the driver's State (its watch, and each diagnose)", "missing": ""},
    "fields": [{"field": "max.warn_high", "type": "float|null", "default": null, "unit": "Cel", "doc": "", "group": "max",
                "value": 30.0, "source": "edited", "editable": true}],
    "status": {"name": "board temperature", "level": "warn", "...": "the check exactly as /node gives it"},
    "window": {"from": 1792631490.0, "to": 1792631550.0, "window_s": 60.0, "state": "motor", "samples": 60}}]}
 ```
 
+- `source` (additive): what feeds the binding: `kind` (state | state_stamps | frame_stamps | frames | reply_counts | config | faults | link_events | members | evidence | none), `input` in plain words, `from` (where RobotDx has it) or, for `none`, `missing` (what would provide it). `status` is there for every binding, a `NoSource` or `NotStreaming` one included, even when no row is posted.
 - One entry per binding that matches the entity (its `path` and / or `model_id` fnmatch, and / or its `part` among the entity's `parts`); **404** for an entity the host does not know, an empty
   list for one nothing is configured on. `fields`: the effective value of every config field, and `source`: `default` (the dataclass's),
   `toml` (the file's), `edited` (written by the POST below; the file lists them in the binding's `edited`). A `Limits` field's four parts are

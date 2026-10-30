@@ -337,9 +337,12 @@ def test_the_host_starts_without_numpy_and_each_diagnostic_says_why(tmp_path):
     out = json.loads(done.stdout.strip().splitlines()[-1])
     assert out["numpy"] is False and "stock.box" in out["listed"]
     found = [row for row in out["found"] if row["path"].endswith("/can/1")]
-    board = [row for row in found if row["code"] != sd.NO_INPUT]
+    board = [row for row in found if row["code"] == "NumpyMissing"]
     assert {row["name"] for row in board} == {"CAN 1: board temperature", "CAN 1: fault and limiter codes", "CAN 1: bus voltage"}
-    assert all(row["level"] == "unknown" and row["code"] == "NumpyMissing" and "diagnostics extra" in row["message"] for row in board), board
-    # the ones a State history never feeds (stamps, events, the expected config) say so without numpy, and post no row
-    assert {row["name"] for row in found if row["code"] == sd.NO_INPUT} == {"CAN 1: command / telemetry rate", "CAN 1: CAN reply loss",
-                                                                            "CAN 1: config matches expected"}
+    assert all(row["level"] == "unknown" and "diagnostics extra" in row["message"] for row in board), board
+    # the others say why without numpy: the rate waits for a watch, F1's boards report no reply counts, and the expected config is compared
+    # with the stdlib alone (stock.agreement needs no numpy)
+    by_name = {row["name"]: row for row in found}
+    assert by_name["CAN 1: command / telemetry rate"]["code"] == sd.NOT_STREAMING
+    assert by_name["CAN 1: CAN reply loss"]["code"] == sd.NO_SOURCE and "queries and replies" in by_name["CAN 1: CAN reply loss"]["message"]
+    assert by_name["CAN 1: config matches expected"]["level"] == "warn" and "differ" in by_name["CAN 1: config matches expected"]["message"]

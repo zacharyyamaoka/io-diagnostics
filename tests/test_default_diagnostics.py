@@ -170,18 +170,22 @@ def test_the_drill_in_api_lists_each_part_types_stock_diagnostics(served, part):
         assert all(row["source"] in ("toml", "default") for row in rows.values())
 
 
-def test_a_binding_the_state_cannot_feed_is_not_run_and_posts_no_row(served):
+def test_an_unwatched_camera_waits_for_its_frames_quietly_and_names_the_sources_it_lacks(served):
     statuses = served.run_stock_diagnostics()
     camera = served.paths["camera_rgbd"]
     mine = {sd.binding_of(status): status for status in statuses if status.path == camera}
     assert set(mine) == expected_ids("camera_rgb", "camera_rgbd")
-    assert {status.code for status in mine.values()} <= set(sd.QUIET)  # frame stamps, images, events: none in a camera's State
-    assert all(status.level == "unknown" for status in mine.values())
+    assert all(status.level == "unknown" for status in mine.values())  # nobody watches it: no frames, and the rest has no source
+    # its frames feed the latency and the blur once a page watches it: until then not run, and no row (tests/test_stock_inputs.py runs them)
+    assert {entry_id for entry_id, status in mine.items() if status.code == sd.NOT_STREAMING} == {"camera.latency", "camera.blur"}
+    no_source = {entry_id for entry_id, status in mine.items() if status.code == sd.NO_SOURCE}
+    assert no_source == set(mine) - {"camera.latency", "camera.blur"}
+    # the camera reports State, so each binding with no source is a row of its own (unknown, never OK) that says what would provide it
     posted = {check["name"] for check in served.node(camera)["checks"]}
-    assert not any(catalog.entry(entry_id).title in name for name in posted for entry_id in mine)
+    assert {entry_id for entry_id in mine if any(name.endswith(catalog.entry(entry_id).title) for name in posted)} == no_source
     body = get(served, f"/api/v1/diagnostics/config?path={camera}")
     reasons = {item["id"]: item["status"]["message"] for item in body["diagnostics"] if item["status"]}
-    assert all(reasons.values()) and "camera.frame_rate" in reasons  # the drill-in still says why
+    assert all(reasons.values()) and "per-frame stamps" in reasons["camera.frame_rate"]  # the drill-in says why, rows or not
 
 
 def test_state_inputs_missing_names_what_is_absent():
@@ -195,6 +199,9 @@ def test_state_inputs_missing_names_what_is_absent():
     assert sd.state_inputs_missing("stock.box", BoxConfig(channel="v_bus_v"), run) == "v_bus_v"
     assert sd.state_inputs_missing("stock.tracking_error", TrackingErrorConfig(), run) == "q_target_rad"
     assert "stock.sample_rate" in sd.state_inputs_missing("stock.sample_rate", None, run)
+    # a column that is not one of the Trajectory's own is read from its extra channels
+    gyro = Trajectory(t=np.arange(5.0), q_rad=np.zeros(5), extra={"gyro_rad_s": np.full(5, 0.01)})
+    assert sd.state_inputs_missing("stock.box", BoxConfig(channel="gyro_rad_s"), gyro) == ""
 
 
 def test_a_watched_board_runs_what_its_state_feeds_and_a_proposed_limit_only_warns(tmp_path):
@@ -211,13 +218,15 @@ def test_a_watched_board_runs_what_its_state_feeds_and_a_proposed_limit_only_war
         voltage = mine["driver.bus_voltage"]
         assert (voltage.level, voltage.code) == ("warn", "ProposedMinBelowErrorLimit") and "not a gate" in voltage.message
         assert mine["driver.board_temp"].level in ("ok", "warn", "error") and mine["driver.board_temp"].measurements[0].value is not None
-        # the loop rate needs command stamps, reply loss needs events, config needs the expected record: not in State
-        for entry_id in ("driver.loop_rate", "driver.link_loss", "driver.config"):
-            assert (mine[entry_id].level, mine[entry_id].code) == ("unknown", sd.NO_INPUT), entry_id
+        # the loop rate counts every State record of the watch, the config is compared with its expected values; this fixture board's
+        # status reports no reply counts, so the reply loss says it has no source
+        assert mine["driver.loop_rate"].level in ("ok", "warn", "error") and mine["driver.loop_rate"].measurements[0].value > 0
+        assert mine["driver.config"].level in ("ok", "warn", "error") and "differ" in mine["driver.config"].message
+        assert (mine["driver.link_loss"].level, mine["driver.link_loss"].code) == ("unknown", sd.NO_SOURCE)
         for entry_id, status in mine.items():  # each row carries its entry's data-ui view, as the library's record writes it
             assert dict(status.values)["dx.hint"] == catalog.entry(entry_id).the_hint in HINTS, entry_id
         posted = {check["name"].split(": ", 1)[-1] for check in rig.host.node(rig.board)["checks"]}
-        assert {"board temperature", "bus voltage", "fault and limiter codes"} <= posted
-        assert not posted & {"command / telemetry rate", "CAN reply loss", "config matches expected"}
+        assert {"board temperature", "bus voltage", "fault and limiter codes", "command / telemetry rate", "config matches expected",
+                "CAN reply loss"} <= posted
     finally:
         rig.host.stop()

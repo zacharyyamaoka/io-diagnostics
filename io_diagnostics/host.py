@@ -681,7 +681,8 @@ class Host:
         self.stock_diagnostics = stock_diagnostics_module.StockDiagnostics(
             Path(settings_file).parent / stock_diagnostics_module.DIAGNOSTICS_FILE if settings_file else None,
             diagnostics_beat_s if diagnostics_beat_s is not None else stock_diagnostics_module.BEAT_S, defaults=stock_diagnostics_defaults)
-        self.stock_results: dict[tuple[str, str], DiagnosticStatus] = {}
+        self.stock_results: dict[tuple[str, str], DiagnosticStatus] = {}  # what the views post
+        self.stock_quiet: dict[tuple[str, str], DiagnosticStatus] = {}  # not run, no row: only the drill-in lists them (stock_diagnostics.quiet)
         # every change a page could see (a refresh, a udev event, a plugin's records): /api/v1/events waits on it
         self.changes = threading.Condition()
         self.revision = 0
@@ -1397,13 +1398,76 @@ class Host:
         return {key[1]: self.history.series(key, now - span_s, now) for key in self.history.keys(path, health=False)
                 if key[0] == path and self.history.is_state(key)}
 
+    def _stock_inputs(self, path: str, entity, view: View, groups: dict, kinds: set[str], span_s: float) -> stock_diagnostics_module.Inputs:
+        """What the entity at ``path`` publishes beside its State history (stock_diagnostics.Inputs), only the parts ``kinds`` read. A
+        composite's events, statuses and operating time are its leaves' (and its child composites'). Nothing is decoded here."""
+
+        composition = view.composition
+        composite = composition.by_path.get(path) if composition else None
+        leaves: list[str] = []
+        members: list[tuple[str, str, str | None, str]] = []
+        if composite is not None:
+            def below(composite_id: str) -> list[str]:
+                out = []
+                for child in composition.resolved.get(composite_id, []):
+                    if child.path and child.present:
+                        out.append(child.path)
+                    if child.kind == "composite":
+                        out += below(child.ref)
+                return out
+
+            leaves = list(dict.fromkeys(below(composite.id)))
+            for child in composition.resolved.get(composite.id, []):
+                if not child.present or not child.path:
+                    continue
+                summary = view.rows.summaries.get(child.path)
+                level = composition.levels.get(child.ref) if child.kind == "composite" else (summary.level if summary else None)
+                members.append((child.path, child.name, level, summary.message if summary else ""))
+        subtree = {path, *leaves}
+        subtree |= {other for other in view.merged.entities for top in tuple(subtree) if other.startswith(top + "/")}
+        target = self._watch_target(path)
+        arrivals, frames, configs, image = {}, {}, [], None
+        if target is not None:
+            job, rel = target
+            with self.lock:
+                arrivals = {group: list(ring) for (where, group), ring in job.cache.arrivals.items() if where == rel}
+                frames = {stream: list(ring) for (where, stream), ring in job.cache.frame_log.items() if where == rel}
+                configs = [config for (where, _key), config in job.cache.configs.items() if where == rel]
+            folder = (self._frames_base() / re.sub(r"[^A-Za-z0-9._-]+", "-", f"{job.key[0]}-{job.key[1]}-{rel or 'device'}")).resolve()
+
+            def image(frame, folder=folder):
+                found = (folder / frame.file).resolve() if frame.file else None
+                return found if found is not None and found.parent == folder else None
+        statuses, events, operating = [], [], []
+        if kinds & {"reply_counts", "evidence"}:
+            statuses = [status for status in view.merged.statuses if status.path in subtree and status.source != stock_diagnostics_module.SOURCE]
+        if kinds & {"faults", "link_events", "evidence"}:
+            # WHY without the stock diagnostics' own faults: a failing loop rate confirmed as a fault would count toward the MTTF that
+            # reads it, and an MTTF that fails would count itself on the next beat
+            own = {(fault.path, fault.code) for fault in self.faults.all()
+                   if (fault.snapshot or {}).get("source") == stock_diagnostics_module.SOURCE}
+            events = [event for event in view.events if event.path in subtree
+                      and not (event.code.startswith("Fault") and (event.path, (event.args or {}).get("fault")) in own)]
+        if "faults" in kinds:
+            # WHY the health history: operating time is when the entity (a composite: its leaves) was reporting a level, never stale
+            spans = []
+            for where in subtree:
+                for key in self.history.keys(where, health=True):
+                    spans += [(piece["from"], piece["to"]) for piece in self.history.timeline(key, view.now - span_s, view.now)
+                              if piece["level"] not in (None, STALE)]
+            operating = spans
+        return stock_diagnostics_module.Inputs(
+            has_state=bool(groups), composite=entity.kind == "composite", plugin=composite is None or bool(composite.plugin),
+            state_arrivals=arrivals, frames=frames, image=image, statuses=statuses, configs=configs, events=events, members=members,
+            leaves=leaves, operating=operating)
+
     def run_stock_diagnostics(self) -> list[DiagnosticStatus]:
         """One beat: every binding of diagnostics.toml on every entity it matches, over that entity's State history; each result a
         status on the entity (source ``robotdx.diagnostics``), into the history, the fault memory and every view."""
 
         runner = self.stock_diagnostics
         runner.reload_if_changed()
-        if not runner.bindings and not self.stock_results:
+        if not runner.bindings and not self.stock_results and not self.stock_quiet:
             return []  # nothing configured (a replay without the person's file): no view, no tick
         view = self.view()
         now = view.now
@@ -1414,20 +1478,25 @@ class Host:
             if not bindings:
                 continue
             # WHY two windows and a beat: stream.windows steps from the slice's first sample, so the newest whole window always fits
-            groups = self._state_history(path, now, 2 * max(binding.window_s for binding in bindings) + runner.beat_s)
+            span = 2 * max(binding.window_s for binding in bindings) + runner.beat_s
+            groups = self._state_history(path, now, span)
+            kinds = {stock_diagnostics_module.source_of(binding).kind for binding in bindings}
+            inputs = self._stock_inputs(path, entity, view, groups, kinds, span)
             for binding in bindings:
-                status = runner.evaluate(binding, path, entity.name or path, groups, now, entity.hardware_id)
+                status = runner.evaluate(binding, path, entity.name or path, groups, now, entity.hardware_id, inputs=inputs)
                 found[(status.path, status.name)] = status
         def seen(results) -> set:
             return {(status.path, status.name, status.level, status.code, status.message,
                      tuple((measurement.key, measurement.value) for measurement in status.measurements)) for status in results.values()}
 
-        with self.lock:
-            changed = seen(found) != seen(self.stock_results)
-            self.stock_results = found
         # WHY a board with no State history posts no row (Zach, 2026-10-28, calm UI): an unwatched moteus keeps no State, so every
-        # board read a grey 'unknown' forever. Its reason stays in stock_results for the drill-in API; it is never shown as OK.
-        statuses = [status for status in found.values() if status.code not in stock_diagnostics_module.QUIET]
+        # board read a grey 'unknown' forever. Its reason stays in stock_quiet for the drill-in API; it is never shown as OK.
+        quiet = {key: status for key, status in found.items() if stock_diagnostics_module.quiet(status)}
+        posted = {key: status for key, status in found.items() if key not in quiet}
+        with self.lock:
+            changed = seen(found) != seen({**self.stock_results, **self.stock_quiet})
+            self.stock_results, self.stock_quiet = posted, quiet
+        statuses = list(posted.values())
         self.history.sync(stock_diagnostics_module.SOURCE, statuses, now)
         self.faults.observe(statuses, now)
         if changed:  # WHY only on a change: a page's tick is for what it would draw differently, not for every beat
@@ -1482,7 +1551,7 @@ class Host:
             checks = self._attach_checks(merged)
             # the stock diagnostics' latest statuses, on the entities that are still here (stock_diagnostics.py)
             stock = [status for status in self.stock_results.values()
-                     if status.path in merged.entities and status.code not in stock_diagnostics_module.QUIET]
+                     if status.path in merged.entities and status.code != stock_diagnostics_module.NO_STATE]
             if setup.entities or setup.statuses or notes or checks or stock:
                 layer = self._layer_with(setup.entities)
                 merged = tree.merge(layer, jobs, self.os_records + setup.statuses + notes + checks + stock)
@@ -3579,7 +3648,7 @@ class Host:
         model_id, composite_kind = _diagnostics_match(entity)
         out = []
         for binding in runner.bindings_for(path, model_id, composite_kind=composite_kind):
-            status = next((found for (where, _name), found in self.stock_results.items()
+            status = next((found for (where, _name), found in {**self.stock_results, **self.stock_quiet}.items()
                            if where == path and stock_diagnostics_module.binding_of(found) == binding.id), None)
             out.append({**runner.binding_json(binding),
                         "status": self.check_json(status, view.now) if status is not None else None,
