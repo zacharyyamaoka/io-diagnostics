@@ -106,6 +106,9 @@
 .al-row.al-boot { border-top: 1px solid var(--io-border); background: var(--io-surface-2); }
 .al-row.al-boot .al-msg { color: var(--io-muted); font-weight: 600; }
 .al-day { position: sticky; top: 24px; padding: 8px 14px 3px; font-size: 11px; font-weight: 600; color: var(--io-faint); font-family: var(--io-font-mono); letter-spacing: .3px; background: var(--io-surface); }
+/* WHY: 24 px is the column header's height, and a compact log has no header. A sticky band sits at its `top` with nothing scrolled, so here it lay on
+   the newest row and hid its first line, number, time and severity, under a blank band (Zach, 2026-11-04: "for the log shouldn't it just be there?") */
+.al-compact .al-day { top: 0; }
 .al-more { display: block; margin: 10px auto; padding: 4px 14px; border: 1px solid var(--io-border); border-radius: var(--io-radius); background: var(--io-control); color: var(--io-muted); cursor: pointer; font: inherit; font-size: 12px; }
 .al-more:hover { background: var(--io-control-hover); }
 .al-empty { padding: 28px 18px; font-size: 13px; }
