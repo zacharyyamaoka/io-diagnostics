@@ -1,6 +1,7 @@
 # 0003: A read answers from a published view, and a page never waits for the host
 
-- **Status:** decided 2026-11-04, on Zach's report of the same day. Built as described, measured below.
+- **Status:** decided 2026-11-04, on Zach's report of the same day. Built as described, measured below. The first landing (9c5147b) had two races, found by the page suites the same day
+  and fixed: a run's end, and a page opened during a cold start. Both are under Rules that follow, because both came from this decision and both would come back with a careless rewrite.
 - **Applies to:** the classic page and every `GET /api/v1/*`. `web/dx/` reads the same API and gains the same answers; its own loading states are its own.
 
 ## Decision
@@ -56,6 +57,10 @@ trusts one; the API stays additive; the change stays small.
 - **A new `GET` reads `Host.read_view()`, never `Host.view()`.** `tests/test_instant_pages.py` fails if a read builds on its request's thread.
 - **A write publishes before it answers** (`SHOWN_WRITES`, `Host.after_write`), so a person's write is in their next read. A heartbeat or a keystroke does not.
 - **A stream waits for the view of its change** (`Host.wait_view`), on its own thread. A request never does.
+- **A run's end is one moment for everyone outside.** Its ending waits for a publish, so a client told it is over finds `RunEnded` in its next read. Until then clients are told the run as it
+  was, then `state`, `active`, `result` and the stream's `end` all at once, and a second notify says so (`Run._conclude`). The run itself, the host's gates and the disk have the end at once:
+  a next run is not refused by this one, and a host that dies in the ending does not read it back as interrupted. The first try held `active` alone. A client could then read `done` with
+  `active: true`, and the page keeps a stream's `end` as its last word, so a finished run stayed a running one. Found by the page suites after landing; do not simplify the hold back to one field.
 - **A direct call builds.** Only threads that `reads_published` (a request, the feed, the tray, the beat) read the published view; a test or a script asking in-process gets the moment.
 - **`View.jobs` is a record of a moment.** It holds copies of the job caches, without their `series`, and is never run or changed. `values_json` and everything at 10 Hz reads the live job, under the lock.
 - **What a read pairs with the view comes from the view.** `View.active_runs` is why: the log pairs a run's events with whether it still runs, and read live beside a published view, a run that had just ended read "the host stopped while it ran".
@@ -65,3 +70,7 @@ trusts one; the API stays additive; the change stays small.
   its driver reports. One that stays missing was unplugged, and the page goes to the Computer as it always did.
 - **Bounds grow.** A load that fails is retried with a longer bound (6 s to 30 s), so a host that needs 9 s still lands its answer. A fixed bound would be the same livelock.
 - **A write is never aborted by a bound.** Aborting a `POST` does not undo it, and it leaves "did it happen?" with no answer.
+- **Once there is a feed, its snapshot is a page's base, whichever landed first.** `/state` and the feed are two requests, and the server now answers before the drivers have, so a change can
+  fall between them: in neither the `/state` read a moment before it nor any delta, since the feed's baseline already has it. A healthy board's row never changes, so it stayed out of the tree.
+  The feed's snapshot and deltas are consistent by construction, and `/state` is only for a page with no feed. Up-first is what made this reachable: anything that assumed "by the time a page
+  can connect, the drivers have answered" no longer holds.

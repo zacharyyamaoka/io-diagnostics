@@ -269,12 +269,12 @@ function loadActivity() {
     .catch(() => {}).finally(() => { activityLoading = false; });
 }
 function applyLive(kind, data) {
-  // WHY: /state remains the canonical bootstrap (including existing HTTP adapters/proxies).
-  // Subscribe first and retain its following deltas, so changing transports cannot lose a startup change.
+  // WHY: /state bootstraps a page with no feed (existing HTTP adapters/proxies), but once there is one its snapshot is the base, whichever landed first: it is what the feed's deltas
+  // follow from. The two are separate requests, so a /state read a moment before a change and a snapshot taken a moment after left that change in neither. The server is up before the
+  // drivers have answered, so at a cold start a board could stay out of the tree until its row next changed, on a healthy board never (tests/test_instant_pages.js).
   if (kind === 'snapshot' && ClassicLive.firstSnapshot) {
     ClassicLive.firstSnapshot = false;
-    if (!ClassicLive.initialized) ClassicLive.initialSnapshot = data;
-    return;
+    if (!ClassicLive.initialized) { ClassicLive.initialSnapshot = data; return; }
   }
   if (!ClassicLive.initialized) {
     ClassicLive.pending.push([kind, data]);
@@ -339,7 +339,8 @@ async function pollState() {
     const data = await getJson('/api/v1/state');
     // A late fallback answer cannot roll back an already connected feed.
     if (!ClassicLive.initialized || !ClassicLive.connected) {
-      S.data = data; rememberTree(data.tree); acceptedState();
+      const base = ClassicLive.initialSnapshot || data;
+      S.data = base; rememberTree(base.tree); acceptedState();
       ClassicLive.initialized = true;
       delete ClassicLive.initialSnapshot;
       const pending = ClassicLive.pending; ClassicLive.pending = [];
