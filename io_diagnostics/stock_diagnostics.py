@@ -25,7 +25,9 @@ each Result an ordinary record-v0.2 status on the entity (docs/api-v1.md "Stock 
   Events; config records with an expected value as Pairs; a composite's members as Results; the statuses' stamps as EvidenceStamps.
   What a composite borrows: a servo or encoder over one board reads that board's State; a servo whose State has no commanded position
   reads the newest recorded run of its joint (``RackArchive``) and its holds; a deployment reads the newest rack acceptance (gate matrix)
-  and the Computer plugin's CPU temperature (rack.host).
+  and the Computer plugin's CPU temperature (rack.host). Round 4: a camera's recorded captures and calibrate runs, a servo's calibration
+  log and follow-up, a gearbox's calibration round against its model card, and (while the arm's State has no commanded pose) the newest
+  UR5e sim cell report, every such result prefixed "UR5e sim cell (<situation>): ".
 - **What it cannot run:** a binding whose input no source on the entity carries is not run with code ``NotMeasured`` (no instrument on
   the entity can produce it) or ``NotWired`` (an existing producer has it or could publish it; nothing maps it yet), value ``dx.gap``, and
   a message "no <input> source on <entity>: <what would provide it>", unknown and never OK. It is a row where the entity reports State, and none
@@ -452,6 +454,10 @@ class Inputs:
     can_ids: Sequence[int] = ()  # the CAN ids of the boards below it (".../can/<id>"), which name its recorded runs and acceptance stations
     archive: "RackArchive | None" = None  # the rack's recordings on disk (runs, acceptance), None where the host has none
     computer: Sequence[dict] = ()  # the Computer plugin's CPU temperature as a State series (cpu_temperature), for rack.host
+    realsense_serials: Sequence[str] = ()  # a camera's SDK serials (its statuses' realsense_serial values): names its captures
+    action_runs: Sequence[Mapping[str, Any]] = ()  # the host's runs of an action on this entity (terminal.Run.to_json), newest last
+    leaf_identity: Mapping[str, Any] = field(default_factory=dict)  # the one board under a composite: its identity (serial_number)
+    leaf_configs: Sequence[Any] = ()  # ... and its config records (contract Config), e.g. motor.Kv
 
 
 NONE = "none"
@@ -489,6 +495,10 @@ _NO_DRIVER = "no {what} on RobotDx; a driver of one that reports {keys} in its S
 _RUN = ("a driver or runner that reports its commanded position{velocity} live, or the rack's recorded runs of this joint (bam_rack_twin "
         "npz in the rack archive), of which there is none")
 _TAG = ("no fiducial tag is mounted in view and nothing detects one; a fixed tag and a detector that reports {what} would provide them")
+_FLAT = ("Intel's depth-quality metrics are defined on a flat target at a measured distance filling the central 40 %, with raw z16 "
+         "frames of it; no flat target is set up in front of any camera and no such capture exists (the archive's RealSense captures are "
+         "8-bit, the driver's depth tile a colourised preview); a flat target in view, with the driver writing its raw depth, would provide them")
+_SIM_CELL = "the newest UR5e sim cell (traj_integration_tests ur_compare: its traj_compare report's commanded and simulated trajectory)"
 W, M = NOT_WIRED_GAP, NOT_MEASURED_GAP
 SOURCES: dict[str, Source] = {
     # servo (a joint): its board's State, the rack's recorded runs of it, the fault memory
@@ -498,10 +508,10 @@ SOURCES: dict[str, Source] = {
                                _RUN.format(velocity=" and velocity (q_target_rad, qd_target_rad_s)"), W),
     "servo.hold_effort": Source("holds", "hold events", "the holds of the rack's newest recorded run of this joint (a hold converged when it "
                                 "ends within 1 mrad of its commanded position)", W),
-    "servo.torque_truth_kt": _none("reference Kv", "the board's Kv is checked against a measure-only calibration (moteus_tool --calibrate "
-                                   "--cal-no-update), which RobotDx does not record; that calibration's result as a record would provide it", W),
-    "servo.live_reid": _none("model error rows and a repeatability floor", "sim2real computes them from datasets of runs; a live "
-                             "re-identification routine that reports them would provide them", W),
+    "servo.torque_truth_kt": Source("kv_check", "reference Kv", "moteus_tool's calibration log of this very board (moteus-cal-<serial>-*.log, its "
+                                    "measured kv) against the board's motor.Kv config", W),
+    "servo.live_reid": Source("followup", "model error rows and a repeatability floor", "the newest calibration follow-up of this joint "
+                              "(bam_rack_twin.calibration_followup/1: its declared pick's rows and floor) in the rack archive", W),
     "servo.mttf": Source("faults", "confirmed faults and operating time", "the fault memory's FaultConfirmed events on its members, and the "
                          "time they reported", W),
     # bldc_driver (a moteus board)
@@ -511,31 +521,33 @@ SOURCES: dict[str, Source] = {
     "driver.loop_rate": Source("state_stamps", "State record stamps", "every State record the driver sends while its page watches it", W),
     "driver.link_loss": Source("reply_counts", "reply counts", "the driver's per-board status: queries and replies (moteus's diagnose)", W),
     "driver.config": Source("config", "expected configuration", "the driver's config records with an expected value (a deployment record)", W),
-    "gearbox.wear": _none("re-identified backlash and friction against the commissioning card", "neither is on RobotDx; a live "
-                          "re-identification against the commissioning card would provide them", W),
+    "gearbox.wear": Source("wear", "re-identified friction against the commissioning card", "the newest calibration round of this joint "
+                           "(bam_rack_twin.calibration_round/1) against its model card (bam-rack-twin/model-card-1, the measured terms) in "
+                           "the rack archive", W),
     # encoder: a moteus reads its own (onboard or aux) encoder, so the one board under the encoder is its State
-    "encoder.homing": _none("repeated homing offsets", "N runs of the homing routine with the offset each found; a homing utility that "
-                            "reports it would provide them", W),
+    # WHY NotMeasured (round 4): homing finds an offset against a hard stop or an index, and none is set up; nothing is missing in software
+    "encoder.homing": _none("repeated homing offsets", "homing finds its offset against a hard stop or an index, and the rack's hard stops "
+                            "are not set (its homing configs hold placeholders) and no homing run is recorded anywhere (the rack archive "
+                            "holds no homing offsets); set hard stops and a homing routine that records each offset found would provide them", M),
     "encoder.standstill_noise": Source("state", "the position at rest", "the State of the one board under this encoder (its position), or "
                                        "an encoder driver that reports its position", W),
     "encoder.validity": Source("state", "the encoder's validity codes", "the State of the one board under this encoder (its fault code), or "
                                "an encoder driver that reports a fault code", W),
     # camera_rgb / camera_rgbd: the driver's State, frame records and images
-    "camera.frame_rate": _none("per-frame stamps", "the driver's frame records are the page's 5 Hz preview, not every camera frame (its State "
-                               "says each stream's fps and frames dropped); the driver reporting each frame's hardware stamp would provide them", W),
+    "camera.frame_rate": Source("captures", "per-frame stamps", "the newest recorded capture of this camera in the rack archive "
+                                "(bam_rack_twin.hardware.record's cam_<RealSense serial>.npz: every frame's hardware clock, hw_ms)", W),
     "camera.latency": Source("frame_stamps", "frame stamps (the driver's and the host's)", "the driver's frame records: their stamp and when the "
                              "host received them", W),
     "camera.extrinsic_drift": _none("fixed tag detections", _TAG.format(what="the tag's pixel centre"), M),
     "camera.blur": Source("frames", "grey frames", "the newest image of the colour stream in the frame directory (JPEG or PNG)", W),
     "camera.tag_detect": _none("tag detections (found or not, per frame)", _TAG.format(what="each frame's result"), M),
-    "depth.plane_rms": _none("depth values of a flat target", "the depth stream is a colourised preview image, not depth values; the driver "
-                             "writing raw depth frames (z16, with the depth scale) of a flat target would provide them", W),
-    "depth.fill_rate": _none("depth values of a flat target", "the depth stream is a colourised preview image, not depth values; the driver "
-                             "writing raw depth frames (z16, with the depth scale) of a flat target would provide them", W),
-    "depth.temporal_noise": _none("depth values of a flat target", "the depth stream is a colourised preview image, not depth values; the "
-                                  "driver writing raw depth frames (z16, with the depth scale) of a flat target would provide them", W),
-    "depth.health_check": _none("the on-chip calibration's health score", "the score is in the calibration run's output, not a record; the "
-                                "driver reporting it as a measurement would provide it", W),
+    # WHY NotMeasured (round 4): Intel's depth-quality metrics are defined on a flat target at a measured distance filling the central ROI;
+    # none is set up in front of any camera, so raw depth of the scene in view would be a number about the scene, not the camera
+    "depth.plane_rms": _none("depth values of a flat target", _FLAT, M),
+    "depth.fill_rate": _none("depth values of a flat target", _FLAT, M),
+    "depth.temporal_noise": _none("depth values of a flat target", _FLAT, M),
+    "depth.health_check": Source("action", "the on-chip calibration's health score", "intel_rgbd's calibrate run kept by this host "
+                                 "(run_on_chip_calibration: the health before and after, and whether it was written)", W),
     # camera_hsi
     "hsi.snr": _none("repeated cubes of a uniform target", "no hyperspectral camera on RobotDx; a driver of one that records reference cubes "
                      "would provide them", M),
@@ -565,14 +577,13 @@ SOURCES: dict[str, Source] = {
     "gripper.compute_time": Source("state", "the grasp compute time", _NO_DRIVER.format(what="gripper or grasp planner", keys="compute_s"), M),
     "gripper.force": Source("state", "the force and its target", _NO_DRIVER.format(what="gripper", keys="force_n and force_target_n"), M),
     # arm: the arm plugin's State (joint angles, end effector x / y), its members
-    "arm.tool_error_at_stop": _none("the tool pose and its target at each stop", "the arm reports its end effector x / y (forward kinematics "
-                                    "of the measured joints) but no commanded tool pose; its planner reporting both would provide them", W),
-    "arm.path_tracking": _none("the tool pose and its target along the path", "the arm reports its end effector x / y (forward kinematics of "
-                               "the measured joints) but no commanded tool pose; its planner reporting both would provide them", W),
-    "arm.overshoot": Source("state", "the position and its target", "the arm's runner reporting its commanded position (q_target_rad)", W),
-    "arm.completion_time": _none("planned and actual end of each trajectory", "RobotDx sees no trajectory plan; the arm's runner reporting its "
-                                 "planned and actual end would provide them", W),
-    "arm.hold_effort": Source("state", "the torque and its feed-forward", "a driver that reports the feed-forward torque it was sent (tau_ff_nm)", W),
+    # WHY the sim cell (round 4, Zach's brief: "the arm's commanded trajectory: from the UR5e sim cell"): no RobotDx arm reports a commanded
+    # pose; the cell's report carries both, and every result says it is the sim cell's, so it is never read as the arm's own measurement
+    "arm.tool_error_at_stop": Source("sim_cell", "the tool pose and its target at each stop", _SIM_CELL, W),
+    "arm.path_tracking": Source("sim_cell", "the tool pose and its target along the path", _SIM_CELL, W),
+    "arm.overshoot": Source("sim_cell", "the position and its target", _SIM_CELL, W),
+    "arm.completion_time": Source("sim_cell", "planned and actual end of each trajectory", _SIM_CELL, W),
+    "arm.hold_effort": Source("sim_cell", "the torque and its feed-forward", _SIM_CELL, W),
     "arm.calibration_drift": _none("tag detections on the tool", _TAG.format(what="the tool tag's pose"), M),
     "arm.joints": Source("members", "the joints' levels", "the composite's members as the tree shows them", W),
     # arm_gripper: the pick
@@ -786,8 +797,13 @@ class RackArchive:
     moteus board reports no commanded position, while every rack run records q_target / qd_target beside q; the newest run of a joint is
     the best evidence RobotDx has of how it tracks, and its window says when it was recorded, so it is never mistaken for now."""
 
-    def __init__(self, root: Path | str, refresh_s: float = 60.0):
-        self.root = Path(root)
+    def __init__(self, root: Path | str | None, refresh_s: float = 60.0, *, calibrations: Path | str | None = None,
+                 sim_cells: Path | str | None = None):
+        # WHY three roots: the rack archive (bam_rack_twin's runs and analysis), moteus_tool's calibration logs
+        # (~/.cache/moteus-firmware/calibrations) and the UR5e sim cell's reports (traj_integration_tests/out) are written by three producers
+        self.root = Path(root) if root is not None else Path("/nonexistent-rack-archive")
+        self.calibrations = Path(calibrations) if calibrations is not None else None
+        self.sim_cells = Path(sim_cells) if sim_cells is not None else None
         self.refresh_s = refresh_s
         self._listed_at: float | None = None
         self._runs: dict[int, list[tuple[float, Path]]] = {}
@@ -813,6 +829,11 @@ class RackArchive:
                     continue
         self._runs = {can_id: sorted(items, reverse=True) for can_id, items in runs.items()}
         self._acceptance = sorted(self.root.glob("rack_*/analysis/acceptance*.json"))
+        self._analysis = sorted(self.root.glob("rack_*/analysis/*.json"))
+        self._cards = sorted(self.root.glob("rack_*/analysis/model_cards/can*.json"))
+        self._captures = sorted(self.root.glob("rack_*/**/cam_*.npz"))
+        self._cal_logs = sorted(self.calibrations.glob("*/moteus-cal-*.log")) if self.calibrations is not None else []
+        self._cells = sorted(self.sim_cells.glob("ur_compare_*/report.html")) if self.sim_cells is not None else []
         self._listed_at = now
 
     def _cached(self, file: Path, load):
@@ -867,6 +888,103 @@ class RackArchive:
             return None
         _stamp, _name, file, document = max(found)
         return file, document
+
+
+    def _json_files(self, files, keep) -> list[tuple[Path, dict]]:
+        out = []
+        for file in files:
+            try:
+                document = self._cached(file, _read_json)
+            except OSError:
+                continue
+            if isinstance(document, dict) and keep(document):
+                out.append((file, document))
+        return out
+
+    def newest_followup(self, can_id: int) -> tuple[Path, dict] | None:
+        """The newest bam_rack_twin.calibration_followup/1 of station ``can<id>`` (by scored_at), or None."""
+
+        with self._lock:
+            self._list()
+            found = self._json_files(self._analysis, lambda d: d.get("schema") == "bam_rack_twin.calibration_followup/1"
+                                     and d.get("station") == f"can{can_id}" and isinstance(d.get("variants"), dict))
+        return max(found, key=lambda item: (str(item[1].get("scored_at") or ""), str(item[0])), default=None)
+
+    def model_card(self, can_id: int) -> tuple[Path, dict] | None:
+        """The newest model card of CAN ``can_id`` (bam-rack-twin/model-card-1, by file time), or None."""
+
+        with self._lock:
+            self._list()
+            found = self._json_files([f for f in self._cards if f.name == f"can{can_id}.json"],
+                                     lambda d: str(d.get("schema", "")).startswith("bam-rack-twin/model-card"))
+        return max(found, key=lambda item: item[0].stat().st_mtime, default=None)
+
+    def newest_calibration_round(self, can_id: int) -> tuple[Path, dict] | None:
+        with self._lock:
+            self._list()
+            found = self._json_files(self._analysis, lambda d: d.get("schema") == "bam_rack_twin.calibration_round/1"
+                                     and d.get("station") == f"can{can_id}" and isinstance(d.get("point"), dict))
+        return max(found, key=lambda item: (str(item[1].get("identified_at") or ""), str(item[0])), default=None)
+
+    def newest_capture(self, serial: str) -> Path | None:
+        """The newest recorded capture of the RealSense with SDK serial ``serial`` (cam_<serial>.npz, by file time), or None."""
+
+        with self._lock:
+            self._list()
+            found = [file for file in self._captures if file.name == f"cam_{serial}.npz"]
+        try:
+            return max(found, key=lambda file: (file.stat().st_mtime, str(file)), default=None)
+        except OSError:
+            return None
+
+    def moteus_calibration(self, serial: str) -> tuple[Path, dict] | None:
+        """The newest moteus_tool calibration log of the board with serial ``serial`` (its device_info, by its timestamp), or None."""
+
+        with self._lock:
+            self._list()
+            found = self._json_files(self._cal_logs, lambda d: (d.get("device_info") or {}).get("serial_number") == serial
+                                     and isinstance(d.get("kv"), (int, float)))
+        return max(found, key=lambda item: (str(item[1].get("timestamp") or ""), str(item[0])), default=None)
+
+    def newest_sim_cell(self) -> tuple[Path, dict] | None:
+        """The newest UR5e sim cell report (ur_compare_*/report.html, by file time) and its traj_compare payload, or None."""
+
+        with self._lock:
+            self._list()
+            cells = sorted(self._cells, key=lambda file: file.stat().st_mtime if file.exists() else 0.0, reverse=True)
+            for file in cells:
+                try:
+                    payload = self._cached(file, _traj_compare_payload)
+                except OSError:
+                    continue
+                if payload is not None:
+                    return file, payload
+        return None
+
+
+def _read_json(file: Path):
+    try:
+        return json.loads(file.read_text())
+    except (OSError, ValueError):
+        return None
+
+
+_PAYLOAD = re.compile(r'<script type="application/json" id="traj-compare-data">(.*?)</script>', re.S)
+
+
+def _traj_compare_payload(file: Path):
+    """The data a traj_compare report embeds (traj_compare.report: one JSON script, ``comparisons`` with their situations).
+    WHY the report, not a second export: it is the sim cell's own output, and its payload holds the commanded and simulated joints, torques
+    and tool poses, exactly what the arm bindings read."""
+
+    found = _PAYLOAD.search(file.read_text(errors="replace"))
+    if not found:
+        return None
+    try:
+        payload = json.loads(found[1])
+    except ValueError:
+        return None
+    return payload if isinstance(payload, dict) and isinstance(payload.get("comparisons"), list) else None
 
 
 # The Computer plugin's CPU temperature (plugins/computer: a "Temperature CPU (<chip>)" status, one measurement per sensor). WHY these
@@ -1151,9 +1269,231 @@ def _feed_acceptance(binding, config, source, path, entity, inputs: Inputs, star
     return cells, len(cells), window
 
 
+def _feed_captures(binding, config, source, path, entity, inputs: Inputs, start, now):
+    from robotdx.diagnostics.adapters import rack_npz
+
+    if inputs.archive is None:
+        raise _no_source(source, entity, "this host has no rack archive (IO_DIAGNOSTICS_RACK_ARCHIVE)")
+    if not inputs.realsense_serials:
+        raise _no_source(source, entity, "its driver names no RealSense serial (realsense_serial) to find its captures by")
+    for serial in inputs.realsense_serials:
+        file = inputs.archive.newest_capture(serial)
+        if file is None:
+            continue
+        stamps = rack_npz.camera_stamps(file)
+        window = {"from": None, "to": None, "window_s": None, "state": "", "samples": int(len(stamps.t)), "source": "capture",
+                  "file": str(file), "serial": serial}
+        return [stamps], len(stamps.t), window
+    raise _no_source(source, entity, f"the rack archive {inputs.archive.root} holds no capture of RealSense {', '.join(inputs.realsense_serials)}")
+
+
+def _feed_action(binding, config, source, path, entity, inputs: Inputs, start, now):
+    from robotdx.diagnostics.stock.truthfulness import Pair
+
+    for run in sorted(inputs.action_runs, key=lambda item: item.get("ended") or 0.0, reverse=True):
+        for record in ((run.get("result") or {}).get("records") or []):
+            args = record.get("args") or {}
+            if record.get("code") != "ActionCompleted" or not all(isinstance(args.get(k), (int, float)) for k in ("health_before", "health_after")):
+                continue
+            # WHY before when not written: the camera keeps the stored calibration unless the new one was better (intel_rgbd)
+            health = float(args["health_after"] if args.get("wrote") else args["health_before"])
+            window = {"from": run.get("started"), "to": run.get("ended"), "window_s": None, "state": "", "samples": 1, "source": "action",
+                      "run": run.get("id"), "wrote": bool(args.get("wrote"))}
+            return [Pair(reported=health, reference=0.0, key="health", evidence=str(run.get("id")))], 1, window
+    raise _no_source(source, entity, "no calibrate run of this camera is kept on this host (its Calibrate action has not run here)")
+
+
+def _feed_kv(binding, config, source, path, entity, inputs: Inputs, start, now):
+    from robotdx.diagnostics.stock.truthfulness import KtReadings
+
+    serial = str(inputs.leaf_identity.get("serial_number") or "")
+    kv = next((item.value for item in inputs.leaf_configs if item.key == "motor.Kv" and isinstance(item.value, (int, float))), None)
+    if kv is None:
+        raise _no_source(source, entity, "its board reports no motor.Kv config (the driver reads it with conf enumerate)")
+    if not serial or inputs.archive is None:
+        raise _no_source(source, entity, "its board names no serial number" if not serial else "this host has no calibration logs")
+    found = inputs.archive.moteus_calibration(serial)
+    if found is None:
+        raise _no_source(source, entity, f"no moteus_tool calibration log of board {serial} in {inputs.archive.calibrations}")
+    file, log = found
+    window = {"from": None, "to": None, "window_s": None, "state": "", "samples": 1, "source": "calibration_log", "file": str(file),
+              "timestamp": log.get("timestamp")}
+    return KtReadings(kv_board_rpm_per_v=float(kv), kv_reference_rpm_per_v=float(log["kv"]), reference=str(file)), 1, window
+
+
+def _feed_followup(binding, config, source, path, entity, inputs: Inputs, start, now):
+    from robotdx.diagnostics.stock.fidelity import FidelityInput, ModelRow
+
+    can_id = _one_can_id(source, entity, inputs)
+    if inputs.archive is None:
+        raise _no_source(source, entity, "this host has no rack archive (IO_DIAGNOSTICS_RACK_ARCHIVE)")
+    found = inputs.archive.newest_followup(can_id)
+    if found is None:
+        raise _no_source(source, entity, f"the rack archive {inputs.archive.root} holds no calibration follow-up of CAN {can_id}")
+    file, document = found
+    variant = str(document.get("declared_pick") or "")
+    rows = (document["variants"].get(variant) or {}).get("rows") or []
+    floor = (document.get("floor") or {}).get("floor_mrad")
+    model = [ModelRow(model="twin", run_id=str(row.get("run")), cls=str(row.get("class")), error=float(row["q_rms_mrad"]))
+             for row in rows if isinstance(row.get("q_rms_mrad"), (int, float))]
+    if not model or not isinstance(floor, (int, float)):
+        raise _no_source(source, entity, f"{file.name} has no rows of its declared pick {variant!r} or no floor")
+    window = {"from": None, "to": None, "window_s": None, "state": "", "samples": len(model), "source": "followup", "file": str(file),
+              "variant": variant, "scored_at": document.get("scored_at")}
+    return FidelityInput(floor=float(floor), rows=model, floor_kind="repeats", unit="mrad"), len(model), window
+
+
+# the model card's terms a calibration round re-identifies, by the round's point keys
+WEAR_TERMS = {"coulomb": "coulomb_nm", "viscous": "viscous_nm_s_rad"}
+
+
+def _feed_wear(binding, config, source, path, entity, inputs: Inputs, start, now):
+    import datetime as dt
+
+    from robotdx.diagnostics.stock.truthfulness import Pair
+
+    can_id = _one_can_id(source, entity, inputs)
+    if inputs.archive is None:
+        raise _no_source(source, entity, "this host has no rack archive (IO_DIAGNOSTICS_RACK_ARCHIVE)")
+    card, round_ = inputs.archive.model_card(can_id), inputs.archive.newest_calibration_round(can_id)
+    if card is None or round_ is None:
+        raise _no_source(source, entity, f"the rack archive holds no {'model card' if card is None else 'calibration round'} of CAN {can_id}")
+    (card_file, card_doc), (round_file, round_doc) = card, round_
+    identified = str(round_doc.get("identified_at") or "")
+    try:
+        later = dt.datetime.fromisoformat(identified.replace("Z", "+00:00")).timestamp() > card_file.stat().st_mtime
+    except ValueError:
+        later = False
+    if not later:
+        raise _no_source(source, entity, f"CAN {can_id}'s newest calibration round ({identified or 'undated'}) is not after its model card")
+    # WHY only measured terms: a card's refused or datasheet term was never this motor's own measurement, so it is no reference for wear
+    pairs = [Pair(reported=float(round_doc["point"][key]), reference=float(term["value"]), key=term["term"], evidence=str(round_file))
+             for term in card_doc.get("terms") or [] for name, key in WEAR_TERMS.items()
+             if term.get("term") == name and term.get("status") == "measured" and isinstance(term.get("value"), (int, float))
+             and isinstance(round_doc["point"].get(key), (int, float))]
+    if not pairs:
+        raise _no_source(source, entity, f"CAN {can_id}'s model card has no measured friction term to compare against")
+    window = {"from": None, "to": None, "window_s": None, "state": "", "samples": len(pairs), "source": "model_card", "card": str(card_file),
+              "round": str(round_file), "identified_at": identified}
+    return pairs, len(pairs), window
+
+
+SETTLE_RAD = 2e-3  # completion: every joint within 2 mrad of its final target from then on
+
+
+def _sim_situations(payload: dict):
+    """``[(comparison, target situation, judged situation)]``. WHY the first non-target situation: in ur_compare it is Sim A, the cell's
+    nominal controller (feed-forward knows the payload); Sim B is its degraded A/B variant."""
+
+    out = []
+    for comparison in payload.get("comparisons") or []:
+        situations = comparison.get("situations") or []
+        target = next((item for item in situations if item.get("role") == "target"), None)
+        judged = next((item for item in situations if item.get("role") != "target" and (item.get("plot") or {}).get("q")), None)
+        if target is not None and judged is not None and (target.get("plot") or {}).get("q"):
+            out.append((comparison, target, judged))
+    return out
+
+
+def _floats(values):
+    """A payload array as floats: traj_compare writes a non-finite sample as null."""
+
+    from robotdx.diagnostics._numpy import np
+
+    def clean(item):
+        return [clean(value) for value in item] if isinstance(item, (list, tuple)) else (np.nan if item is None else float(item))
+
+    return np.asarray(clean(values), float)
+
+
+def _sim_cell_data(binding: Binding, situations, file: Path):
+    from robotdx.diagnostics._numpy import np
+    from robotdx.diagnostics.data import Trajectory
+    from robotdx.diagnostics.stock.iso9283 import PathCycle
+    from robotdx.diagnostics.stock.truthfulness import Pair
+
+    def joints(comparison, target, judged):
+        t = _floats(comparison["plot_t"])
+        q_target, q = _floats(target["plot"]["q"]), _floats(judged["plot"]["q"])
+        tau_ff = _floats(target["plot"]["tau"]) if target["plot"].get("tau") else np.full_like(q_target, np.nan)
+        tau = _floats(judged["plot"]["tau"]) if judged["plot"].get("tau") else np.full_like(q, np.nan)
+        names = comparison.get("joint_names") or [f"joint {i}" for i in range(len(q))]
+        for index in range(min(len(q), len(q_target))):
+            # WHY the target's torque as the feed-forward: ur_compare's target torque is the plant's inverse dynamics, what Sim A feeds forward
+            yield Trajectory(t=t, q_rad=q[index], q_target_rad=q_target[index], qd_target_rad_s=np.gradient(q_target[index], t),
+                             tau_nm=tau[index], tau_ff_nm=tau_ff[index], run=f"{file}#{comparison.get('name')}/{names[index]}",
+                             device=str(names[index]), situation=str(judged.get("name")), source="sim")
+
+    def cartesian(comparison, judged):
+        three = judged.get("three") or {}
+        if not three.get("p") or not three.get("tp"):
+            return None
+        return _floats(three["t"]), _floats(three["p"]), _floats(three["tp"])
+
+    if binding.id in ("arm.overshoot", "arm.hold_effort"):
+        return [run for comparison, target, judged in situations for run in joints(comparison, target, judged)]
+    if binding.id == "arm.tool_error_at_stop":
+        runs = []
+        for comparison, _target, judged in situations:
+            found = cartesian(comparison, judged)
+            if found is None:
+                continue
+            t, p, tp = found
+            speed = np.linalg.norm(np.gradient(tp, t, axis=0), axis=1)
+            # WHY a distance as the channel: the stop error is |p - p_target| (catalog: Cartesian, mm); its target is 0
+            runs.append(Trajectory(t=t, q_rad=1000.0 * np.linalg.norm(p - tp, axis=1), q_target_rad=np.zeros_like(t),
+                                   qd_target_rad_s=np.where(speed < 1e-9, 0.0, speed), run=f"{file}#{comparison.get('name')}/tool",
+                                   device="tool", situation=str(judged.get("name")), source="sim", frame="base"))
+        return runs
+    if binding.id == "arm.path_tracking":
+        # WHY one comparison: ISO 9283 path accuracy compares repeats of ONE path point by point; two tapes are two paths
+        for comparison, _target, judged in situations:
+            found = cartesian(comparison, judged)
+            if found is not None:
+                return [PathCycle(xyz_mm=1000.0 * found[1], target_xyz_mm=1000.0 * found[2], frame="base", run=f"{file}#{comparison.get('name')}")]
+        return []
+    if binding.id == "arm.completion_time":
+        pairs = []
+        for comparison, target, judged in situations:
+            t = _floats(comparison["plot_t"])
+            q_target, q = _floats(target["plot"]["q"]), _floats(judged["plot"]["q"])
+            moving = np.where(np.max(np.abs(np.gradient(q_target, t, axis=1)), axis=0) > 1e-6)[0]
+            if not len(moving) or moving[-1] >= len(t) - 1:
+                continue  # never moves, or still moving when the tape ends (a conveyor track ends at belt speed): no planned end
+            planned = int(moving[-1])
+            off = np.max(np.abs(q - q_target[:, -1:]), axis=0) > SETTLE_RAD
+            late = np.where(off)[0]
+            settled = int(late[-1]) + 1 if len(late) else 0
+            if settled >= len(t):
+                continue  # never settles on the tape: no actual end to compare
+            pairs.append(Pair(reported=float(t[max(settled, planned)] - t[0]), reference=float(t[planned] - t[0]),
+                              key=str(comparison.get("name")), evidence=f"{file}#{comparison.get('name')}"))
+        return pairs
+    return None
+
+
+def _feed_sim_cell(binding, config, source, path, entity, inputs: Inputs, start, now):
+    if inputs.archive is None or inputs.archive.sim_cells is None:
+        raise _no_source(source, entity, "this host has no UR5e sim cell reports (IO_DIAGNOSTICS_SIM_CELLS)")
+    found = inputs.archive.newest_sim_cell()
+    if found is None:
+        raise _no_source(source, entity, f"{inputs.archive.sim_cells} holds no UR5e sim cell report (ur_compare_*/report.html)")
+    file, payload = found
+    situations = _sim_situations(payload)
+    data = _sim_cell_data(binding, situations, file) if situations else None
+    if data is None:
+        raise _no_source(source, entity, f"the sim cell report {file} carries no {source.input.removeprefix('the ')}")
+    # WHY an empty list goes on: the report is there and read; a tape with no stop or no planned end is the primitive's own not_run
+    # (NoStops, NoMoves, no pair), which says what the tape lacks, never a missing source
+    window = {"from": None, "to": None, "window_s": None, "state": "", "samples": len(data), "source": "sim_cell", "file": str(file),
+              "situation": str(situations[0][2].get("name")), "comparisons": [str(c.get("name")) for c, _t, _j in situations]}
+    return data, len(data), window
+
+
 # WHY a feed may return a third item, its own window: a recorded run's or an acceptance's time is its own, not the last window_s of now
 _FEEDS = {"state_stamps": _feed_state_stamps, "frame_stamps": _feed_frame_stamps, "frames": _feed_frames, "reply_counts": _feed_reply_counts,
-          "holds": _feed_holds, "acceptance": _feed_acceptance, "config": _feed_config, "faults": _feed_faults, "link_events": _feed_link_events, "members": _feed_members, "evidence": _feed_evidence}
+          "holds": _feed_holds, "acceptance": _feed_acceptance, "captures": _feed_captures, "action": _feed_action, "kv_check": _feed_kv,
+          "followup": _feed_followup, "wear": _feed_wear, "sim_cell": _feed_sim_cell, "config": _feed_config, "faults": _feed_faults, "link_events": _feed_link_events, "members": _feed_members, "evidence": _feed_evidence}
 
 
 # ----- the runner --------------------------------------------------------------------------------------------------------
@@ -1278,6 +1618,11 @@ class StockDiagnostics:
             source = source_of(binding)
             if source.kind == "state":
                 result, window = self._from_state(binding, spec, config, source, path, entity_name, groups, inputs)
+            elif source.kind == "sim_cell" and binding.diagnostic in _STATE_NEEDS and (groups or inputs.leaf_state) and \
+                    (live := self._from_state(binding, spec, config, source, path, entity_name, groups, inputs))[0].code not in (*NO_SOURCE_CODES, NO_STATE):
+                # WHY the arm's own State first: an arm whose runner reports its commanded position or feed-forward is judged on itself;
+                # the sim cell stands in only while it does not
+                result, window = live
             elif source.kind == NONE:  # WHY first and without numpy: nothing RobotDx publishes carries it, so it is the lasting reason
                 missing = _no_source(source, entity_name)
                 result = self._not_run(binding, spec, missing.code, missing.message)
@@ -1292,6 +1637,8 @@ class StockDiagnostics:
                     result = self._gated(binding, config, dx_registry.evaluate(binding.diagnostic, config, data, subject=path, stamp=now))
                     window = fed[2] if len(fed) > 2 else {"from": start, "to": now, "window_s": binding.window_s, "state": binding.state,
                                                           "samples": samples, "source": source.kind}
+                    if window.get("source") == "sim_cell":  # WHY: a sim's number on an arm's row must say whose it is
+                        result = dataclasses.replace(result, message=f"UR5e sim cell ({window['situation']}): {result.message}")
         except ModuleNotFoundError as error:
             result = self._not_run(binding, spec, NUMPY_MISSING_CODE, NUMPY_MISSING if error.name == "numpy" else f"{error}")
         except Exception as error:  # noqa: BLE001 - a diagnostic that raises is a not_run with its reason, never a crashed host

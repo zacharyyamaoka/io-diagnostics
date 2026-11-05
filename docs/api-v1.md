@@ -1020,7 +1020,13 @@ or encoder composite over one board also reads that board's State; a servo whose
 recorded run of its joint (bam_rack_twin npz in the rack archive, `$IO_DIAGNOSTICS_RACK_ARCHIVE`, default `/archive/datasets/bam_rig`;
 `dx.window.source` `recorded_run`, its `from` / `to` the run's own wall clock and `run` its file) and its holds; a deployment reads the
 newest `bam_rack_twin.acceptance/1` there for its gate matrix (`source` `acceptance`, `file`, `generated_at`) and the Computer plugin's
-`Temperature CPU` status for `cpu_temp_c`. A binding whose input no source on the entity carries is not run with one of two codes, and
+`Temperature CPU` status for `cpu_temp_c`. Round 4 (Codex audit 2026-11-04 r4, gap 1): a camera reads the newest recorded capture of its RealSense serial
+(`cam_<serial>.npz` hw_ms, `source` `capture`) for its frame rate and the host's newest intel_rgbd calibrate run for its on-chip health
+(`action`); a servo reads moteus_tool's calibration log of its board's serial against the board's `motor.Kv` (`calibration_log`,
+`$IO_DIAGNOSTICS_MOTEUS_CALIBRATIONS`) and the newest calibration follow-up (`followup`); a gearbox reads the newest calibration round
+against its model card (`model_card`); an arm whose State has no commanded pose reads the newest UR5e sim cell report
+(traj_integration_tests `ur_compare_*/report.html`, `$IO_DIAGNOSTICS_SIM_CELLS`; `sim_cell`, every message prefixed
+"UR5e sim cell (<situation>): "). A binding whose input no source on the entity carries is not run with one of two codes, and
 the message "no <input> source on <entity>: <what would provide it>" and value `dx.gap`: `NotMeasured` (`not_measured`: no instrument on
 the entity can produce it: no IMU, no pick log, no tag in view) or `NotWired` (`not_wired`: an existing producer has it or could
 publish it, and nothing maps it yet): a row (unknown, never OK) where the entity reports State, none where it reports no State at all (value

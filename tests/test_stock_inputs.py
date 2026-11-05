@@ -511,7 +511,7 @@ def moteus_calibrations(root: Path) -> Path:
 
 def arm_payload():
     """The traj_compare report payload of a UR5e sim cell (traj_integration_tests ur_compare): a joint reach that steps every joint
-    0 -> 0.5 rad and holds, the sim overshooting 4 % and settling; and a Cartesian move that ends in a 0.6 s dwell, the sim 1 mm off."""
+    0 -> 0.5 rad and holds, the sim overshooting 4 % and settling; and a Cartesian move that stops for 0.6 s mid-way, the sim 1 mm off."""
 
     import numpy as np
 
@@ -528,7 +528,8 @@ def arm_payload():
                  {"name": "target", "role": "target", "plot": {"q": [target.tolist()] * 6, "tau": [tau_target.tolist()] * 6}, "three": None},
                  {"name": "sim_a", "role": "situation", "title": "Sim A", "plot": {"q": [sim.tolist()] * 6, "tau": [tau_sim.tolist()] * 6},
                   "three": None}]}
-    move = np.clip(t / 2.4, 0, 1)
+    # out, a 0.6 s dwell (a stop: more motion follows), out again, parked
+    move = np.where(t < 1.0, t / 1.0, np.where(t < 1.6, 1.0, np.clip(1.0 + (t - 1.6) / 1.0 * 0.5, 1.0, 1.5)))
     tp = np.stack([0.4 + 0.2 * move, 0.1 * move, 0.3 + 0 * t], axis=1)
     p = tp + np.array([0.001, 0.0, 0.0])
     track = {"name": "conveyor_track", "has_cartesian": True, "plot_t": t.tolist(), "joint_names": [f"j{i}" for i in range(6)],

@@ -564,6 +564,29 @@ def default_rack_archive() -> Path | None:
     return RACK_ARCHIVE if RACK_ARCHIVE.is_dir() else None
 
 
+MOTEUS_CALIBRATIONS = Path.home() / ".cache" / "moteus-firmware" / "calibrations"
+SIM_CELLS = Path("/home/bam/bam_ws/src/core/mdp/agent/actor/trajectory_generation/traj_integration_tests/out")
+
+
+def _default_dir(variable: str, default: Path) -> Path | None:
+    named = os.environ.get(variable)
+    if named is not None:
+        return Path(named) if named else None
+    return default if default.is_dir() else None
+
+
+def default_moteus_calibrations() -> Path | None:
+    """``$IO_DIAGNOSTICS_MOTEUS_CALIBRATIONS`` (empty: none), else moteus_tool's calibration logs when this machine keeps them."""
+
+    return _default_dir("IO_DIAGNOSTICS_MOTEUS_CALIBRATIONS", MOTEUS_CALIBRATIONS)
+
+
+def default_sim_cells() -> Path | None:
+    """``$IO_DIAGNOSTICS_SIM_CELLS`` (empty: none), else traj_integration_tests' output, where ur_compare writes its UR5e sim cell reports."""
+
+    return _default_dir("IO_DIAGNOSTICS_SIM_CELLS", SIM_CELLS)
+
+
 def default_state_dir() -> Path:
     """``$IO_DIAGNOSTICS_STATE_DIR``, else ``~/.local/state/io-diagnostics`` (the XDG state home)."""
 
@@ -740,7 +763,8 @@ class Host:
                  ledger_file: Path | None = None, history_file: Path | None = None, describes_file: Path | None = None, restore_later: bool = False,
                  watch_grace_s: float | None = None, watch_tick_s: float | None = None, frames_dir: Path | None = None,
                  describe_check_s: float | None = None, diagnostics_beat_s: float | None = None,
-                 stock_diagnostics_defaults: bool = True, rack_archive: Path | None = None):
+                 stock_diagnostics_defaults: bool = True, rack_archive: Path | None = None, moteus_calibrations: Path | None = None,
+                 sim_cells: Path | None = None):
         self.plugins_dir = Path(plugins_dir)
         self.describe_check_s = describe_check_s if describe_check_s is not None else DESCRIBE_CHECK_S
         # WHY settable: the defaults are the product (probe.py: holders' pids every 1 s, 0.5 s settle, 10 s first
@@ -809,7 +833,8 @@ class Host:
             Path(settings_file).parent / stock_diagnostics_module.DIAGNOSTICS_FILE if settings_file else None,
             diagnostics_beat_s if diagnostics_beat_s is not None else stock_diagnostics_module.BEAT_S, defaults=stock_diagnostics_defaults)
         # the rack's recordings (recorded runs, acceptance) the servo and deployment bindings read; None = none (a fixture, a host by hand)
-        self.rack_archive = stock_diagnostics_module.RackArchive(rack_archive) if rack_archive is not None else None
+        self.rack_archive = (stock_diagnostics_module.RackArchive(rack_archive, calibrations=moteus_calibrations, sim_cells=sim_cells)
+                             if any(root is not None for root in (rack_archive, moteus_calibrations, sim_cells)) else None)
         self.stock_results: dict[tuple[str, str], DiagnosticStatus] = {}  # what the views post
         self.stock_quiet: dict[tuple[str, str], DiagnosticStatus] = {}  # not run, no row: only the drill-in lists them (stock_diagnostics.quiet)
         # every change a page could see (a refresh, a udev event, a plugin's records): /api/v1/events waits on it
@@ -1761,10 +1786,24 @@ class Host:
         leaf_state = self._state_history(devices[0], view.now, span_s) if composite is not None and len(devices) == 1 and "state" in kinds else {}
         can_ids = tuple(dict.fromkeys(found for found in (stock_diagnostics_module.can_id_of(leaf) for leaf in devices) if found is not None))
         computer = self._computer_temperature(view.now, span_s) if composite is not None and "state" in kinds else []
+        serials, action_runs, leaf_identity, leaf_configs = (), (), {}, ()
+        if "captures" in kinds:  # the camera's SDK serial, as its driver names it (intel_rgbd: realsense_serial), never the USB one
+            serials = tuple(dict.fromkeys(value for status in view.merged.statuses if status.path == path
+                                          for key, value in status.values if key == "realsense_serial" and value))
+        if "action" in kinds:
+            action_runs = tuple(run.to_json(detail=True) for run in self.runs.list() if run.spec.path == path and run.spec.action == "calibrate")
+        if "kv_check" in kinds and composite is not None and len(devices) == 1:
+            leaf_identity = dict(getattr(view.merged.entities[devices[0]], "identity", None) or {})
+            found = self._watch_target(devices[0])
+            if found is not None:
+                job, rel = found
+                with self.lock:
+                    leaf_configs = tuple(config for (where, _key), config in job.cache.configs.items() if where == rel)
         return stock_diagnostics_module.Inputs(
             has_state=bool(groups), composite=entity.kind == "composite", plugin=composite is None or bool(composite.plugin),
             state_arrivals=arrivals, frames=frames, image=image, statuses=statuses, configs=configs, events=events, members=members,
-            leaves=leaves, operating=operating, leaf_state=leaf_state, can_ids=can_ids, archive=self.rack_archive, computer=computer)
+            leaves=leaves, operating=operating, leaf_state=leaf_state, can_ids=can_ids, archive=self.rack_archive, computer=computer,
+            realsense_serials=serials, action_runs=action_runs, leaf_identity=leaf_identity, leaf_configs=leaf_configs)
 
     def _computer_temperature(self, now: float, span_s: float) -> list[dict]:
         """The Computer plugin's CPU temperature status on the host entity, as the State series ``cpu_temp_c`` (rack.host), or []."""
@@ -4120,7 +4159,8 @@ def make_host(*, fixture: str | None = None, plugins_dir: Path | None = None, on
                     history_file=None if once else default_state_dir() / HISTORY_FILE,
                     describes_file=None if once else default_state_dir() / DESCRIBES_FILE,
                     expected_file=expected or expected_module.default_config_dir() / expected_module.EXPECTED_FILE,
-                    rack_archive=default_rack_archive(), **settings)
+                    rack_archive=default_rack_archive(), moteus_calibrations=default_moteus_calibrations(),
+                    sim_cells=default_sim_cells(), **settings)
     document, frame = load_fixture(fixture)
     offset = frame.get("utc_offset_s")
     clock = FixedClock(frame["clock"] + at_s, offset, "fixture") if once else ReplayClock(frame["clock"], offset, offset_s)
