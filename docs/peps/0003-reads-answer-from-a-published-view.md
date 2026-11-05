@@ -1,7 +1,8 @@
 # 0003: A read answers from a published view, and a page never waits for the host
 
-- **Status:** decided 2026-11-04, on Zach's report of the same day. Built as described, measured below. The first landing (9c5147b) had two races, found by the page suites the same day
-  and fixed: a run's end, and a page opened during a cold start. Both are under Rules that follow, because both came from this decision and both would come back with a careless rewrite.
+- **Status:** decided 2026-11-04, on Zach's report of the same day. Built as described, measured below. The first landing (9c5147b) had three races, found by the page suites the same day
+  and fixed: a run's end, a page opened during a cold start, and a press on Run lost while its token was on the way (old, but this made it bite). All are under Rules that follow, because each
+  came from this decision or was widened by it, and each would come back with a careless rewrite. A single green run missed all three: they lost about one round in ten.
 - **Applies to:** the classic page and every `GET /api/v1/*`. `web/dx/` reads the same API and gains the same answers; its own loading states are its own.
 
 ## Decision
@@ -70,6 +71,8 @@ trusts one; the API stays additive; the change stays small.
   its driver reports. One that stays missing was unplugged, and the page goes to the Computer as it always did.
 - **Bounds grow.** A load that fails is retried with a longer bound (6 s to 30 s), so a host that needs 9 s still lands its answer. A fixed bound would be the same livelock.
 - **A write is never aborted by a bound.** Aborting a `POST` does not undo it, and it leaves "did it happen?" with no answer.
+- **What changes nothing publishes nothing.** A dry run is a `POST` to `/api/v1/act` but has nothing for a next read to show, and a Run page waits for its answer. A build added to each dry run
+  was longest right after a run ended, and that wait is where a press on Run went nowhere, because the first draw offered Run before the asking began. Now it says "Asking…" until the token is there.
 - **Once there is a feed, its snapshot is a page's base, whichever landed first.** `/state` and the feed are two requests, and the server now answers before the drivers have, so a change can
   fall between them: in neither the `/state` read a moment before it nor any delta, since the feed's baseline already has it. A healthy board's row never changes, so it stayed out of the tree.
   The feed's snapshot and deltas are consistent by construction, and `/state` is only for a page with no feed. Up-first is what made this reachable: anything that assumed "by the time a page
