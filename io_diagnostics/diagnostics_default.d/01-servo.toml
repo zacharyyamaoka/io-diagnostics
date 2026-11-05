@@ -4,7 +4,7 @@
 # The host's default set (stock_diagnostics.py): read when the person has no diagnostics.toml of their own; the entity page's
 # drill-in copies the whole set there the first time a value is changed. `limits:` says whose thresholds these are: his /
 # his code gate; agent / proposed show as a warning at most, never a fail, until a person sets their own.
-# 7 bound here (live: consumers robotdx or both); sim2real-only, not bound: servo.floor, servo.twin_fidelity, servo.torque_fidelity, servo.torque_truth_load, servo.feedback_share, servo.coverage, servo.envelope, servo.thermal, servo.warm_cold
+# 7 bound here (live: consumers robotdx or both); sim2real-only, not bound: servo.floor, servo.twin_fidelity, servo.torque_fidelity, servo.floor_split, servo.twin_split, servo.rest_offset, servo.twin_fidelity_split, servo.torque_truth_load, servo.feedback_share, servo.coverage, servo.envelope, servo.thermal, servo.warm_cold
 
 [[part]]
 type = "servo"
