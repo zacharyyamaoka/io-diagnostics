@@ -53,7 +53,7 @@
   };
   const Live = { path: null, cursor: 0, rings: new Map(), groups: [], streams: [], watch: null, heard: null, loaded: false, none: false,
     error: '', inflight: false, rendered: 0, beat: null, poll: null, now: 0 };
-  const Heard = { base: null, at: 0, source: null, text: null, path: null, stale: '' };
+  const Heard = { base: null, at: 0, source: null, text: null, path: null, stale: '', none: 'never heard' };
   let last = null;
   const wired = new WeakSet();
   const ER = () => root.IOEntityRows;
@@ -73,13 +73,16 @@
     Heard.base = age; Heard.at = performance.now();
   }
   const heardAge = () => (Heard.base === null ? null : Heard.base + (performance.now() - Heard.at) / 1000);
+  // WHY presence: after a host restart with the bus held a board has no fresh report, so age_s is null while the host still remembers it. "never heard" there is false.
+  const missing = (node) => node.presence && node.presence.state === 'stale';
+  const nodeAge = (node) => (typeof node.age_s === 'number' ? node.age_s : (missing(node) && typeof node.presence.age_s === 'number' ? node.presence.age_s : null));
   function heardText(h) {
     if (Heard.text === null) updateHeard(h);
     return Heard.text;
   }
   function updateHeard(h) {
     const age = heardAge();
-    Heard.text = (age === null ? 'never heard' : `heard ${h.ago(Math.max(0, age))} ago`) + Heard.stale;
+    Heard.text = (age === null ? Heard.none : `heard ${h.ago(Math.max(0, age))} ago`) + Heard.stale;
   }
   if (typeof setInterval !== 'undefined') {
     setInterval(() => {
@@ -271,7 +274,8 @@
     const usb = detail && detail.badge && detail.badge.usb && root.IOUsb ? root.IOUsb.describe(detail.badge.usb) : { text: '', tip: '' };
     const badgeText = detail && detail.badge ? (detail.badge.kind === 'can' ? detail.badge.text : usb.text) : '';
     const badge = badgeText ? `<span class="d6-badge-c" title="${h.esc([usb.tip, detail.badge.kind === 'can' ? `via ${detail.badge.text.split(' · ')[1] || ''}` : ''].filter(Boolean).join(' · '))}">${h.esc(badgeText)}</span>` : '';
-    Heard.stale = node.stale ? ' · stale' : '';
+    Heard.stale = node.stale || missing(node) ? ' · stale' : '';
+    Heard.none = (missing(node) && node.presence.text) || 'never heard';
     if (Heard.path !== node.path) { Heard.path = node.path; Heard.text = null; }
     const hw = hardwareItems(node);
     const open = U.more.has(node.path);
@@ -956,7 +960,7 @@
     const node = ctx.node;
     if (!detail) {
       stopLive();
-      if (Heard.path !== node.path) { if (typeof node.age_s === 'number') setHeard(node.age_s); else Heard.base = null; }
+      if (Heard.path !== node.path) { const age = nodeAge(node); if (age !== null) setHeard(age); else Heard.base = null; }
       const tabs = tabsFor(null);
       const active = activeTab(ctx, node, tabs);
       const banners = p.banners();
@@ -967,7 +971,7 @@
     }
     if (Heard.source !== detail) { // a new answer from the host: its age is the freshest we know, unless the live poll has a newer one
       Heard.source = detail;
-      const age = detail.heard && typeof detail.heard.age_s === 'number' ? detail.heard.age_s : node.age_s;
+      const age = detail.heard && typeof detail.heard.age_s === 'number' ? detail.heard.age_s : nodeAge(node);
       if (!(Live.path === node.path && Live.heard)) {
         if (typeof age === 'number') setHeard(age); else Heard.base = null;
       }
