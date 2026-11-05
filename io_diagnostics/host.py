@@ -551,6 +551,18 @@ def _pid_alive(pid: int) -> bool:
     return stat.rsplit(")", 1)[-1].split()[:1] != ["Z"]
 
 
+RACK_ARCHIVE = Path("/archive/datasets/bam_rig")
+
+
+def default_rack_archive() -> Path | None:
+    """``$IO_DIAGNOSTICS_RACK_ARCHIVE`` (empty: none), else the rack's archive when this machine has it (bam_rack_twin writes there)."""
+
+    named = os.environ.get("IO_DIAGNOSTICS_RACK_ARCHIVE")
+    if named is not None:
+        return Path(named) if named else None
+    return RACK_ARCHIVE if RACK_ARCHIVE.is_dir() else None
+
+
 def default_state_dir() -> Path:
     """``$IO_DIAGNOSTICS_STATE_DIR``, else ``~/.local/state/io-diagnostics`` (the XDG state home)."""
 
@@ -727,7 +739,7 @@ class Host:
                  ledger_file: Path | None = None, history_file: Path | None = None, describes_file: Path | None = None, restore_later: bool = False,
                  watch_grace_s: float | None = None, watch_tick_s: float | None = None, frames_dir: Path | None = None,
                  describe_check_s: float | None = None, diagnostics_beat_s: float | None = None,
-                 stock_diagnostics_defaults: bool = True):
+                 stock_diagnostics_defaults: bool = True, rack_archive: Path | None = None):
         self.plugins_dir = Path(plugins_dir)
         self.describe_check_s = describe_check_s if describe_check_s is not None else DESCRIBE_CHECK_S
         # WHY settable: the defaults are the product (probe.py: holders' pids every 1 s, 0.5 s settle, 10 s first
@@ -795,6 +807,8 @@ class Host:
         self.stock_diagnostics = stock_diagnostics_module.StockDiagnostics(
             Path(settings_file).parent / stock_diagnostics_module.DIAGNOSTICS_FILE if settings_file else None,
             diagnostics_beat_s if diagnostics_beat_s is not None else stock_diagnostics_module.BEAT_S, defaults=stock_diagnostics_defaults)
+        # the rack's recordings (recorded runs, acceptance) the servo and deployment bindings read; None = none (a fixture, a host by hand)
+        self.rack_archive = stock_diagnostics_module.RackArchive(rack_archive) if rack_archive is not None else None
         self.stock_results: dict[tuple[str, str], DiagnosticStatus] = {}  # what the views post
         self.stock_quiet: dict[tuple[str, str], DiagnosticStatus] = {}  # not run, no row: only the drill-in lists them (stock_diagnostics.quiet)
         # every change a page could see (a refresh, a udev event, a plugin's records): /api/v1/events waits on it
@@ -1741,10 +1755,25 @@ class Host:
                     spans += [(piece["from"], piece["to"]) for piece in self.history.timeline(key, view.now - span_s, view.now)
                               if piece["level"] not in (None, STALE)]
             operating = spans
+        # what a composite borrows (stock_diagnostics.LEAF_STATE_PARTS, RackArchive, cpu_temperature): read only when a binding asks
+        devices = [leaf for leaf in leaves if (view.merged.entities.get(leaf) is not None and view.merged.entities[leaf].kind != "composite")]
+        leaf_state = self._state_history(devices[0], view.now, span_s) if composite is not None and len(devices) == 1 and "state" in kinds else {}
+        can_ids = tuple(dict.fromkeys(found for found in (stock_diagnostics_module.can_id_of(leaf) for leaf in devices) if found is not None))
+        computer = self._computer_temperature(view.now, span_s) if composite is not None and "state" in kinds else []
         return stock_diagnostics_module.Inputs(
             has_state=bool(groups), composite=entity.kind == "composite", plugin=composite is None or bool(composite.plugin),
             state_arrivals=arrivals, frames=frames, image=image, statuses=statuses, configs=configs, events=events, members=members,
-            leaves=leaves, operating=operating)
+            leaves=leaves, operating=operating, leaf_state=leaf_state, can_ids=can_ids, archive=self.rack_archive, computer=computer)
+
+    def _computer_temperature(self, now: float, span_s: float) -> list[dict]:
+        """The Computer plugin's CPU temperature status on the host entity, as the State series ``cpu_temp_c`` (rack.host), or []."""
+
+        for key in self.history.keys(tree.HOST_PATH, health=True):
+            if key[0] == tree.HOST_PATH and key[1].startswith(stock_diagnostics_module.CPU_STATUS_PREFIX):
+                found = stock_diagnostics_module.cpu_temperature(self.history.series(key, now - span_s, now))
+                if found:
+                    return found
+        return []
 
     def run_stock_diagnostics(self) -> list[DiagnosticStatus]:
         """One beat: every binding of diagnostics.toml on every entity it matches, over that entity's State history; each result a
@@ -4078,7 +4107,7 @@ def make_host(*, fixture: str | None = None, plugins_dir: Path | None = None, on
                     history_file=None if once else default_state_dir() / HISTORY_FILE,
                     describes_file=None if once else default_state_dir() / DESCRIBES_FILE,
                     expected_file=expected or expected_module.default_config_dir() / expected_module.EXPECTED_FILE,
-                    **settings)
+                    rack_archive=default_rack_archive(), **settings)
     document, frame = load_fixture(fixture)
     offset = frame.get("utc_offset_s")
     clock = FixedClock(frame["clock"] + at_s, offset, "fixture") if once else ReplayClock(frame["clock"], offset, offset_s)

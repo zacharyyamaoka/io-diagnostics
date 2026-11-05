@@ -435,8 +435,9 @@ def waypoints_run(seconds_per_hold: float = 1.5, rate_hz: float = 100.0, error_r
 
 
 def gates(station: str, statuses: dict[str, str]) -> list[dict]:
-    return [{"id": gate, "name": gate.lower(), "status": status, "value": 1.0, "target": "fixture", "detail": f"CAN {station} {gate}"}
-            for gate, status in statuses.items()]
+    # WHY one value a string: the real acceptance writes T11's count as "18/25" (acceptance_limits_explicit.json), never a float
+    return [{"id": gate, "name": gate.lower(), "status": status, "value": "18/25" if gate == "T8" else 1.0, "target": "fixture",
+             "detail": f"CAN {station} {gate}"} for gate, status in statuses.items()]
 
 
 def rack_archive(root: Path) -> Path:
@@ -499,7 +500,8 @@ def test_the_archive_reads_the_newest_acceptance_by_its_generated_at(tmp_path):
 
 
 def servo_inputs(tmp_path, can_ids=(1,)):
-    return sd.Inputs(composite=True, plugin=False, can_ids=tuple(can_ids), archive=sd.RackArchive(rack_archive(tmp_path)))
+    root = tmp_path / "bam_rig"
+    return sd.Inputs(composite=True, plugin=False, can_ids=tuple(can_ids), archive=sd.RackArchive(root if root.is_dir() else rack_archive(root)))
 
 
 @pytest.mark.parametrize("entry_id", ["servo.tracking_rms", "servo.tracking_peak", "servo.stop_error", "servo.hold_effort"])
@@ -513,8 +515,9 @@ def test_a_servo_is_judged_on_its_newest_recorded_run_when_its_state_has_no_targ
     assert window["from"] == pytest.approx(1_793_000_000.0) and window["to"] > window["from"]  # the run's own wall clock, not now
     if entry_id == "servo.hold_effort":  # four holds, each settled to 0.5 mrad: all converged
         assert status.measurements[0].value == pytest.approx(1.0) and status.level == "ok", status.measurements
-    if entry_id == "servo.stop_error":  # three stops followed by motion, 0.5 mrad each
-        assert status.measurements[0].value == pytest.approx(0.5, rel=1e-3) and status.level == "ok", status.measurements
+    if entry_id == "servo.stop_error":  # three stops followed by motion, 0.5 mrad each: within 3.6, but the run is the encoder side
+        assert status.measurements[0].value == pytest.approx(0.5, rel=1e-3), status.measurements
+        assert (status.level, status.code) == ("warn", "MeasuredOnEncoderSide"), (status.code, status.message)
 
 
 def test_a_hold_that_does_not_settle_within_1_mrad_counts_against_the_share(tmp_path):
@@ -528,7 +531,9 @@ def test_a_hold_that_does_not_settle_within_1_mrad_counts_against_the_share(tmp_
     np.savez(file, **run)
     status = runner.evaluate(binding, "fixture/servo", "servo", {}, 1_800_000_000.0,
                              inputs=sd.Inputs(composite=True, plugin=False, can_ids=(1,), archive=sd.RackArchive(root)))
-    assert status.measurements[0].value == pytest.approx(0.0) and status.level == "error", (status.code, status.message)
+    # none converged: below the 0.8 floor, a warning while that floor is an agent's proposal (catalog.advisory), never OK
+    assert status.measurements[0].value == pytest.approx(0.0) and status.level in ("warn", "error"), (status.code, status.message)
+    assert "Below" in status.code, status.code
 
 
 def test_a_servo_with_no_recorded_run_says_it_is_not_wired(tmp_path):

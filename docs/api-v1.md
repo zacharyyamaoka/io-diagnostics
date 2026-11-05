@@ -1004,11 +1004,18 @@ one file per part type, generated from the catalog by `io_diagnostics/default_di
 (by `model_id`, `path` or a composite's kind) and a binding's `part = "<type>"` runs on all of them, so an entity of a known type gets the
 catalog's live diagnostics with no file of the person's. Each binding reads one typed input out of what the entity publishes
 (`stock_diagnostics.SOURCES`): its State history; every State record's arrival (a rate); its frame records (stamp vs received); the
-newest image of its colour stream (decoded on the beat with the stdlib and numpy: PNG only, a JPEG is `NoDecoder`); the fault memory's
+newest image of its colour stream (decoded on the beat: PNG with the stdlib and numpy, JPEG with Pillow from the `diagnostics` extra; a JPEG
+without Pillow is `NoDecoder`); the fault memory's
 `FaultConfirmed` events (a composite's: its leaves', never the stock diagnostics' own) with the history's operating time; link events;
-its status's `queries` / `replies`; config records with an `expected` value; a composite's members' levels; its statuses' stamps. A
-binding whose input no source on the entity carries is not run with code `NoSource` and the message "no <input> source on <entity>:
-<what would provide it>": a row (unknown, never OK) where the entity reports State, none where it reports no State at all (value
+its status's `queries` / `replies`; config records with an `expected` value; a composite's members' levels; its statuses' stamps. A servo
+or encoder composite over one board also reads that board's State; a servo whose State has no commanded position reads the newest
+recorded run of its joint (bam_rack_twin npz in the rack archive, `$IO_DIAGNOSTICS_RACK_ARCHIVE`, default `/archive/datasets/bam_rig`;
+`dx.window.source` `recorded_run`, its `from` / `to` the run's own wall clock and `run` its file) and its holds; a deployment reads the
+newest `bam_rack_twin.acceptance/1` there for its gate matrix (`source` `acceptance`, `file`, `generated_at`) and the Computer plugin's
+`Temperature CPU` status for `cpu_temp_c`. A binding whose input no source on the entity carries is not run with one of two codes, and
+the message "no <input> source on <entity>: <what would provide it>" and value `dx.gap`: `NotMeasured` (`not_measured`: no instrument on
+the entity can produce it: no IMU, no pick log, no tag in view) or `NotWired` (`not_wired`: an existing producer has it or could
+publish it, and nothing maps it yet): a row (unknown, never OK) where the entity reports State, none where it reports no State at all (value
 `dx.quiet`); `NotStreaming` (its stream has sent nothing in the window: frames and records arrive while a page watches) and `NoState`
 post no row. The drill-in always lists them. Every 5 s (a thread of its own, never the 10 Hz watch path) each
 binding reads the last `window_s` of its entity's State history (kept at 1 Hz at most) through `stream.monitor`, and the newest window's
@@ -1016,7 +1023,7 @@ Result is an **ordinary record-v0.2 status** on the entity: `source` `robotdx.di
 warn / error limits, `values` the library's `dx.*` keys (`dx.diagnostic`, `dx.config`, ...) plus `dx.binding` (the binding's id) and
 `dx.window` (JSON `{"from", "to", "window_s", "state", "samples", "source"}`, host clock; `source` the input kind it was fed from), `expected_period_s` the beat (so a stopped beat goes STALE).
 So it is in `/node`'s `checks`, `/checks`, `/history`, the history bar and `/live` with no change to any of them. A result that could not be
-computed is `unknown`, never `ok`: `NotEnoughHistory`, `NoState`, `NoSource`, `NotStreaming`, `NoDecoder`, `NoChannel`, `NumpyMissing` (the `diagnostics` extra is not installed),
+computed is `unknown`, never `ok`: `NotEnoughHistory`, `NoState`, `NotWired`, `NotMeasured`, `NotStreaming`, `NoDecoder`, `NoChannel`, `NumpyMissing` (the `diagnostics` extra is not installed),
 `DiagnosticRaised` (the exception's text).
 
 ### `GET /api/v1/diagnostics`
@@ -1061,7 +1068,7 @@ computed is `unknown`, never `ok`: `NotEnoughHistory`, `NoState`, `NoSource`, `N
    "window": {"from": 1792631490.0, "to": 1792631550.0, "window_s": 60.0, "state": "motor", "samples": 60}}]}
 ```
 
-- `source` (additive): what feeds the binding: `kind` (state | state_stamps | frame_stamps | frames | reply_counts | config | faults | link_events | members | evidence | none), `input` in plain words, `from` (where RobotDx has it) or, for `none`, `missing` (what would provide it). `status` is there for every binding, a `NoSource` or `NotStreaming` one included, even when no row is posted.
+- `source` (additive): what feeds the binding: `kind` (state | state_stamps | frame_stamps | frames | reply_counts | config | faults | link_events | members | evidence | holds | acceptance | none), `input` in plain words, `from` (where RobotDx has it) or, for `none`, `missing` (what would provide it), and `gap` (`not_wired` | `not_measured`: what its absence is). `status` is there for every binding, a `NotWired`, `NotMeasured` or `NotStreaming` one included, even when no row is posted.
 - One entry per binding that matches the entity (its `path` and / or `model_id` fnmatch, and / or its `part` among the entity's `parts`); **404** for an entity the host does not know, an empty
   list for one nothing is configured on. `fields`: the effective value of every config field, and `source`: `default` (the dataclass's),
   `toml` (the file's), `edited` (written by the POST below; the file lists them in the binding's `edited`). A `Limits` field's four parts are

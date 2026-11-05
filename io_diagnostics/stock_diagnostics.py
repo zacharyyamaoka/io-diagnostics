@@ -20,14 +20,18 @@ each Result an ordinary record-v0.2 status on the entity (docs/api-v1.md "Stock 
   the entity's State history (history.py keeps it at 1 Hz at most) through ``stream.monitor`` and keeps the newest window's Result.
 - **What feeds it** (``source_of``, the table ``SOURCES``): each binding reads one typed input, out of what RobotDx entities actually publish
   (``Inputs``, gathered by the host each beat): the State history as a Trajectory; every State record's arrival as Stamps; frame records
-  as StampPairs; the newest image of the colour stream as Frames (decoded only here, on the beat, never on the watch path); the fault
+  as StampPairs; the newest image of the colour stream as Frames (PNG or JPEG, decoded only here, on the beat, never on the watch path); the fault
   memory's FaultConfirmed events and the history's operating time as an EventLog; link events as Events; a status's reply counts as
   Events; config records with an expected value as Pairs; a composite's members as Results; the statuses' stamps as EvidenceStamps.
-- **What it cannot run:** a binding whose input no source on the entity carries is not run with code ``NoSource`` and a message
-  "no <input> source on <entity>: <what would provide it>", unknown and never OK. It is a row where the entity reports State, and none
+  What a composite borrows: a servo or encoder over one board reads that board's State; a servo whose State has no commanded position
+  reads the newest recorded run of its joint (``RackArchive``) and its holds; a deployment reads the newest rack acceptance (gate matrix)
+  and the Computer plugin's CPU temperature (rack.host).
+- **What it cannot run:** a binding whose input no source on the entity carries is not run with code ``NotMeasured`` (no instrument on
+  the entity can produce it) or ``NotWired`` (an existing producer has it or could publish it; nothing maps it yet), value ``dx.gap``, and
+  a message "no <input> source on <entity>: <what would provide it>", unknown and never OK. It is a row where the entity reports State, and none
   where it reports no State at all (as ``NoState``: a board nobody watches posts no grey row forever); the drill-in API always lists it,
   with the binding's ``source``. ``NotStreaming``: the source is there but nothing arrived in the window (frames come while a page
-  watches): no row either. ``NoDecoder``: a frame in a format nothing here decodes (JPEG).
+  watches): no row either. ``NoDecoder``: a frame in a format nothing here decodes (a JPEG without Pillow).
 - **What it emits:** ``record.to_record`` of the Result (source ``robotdx.diagnostics``, ``dx.*`` values, ``expected_period_s`` = the
   beat, so a stopped beat goes STALE), plus ``dx.binding`` and ``dx.window``. A Result that could not be computed is not_run (level
   unknown), never OK; a diagnostic that raises is not_run with the exception text; numpy missing is not_run with that reason.
@@ -71,11 +75,16 @@ SOURCE = dx_record.SOURCE  # "robotdx.diagnostics": the status's source, which t
 BEAT_S = 5.0
 DEFAULT_WINDOW_S = 60.0
 NO_STATE = "NoState"  # the entity has no State history: not run, and the host posts no row for it
-NO_SOURCE = "NoSource"  # nothing the entity publishes carries this input: not run, and the message says what would provide it
+# WHY two codes, not one NoSource (Codex audit 2026-11-04 r3, gap 2): "no source" hid two different next steps. NotMeasured needs an
+# instrument (a sensor, a log, a tag: hardware or a person); NotWired is software, the data exists or an existing producer could publish it
+NOT_WIRED = "NotWired"  # an existing producer has the input or could publish it, and nothing maps it here yet: not run, says what would
+NOT_MEASURED = "NotMeasured"  # no instrument on this entity can produce the input (no IMU, no pick log, no tag): not run, says what would
+NO_SOURCE_CODES = (NOT_WIRED, NOT_MEASURED)
+GAP_KEY = "dx.gap"  # not_wired | not_measured on a status of either code
 NOT_STREAMING = "NotStreaming"  # its stream feeds it, but nothing arrived in the window (it streams while a page watches): not run, no row
-NO_DECODER = "NoDecoder"  # a frame in a format nothing here decodes (JPEG: neither the stdlib nor numpy does)
+NO_DECODER = "NoDecoder"  # a frame in a format nothing here decodes (a JPEG without Pillow, the diagnostics extra)
 QUIET = (NO_STATE, NOT_STREAMING)  # not run until the entity streams: listed by the drill-in, never a grey row
-QUIET_KEY = "dx.quiet"  # a value on a NoSource status of an entity that reports no State: listed by the drill-in, no row (``quiet``)
+QUIET_KEY = "dx.quiet"  # a value on a NotWired / NotMeasured status of an entity that reports no State: listed by the drill-in, no row (``quiet``)
 MIN_WINDOW_S, MAX_WINDOW_S = 2.0, 86400.0
 LIMIT_PARTS = ("warn_low", "warn_high", "error_low", "error_high")
 HEADER = ("# robotdx.diagnostics on this host (io_diagnostics/stock_diagnostics.py; the default set and every key explained:\n"
@@ -378,6 +387,18 @@ _STATE_NEEDS = {
 }
 
 
+# WHY only these parts borrow a board's State (round 3, gap 2): a moteus board's State IS its joint's (position, torque, mode, fault) and
+# its own encoder's reading; an IMU, FT sensor or gripper composite over a board is not that board, and borrowing would judge the wrong
+# instrument (imu.rate on a board's State stamps). Only a servo has recorded runs of its own (the rack records joints).
+LEAF_STATE_PARTS = ("servo", "encoder")
+RUN_PARTS = ("servo",)
+
+
+def _part_of(binding: Binding) -> str:
+    entry = catalog_entry(binding.id)  # None for the person's own binding (dx_catalog.entry raises)
+    return binding.part or (entry.part if entry is not None else "")
+
+
 def state_fed(name: str) -> bool:
     """Whether a State history can ever feed diagnostic ``name``: a stock primitive over runs, or any custom diagnostic."""
 
@@ -416,7 +437,7 @@ class Inputs:
     """What the host has on one entity beside its State history, gathered once per beat (host.py ``_stock_inputs``). Nothing here is
     decoded: ``image`` only says where a frame's file is, and the one binding that reads images opens it when it runs."""
 
-    has_state: bool = False  # the entity has State history: a NoSource row is shown only then (a board with no State posts no row)
+    has_state: bool = False  # the entity has State history: a NotWired / NotMeasured row is shown only then (a board with no State posts no row)
     composite: bool = False  # a composite: its events, statuses and operating time are its leaves'
     plugin: bool = True  # someone reports State for it (a device's driver; a composite only with a composite plugin)
     state_arrivals: Mapping[str, Sequence[float]] = field(default_factory=dict)  # State group -> every record's arrival, not the 1 Hz history
@@ -428,143 +449,160 @@ class Inputs:
     members: Sequence[tuple[str, str, str | None, str]] = ()  # a composite's own children: (path, name, level, message)
     leaves: Sequence[str] = ()  # the entity paths below a composite (a device: none)
     operating: Sequence[tuple[float, float]] = ()  # (start, end) host clock: when the entity or its leaves were reporting
+    # what a composite borrows (round 3, gap 2): nothing here is read unless a binding of the right part asks for it
+    leaf_state: Mapping[str, list[dict]] = field(default_factory=dict)  # a composite over ONE device: that device's State history
+    can_ids: Sequence[int] = ()  # the CAN ids of the boards below it (".../can/<id>"), which name its recorded runs and acceptance stations
+    archive: "RackArchive | None" = None  # the rack's recordings on disk (runs, acceptance), None where the host has none
+    computer: Sequence[dict] = ()  # the Computer plugin's CPU temperature as a State series (cpu_temperature), for rack.host
 
 
 NONE = "none"
 
 
+NOT_WIRED_GAP, NOT_MEASURED_GAP = "not_wired", "not_measured"
+GAP_CODE = {NOT_WIRED_GAP: NOT_WIRED, NOT_MEASURED_GAP: NOT_MEASURED}
+
+
 @dataclass(frozen=True)
 class Source:
     """What one binding is fed from. ``kind``: state | state_stamps | frame_stamps | frames | reply_counts | config | faults | link_events |
-    members | evidence | none. ``input``: what the diagnostic takes, in plain words. ``feeds``: where RobotDx has it, or (none, and a State
-    input no entity reports) what would provide it."""
+    members | evidence | holds | acceptance | none. ``input``: what the diagnostic takes, in plain words. ``feeds``: where RobotDx has it, or
+    (none, and a State input no entity reports) what would provide it. ``gap``: what its absence on an entity is: ``not_measured`` (no
+    instrument on the entity can produce it) or ``not_wired`` (an existing producer has it or could publish it, and nothing maps it yet)."""
 
     kind: str
     input: str
     feeds: str
+    gap: str = NOT_WIRED_GAP
 
     def json(self) -> dict:
         return {"kind": self.kind, "input": self.input, "from": "" if self.kind == NONE else self.feeds,
-                "missing": self.feeds if self.kind == NONE else ""}
+                "missing": self.feeds if self.kind == NONE else "", "gap": self.gap}
 
 
-def _none(input_: str, why: str) -> Source:
-    return Source(NONE, input_, why)
+def _none(input_: str, why: str, gap: str) -> Source:
+    return Source(NONE, input_, why, gap)
 
 
 # WHY one row per catalog binding, not per primitive: one primitive means different things per part (stock.share is a hold, a lost reply,
 # a grasp), so what feeds it is the binding's. Every live catalog binding is here (tests/test_stock_inputs.py lists them).
 _DRIVER_STATE = "the driver's State (its watch, and each diagnose)"
-_NO_DRIVER = "no RobotDx driver of this part type yet; one that reports {keys} in its State"
+_NO_DRIVER = "no {what} on RobotDx; a driver of one that reports {keys} in its State would provide it"
+_RUN = ("a driver or runner that reports its commanded position{velocity} live, or the rack's recorded runs of this joint (bam_rack_twin "
+        "npz in the rack archive), of which there is none")
+_TAG = ("no fiducial tag is mounted in view and nothing detects one; a fixed tag and a detector that reports {what} would provide them")
+W, M = NOT_WIRED_GAP, NOT_MEASURED_GAP
 SOURCES: dict[str, Source] = {
-    # servo (a joint): its State, the fault memory
-    "servo.tracking_rms": Source("state", "the position and its target", "a driver or runner that reports its commanded position (q_target_rad)"),
-    "servo.tracking_peak": Source("state", "the position and its target", "a driver or runner that reports its commanded position (q_target_rad)"),
+    # servo (a joint): its board's State, the rack's recorded runs of it, the fault memory
+    "servo.tracking_rms": Source("state", "the position and its target", _RUN.format(velocity=" (q_target_rad)"), W),
+    "servo.tracking_peak": Source("state", "the position and its target", _RUN.format(velocity=" (q_target_rad)"), W),
     "servo.stop_error": Source("state", "the position and its target at each stop",
-                               "a driver or runner that reports its commanded position and velocity (q_target_rad, qd_target_rad_s)"),
-    "servo.hold_effort": _none("hold events", "a hold ends within 1 mrad only against its commanded position, which no RobotDx driver reports; "
-                               "a runner that reports each hold would provide them"),
+                               _RUN.format(velocity=" and velocity (q_target_rad, qd_target_rad_s)"), W),
+    "servo.hold_effort": Source("holds", "hold events", "the holds of the rack's newest recorded run of this joint (a hold converged when it "
+                                "ends within 1 mrad of its commanded position)", W),
     "servo.torque_truth_kt": _none("reference Kv", "the board's Kv is checked against a measure-only calibration (moteus_tool --calibrate "
-                                   "--cal-no-update), which RobotDx does not record; that calibration's result as a record would provide it"),
+                                   "--cal-no-update), which RobotDx does not record; that calibration's result as a record would provide it", W),
     "servo.live_reid": _none("model error rows and a repeatability floor", "sim2real computes them from datasets of runs; a live "
-                             "re-identification routine that reports them would provide them"),
+                             "re-identification routine that reports them would provide them", W),
     "servo.mttf": Source("faults", "confirmed faults and operating time", "the fault memory's FaultConfirmed events on its members, and the "
-                         "time they reported"),
+                         "time they reported", W),
     # bldc_driver (a moteus board)
-    "driver.faults": Source("state", "the mode and fault codes", _DRIVER_STATE),
-    "driver.board_temp": Source("state", "the board temperature", _DRIVER_STATE),
-    "driver.bus_voltage": Source("state", "the bus voltage", _DRIVER_STATE),
-    "driver.loop_rate": Source("state_stamps", "State record stamps", "every State record the driver sends while its page watches it"),
-    "driver.link_loss": Source("reply_counts", "reply counts", "the driver's per-board status: queries and replies (moteus's diagnose)"),
-    "driver.config": Source("config", "expected configuration", "the driver's config records with an expected value (a deployment record)"),
+    "driver.faults": Source("state", "the mode and fault codes", _DRIVER_STATE, W),
+    "driver.board_temp": Source("state", "the board temperature", _DRIVER_STATE, W),
+    "driver.bus_voltage": Source("state", "the bus voltage", _DRIVER_STATE, W),
+    "driver.loop_rate": Source("state_stamps", "State record stamps", "every State record the driver sends while its page watches it", W),
+    "driver.link_loss": Source("reply_counts", "reply counts", "the driver's per-board status: queries and replies (moteus's diagnose)", W),
+    "driver.config": Source("config", "expected configuration", "the driver's config records with an expected value (a deployment record)", W),
     "gearbox.wear": _none("re-identified backlash and friction against the commissioning card", "neither is on RobotDx; a live "
-                          "re-identification against the commissioning card would provide them"),
-    # encoder
+                          "re-identification against the commissioning card would provide them", W),
+    # encoder: a moteus reads its own (onboard or aux) encoder, so the one board under the encoder is its State
     "encoder.homing": _none("repeated homing offsets", "N runs of the homing routine with the offset each found; a homing utility that "
-                            "reports it would provide them"),
-    "encoder.standstill_noise": Source("state", "the position at rest", _NO_DRIVER.format(keys="its position")),
-    "encoder.validity": Source("state", "the encoder's validity codes", _NO_DRIVER.format(keys="a fault code")),
+                            "reports it would provide them", W),
+    "encoder.standstill_noise": Source("state", "the position at rest", "the State of the one board under this encoder (its position), or "
+                                       "an encoder driver that reports its position", W),
+    "encoder.validity": Source("state", "the encoder's validity codes", "the State of the one board under this encoder (its fault code), or "
+                               "an encoder driver that reports a fault code", W),
     # camera_rgb / camera_rgbd: the driver's State, frame records and images
     "camera.frame_rate": _none("per-frame stamps", "the driver's frame records are the page's 5 Hz preview, not every camera frame (its State "
-                               "says each stream's fps and frames dropped); a driver that reports each frame's hardware stamp would provide them"),
+                               "says each stream's fps and frames dropped); the driver reporting each frame's hardware stamp would provide them", W),
     "camera.latency": Source("frame_stamps", "frame stamps (the driver's and the host's)", "the driver's frame records: their stamp and when the "
-                             "host received them"),
-    "camera.extrinsic_drift": _none("fixed tag detections", "nothing on RobotDx detects tags in a camera's frames; a tag detector that "
-                                    "reports the tag's pixel centre would provide them"),
-    "camera.blur": Source("frames", "grey frames", "the newest image of the colour stream in the frame directory (PNG)"),
-    "camera.tag_detect": _none("tag detections (found or not, per frame)", "nothing on RobotDx detects tags in a camera's frames; a tag "
-                               "detector that reports each frame's result would provide them"),
-    "depth.plane_rms": _none("depth values of a flat target", "the depth stream is a colourised preview image, not depth values; raw depth "
-                             "frames (16-bit, with the depth scale) of a flat target would provide them"),
-    "depth.fill_rate": _none("depth values of a flat target", "the depth stream is a colourised preview image, not depth values; raw depth "
-                             "frames (16-bit, with the depth scale) of a flat target would provide them"),
-    "depth.temporal_noise": _none("depth values of a flat target", "the depth stream is a colourised preview image, not depth values; raw "
-                                  "depth frames (16-bit, with the depth scale) of a flat target would provide them"),
+                             "host received them", W),
+    "camera.extrinsic_drift": _none("fixed tag detections", _TAG.format(what="the tag's pixel centre"), M),
+    "camera.blur": Source("frames", "grey frames", "the newest image of the colour stream in the frame directory (JPEG or PNG)", W),
+    "camera.tag_detect": _none("tag detections (found or not, per frame)", _TAG.format(what="each frame's result"), M),
+    "depth.plane_rms": _none("depth values of a flat target", "the depth stream is a colourised preview image, not depth values; the driver "
+                             "writing raw depth frames (z16, with the depth scale) of a flat target would provide them", W),
+    "depth.fill_rate": _none("depth values of a flat target", "the depth stream is a colourised preview image, not depth values; the driver "
+                             "writing raw depth frames (z16, with the depth scale) of a flat target would provide them", W),
+    "depth.temporal_noise": _none("depth values of a flat target", "the depth stream is a colourised preview image, not depth values; the "
+                                  "driver writing raw depth frames (z16, with the depth scale) of a flat target would provide them", W),
     "depth.health_check": _none("the on-chip calibration's health score", "the score is in the calibration run's output, not a record; the "
-                                "driver reporting it as a measurement would provide it"),
+                                "driver reporting it as a measurement would provide it", W),
     # camera_hsi
-    "hsi.snr": _none("repeated cubes of a uniform target", "no hyperspectral camera driver on RobotDx; one that records reference cubes would "
-                     "provide them"),
-    "hsi.references": _none("white and dark reference captures", "no hyperspectral camera driver on RobotDx; one that reports when it took "
-                            "its references would provide them"),
-    "hsi.spectral_angle": _none("measured and reference spectra", "no hyperspectral camera driver on RobotDx; one that reports known "
-                                "materials' spectra beside a library would provide them"),
-    "hsi.frame_rate": _none("per-frame stamps", "no hyperspectral camera driver on RobotDx; one that reports each cube's stamp would provide them"),
+    "hsi.snr": _none("repeated cubes of a uniform target", "no hyperspectral camera on RobotDx; a driver of one that records reference cubes "
+                     "would provide them", M),
+    "hsi.references": _none("white and dark reference captures", "no hyperspectral camera on RobotDx; a driver of one that reports when it "
+                            "took its references would provide them", M),
+    "hsi.spectral_angle": _none("measured and reference spectra", "no hyperspectral camera on RobotDx; a driver of one that reports known "
+                                "materials' spectra beside a library would provide them", M),
+    "hsi.frame_rate": _none("per-frame stamps", "no hyperspectral camera on RobotDx; a driver of one that reports each cube's stamp would "
+                            "provide them", M),
     # imu
-    "imu.static_bias": Source("state", "the gyro rate at rest", _NO_DRIVER.format(keys="gyro_rad_s")),
-    "imu.gravity": _none("the accel magnitude at rest, paired with g", "no IMU driver on RobotDx; one that reports accel_m_s2 at rest would "
-                         "provide it"),
-    "imu.rate": Source("state_stamps", "State record stamps", _NO_DRIVER.format(keys="its samples")),
+    "imu.static_bias": Source("state", "the gyro rate at rest", _NO_DRIVER.format(what="IMU", keys="gyro_rad_s"), M),
+    "imu.gravity": _none("the accel magnitude at rest, paired with g", "no IMU on RobotDx; a driver of one that reports accel_m_s2 at rest "
+                         "would provide it", M),
+    "imu.rate": Source("state_stamps", "State record stamps", _NO_DRIVER.format(what="IMU", keys="its samples"), M),
     # ft_sensor
-    "ft.known_mass": _none("known-mass sweeps (load on and off)", "sim2real takes them on the rack; a record of a weighed mass's sweeps would "
-                           "provide them"),
-    "ft.zero_drift": Source("state", "the unloaded force", _NO_DRIVER.format(keys="force_n")),
-    "ft.noise": Source("state", "the unloaded force", _NO_DRIVER.format(keys="force_n")),
-    "ft.saturation": Source("state", "the sensor's status codes", _NO_DRIVER.format(keys="a fault code")),
+    "ft.known_mass": _none("known-mass sweeps (load on and off)", "no force-torque sensor and no weighed mass on RobotDx; a record of a "
+                           "weighed mass's sweeps would provide them", M),
+    "ft.zero_drift": Source("state", "the unloaded force", _NO_DRIVER.format(what="force-torque sensor", keys="force_n"), M),
+    "ft.noise": Source("state", "the unloaded force", _NO_DRIVER.format(what="force-torque sensor", keys="force_n"), M),
+    "ft.saturation": Source("state", "the sensor's status codes", _NO_DRIVER.format(what="force-torque sensor", keys="a fault code"), M),
     # gripper
-    "gripper.cycle": Source("state", "the width and its target", _NO_DRIVER.format(keys="width_mm and width_target_mm")),
-    "gripper.detect": _none("object-inside readings with ground truth", "no gripper driver on RobotDx, and no ground truth; a labelled pick "
-                            "log would provide them"),
+    "gripper.cycle": Source("state", "the width and its target", _NO_DRIVER.format(what="gripper", keys="width_mm and width_target_mm"), M),
+    "gripper.detect": _none("object-inside readings with ground truth", "no gripper on RobotDx, and no ground truth; a labelled pick "
+                            "log would provide them", M),
     "gripper.grasp_success": _none("grasp outcomes", "no gripper or pick log on RobotDx; one that reports each grasp held or not would "
-                                   "provide them"),
-    "gripper.compute_time": Source("state", "the grasp compute time", _NO_DRIVER.format(keys="compute_s")),
-    "gripper.force": Source("state", "the force and its target", _NO_DRIVER.format(keys="force_n and force_target_n")),
+                                   "provide them", M),
+    "gripper.compute_time": Source("state", "the grasp compute time", _NO_DRIVER.format(what="gripper or grasp planner", keys="compute_s"), M),
+    "gripper.force": Source("state", "the force and its target", _NO_DRIVER.format(what="gripper", keys="force_n and force_target_n"), M),
     # arm: the arm plugin's State (joint angles, end effector x / y), its members
     "arm.tool_error_at_stop": _none("the tool pose and its target at each stop", "the arm reports its end effector x / y (forward kinematics "
-                                    "of the measured joints) but no commanded tool pose; a planner or camera that reports both would provide them"),
+                                    "of the measured joints) but no commanded tool pose; its planner reporting both would provide them", W),
     "arm.path_tracking": _none("the tool pose and its target along the path", "the arm reports its end effector x / y (forward kinematics of "
-                               "the measured joints) but no commanded tool pose; a planner or camera that reports both would provide them"),
-    "arm.overshoot": Source("state", "the position and its target", "a driver or runner that reports its commanded position (q_target_rad)"),
-    "arm.completion_time": _none("planned and actual end of each trajectory", "RobotDx sees no trajectory plan; a runner that reports its "
-                                 "planned and actual end would provide them"),
-    "arm.hold_effort": Source("state", "the torque and its feed-forward", "a driver that reports the feed-forward torque it was sent (tau_ff_nm)"),
-    "arm.calibration_drift": _none("tag detections on the tool", "nothing on RobotDx detects tags; a camera tag detector that reports the "
-                                   "tool tag's pose would provide them"),
-    "arm.joints": Source("members", "the joints' levels", "the composite's members as the tree shows them"),
+                               "the measured joints) but no commanded tool pose; its planner reporting both would provide them", W),
+    "arm.overshoot": Source("state", "the position and its target", "the arm's runner reporting its commanded position (q_target_rad)", W),
+    "arm.completion_time": _none("planned and actual end of each trajectory", "RobotDx sees no trajectory plan; the arm's runner reporting its "
+                                 "planned and actual end would provide them", W),
+    "arm.hold_effort": Source("state", "the torque and its feed-forward", "a driver that reports the feed-forward torque it was sent (tau_ff_nm)", W),
+    "arm.calibration_drift": _none("tag detections on the tool", _TAG.format(what="the tool tag's pose"), M),
+    "arm.joints": Source("members", "the joints' levels", "the composite's members as the tree shows them", W),
     # arm_gripper: the pick
-    "pick.sppm": _none("pick outcomes", "no pick log on RobotDx; one that reports each pick and whether it held would provide them"),
-    "pick.vs_human": _none("a human's SPPM on the same stream", "a reference a person measures; recorded as a record it would provide it"),
-    "pick.rate": _none("pick events", "no pick log on RobotDx; one that reports each pick would provide them"),
-    "pick.mtti": _none("intervention events", "no operator or teleop log on RobotDx; one that reports each human intervention would provide them"),
-    "pick.grasp_pose_error": _none("the grasp pose and the TCP at closing", "no planner or tool pose on RobotDx; one that reports both at "
-                                   "closing would provide them"),
-    # deployment: the composite's members, their faults, links and evidence
-    "rack.gate_matrix": _none("gate results (T1-T8)", "the rack acceptance (sim2real) computes them from its runs; publishing them as records "
-                              "would provide them"),
-    "rack.rollup": Source("members", "the stations' levels", "the composite's members as the tree shows them"),
-    "rack.evidence_age": Source("evidence", "statuses with their stamps", "every status of the composite's leaves, and their replug / restart events"),
+    "pick.sppm": _none("pick outcomes", "no pick log on RobotDx; one that reports each pick and whether it held would provide them", M),
+    "pick.vs_human": _none("a human's SPPM on the same stream", "a reference a person measures; recorded as a record it would provide it", M),
+    "pick.rate": _none("pick events", "no pick log on RobotDx; one that reports each pick would provide them", M),
+    "pick.mtti": _none("intervention events", "no operator or teleop log on RobotDx; one that reports each human intervention would provide them", M),
+    "pick.grasp_pose_error": _none("the grasp pose and the TCP at closing", "no grasp planner or tool pose on RobotDx; one that reports both "
+                                   "at closing would provide them", M),
+    # deployment: the composite's members, their faults, links and evidence; the rack acceptance; the Computer it runs on
+    "rack.gate_matrix": Source("acceptance", "gate results (T1-T8)", "the newest rack acceptance (bam_rack_twin.acceptance/1) in the rack "
+                               "archive, for the stations under this composite", W),
+    "rack.rollup": Source("members", "the stations' levels", "the composite's members as the tree shows them", W),
+    "rack.evidence_age": Source("evidence", "statuses with their stamps", "every status of the composite's leaves, and their replug / restart events", W),
     "rack.uptime": Source("faults", "confirmed system faults and operating time", "the fault memory's FaultConfirmed events anywhere in the "
-                          "composite, and the time its leaves reported"),
-    "rack.throughput": _none("material processed events", "no material log on RobotDx; a scale or belt counter that reports each batch "
-                             "would provide them"),
-    "rack.host": Source("state", "the host's CPU temperature", "a composite plugin that reports the host's cpu_temp_c in the rack's State"),
-    "rack.links": Source("link_events", "link events per edge", "the activity log's USB and network link events on the composite's leaves"),
+                          "composite, and the time its leaves reported", W),
+    "rack.throughput": _none("material processed events", "no scale or belt counter on RobotDx; one that reports each batch would provide "
+                             "them", M),
+    "rack.host": Source("state", "the host's CPU temperature", "the Computer plugin's CPU temperature status (Temperature CPU) on this host, "
+                        "or a composite plugin that reports cpu_temp_c", W),
+    "rack.links": Source("link_events", "link events per edge", "the activity log's USB and network link events on the composite's leaves", W),
 }
+del W, M
 # a binding that is not in the catalog (the person's own, a custom diagnostic): what its primitive is fed from on any entity
 _BY_PRIMITIVE = {
     "stock.sample_rate": Source("state_stamps", "State record stamps", "every State record the driver sends while its page watches it"),
     "stock.stamp_delay": Source("frame_stamps", "frame stamps (the driver's and the host's)", "the driver's frame records"),
-    "stock.image_sharpness": Source("frames", "grey frames", "the newest image of the colour stream in the frame directory (PNG)"),
+    "stock.image_sharpness": Source("frames", "grey frames", "the newest image of the colour stream in the frame directory (JPEG or PNG)"),
     "stock.rollup": Source("members", "the members' levels", "the composite's members as the tree shows them"),
     "stock.staleness": Source("evidence", "statuses with their stamps", "every status of the entity and its leaves"),
     "stock.event_interval": Source("faults", "confirmed faults and operating time", "the fault memory's FaultConfirmed events"),
@@ -582,14 +620,14 @@ def source_of(binding: Binding) -> Source:
         return Source("state", "State", _DRIVER_STATE)
     spec = dx_registry.REGISTRY.get(binding.diagnostic)
     return _none(f"the input of {binding.diagnostic}" + (f" ({spec.summary})" if spec is not None and spec.summary else ""),
-                 "no RobotDx entity publishes it; it runs where that input is recorded (sim2real)")
+                 "no RobotDx entity publishes it; it runs where that input is recorded (sim2real)", NOT_WIRED_GAP)
 
 
 def quiet(status) -> bool:
-    """Whether a stock status posts no row (it stays in the drill-in): not run until the entity streams, or NoSource on an entity that
+    """Whether a stock status posts no row (it stays in the drill-in): not run until the entity streams, or NotWired / NotMeasured on an entity that
     reports no State at all."""
 
-    return status.code in QUIET or (status.code == NO_SOURCE and any(key == QUIET_KEY for key, _value in status.values))
+    return status.code in QUIET or (status.code in NO_SOURCE_CODES and any(key == QUIET_KEY for key, _value in status.values))
 
 
 class _Missing(Exception):
@@ -602,30 +640,66 @@ class _Missing(Exception):
 
 def _no_source(source: Source, entity: str, why: str = "") -> _Missing:
     what = source.input.removeprefix("the ")  # "no position and its target source", never "no the ..."
+    code = GAP_CODE[source.gap]
     if source.kind == NONE:
-        return _Missing(NO_SOURCE, f"no {what} source on {entity}: {source.feeds}")
-    return _Missing(NO_SOURCE, f"no {what} source on {entity}: {why}; {source.feeds} would provide it")
+        return _Missing(code, f"no {what} source on {entity}: {source.feeds}")
+    feeds = source.feeds if source.feeds.endswith(("would provide it", "would provide them", "of which there is none")) \
+        else f"{source.feeds} would provide it"
+    return _Missing(code, f"no {what} source on {entity}: {why}; {feeds}")
 
 
 def _in(start: float, end: float, stamp) -> bool:
     return stamp is not None and start <= stamp <= end
 
 
-# ----- images: decoded on the beat with the stdlib (zlib) and numpy, never on the watch path ------------------------------------
+# ----- images: decoded on the beat (PNG with the stdlib's zlib and numpy, JPEG with Pillow), never on the watch path --------------------
 class Undecodable(ValueError):
     """A frame this host cannot turn into pixels; the message says why."""
 
 
+def _luma(pixels):
+    """ITU-R BT.601 luma of an (H, W) or (H, W, 3) float array, as OpenCV's cvtColor (one formula for every format)."""
+
+    if pixels.ndim == 2:
+        return pixels
+    return 0.299 * pixels[..., 0] + 0.587 * pixels[..., 1] + 0.114 * pixels[..., 2]
+
+
+def _decode_jpeg(data: bytes):
+    """A JPEG as a grey float array, decoded by Pillow.
+
+    WHY Pillow, an optional extra, and not the driver's decoded frame or a hand-written decoder (Codex audit 2026-11-04 r3, gap 2): the
+    configured intel_rgbd driver writes <stream>.jpg (entity_page.save_jpeg) and publishes no decoded pixels; neither the stdlib nor numpy
+    decodes JPEG, and a baseline + progressive + chroma-subsampled decoder is exactly the stock part not to rewrite. The core stays stdlib +
+    the ``diagnostics`` extra (numpy, Pillow; the Stable channel's /usr/bin/python3 has both); without Pillow a JPEG is NoDecoder."""
+
+    try:
+        import io
+
+        from PIL import Image, UnidentifiedImageError
+    except ImportError as error:
+        raise Undecodable("the frame is JPEG and Pillow is not installed here (the diagnostics extra: uv run --extra diagnostics); "
+                          "with it, or a driver that writes PNG frames, it would be decoded") from error
+    from robotdx.diagnostics._numpy import np
+
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            image.load()
+            grey = image.mode in ("L", "I;16", "I", "F")
+            pixels = np.asarray(image.convert("L" if grey else "RGB"), float)
+    except (UnidentifiedImageError, OSError, ValueError, SyntaxError) as error:
+        raise Undecodable(f"the JPEG does not decode ({type(error).__name__}: {error})") from error
+    return _luma(pixels)
+
+
 def decode_image(data: bytes, format: str = "png"):
-    """A frame's file as a grey ``(H, W)`` float array (ITU-R BT.601 luma, as OpenCV's cvtColor). PNG only: 8- or 16-bit grey, grey + alpha,
-    RGB or RGBA, not interlaced, every filter (the stdlib's zlib and numpy). WHY no JPEG: neither the stdlib nor numpy decodes it, and the
-    host's runtime stays stdlib + the numpy extra; a JPEG raises ``Undecodable``."""
+    """A frame's file as a grey ``(H, W)`` float array (ITU-R BT.601 luma, as OpenCV's cvtColor). PNG: 8- or 16-bit grey, grey + alpha, RGB
+    or RGBA, not interlaced, every filter (the stdlib's zlib and numpy). JPEG: Pillow (``_decode_jpeg``); without it, ``Undecodable``."""
 
     from robotdx.diagnostics._numpy import np
 
     if format in ("jpeg", "jpg") or data[:2] == b"\xff\xd8":
-        raise Undecodable("the frame is JPEG, and neither the stdlib nor numpy decodes JPEG (only PNG here); a driver that writes PNG "
-                          "frames would provide it")
+        return _decode_jpeg(data)
     if data[:8] != b"\x89PNG\r\n\x1a\n":
         raise Undecodable(f"the frame is not a PNG (format {format!r})")
     import struct
@@ -691,7 +765,185 @@ def decode_image(data: bytes, format: str = "png"):
         pixels = pixels.astype(float)
     if channels in (1, 2):
         return pixels[..., 0]
-    return 0.299 * pixels[..., 0] + 0.587 * pixels[..., 1] + 0.114 * pixels[..., 2]
+    return _luma(pixels[..., :3])
+
+
+# ----- the rack's recordings on disk: recorded runs and the acceptance (round 3, gap 2) ---------------------------------------------
+ACCEPTANCE_SCHEMA = "bam_rack_twin.acceptance/1"
+_CAN_IN_NAME = re.compile(r"(?<![0-9A-Za-z])can(\d+)(?![0-9])")  # s02_can11_waypoints.npz -> 11; never "can1" inside "can11"
+_CAN_IN_PATH = re.compile(r"/can/(\d+)$")  # a board's entity path: <adapter>/can/<id>
+
+
+def can_id_of(path: str) -> int | None:
+    found = _CAN_IN_PATH.search(path)
+    return int(found[1]) if found else None
+
+
+class RackArchive:
+    """The rack's recordings, read-only: ``<root>/rack_<date>/<study>/runs/<name>.npz`` (+ ``.json`` sidecar, bam_rack_twin.hardware) and
+    ``<root>/rack_<date>/analysis/acceptance*.json`` (bam_rack_twin.acceptance/1). The listing is re-read at most every ``refresh_s``; a
+    loaded run or acceptance is kept until its file changes.
+
+    WHY recorded runs feed a live monitor (Zach's brief, round 3: "wire every not_wired case ... from the rack's recorded runs"): the
+    moteus board reports no commanded position, while every rack run records q_target / qd_target beside q; the newest run of a joint is
+    the best evidence RobotDx has of how it tracks, and its window says when it was recorded, so it is never mistaken for now."""
+
+    def __init__(self, root: Path | str, refresh_s: float = 60.0):
+        self.root = Path(root)
+        self.refresh_s = refresh_s
+        self._listed_at: float | None = None
+        self._runs: dict[int, list[tuple[float, Path]]] = {}
+        self._acceptance: list[Path] = []
+        self._loaded: dict[Path, tuple[int, Any]] = {}
+        self._lock = threading.Lock()
+
+    def _list(self) -> None:
+        import time
+
+        now = time.monotonic()
+        if self._listed_at is not None and now - self._listed_at < self.refresh_s:
+            return
+        runs: dict[int, list[tuple[float, Path]]] = {}
+        for pattern in ("rack_*/*/runs/*.npz", "rack_*/runs/*.npz"):
+            for file in self.root.glob(pattern):
+                found = _CAN_IN_NAME.search(file.name)
+                if not found:
+                    continue
+                try:
+                    runs.setdefault(int(found[1]), []).append((file.stat().st_mtime, file))
+                except OSError:
+                    continue
+        self._runs = {can_id: sorted(items, reverse=True) for can_id, items in runs.items()}
+        self._acceptance = sorted(self.root.glob("rack_*/analysis/acceptance*.json"))
+        self._listed_at = now
+
+    def _cached(self, file: Path, load):
+        mtime = file.stat().st_mtime_ns
+        held = self._loaded.get(file)
+        if held is None or held[0] != mtime:
+            held = self._loaded[file] = (mtime, load(file))
+        return held[1]
+
+    def newest_run(self, can_id: int):
+        """The newest recorded run of the joint on CAN ``can_id`` as a Trajectory (robotdx's rack_npz adapter), or None. A run whose
+        sidecar names another CAN id is skipped (the file name is only the index)."""
+
+        from robotdx.diagnostics.adapters import rack_npz
+
+        with self._lock:
+            self._list()
+            for _mtime, file in self._runs.get(can_id, []):
+                try:
+                    run = self._cached(file, rack_npz.load)
+                except (OSError, ValueError, KeyError, json.JSONDecodeError):
+                    continue
+                named = run.labels.get("can_id")
+                if named is not None and int(named) != can_id:
+                    continue
+                return run
+        return None
+
+    def newest_acceptance(self) -> tuple[Path, dict] | None:
+        """``(file, document)`` of the acceptance with the latest ``generated_at`` (never the newest mtime: a re-score of an old run is
+        written later), or None."""
+
+        def load(file: Path):
+            try:
+                document = json.loads(file.read_text())
+            except (OSError, ValueError):
+                return None
+            ok = isinstance(document, dict) and document.get("schema") == ACCEPTANCE_SCHEMA and isinstance(document.get("stations"), dict)
+            return document if ok else None
+
+        with self._lock:
+            self._list()
+            found = []
+            for file in self._acceptance:
+                try:
+                    document = self._cached(file, load)
+                except OSError:
+                    continue
+                if document is not None:
+                    found.append((str(document.get("generated_at") or ""), str(file), file, document))
+        if not found:
+            return None
+        _stamp, _name, file, document = max(found)
+        return file, document
+
+
+# The Computer plugin's CPU temperature (plugins/computer: a "Temperature CPU (<chip>)" status, one measurement per sensor). WHY these
+# keys first: Tctl (k10temp, AMD) and "Package id 0" (coretemp, Intel) are the die's control temperature, what its throttling acts on
+CPU_STATUS_PREFIX = "Temperature CPU"
+CPU_KEYS = ("Tctl", "Tdie", "Package id 0", "CPU")
+
+
+def cpu_temperature(series: list[dict]) -> list[dict]:
+    """The CPU status's measurement series as one State series ``cpu_temp_c`` (rack.host's channel), or [] when it has none."""
+
+    with_points = [item for item in series if item.get("points")]
+    if not with_points:
+        return []
+    chosen = next((item for key in CPU_KEYS for item in with_points if item["key"] == key), with_points[0])
+    return [{**chosen, "key": "cpu_temp_c", "unit": chosen.get("unit") or "Cel"}]
+
+
+HOLD_MIN_S = 0.5  # a hold is the target still for at least this long (the rack's waypoint dwells are 1-2 s)
+HOLD_CONVERGED_RAD = 1e-3  # a hold converged when it ends within 1 mrad of its target (catalog servo.hold_effort)
+
+
+def hold_events(run) -> list:
+    """Every hold of a recorded run as a share Event: ok = it ended within 1 mrad of its commanded position. A hold is a stretch where the
+    commanded velocity is zero and the commanded position does not move, for at least HOLD_MIN_S (tracking.stops' dwell, with the tape's
+    last one included: a run ends on a hold that must converge too)."""
+
+    from robotdx.diagnostics._numpy import np
+    from robotdx.diagnostics.stock.events import Event as DxEvent
+
+    keep = run.rows(skip_prelude=True)
+    t, q, target = run.t[keep], run.channel("q_rad")[keep], run.channel("q_target_rad")[keep]
+    velocity = run.channel("qd_target_rad_s")[keep] if run.has("qd_target_rad_s") else np.zeros_like(t)
+    still = np.isfinite(target) & (np.abs(np.nan_to_num(velocity, nan=1.0)) < 1e-9)
+    out, start, count = [], 0, len(t)
+    while start < count:
+        if not still[start]:
+            start += 1
+            continue
+        end = start
+        while end + 1 < count and still[end + 1] and abs(target[end + 1] - target[start]) < 1e-9:
+            end += 1
+        error = abs(float(q[end] - target[end]))
+        if t[end] - t[start] >= HOLD_MIN_S and np.isfinite(error):
+            out.append(DxEvent(t=float(t[end]), ok=error <= HOLD_CONVERGED_RAD, code="hold", evidence=run.run,
+                               labels={"error_mrad": round(1000 * error, 3)}))
+        start = end + 1
+    return out
+
+
+def _one_can_id(source, entity, inputs: Inputs) -> int:
+    ids = sorted(set(inputs.can_ids))
+    if len(ids) != 1:
+        why = "it has no CAN board below it" if not ids else f"it has {len(ids)} boards below it (CAN {', '.join(map(str, ids))}), not one joint"
+        raise _no_source(source, entity, why)
+    return ids[0]
+
+
+def _recorded_run(source, entity, inputs: Inputs):
+    """The newest recorded run of the one joint below ``entity``, or ``_Missing`` saying why there is none."""
+
+    can_id = _one_can_id(source, entity, inputs)
+    if inputs.archive is None:
+        raise _no_source(source, entity, "this host has no rack archive (IO_DIAGNOSTICS_RACK_ARCHIVE)")
+    run = inputs.archive.newest_run(can_id)
+    if run is None:
+        raise _no_source(source, entity, f"the rack archive {inputs.archive.root} holds no recorded run of CAN {can_id}")
+    return run, can_id
+
+
+def _run_window(run, binding: Binding, samples) -> dict:
+    wall = run.labels.get("wall_start")
+    start = float(wall) if wall is not None else None
+    return {"from": start, "to": start + float(run.t[-1] - run.t[0]) if start is not None else None, "window_s": float(run.t[-1] - run.t[0]),
+            "state": binding.state, "samples": samples, "source": "recorded_run", "run": run.run}
 
 
 # ----- one feed per source kind: (data, samples) or _Missing ------------------------------------------------------------------------
@@ -860,8 +1112,50 @@ def _feed_evidence(binding, config, source, path, entity, inputs: Inputs, start,
     return EvidenceStamps(now=now, stamps=stamps, reset_at=max(resets) if resets else None), len(stamps)
 
 
+def _feed_holds(binding, config, source, path, entity, inputs: Inputs, start, now):
+    run, can_id = _recorded_run(source, entity, inputs)
+    if not (run.has("q_target_rad") and run.has("q_rad")):
+        raise _no_source(source, entity, f"CAN {can_id}'s newest recorded run has no commanded position")
+    events = hold_events(run)
+    return events, len(events), _run_window(run, binding, len(events))
+
+
+GATE_VERDICT = {"pass": "pass", "fail": "fail", "partial": "warn"}  # the acceptance's status as a cell's verdict; not_run and others: not run
+
+
+def _feed_acceptance(binding, config, source, path, entity, inputs: Inputs, start, now):
+    ids = sorted(set(inputs.can_ids))
+    if not ids:
+        raise _no_source(source, entity, "it has no CAN board below it, so no acceptance station is its own")
+    if inputs.archive is None:
+        raise _no_source(source, entity, "this host has no rack archive (IO_DIAGNOSTICS_RACK_ARCHIVE)")
+    found = inputs.archive.newest_acceptance()
+    if found is None:
+        raise _no_source(source, entity, f"the rack archive {inputs.archive.root} holds no {ACCEPTANCE_SCHEMA} file")
+    file, document = found
+    stations = {str(key): value for key, value in document["stations"].items()}
+    mine = [can_id for can_id in ids if str(can_id) in stations]
+    if not mine:
+        raise _no_source(source, entity, f"the newest acceptance ({file.name}) has stations {', '.join(sorted(stations, key=int))}, and none is "
+                                         f"below it (CAN {', '.join(map(str, ids))})")
+    cells = []
+    for can_id in mine:
+        for gate in stations[str(can_id)].get("gates") or []:
+            verdict = GATE_VERDICT.get(gate.get("status"), "not_run")
+            value = gate.get("value")
+            value = float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None  # T11 writes "18/25"
+            cells.append((f"CAN {can_id}", str(gate.get("id")), dx_core.Result(
+                diagnostic="gate", title=str(gate.get("name") or gate.get("id")), verdict=verdict, value=value, unit="1",
+                subject=f"CAN {can_id}", code="" if verdict == "pass" else f"Gate{str(gate.get('status')).title().replace('_', '')}",
+                message=str(gate.get("detail") or ""))))
+    window = {"from": None, "to": None, "window_s": None, "state": "", "samples": len(cells), "source": "acceptance", "file": str(file),
+              "generated_at": document.get("generated_at"), "stations": [f"CAN {can_id}" for can_id in mine]}
+    return cells, len(cells), window
+
+
+# WHY a feed may return a third item, its own window: a recorded run's or an acceptance's time is its own, not the last window_s of now
 _FEEDS = {"state_stamps": _feed_state_stamps, "frame_stamps": _feed_frame_stamps, "frames": _feed_frames, "reply_counts": _feed_reply_counts,
-          "config": _feed_config, "faults": _feed_faults, "link_events": _feed_link_events, "members": _feed_members, "evidence": _feed_evidence}
+          "holds": _feed_holds, "acceptance": _feed_acceptance, "config": _feed_config, "faults": _feed_faults, "link_events": _feed_link_events, "members": _feed_members, "evidence": _feed_evidence}
 
 
 # ----- the runner --------------------------------------------------------------------------------------------------------
@@ -977,7 +1271,8 @@ class StockDiagnostics:
         its State). Never raises: whatever goes wrong is a not_run status that says what."""
 
         inputs = inputs if inputs is not None else Inputs()
-        has_state = inputs.has_state or bool(groups)
+        # WHY a borrowed board's State counts (round 3): a servo or encoder over a watched board reports through it, so its gaps are rows
+        has_state = inputs.has_state or bool(groups) or (bool(inputs.leaf_state) and _part_of(binding) in LEAF_STATE_PARTS)
         spec = dx_registry.REGISTRY.get(binding.diagnostic)
         window = None
         try:
@@ -991,13 +1286,14 @@ class StockDiagnostics:
             else:
                 start = now - binding.window_s
                 try:
-                    data, samples = _FEEDS[source.kind](binding, config, source, path, entity_name, inputs, start, now)
+                    fed = _FEEDS[source.kind](binding, config, source, path, entity_name, inputs, start, now)
                 except _Missing as missing:
                     result = self._not_run(binding, spec, missing.code, missing.message)
                 else:
+                    data, samples = fed[:2]
                     result = self._gated(binding, config, dx_registry.evaluate(binding.diagnostic, config, data, subject=path, stamp=now))
-                    window = {"from": start, "to": now, "window_s": binding.window_s, "state": binding.state, "samples": samples,
-                              "source": source.kind}
+                    window = fed[2] if len(fed) > 2 else {"from": start, "to": now, "window_s": binding.window_s, "state": binding.state,
+                                                          "samples": samples, "source": source.kind}
         except ModuleNotFoundError as error:
             result = self._not_run(binding, spec, "NumpyMissing", NUMPY_MISSING if error.name == "numpy" else f"{error}")
         except Exception as error:  # noqa: BLE001 - a diagnostic that raises is a not_run with its reason, never a crashed host
@@ -1013,7 +1309,9 @@ class StockDiagnostics:
         line["values"] = [*line["values"], {"key": "dx.binding", "value": binding.id}]
         if window is not None:
             line["values"].append({"key": "dx.window", "value": json.dumps(window, separators=(",", ":"))})
-        if result.code == NO_SOURCE and not has_state:
+        if result.code in NO_SOURCE_CODES:
+            line["values"].append({"key": GAP_KEY, "value": next(gap for gap, code in GAP_CODE.items() if code == result.code)})
+        if result.code in NO_SOURCE_CODES and not has_state:
             # WHY no row (Zach, 2026-10-28, calm UI): an entity that reports no State at all (an unwatched board, a composite without a
             # plugin) would carry a grey row per binding forever; the drill-in still lists it with this reason
             line["values"].append({"key": QUIET_KEY, "value": "no State on this entity"})
@@ -1026,32 +1324,70 @@ class StockDiagnostics:
         return result
 
     def _from_state(self, binding: Binding, spec, config, source: Source, path: str, entity_name: str, groups, inputs: Inputs):
-        """``(result, window)`` of a binding fed from the State history."""
+        """``(result, window)`` of a binding fed from the State history: the entity's own, else (round 3, gap 2) what it borrows, in order:
+        the one board under a servo or encoder (``LEAF_STATE_PARTS``), the Computer's CPU temperature (rack.host), and for a servo the
+        newest recorded run of its joint. Each borrowed window says which (``source``: state | leaf_state | computer | recorded_run)."""
 
         needs = state_needs(binding.diagnostic, config)
         # WHY the column's own name as a State key too: PEP 0010's names (q_target_rad, gyro_rad_s) are what a driver reports them as
         columns = {**COLUMNS, **{column: column for column in needs if column not in COLUMNS}, **binding.columns}
-        names = [binding.state] if binding.state else list(groups)
-        series = next((groups[name] for name in names if name in groups and any(item["key"] in columns.values() for item in groups[name])), None)
-        if series is None:
-            wanted = ", ".join(needs) or "State"
-            # WHY a named group not there yet is NoState: a driver reports a group when it has one (a board's watch group arrives with
-            # the watch); only a group that is there and lacks the keys says the source is missing
-            if groups and not (binding.state and binding.state not in groups):
-                missing = _no_source(source, entity_name, f"its State does not report {wanted}")
-                return self._not_run(binding, spec, missing.code, missing.message), None
-            if inputs.composite and not inputs.plugin:
-                missing = _no_source(source, entity_name, "it reports no State of its own (a composite without a plugin)")
-                return self._not_run(binding, spec, missing.code, missing.message), None
-            which = f"State group {binding.state!r}" if binding.state else "State"
-            return self._not_run(binding, spec, NO_STATE, f"no {which} history on {entity_name} yet: it is kept while the driver reports State"), None
+        part = _part_of(binding)
+        candidates = [("state", self._pick(binding, columns, groups))]
+        if part in LEAF_STATE_PARTS and inputs.leaf_state:
+            candidates.append(("leaf_state", self._pick(binding, columns, inputs.leaf_state, named=False)))
+        if inputs.computer and "cpu_temp_c" in needs:
+            candidates.append(("computer", inputs.computer))
+        absent, lacking = "", None
+        for kind, series in candidates:
+            if series is None:
+                continue
+            run, first = trajectory(series, columns=columns, run=f"history:{path}#{binding.state or kind}", device=entity_name)
+            absent = state_inputs_missing(binding.diagnostic, config, run)
+            if not absent:
+                return self._monitor(binding, spec, config, path, run, first, kind)
+            lacking = lacking or absent
+        if part in RUN_PARTS:
+            try:
+                run, can_id = _recorded_run(source, entity_name, inputs)
+            except _Missing as missing:
+                if lacking is None and not groups and not inputs.leaf_state:
+                    pass  # no State at all: the reasons below say so
+                else:
+                    return self._not_run(binding, spec, missing.code, missing.message), None
+            else:
+                absent = state_inputs_missing(binding.diagnostic, config, run)
+                if absent:
+                    missing = _no_source(source, entity_name, f"CAN {can_id}'s newest recorded run ({Path(run.run).name}) lacks {absent}")
+                    return self._not_run(binding, spec, missing.code, missing.message), None
+                result = self._gated(binding, config, dx_registry.evaluate(binding.diagnostic, config, [run], subject=path, stamp=None))
+                result = dataclasses.replace(result, stamp=None)  # WHY: stamped when evaluated (now), the window carries the run's own time
+                samples = next((m.value for m in result.measurements if m.key in ("n", "rows")), int(len(run.t)))
+                return result, _run_window(run, binding, samples)
+        if lacking is not None:
+            missing = _no_source(source, entity_name, f"its State does not report {lacking}")
+            return self._not_run(binding, spec, missing.code, missing.message), None
+        wanted = ", ".join(needs) or "State"
+        # WHY a named group not there yet is NoState: a driver reports a group when it has one (a board's watch group arrives with
+        # the watch); only a group that is there and lacks the keys says the source is missing
+        if groups and not (binding.state and binding.state not in groups):
+            missing = _no_source(source, entity_name, f"its State does not report {wanted}")
+            return self._not_run(binding, spec, missing.code, missing.message), None
+        if inputs.composite and not inputs.plugin:
+            missing = _no_source(source, entity_name, "it reports no State of its own (a composite without a plugin)")
+            return self._not_run(binding, spec, missing.code, missing.message), None
+        which = f"State group {binding.state!r}" if binding.state else "State"
+        return self._not_run(binding, spec, NO_STATE, f"no {which} history on {entity_name} yet: it is kept while the driver reports State"), None
+
+    @staticmethod
+    def _pick(binding: Binding, columns, groups, named: bool = True):
+        """The first State group (``binding.state`` when ``named``) that carries any of ``columns``' keys, or None."""
+
+        names = [binding.state] if binding.state and named else list(groups)
+        return next((groups[name] for name in names if name in groups and any(item["key"] in columns.values() for item in groups[name])), None)
+
+    def _monitor(self, binding: Binding, spec, config, path: str, run, first, kind: str):
         from robotdx.diagnostics import stream as dx_stream
 
-        run, first = trajectory(series, columns=columns, run=f"history:{path}#{binding.state or 'state'}", device=entity_name)
-        absent = state_inputs_missing(binding.diagnostic, config, run)
-        if absent:
-            missing = _no_source(source, entity_name, f"its State does not report {absent}")
-            return self._not_run(binding, spec, missing.code, missing.message), None
         pairs = dx_stream.monitor(binding.diagnostic, config, run, subject=path, window_s=binding.window_s, step_s=self.beat_s,
                                   wall_start=first)
         if not pairs:
@@ -1062,7 +1398,7 @@ class StockDiagnostics:
         result = self._gated(binding, config, pairs[-1][0])  # the newest window: stamped with its end, on the host's clock
         window_end = result.stamp
         return result, {"from": window_end - binding.window_s, "to": window_end, "window_s": binding.window_s, "state": binding.state,
-                        "samples": next((m.value for m in result.measurements if m.key in ("n", "rows")), None), "source": "state"}
+                        "samples": next((m.value for m in result.measurements if m.key in ("n", "rows")), None), "source": kind}
 
     @staticmethod
     def _not_run(binding: Binding, spec, code: str, message: str) -> dx_core.Result:
@@ -1236,6 +1572,7 @@ def binding_of(status) -> str:
     return next((value for key, value in status.values if key == "dx.binding"), "")
 
 
-__all__ = ["StockDiagnostics", "Binding", "PartRule", "parse_parts", "state_inputs_missing", "NO_SOURCE", "NOT_STREAMING", "NO_DECODER", "QUIET",
+__all__ = ["StockDiagnostics", "Binding", "PartRule", "parse_parts", "state_inputs_missing", "NOT_WIRED", "NOT_MEASURED", "NO_SOURCE_CODES",
+           "GAP_KEY", "RackArchive", "cpu_temperature", "NOT_STREAMING", "NO_DECODER", "QUIET",
            "Inputs", "Source", "SOURCES", "source_of", "quiet", "decode_image", "DEFAULT_DIR", "DiagnosticsError", "parse", "dump", "schema", "field_docs", "trajectory", "SOURCE",
            "DIAGNOSTICS_FILE", "BEAT_S", "registry_json", "config_doc", "kind_of", "catalog_parts", "catalog_entry", "window_of", "binding_of"]
