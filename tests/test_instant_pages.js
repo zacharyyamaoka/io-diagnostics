@@ -197,7 +197,8 @@ async function scenario(browser, name, body) {
       const back = await waitFor(() => page.locator('[data-d6-log] .ev').count(), 400, 20);
       check('coming back to a log shows its rows at once, the host not answering', back >= before, `${back} rows, ${before} when it was left`); // WHY >=: the fixture logs on
       await wait(9500); // the log's own 8 s refresh fails too
-      check('a log that fails to refresh keeps the rows it has', (await page.locator('[data-d6-log] .ev').count()) === back, `${back} rows`);
+      const kept = await page.locator('[data-d6-log] .ev').count();
+      check('a log that fails to refresh keeps the rows it has', kept >= back, `${kept} rows, ${back} before it failed`); // WHY >=: the live stream still brings new ones
       check('and says so, with Retry', Boolean(await page.locator('[data-d6-log] .al-late [data-al-retry]:visible').count()));
       await page.unroute('**/api/v1/activity*');
       await page.locator('[data-d6-log] .al-late [data-al-retry]').click();

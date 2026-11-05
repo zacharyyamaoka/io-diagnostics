@@ -405,6 +405,83 @@ def test_resize_reaches_the_terminal(rig):
     watcher.wait_end()
 
 
+# ----- a run's end is one moment for everyone outside ------------------------------------------------------------------
+# Found on the landed instant pages, 2026-11-04, by the page suites under load: a read answers from a published view, so the ending waits for a publish, and in that wait a
+# client read `state: done` with `active: true`. The page keeps the stream's `end` as its last word on a run, so a finished run stayed a running one: a spinner, Stop, no cast link.
+def _hold_the_ending(rig) -> tuple[threading.Event, threading.Event]:
+    """Holds a run inside its ending, where the publish is: deterministic, where a slow machine only sometimes lands in it."""
+
+    reached, release = threading.Event(), threading.Event()
+    hook = rig.host.runs.on_end
+
+    def slow_publish(run):
+        reached.set()
+        assert release.wait(15)
+        hook(run)
+
+    rig.host.runs.on_end = slow_publish
+    return reached, release
+
+
+def test_a_client_sees_a_runs_end_as_one_moment(rig):
+    reached, release = _hold_the_ending(rig)
+    run = rig.start("old", node=None)
+    watcher = Watcher(rig, run["id"])
+    assert reached.wait(15)
+    during = rig.run(run["id"])
+    summary = rig.call("GET", "/api/v1/runs")[1]
+    try:
+        assert (during["state"], during["active"], during["exit_code"], during["ended"]) == ("running", True, None, None) and "result" not in during
+        assert (summary["active"], summary["runs"][0]["state"]) == (1, "running")
+        time.sleep(0.3)  # time for a stream that was going to say `end` to say it
+        assert watcher.end is None
+    finally:
+        release.set()
+    final = watcher.wait_end()
+    assert (final["state"], final["active"], final["exit_code"]) == ("done", False, 0) and final["result"]["outcome"] == "ok"
+    assert [e["args"]["state"] for e in rig.call("GET", "/api/v1/activity?types=run")[1]["events"] if e["code"] == "RunEnded"] == ["done"]
+    assert rig.run(run["id"])["active"] is False
+
+
+def test_a_run_is_over_on_disk_and_in_the_host_before_clients_are_told(rig):
+    reached, release = _hold_the_ending(rig)
+    run = rig.start("old", node=None)
+    assert reached.wait(15)
+    try:
+        # WHY the truth on disk at once: a host that dies inside the ending must not read this run back as "the host stopped while it ran"
+        meta = json.loads((rig.runs_dir / f"{run['id']}.json").read_text())
+        assert (meta["state"], meta["exit_code"], meta["result"]["outcome"]) == ("done", 0, "ok")
+        assert rig.host.runs.active() == []  # a next run on this board is not refused by one that is over
+    finally:
+        release.set()
+    rig.wait_ended(run["id"])
+
+
+def test_the_last_word_on_a_run_is_that_it_is_over(rig):
+    told = []
+    notify = rig.host.runs.notify
+
+    def listening(reason):
+        told.append(rig.host.runs.json()["items"][0]["active"])
+        notify(reason)
+
+    rig.host.runs.notify = listening
+    run = rig.start("old", node=None)
+    rig.wait_ended(run["id"])
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and told[-1] is not False:
+        time.sleep(0.02)
+    assert told[-1] is False, told  # WHY: a page re-reads on this, and nothing comes after it
+
+
+def test_a_run_says_one_duration(rig, monkeypatch):
+    # WHY 0.5447: "%.2g" of it is 0.54 and of its round(_, 3) is 0.55, and the message and duration_s were printed from one each, so about one run in twenty disagreed with itself
+    monkeypatch.setattr("io_diagnostics.terminal.Run.elapsed", lambda _run: 0.5447)
+    status, dry = rig.call("POST", "/api/v1/act", {"path": rig.device, "action": "check_comms", "node": None, "dry_run": True})
+    status, answer = rig.call("POST", "/api/v1/act", {"path": rig.device, "action": "check_comms", "node": None, "token": dry["token"]})
+    assert status == 200 and (answer["result"]["duration_s"], answer["result"]["message"]) == (0.545, "ran in 0.55 s · 1 lines")
+
+
 # ----- records leave the terminal, old plugins still work -------------------------------------------------------------
 def test_an_old_plugin_that_ignores_the_record_fd_still_works(rig):
     run = rig.start("old", node=None)
