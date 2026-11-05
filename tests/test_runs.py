@@ -488,6 +488,19 @@ def test_the_last_word_on_a_run_is_that_it_is_over(rig):
     assert told[-1] is False, told  # WHY: a page re-reads on this, and nothing comes after it
 
 
+def test_a_dry_run_changes_nothing_so_it_waits_for_no_build(rig, monkeypatch):
+    # WHY: a Run page's Run is held until its token comes, and right after a run ends, when builds are busiest, a build added to every dry run only made that wait longer
+    built = []
+    monkeypatch.setattr(rig.host, "after_write", lambda: built.append(True))
+    status, dry = rig.call("POST", "/api/v1/act", {"path": rig.device, "action": "check_comms", "node": None, "dry_run": True})
+    assert status == 200 and dry["token"] and built == []
+    status, answer = rig.call("POST", "/api/v1/act", {"path": rig.device, "action": "check_comms", "node": None, "token": dry["token"]})
+    assert status == 200 and answer["dry_run"] is False and built, "a real one is in the next read"
+    built.clear()
+    assert rig.call("POST", "/api/v1/act", {"path": rig.device, "action": "check_comms", "node": None, "token": "not a token"})[0] != 200
+    assert built, "a keep-alive connection's next write is not taken for the dry run before it"
+
+
 def test_a_run_says_one_duration(rig, monkeypatch):
     # WHY 0.5447: "%.2g" of it is 0.54 and of its round(_, 3) is 0.55, and the message and duration_s were printed from one each, so about one run in twenty disagreed with itself
     monkeypatch.setattr("io_diagnostics.terminal.Run.elapsed", lambda _run: 0.5447)

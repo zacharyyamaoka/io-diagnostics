@@ -283,6 +283,28 @@ async function scenario(browser, name, body) {
       check('the page is on the entity it opened on', (await page.evaluate(() => S.sel)) === ADAPTER);
     });
 
+    // ----- the Run page -----------------------------------------------------------------------------------------------------------
+    // Found by test_runs_r2 and r5, about one run in ten: the Run page opened with Run enabled while its token was still being asked for, and a press then fell on `util.asking` and
+    // was dropped, with no sign of it. The first draw came before the asking began and nothing drew again until an answer came. A press on Run must never go nowhere.
+    await scenario(browser, 'run page', async (page) => {
+      // WHY its own host: the recorded plugin has the utilities with a Run page; the suite's state plugin has none
+      const root = H.fs.mkdtempSync(H.path.join(H.os.tmpdir(), 'instant-run-page-'));
+      const recorded = await H.startServer(root, 'F1', {}, { plugins: H.path.join(H.ROOT, 'tests', 'fixtures', 'plugins') });
+      try {
+        await page.route('**/api/v1/act', async (route) => { await wait(1500); await route.continue().catch(() => {}); });
+        await H.open(page, recorded.base, 'host/usb1/port-1-3/usb-1-3/can/15');
+        await page.waitForSelector('#ent-util-btn:not([disabled])', { timeout: 15000 });
+        await page.click('#ent-util-btn');
+        await page.click('.ent-menu [data-util="identify"]', { timeout: 8000 });
+        await page.waitForSelector('#modal:not([hidden]) [data-util-confirm]', { timeout: 5000 });
+        const first = await page.evaluate(() => ({ disabled: document.querySelector('#modal [data-util-confirm]').disabled, note: document.querySelector('#modal footer .note').textContent }));
+        check('the Run page does not offer Run before it has its token, and says what it is waiting for', first.disabled && /^Asking /.test(first.note), first);
+        check('and offers it once it has', Boolean(await waitFor(() => page.locator('#modal [data-util-confirm]:not([disabled])').count(), 8000, 50)));
+      } finally {
+        H.stopServer(recorded.child);
+      }
+    });
+
     // ----- the chip of the release channels ------------------------------------------------------------------------------------------
     await scenario(browser, 'chip', async (page) => {
       await H.open(page, server.base, ADAPTER);
