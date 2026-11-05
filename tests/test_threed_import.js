@@ -230,9 +230,18 @@ const fileAt = (page, file) => page.evaluate((name) => {
     const placedPx = await pixel(page, motor1.x, motor1.y);
     await page.click('[data-td-map-done]');
     await page.waitForTimeout(200);
+    // the person's camera, by a real drag: it must survive the reload, not the scene's own home pose
+    await page.mouse.move(viewport.x + 300, viewport.y + 500);
+    await page.mouse.down();
+    await page.mouse.move(viewport.x + 380, viewport.y + 470, { steps: 4 });
+    await page.mouse.up();
+    await page.waitForTimeout(400);
+    const dragged = await page.evaluate(() => new URLSearchParams(location.search).get('cam'));
     await page.reload();
     await ready3d(page);
     await page.waitForTimeout(400);
+    const reopened = await page.evaluate(() => ({ cam: IOThreeD.debug().scene.cameraText(), url: new URLSearchParams(location.search).get('cam') }));
+    check('the camera in the URL survives a reload (the model does not go home over it)', dragged && dragged !== camera && reopened.cam === dragged && reopened.url === dragged, { dragged, reopened });
     const afterReload = await page.evaluate(() => { const d = IOThreeD.debug(); return { parts: d.desc.parts.map((p) => p.path), state: (d.states || []).map((s) => s.level) }; });
     check('the assignment persists across a reload', afterReload.parts.length === 1 && afterReload.parts[0] === CAN2, afterReload);
     const motorPart = await page.evaluate(() => IOThreeD.debug().scene.partOfFile('Plate_1___Motor_1__Body_3__0.stl'));

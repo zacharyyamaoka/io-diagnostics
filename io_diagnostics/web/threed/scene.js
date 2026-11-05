@@ -106,6 +106,7 @@ export function createScene(container, hooks = {}) {
     requestAnimationFrame(draw);
   }
   controls.addEventListener('change', request);
+  controls.addEventListener('start', () => { st.touched = true; });
   controls.addEventListener('end', () => emitCamera());
   const resize = new ResizeObserver(() => { size(); request(); });
   resize.observe(container);
@@ -199,7 +200,7 @@ export function createScene(container, hooks = {}) {
     return { target, position: target.clone().addScaledVector(direction, distance), distance };
   }
   // the first view of a model: Fusion's home, the whole model filling the viewport from the front's right, a little above
-  function home(animate = false) {
+  function home(animate = false, emit = true) {
     if (st.all.isEmpty()) return;
     const front = frontAxis();
     const right = new THREE.Vector3(0, 1, 0).cross(front).normalize();
@@ -211,7 +212,7 @@ export function createScene(container, hooks = {}) {
     camera.near = Math.max(0.001, pose.distance / 200);
     camera.far = Math.max(50, pose.distance * 50);
     camera.updateProjectionMatrix();
-    if (!animate) { camera.position.copy(pose.position); controls.target.copy(pose.target); controls.update(); request(); emitCamera(); return; }
+    if (!animate) { camera.position.copy(pose.position); controls.target.copy(pose.target); controls.update(); request(); if (emit) emitCamera(); return; }
     st.fly = { start: performance.now(), fromPos: camera.position.clone(), toPos: pose.position, fromTarget: controls.target.clone(), toTarget: pose.target };
     request();
   }
@@ -329,7 +330,7 @@ export function createScene(container, hooks = {}) {
     measure();
     placeGlyphs();
     measure();
-    home(false);
+    if (!st.touched) home(false);
     request();
     return st.timings;
   }
@@ -341,7 +342,9 @@ export function createScene(container, hooks = {}) {
     mesh.userData.part = partOfMesh(mesh);
     mesh.material = mesh.userData.part >= 0 ? st.partMats[mesh.userData.part] : st.neutral;
     st.meshes.push(mesh);
-    if (!st.measuring) { st.measuring = true; requestAnimationFrame(() => { st.measuring = false; measure(); request(); }); }
+    // WHY home again as meshes arrive: the first pose fits whatever landed first, and a rack that takes 3 s to load sat off to one side
+    // until then. A person who already took the camera keeps it
+    if (!st.measuring) { st.measuring = true; requestAnimationFrame(() => { st.measuring = false; measure(); if (!st.timings.done && !st.touched) home(false, false); request(); }); }
   }
   function measure() {
     root.updateMatrixWorld(true);

@@ -322,12 +322,15 @@ reason = "no mount for it in the model"`;
       });
       applyColors();
       paint();
+      // WHY read before the load: the scene goes home as it loads, and that pose must not replace the one this page was opened with
+      const cam = S().cam;
       const loading = T.scene.load(T.desc.urdf, parts(), { front: (T.desc.view || {}).front, packages: T.desc.packages });
       status();
       const tick = setInterval(status, 200);
       await loading;
       clearInterval(tick);
-      if (S().cam) { T.appliedCam = S().cam; T.scene.setCamera(S().cam); } else T.api.replaceNav();
+      if (cam) { S().cam = cam; T.appliedCam = cam; T.scene.setCamera(cam); }
+      T.api.replaceNav();
     } catch (error) {
       console.error('3D view:', error);
       T.sceneError = String(error && error.message ? error.message : error);

@@ -37,6 +37,7 @@ MUTATIONS = [
     ('chips: lit without a colour', SCENE, 'if (state.lit && !state.selected) {', 'if (false) {', PAGE),
     ('map: parts are not dealt out again', CORE, 'if (T.partsKey !== partsKey && T.scene && T.scene.loaded()) { T.partsKey = partsKey; T.scene.setParts(parts()); T.lastSel = undefined; }', '', PAGE),
     ('map: the step is lost on the way to the button', CORE, 'T.map.shift = Math.max(-6, Math.min(6, T.map.shift + step));', 'T.map.shift = 0;', PAGE),
+    ('home: the load replaces the camera the page was opened with', CORE, 'const cam = S().cam;\n      const loading', 'const cam = null;\n      const loading', PAGE),
     ('upload: the page does not reload the description', CORE, "      wantDescription(true);\n    } catch (error) {\n      T.upload = null;", "    } catch (error) {\n      T.upload = null;", PAGE),
 ]
 
