@@ -385,6 +385,9 @@ def diagnose(device: str) -> None:
             time.sleep(float(os.environ.get("STATE_CONFIG_S") or 0))
             for row in [*configs("can/1", clock()), *extra_configs("can/1", clock())]:
                 emit(**{key: value for key, value in row.items() if key != "schema"})
+            if os.environ.get("STATE_MOTOR_KV"):  # WHY opt-in: a moteus board's conf enumerate includes motor.Kv (rpm/V), as the real driver's
+                emit(record="config", path="can/1", key="motor.Kv", value=float(os.environ["STATE_MOTOR_KV"]), unit="rpm/V", type="float",
+                     writable=False, stamp=clock())
         # WHY each stamped now: a re-sent stamp is the same report to the host, and its history keeps one point per evaluation
         for line in dx_records():
             emit(**{**{key: value for key, value in line.items() if key != "schema"}, "path": "can/1", "stamp": clock()})
@@ -393,7 +396,10 @@ def diagnose(device: str) -> None:
              identity={"manufacturer": "Intel", "model": "D405", "model_id": "intel-realsense-d405", "serial_number": "219323070276",
                        "sw_version": "5.16.0.1"}, actions=actions_of("device"))
         emit(record="status", level="ok", name="camera: firmware", path="", message="5.16.0.1 is the latest", stamp=now, expected_period_s=30)
-        emit(record="status", level="ok", name="camera: comms", path="", message="answers", stamp=now, expected_period_s=30)
+        # WHY opt-in: the real intel_rgbd driver names the camera's SDK serial (realsense_serial), which differs from the USB one
+        serial = os.environ.get("STATE_REALSENSE_SERIAL")
+        emit(record="status", level="ok", name="camera: comms", path="", message="answers", stamp=now, expected_period_s=30,
+             **({"values": [{"key": "realsense_serial", "value": serial}]} if serial else {}))
         if NEW:
             emit(record="state", path="", name="camera", stamp=now, expected_period_s=30,
                  measurements=[{"key": "asic temperature", "value": 41.5, "unit": "Cel", "warn_high": 80.0}, {"key": "frames dropped", "value": 0}])
