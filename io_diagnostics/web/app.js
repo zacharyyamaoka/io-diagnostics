@@ -132,19 +132,57 @@ function writePref(key, value) {
 }
 
 // ---------------------------------------------------------------------------------- data ----
-async function getJson(url) {
-  const response = await fetch(url);
-  const data = await response.json();
-  if (data.error) throw new Error(data.error);
-  return data;
+// WHY a bound on every load (Zach, 2026-11-04: "surely maybe there is like a timeout on these things?"): a fetch has none of its own, so
+// a host that does not answer left a page on "loading…" for as long as the tab stayed open.
+const LOAD_TIMEOUT_MS = 8000;
+async function getJson(url, { timeoutMs = LOAD_TIMEOUT_MS, signal = null } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  if (signal) signal.addEventListener('abort', () => controller.abort(), { once: true });
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    const data = await response.json();
+    if (data.error) throw Object.assign(new Error(data.error), { status: response.status });
+    return data;
+  } catch (error) {
+    if (controller.signal.aborted && !(signal && signal.aborted)) throw new Error(`no answer in ${Math.round(timeoutMs / 1000)} s`);
+    throw error instanceof TypeError ? new Error('the host is not answering') : error; // WHY: fetch's own "Failed to fetch" says nothing to a person
+  } finally {
+    clearTimeout(timer);
+  }
 }
+
+// WHY (Zach, 2026-11-04: "Preview server unreachable" on a host restarting, and sps restarts it on every .py that lands): the release chip is the
+// runtime's own bundle and calls one failed poll "unreachable" until its next poll 5 s later. A restart is a second or two, so its status
+// poll is asked again here for a few seconds first; a host that really is gone still fails, and the chip then says so. The chip gives a
+// poll 8 s of its own (stable_preview_switcher REQUEST_TIMEOUT_MS), which this stays inside.
+const CHIP_STATUS = '/__sps/status';
+const CHIP_RIDE_MS = 6000;
+const CHIP_RETRY_MS = 400;
+(function rideOutRestarts() {
+  const plain = window.fetch.bind(window);
+  window.fetch = async function fetchThroughRestarts(input, init) {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    if (new URL(url, location.href).pathname !== CHIP_STATUS) return plain(input, init);
+    const giveUp = performance.now() + CHIP_RIDE_MS;
+    for (;;) {
+      try {
+        const response = await plain(input, init);
+        if (response.status < 500 || performance.now() >= giveUp) return response;
+      } catch (error) {
+        if ((init && init.signal && init.signal.aborted) || performance.now() >= giveUp) throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, CHIP_RETRY_MS));
+    }
+  };
+})();
 
 // --------------------------------------------------------------- skins, structures (manifests) ----
 // skins/index.json and view/structure/index.json pre-list every planned entry; only `ready` ones are loaded, so a
 // lane that lands a skin or a structure flips its own line and nothing else (docs/round2-seams.md).
 async function readManifest(url, listKey) {
   try {
-    const manifest = await getJson(url);
+    const manifest = await getJson(url, { timeoutMs: 30000 }); // WHY longer: without a manifest there is no page to say anything on
     return { default: manifest.default, entries: (manifest[listKey] || []).filter((entry) => entry.ready) };
   } catch (error) {
     console.warn(`manifest ${url}:`, error);
@@ -274,44 +312,57 @@ function applyLive(kind, data) {
     S.lastOk = performance.now(); S.lastError = '';
   }
   render();
-  if (S.sel && (performance.now() - S.nodeAt > 1800 || !S.node || S.node.node.path !== S.sel)) loadNode();
+  if (S.sel) pollNode();
 }
 ClassicLive.apply = applyLive;
 function startLiveFeed() {
   if (ClassicLive.source || document.hidden || typeof EventSource === 'undefined') return;
   const source = ClassicLive.source = new EventSource('/api/v1/live');
   source.onopen = () => { ClassicLive.connected = true; S.lastError = ''; };
-  source.onerror = () => { ClassicLive.connected = false; ClassicLive.firstSnapshot = false; };
+  source.onerror = () => {
+    ClassicLive.connected = false; ClassicLive.firstSnapshot = false;
+    // WHY: on an HTTP error (a host still starting) the browser closes the stream for good; the next tick opens another
+    if (source === ClassicLive.source && source.readyState === EventSource.CLOSED) ClassicLive.source = null;
+  };
   for (const kind of ['snapshot', 'upsert', 'remove', 'samples']) source.addEventListener(kind, (event) => {
     if (source !== ClassicLive.source) return;
     try { applyLive(kind, JSON.parse(event.data)); } catch (error) { console.error('classic live:', error); }
   });
 }
-async function tick() {
-  if (document.hidden) return;
-  startLiveFeed();
+// WHY one at a time (the same pile-up as /node's): the 1 Hz tick asked again whether or not the last poll had answered, so a host that was not
+// answering collected one more with every tick, each to be answered in turn when it came back.
+let statePolling = false;
+async function pollState() {
+  if (statePolling) return;
+  statePolling = true;
   try {
+    const data = await getJson('/api/v1/state');
+    // A late fallback answer cannot roll back an already connected feed.
     if (!ClassicLive.initialized || !ClassicLive.connected) {
-      const data = await getJson('/api/v1/state');
-      // A late fallback answer cannot roll back an already connected feed.
-      if (!ClassicLive.initialized || !ClassicLive.connected) {
-        S.data = data; rememberTree(data.tree); acceptedState();
-        ClassicLive.initialized = true;
-        delete ClassicLive.initialSnapshot;
-        const pending = ClassicLive.pending; ClassicLive.pending = [];
-        for (const [kind, event] of pending) applyLive(kind, event);
-        render();
-      }
-      if (!S.act || performance.now() - S.actAt > 4000) loadActivity();
+      S.data = data; rememberTree(data.tree); acceptedState();
+      ClassicLive.initialized = true;
+      delete ClassicLive.initialSnapshot;
+      const pending = ClassicLive.pending; ClassicLive.pending = [];
+      for (const [kind, event] of pending) applyLive(kind, event);
+      render();
     }
-    if (S.sel && $('detail').checkVisibility() && (performance.now() - S.nodeAt > 1800 || !S.node || S.node.node.path !== S.sel)) loadNode();
-    renderStatusbar();
-    renderClock();
+    if (!S.act || performance.now() - S.actAt > 4000) loadActivity();
   } catch (error) {
     S.lastError = String(error);
     if (!S.data) { $('tree-host').hidden = true; $('left-other').hidden = false; $('left-other').innerHTML = `<div class="err">${esc(error)}</div>`; }
-    renderStatusbar();
+  } finally {
+    statePolling = false;
   }
+}
+async function tick() {
+  if (document.hidden) return;
+  startLiveFeed();
+  if (!ClassicLive.initialized || !ClassicLive.connected) await pollState();
+  if (S.data && S.sel && $('detail').checkVisibility()) pollNode();
+  // WHY: the note above a stale page says how old it is, and nothing else redraws it while nothing arrives
+  if (S.lastError || NodeLoad.failedPath) queueRedraw();
+  renderStatusbar();
+  renderClock();
 }
 document.addEventListener('visibilitychange', () => {
   // WHY: a background browser tab neither polls nor keeps hardware watches alive.
@@ -331,14 +382,80 @@ function renderClock() {
   $('clock').textContent = `${shown.slice(5, 10)}  ${shown.slice(11, 19)}`;
 }
 
-let nodeRequest = 0, pendingNode = null;
-function loadNode() {
-  const request = ++nodeRequest;
+// One /node at a time, and its answer counts. WHY (measured 2026-11-04, tests/test_instant_pages.js): while a page had no answer every 1 Hz tick and
+// every live event asked again, about 20 a second, and an answer counted only if it was the newest asked for. A /node slower than that gap could never
+// land: with 3 s the page sent 645 requests in 30 s and drew nothing. Preview's took 4 to 22 s, so "loading…" was for ever. Chrome holds identical GETs back
+// and sends them one at a time (a 4 s /node: 532 sent, 7 answered in 30 s, the newest queued 22 s), so the host always had the next one: its 90% CPU.
+let pendingNode = null;
+const NODE_TIMEOUT_MS = 6000, NODE_TIMEOUT_MAX_MS = 30000;
+const NODE_RETRY_MS = 2000, NODE_RETRY_MAX_MS = 15000;
+const NODE_GONE_MS = 20000; // how long an entity may be missing from the host and the tree before the page stops asking for it
+const NODES_KEPT = 64;
+const NodeLoad = { path: null, controller: null, again: false, failures: 0, failedPath: null, why: '', retryAt: 0, missingSince: null };
+// WHY kept: a page already visited comes back at once, whole, and fills in behind (Zach, 2026-11-04: "Pages are just there"). Its age is shown
+// when the host does not answer. A Map keeps insertion order: the oldest go first.
+const nodeCache = new Map();
+function rememberNode(path, node) {
+  nodeCache.delete(path);
+  // WHY the tree's row too: the row of an entity the tree has just lost (a restarted host, before its driver has reported) keeps the page drawn until it comes back or stays gone
+  nodeCache.set(path, { node, at: performance.now(), row: (S.byPath && S.byPath.get(path)) || null });
+  for (const key of [...nodeCache.keys()].slice(0, Math.max(0, nodeCache.size - NODES_KEPT))) nodeCache.delete(key);
+}
+// The poll: its own answer is on the way, so asking again could only be slower
+const pollNode = () => {
+  if (NodeLoad.path !== S.sel && (performance.now() - S.nodeAt > 1800 || !S.node || S.node.node.path !== S.sel)) loadNode();
+};
+// Something changed (a run ended, a setting was written, the selection moved): the answer must be newer than this moment. WHY one more after the
+// one in flight and not a second beside it: that answer may predate the change, and one at a time is what keeps the host and the browser's connections free.
+function loadNode(again = false) {
   const path = S.sel;
+  if (!path) return;
+  if (NodeLoad.path === path) { NodeLoad.again = true; return; }
+  const failures = NodeLoad.failedPath === path ? NodeLoad.failures : 0;
+  if (!again && failures && performance.now() < NodeLoad.retryAt) return;
+  if (NodeLoad.controller) NodeLoad.controller.abort(); // another entity: that answer is no longer wanted
+  const controller = new AbortController();
+  NodeLoad.path = path; NodeLoad.controller = controller; NodeLoad.again = false;
   S.nodeAt = performance.now();
-  getJson(`/api/v1/node?path=${encodeURIComponent(path)}`)
-    .then((node) => { if (S.sel === path && request === nodeRequest) { pendingNode = { path, node }; queueRedraw(); } })
-    .catch(() => { if (S.sel === path) { S.sel = S.data.tree.path; S.node = null; S.drill = { ...NO_DRILL }; replaceNav(); } });
+  // WHY longer each time: a host that needs 9 s still lands its answer; a fixed bound would abort it for ever, the same livelock
+  const timeoutMs = Math.min(NODE_TIMEOUT_MS * 2 ** failures, NODE_TIMEOUT_MAX_MS);
+  getJson(`/api/v1/node?path=${encodeURIComponent(path)}`, { timeoutMs, signal: controller.signal })
+    .then((node) => {
+      if (NodeLoad.controller !== controller) return;
+      const more = NodeLoad.again;
+      Object.assign(NodeLoad, { path: null, controller: null, again: false, failures: 0, failedPath: null, why: '', retryAt: 0, missingSince: null });
+      rememberNode(path, node);
+      if (S.sel === path) { pendingNode = { path, node }; queueRedraw(); if (more) loadNode(); }
+    })
+    .catch((error) => {
+      if (NodeLoad.controller !== controller) return; // superseded by a new selection
+      NodeLoad.path = NodeLoad.controller = null; NodeLoad.again = false;
+      // WHY only an entity missing for a while moves the selection (Zach, 2026-11-04: "no lost selection"): a host restarting, or a slow one, says nothing about it, and
+      // a board's row comes back only when its driver has reported, seconds after the host is up. One that stays missing was unplugged: the Computer, as ever.
+      const missing = error.status === 404 && S.sel === path && S.data && !(S.byPath && S.byPath.has(path));
+      if (missing) {
+        NodeLoad.missingSince = NodeLoad.missingSince === null ? performance.now() : NodeLoad.missingSince;
+        if (performance.now() - NodeLoad.missingSince >= NODE_GONE_MS) {
+          Object.assign(NodeLoad, { failures: 0, failedPath: null, why: '', retryAt: 0, missingSince: null });
+          S.sel = S.data.tree.path; S.node = null; S.drill = { ...NO_DRILL }; replaceNav();
+          return;
+        }
+      } else NodeLoad.missingSince = null;
+      Object.assign(NodeLoad, { failures: failures + 1, failedPath: path, why: String(error.message || error),
+        retryAt: performance.now() + Math.min(NODE_RETRY_MS * 2 ** failures, NODE_RETRY_MAX_MS) });
+      queueRedraw();
+    });
+}
+// The calm line above a page that is older than it looks: how old, why, and Retry. Never a problem colour: nothing is known to be wrong with
+// the entity, only that the host has not said yet.
+function loadNote(node) {
+  const reconnecting = Boolean(S.lastError);
+  const failed = NodeLoad.failedPath === S.sel; // WHY S.sel: an entity not in the tree yet draws the Computer's row, and its note still belongs on the page
+  if (!reconnecting && !failed) return '';
+  const held = nodeCache.get(S.sel);
+  const shown = held ? `Showing what the host said ${ago((performance.now() - held.at) / 1000)} ago.` : 'Showing what the tree last knew.';
+  const text = reconnecting ? `Reconnecting to the host. ${shown}` : `The details of this page have not answered (${esc(NodeLoad.why)}). ${shown}`;
+  return `<div class="banner osonly" role="status" data-load-slow><span>${text}</span>${reconnecting ? '' : '<button class="load-retry" data-load-retry>Retry</button>'}</div>`;
 }
 
 // ----------------------------------------------------------------------------------- back / forward ----
@@ -436,7 +553,7 @@ function cached(url, everyMs = HISTORY_EVERY_MS) {
   entry.used = now;
   if (!entry.loading && now - entry.at >= everyMs) {
     entry.loading = true;
-    fetch(url, { cache: 'no-store' })
+    fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(LOAD_TIMEOUT_MS) })
       .then(async (response) => {
         const body = await response.json().catch(() => ({}));
         if (!response.ok || body.error) throw new Error(body.error || `HTTP ${response.status}`);
@@ -1263,8 +1380,10 @@ const HELPERS = { esc, usb, icon, shape, pill, ago, kv, statusMark, eventRow, ch
 // What a detail layout draws from, for the current selection.
 function detailContext(byPath) {
   const group = !S.sel && S.selKey && S.built && S.built.byKey.has(S.selKey) ? S.built.byKey.get(S.selKey) : null;
-  const node = group ? null : (byPath.get(S.sel) || S.data.tree);
-  const detail = node && S.node && S.node.node.path === node.path ? S.node : null;
+  const node = group ? null : (byPath.get(S.sel) || (nodeCache.get(S.sel) || {}).row || S.data.tree);
+  // WHY the kept answer only here: S.node stays "the host's answer for the selection" (the Utilities menu, the 3D drawer and the runs act on it); a page
+  // already visited draws from what it last said, at once, until that answer lands
+  const detail = node && (S.node && S.node.node.path === node.path ? S.node : (nodeCache.get(node.path) || {}).node || null);
   // the row that stands for exactly this entity (not its owner, when the selection is a folded part)
   const rowKey = node && S.built ? S.built.byEntity.get(node.path) : null;
   const row = rowKey && S.built.byKey.get(rowKey).entity === node.path ? S.built.byKey.get(rowKey) : null;
@@ -1283,7 +1402,7 @@ function detailContext(byPath) {
     },
     banners() {
       if (!node) return '';
-      let html = '';
+      let html = loadNote(node);
       if (node.knock_on_of) {
         const cause = byPath.get(node.knock_on_of);
         html += `<div class="banner knock">↳ <span>Explained by <a class="link" data-go="${esc(node.knock_on_of)}">${esc(cause ? cause.name : node.knock_on_of)}</a> above: counted once, as that cause.</span></div>`;
@@ -2110,11 +2229,16 @@ function renderChip() {
     + '<div class="pop-foot">The tray renders this same model (/api/v1/state → chip) through V2\'s AppIndicator.</div>';
 }
 
+const HOST_LOST_S = 30;
 function renderStatusbar() {
   const since = (performance.now() - S.lastOk) / 1000;
-  const message = S.lastError ? `Host unreachable · last update ${since.toFixed(0)} s ago` : `Last update ${since < 1.5 ? '0' : since.toFixed(0)} s ago`;
+  // WHY calm first (Zach, 2026-11-04: "A server restart is invisible"): sps restarts Preview on every .py that lands, a matter of seconds; the page keeps
+  // its data, and only a host still gone after HOST_LOST_S is a problem worth a colour
+  const lost = S.lastError && since >= HOST_LOST_S;
+  const message = !S.lastError ? `Last update ${since < 1.5 ? '0' : since.toFixed(0)} s ago`
+    : lost ? `Host unreachable · last update ${ago(since)} ago` : `Reconnecting · ${since.toFixed(0)} s ago`; // WHY short: this bar ellipsizes, and the age is the point
   $('lastmsg').textContent = message;
-  $('lastmsg').className = S.lastError ? 'late' : '';
+  $('lastmsg').className = lost ? 'late' : '';
   const renderer = renderers()[S.variant];
   if (renderer) $('variant-switch').title = `Tree proposal ${S.variant} · ${renderer.name}${renderer.description ? ` — ${renderer.description}` : ''}`;
 }
@@ -2196,6 +2320,7 @@ function select(path) {
 document.addEventListener('click', (event) => {
   const t = event.target;
   // View options: its button toggles it, a click anywhere else closes it (and still does what it clicked)
+  if (t.closest('[data-load-retry]')) { loadNode(true); return; }
   if (t.closest('#vo-btn')) { setViewOptions(!S.vo); return; }
   if (S.vo && !t.closest('#view-options')) setViewOptions(false);
   // the entity header's Utilities ▾: its button toggles the menu, a click anywhere else closes it (light dismiss)

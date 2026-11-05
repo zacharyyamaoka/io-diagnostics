@@ -35,7 +35,7 @@
     if (A.started) return;
     A.started = true;
     try {
-      const response = await fetch('/api/v1/arrangements', { cache: 'no-store' });
+      const response = await fetch('/api/v1/arrangements', { cache: 'no-store', signal: AbortSignal.timeout(8000) });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const body = await response.json();
       A.data = body.arrangements || {};
@@ -563,7 +563,7 @@
     if (!force && Date.now() - (DXC.asked.get(path) || 0) < 4000) return;
     DXC.asked.set(path, Date.now());
     try {
-      const response = await fetch(`/api/v1/diagnostics/config?path=${encodeURIComponent(path)}`);
+      const response = await fetch(`/api/v1/diagnostics/config?path=${encodeURIComponent(path)}`, { signal: AbortSignal.timeout(8000) });
       if (response.ok) { DXC.data.set(path, await response.json()); redraw(); }
     } catch (_) { /* the next unfold asks again */ }
   }

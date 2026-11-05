@@ -111,7 +111,7 @@
     entry.used = now;
     if (!entry.loading && now - entry.at > everyMs) {
       entry.loading = true;
-      fetch(url).then((response) => (response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`))))
+      fetch(url, { signal: AbortSignal.timeout(8000) }).then((response) => (response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`))))
         .then((data) => { entry.data = data; entry.failed = false; })
         .catch(() => { entry.failed = true; })
         .finally(() => { entry.loading = false; entry.at = Date.now(); redraw(); });

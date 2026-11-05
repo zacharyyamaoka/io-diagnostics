@@ -535,3 +535,9 @@ table.grid td.mono.xcol { font-size: 11.5px; }
 .tn-chip-x { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 999px; background: transparent; color: var(--io-muted); cursor: pointer; }
 .tn-chip-x:hover, .tn-chip-x:focus-visible { background: var(--io-control-hover); color: var(--io-text-strong); }
 .tn-chip-x svg { width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+
+/* ---- a page older than it looks (Zach, 2026-11-04: "Pages are just there"): quiet, a button that says Retry, never a problem colour ---- */
+.banner[data-load-slow] { align-items: center; }
+.banner .load-retry { margin-left: auto; flex: none; padding: 1px 10px; border: 1px solid var(--io-border); border-radius: var(--io-radius-sm); background: var(--io-surface); color: var(--io-text); font: inherit; cursor: pointer; }
+.banner .load-retry:hover { background: var(--io-control); }
+.d6-reading { margin-top: 10px; }

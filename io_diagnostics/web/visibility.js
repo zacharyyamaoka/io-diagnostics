@@ -151,7 +151,7 @@
       for (const [id, choice] of Object.entries(saved)) if (CHOICES.includes(choice)) state.choices[id] = choice;
     } catch (error) { /* nothing stored */ }
     if (typeof root.fetch !== 'function') return Promise.resolve();
-    return root.fetch('/api/v1/settings').then((response) => response.json()).then((settings) => {
+    return root.fetch('/api/v1/settings', { signal: AbortSignal.timeout(8000) }).then((response) => response.json()).then((settings) => {
       if (settings && settings.visibility && typeof settings.visibility === 'object') {
         // the host's choices win; what only the browser has is offered to the host once
         const fromHost = settings.visibility;

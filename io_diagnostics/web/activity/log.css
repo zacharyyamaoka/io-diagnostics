@@ -136,3 +136,7 @@
 .al-member .t { font-family: var(--io-font-mono); font-size: 11px; color: var(--io-muted); margin-right: 4px; }
 .al-cmd { display: flex; gap: 8px; align-items: flex-start; }
 .al-cmd code { flex: 1; font-family: var(--io-font-mono); font-size: 11.5px; overflow-wrap: anywhere; background: var(--io-field); padding: 4px 6px; border-radius: var(--io-radius-sm); }
+
+/* the log kept its rows but could not refresh them: said once, quietly, above the footer */
+.al-late { padding: 4px 8px; font-size: 12px; display: flex; gap: 8px; align-items: center; }
+.al-late[hidden] { display: none; }

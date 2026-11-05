@@ -448,7 +448,7 @@
     st.menu = { key, row, entity: row.entity, nav: typeof st.opts.onRowNav === 'function' ? st.opts.onRowNav : null, info: row.entity ? null : {}, confirm: null, result: null, busy: false, x: rect.right, y: rect.bottom };
     paintMenu(st);
     if (!row.entity) return;
-    fetch(`/api/v1/node?path=${encodeURIComponent(row.entity)}`).then((response) => response.json()).then((info) => {
+    fetch(`/api/v1/node?path=${encodeURIComponent(row.entity)}`, { signal: AbortSignal.timeout(8000) }).then((response) => response.json()).then((info) => {
       if (st.menu && st.menu.key === key) { st.menu.info = info; paintMenu(st); }
     }).catch(() => { if (st.menu && st.menu.key === key) { st.menu.info = { error: true }; paintMenu(st); } });
   }

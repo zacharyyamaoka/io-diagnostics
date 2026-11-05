@@ -179,7 +179,7 @@
     if (entry.pending || (entry.at && now - entry.at < DETAIL_TTL_MS) || (entry.failedAt && now - entry.failedAt < DETAIL_RETRY_MS)) return;
     entry.pending = true;
     DETAIL.set(path, entry);
-    fetch(`/api/v1/node?path=${encodeURIComponent(path)}`)
+    fetch(`/api/v1/node?path=${encodeURIComponent(path)}`, { signal: AbortSignal.timeout(8000) })
       .then((response) => (response.ok ? response.json() : Promise.reject(new Error(String(response.status)))))
       .then((data) => {
         DETAIL.set(path, { at: Date.now(), data: digestDetail(data) });

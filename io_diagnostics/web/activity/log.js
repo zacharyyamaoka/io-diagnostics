@@ -26,6 +26,11 @@
   const KNOWN_MAX = 6000;    // rows remembered so a paused list can keep one the host has since folded away
   const BREADCRUMB_S = 30;   // a fault's detail shows what its entity logged this long before
   const PAUSE_PX = 8;        // scrolled this far from the top = looking away
+  // WHY a bound, longer each time (Zach, 2026-11-04: "surely maybe there is like a timeout on these things?"): a fetch has none, so "Loading the log…"
+  // stayed for as long as the tab did; and a fixed bound would abort a host that needs 9 s every time.
+  const LOAD_BOUND_MS = 8000;
+  const LOAD_BOUND_MAX_MS = 30000;
+  const LOGS_KEPT = 24;      // the entity logs remembered, so coming back to one shows its rows at once
   const COLUMNS = [['n', 'No', 46], ['t', 'Time', 72], ['sev', 'Severity', 84], ['ent', 'Entity', 150], ['code', 'Code', 170], ['msg', 'Message', 0], ['src', 'Source', 150]];
   const RESIZABLE = ['ent', 'code', 'src'];
   const FLOOR_LABEL = { debug: 'Debug+', info: 'Info+', warn: 'Warn+', error: 'Error+' };
@@ -36,6 +41,14 @@
   const shortSource = (source) => String(source || '').replace(/\s*[(·].*$/, '').replace(/^io_facts\./, '').replace(/^io_diagnostics\./, '');
 
   const registry = { instances: new Set(), runs: null, fallback: null, main: null, visible: false };
+  // scope -> what the log last answered for it (Zach, 2026-11-04: "for the log shouldn't it just be there?"). A Map keeps insertion order: the oldest go first.
+  const remembered = new Map();
+  const scopeKey = (scope) => (scope && scope.path ? `${scope.path}\u0000${scope.mode}` : '');
+  function remember(key, answer) {
+    remembered.delete(key);
+    remembered.set(key, answer);
+    for (const old of [...remembered.keys()].slice(0, Math.max(0, remembered.size - LOGS_KEPT))) remembered.delete(old);
+  }
   // The output of runs under their rows: the provider a run view attached (runs/r4.js), else one on the runs runtime (runs/core.js)
   // that every page has, so an entity's own log shows its runs' output whichever run view is chosen.
   const effective = () => registry.runs || (window.IORuns ? (registry.fallback = registry.fallback || runsProvider(window.IORuns)) : null);
@@ -83,7 +96,7 @@
       floor: saved('floor', opts.floor || 'info'), preset: 'all', search: '', exclude: saved('exclude', []), highlight: saved('highlight', []),
       onlyHighlighted: false, raw: opts.raw === undefined ? null : opts.raw, scope: opts.scope || null, range: null,
       expanded: null, limit: SHOW_STEP, paused: false, frozen: null, newCount: 0,
-      rows: [], rawRows: [], clock: null, log: null, error: '', loaded: false, optsOpen: false,
+      rows: [], rawRows: [], clock: null, log: null, error: '', loaded: false, loadedAt: 0, failures: 0, optsOpen: false,
       cols: saved('cols', {}), detailW: saved('detail-w', 380), stripH: saved('strip-h', 44),
     };
     const known = new Map();      // id -> the last row object seen (a paused list keeps rows that the host folded away)
@@ -99,10 +112,24 @@
     // ------------------------------------------------------------------------------------------------ data ----
     const rawOn = () => (s.raw === null ? Boolean(s.scope) : s.raw);
     async function getJson(url) {
-      const response = await fetch(url, { cache: 'no-store' });
-      const data = await response.json();
-      if (data.error) throw new Error(data.error);
-      return data;
+      const bound = Math.min(LOAD_BOUND_MS * 2 ** s.failures, LOAD_BOUND_MAX_MS);
+      try {
+        const response = await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(bound) });
+        const data = await response.json();
+        if (data.error) throw new Error(data.error);
+        return data;
+      } catch (error) {
+        if (error && error.name === 'TimeoutError') throw new Error(`no answer in ${Math.round(bound / 1000)} s`);
+        throw error instanceof TypeError ? new Error('the host is not answering') : error;
+      }
+    }
+    // what is held for this scope: a log already read is there at once, and the load below replaces it
+    function restore() {
+      const held = remembered.get(scopeKey(s.scope));
+      Object.assign(s, held ? { ...held, loaded: true } : { rows: [], rawRows: [], clock: s.clock, log: null, loaded: false, loadedAt: 0 });
+      s.error = ''; s.failures = 0;
+      known.clear();
+      for (const row of [...s.rows, ...s.rawRows]) known.set(row.id, row);
     }
     const scopeQuery = (query) => { if (s.scope && s.scope.path) { query.set('path', s.scope.path); query.set('scope', s.scope.mode); } return query; };
     let inflight = null;
@@ -110,20 +137,28 @@
       if (document.hidden) return Promise.resolve();
       if (inflight) { again = true; return inflight; }
       inflight = (async () => {
+        const asked = scopeKey(s.scope);
         try {
           const activity = await getJson(`/api/v1/activity?${scopeQuery(new URLSearchParams({ fold: '1', limit: String(LIMIT), severity: 'debug' }))}`);
           const raw = rawOn() ? await getJson(`/api/v1/activity?${scopeQuery(new URLSearchParams({ fold: '1', channel: 'raw', limit: String(RAW_LIMIT), severity: 'debug' }))}`) : null;
+          // WHY: the page moved to another entity while this was on its way: these are that one's rows, and they must not be drawn or kept as this one's
+          if (scopeKey(s.scope) !== asked) { again = true; return; }
           s.rows = activity.events;
           s.rawRows = raw ? raw.events : [];
           s.clock = activity.clock;
           s.log = activity.log;
           s.error = '';
+          s.failures = 0;
           s.loaded = true;
+          s.loadedAt = performance.now();
+          if (s.scope) remember(scopeKey(s.scope), { rows: s.rows, rawRows: s.rawRows, clock: s.clock, log: s.log, loadedAt: s.loadedAt });
           for (const row of [...s.rows, ...s.rawRows]) known.set(row.id, row);
           // a long-open page must not keep every row it ever saw: the oldest go first (a Map keeps insertion order)
           for (const id of [...known.keys()].slice(0, Math.max(0, known.size - KNOWN_MAX))) known.delete(id);
         } catch (error) {
+          // WHY the rows stay: what the log said a moment ago is still what happened, and the line above the footer says it could not refresh
           s.error = String(error.message || error);
+          s.failures += 1;
         }
         draw();
       })().finally(() => {
@@ -263,8 +298,10 @@
       return html;
     }
     function emptyHtml(c, total) {
-      if (!s.loaded) return '<div class="al-empty muted">Loading the log…</div>';
-      if (s.error) return `<div class="al-empty err">${esc(s.error)}</div>`;
+      if (!s.loaded) return s.error
+        ? `<div class="al-empty muted">The log has not answered (${esc(s.error)}). <button class="al-act" data-al-retry>Retry</button></div>`
+        : '<div class="al-empty muted">Loading the log…</div>';
+      if (s.error) return `<div class="al-empty muted">The log could not refresh (${esc(s.error)}). <button class="al-act" data-al-retry>Retry</button></div>`;
       if (!total) return '<div class="al-empty muted">Nothing has been logged yet.</div>';
       const h = c.result.hidden;
       const why = [];
@@ -301,7 +338,8 @@
     // the volume strip: every row that passes scope, search and filters except the floor, the view and the time range
     function stripHtml(c) {
       const rows = C.applyFilters(c.rows, { ...filterState(), floor: 'debug', preset: 'all', range: null }).shown;
-      if (!rows.length) return '<div class="al-strip-empty muted">no events yet</div>';
+      // WHY the condition (Zach's Activity screenshot, 2026-11-04: "no events yet" over a log of 26,867): it is true only once the log has answered
+      if (!rows.length) return s.loaded ? '<div class="al-strip-empty muted">no events yet</div>' : '';
       let t0 = Infinity;
       let t1 = -Infinity;
       for (const row of rows) { t0 = Math.min(t0, C.whenOf(row)); t1 = Math.max(t1, C.whenOf(row)); }
@@ -425,7 +463,15 @@
     }
     function syncToolbar(c) {
       const q = (selector) => el.querySelector(selector);
-      q('.al-count').textContent = s.loaded ? `· ${c.rows.length} rows${s.log && s.log.matching > s.rows.length ? ` of ${s.log.matching}` : ''} · newest first · ${summaryText(c)}` : '· loading…';
+      q('.al-count').textContent = s.loaded ? `· ${c.rows.length} rows${s.log && s.log.matching > s.rows.length ? ` of ${s.log.matching}` : ''} · newest first · ${summaryText(c)}` : s.error ? '· not answering' : '· loading…';
+      const late = q('.al-late');
+      const lateNow = s.loaded && s.error && c.rows.length;
+      late.hidden = !lateNow;
+      if (lateNow) {
+        const seconds = Math.round((performance.now() - s.loadedAt) / 1000);
+        const words = `Could not refresh (${s.error}): these rows are ${seconds < 90 ? `${seconds} s` : `${Math.round(seconds / 60)} min`} old.`;
+        if (q('.al-late-t').textContent !== words) q('.al-late-t').textContent = words;
+      }
       el.querySelectorAll('[data-al-floor]').forEach((b) => { const on = b.dataset.alFloor === s.floor; b.classList.toggle('on', on); b.setAttribute('aria-checked', String(on)); });
       el.querySelectorAll('[data-al-preset]').forEach((b) => { const on = b.dataset.alPreset === s.preset; b.classList.toggle('on', on); b.setAttribute('aria-checked', String(on)); });
       const raw = q('[data-al-raw]');
@@ -471,10 +517,12 @@
         + (opts.compact ? '' : `<div class="al-strip" aria-label="Volume over time"></div><div class="al-hsash" role="separator" aria-orientation="horizontal" aria-label="Resize the volume strip" tabindex="0" title="Drag to resize · double-click to reset"></div>`)
         + `<div class="al-body"><div class="al-list" role="table" aria-label="Activity log" tabindex="0"></div>`
         + (opts.compact ? '' : `<div class="al-sash" role="separator" aria-orientation="vertical" aria-label="Resize the detail" tabindex="0" title="Drag to resize · double-click to reset"></div><aside class="al-detail" aria-label="Row detail"></aside>`)
-        + `</div><div class="al-foot muted" role="status"></div></div>`;
+        + `</div><div class="al-late muted" role="status" hidden><span class="al-late-t"></span> <button class="al-act" data-al-retry>Retry</button></div>`
+        + `<div class="al-foot muted" role="status"></div></div>`;
     }
     inst.mount = function mount(target) {
       el = target;
+      if (s.scope && !s.loaded) restore();
       el.innerHTML = skeleton();
       el.hidden = false;
       wire();
@@ -501,7 +549,9 @@
     inst.setScope = (scope) => {
       s.scope = scope && scope.path ? { path: scope.path, name: scope.name || lastSegment(scope.path), mode: scope.mode || 'children' } : null;
       s.raw = opts.raw === undefined ? null : opts.raw;
-      s.rows = []; s.rawRows = []; s.expanded = null; s.paused = false; s.frozen = null; s.range = null;
+      s.expanded = null; s.paused = false; s.frozen = null; s.range = null;
+      // WHY through restore: rows of the last scope were cleared with `loaded` left true, so the page said "Nothing has been logged yet" while it loaded
+      restore();
       if (source) connect();
       load();
       draw();
@@ -547,6 +597,7 @@
         const t = event.target;
         const go = (selector) => t.closest(selector);
         let hit;
+        if (go('[data-al-retry]')) { s.failures = 0; s.error = ''; load(); return draw(); }
         if ((hit = go('[data-al-floor]'))) { s.floor = hit.dataset.alFloor; if (!opts.compact) write('floor', s.floor); refilter(); return draw(); }
         if ((hit = go('[data-al-preset]'))) { s.preset = hit.dataset.alPreset; refilter(); return draw(); }
         if (go('[data-al-raw]')) { s.raw = !rawOn(); lastHtml.list = ''; load(); return draw(); }

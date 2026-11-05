@@ -58,6 +58,7 @@
   const wired = new WeakSet();
   const ER = () => root.IOEntityRows;
   const CONFIG_ACTIONS = new Set(['set_config', 'persist_config', 'reset_config']); // driven by the Configuration tab's edit session
+  const LOAD_BOUND_MS = 8000; // the longest a live poll or a heartbeat is waited for
 
   // ---------------------------------------------------------------------------------- formatting ----
   const num = (v) => (typeof v === 'boolean' ? String(v) : Number.isInteger(v) ? String(v) : String(+Number(v).toPrecision(4)));
@@ -118,7 +119,8 @@
   async function heartbeat(path) {
     const generation = Live.generation;
     try {
-      const response = await fetch('/api/v1/watch', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-IO-Diagnostics': 'ui' }, body: JSON.stringify({ path }) });
+      // WHY a bound: a heartbeat that never answers must not hold one of the browser's six connections; the next beat is 3 s away
+      const response = await fetch('/api/v1/watch', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-IO-Diagnostics': 'ui' }, body: JSON.stringify({ path }), signal: AbortSignal.timeout(LOAD_BOUND_MS) });
       const body = await response.json();
       if (Live.path === path && Live.generation === generation && body.watch) Live.watch = body.watch;
     } catch (_) { /* the poll shows the host is unreachable */ }
@@ -149,7 +151,8 @@
       for (const row of group.rows) {
         const key = `${group.name}\u0001${row.key}`;
         const ring = Live.rings.get(key) || [];
-        for (const point of row.points) ring.push(point);
+        // WHY only what is newer: a reconnect asks from the start again, and the rings it held already have those points
+        for (const point of row.points) if (!ring.length || point[0] > ring[ring.length - 1][0]) ring.push(point);
         while (ring.length > RING_MAX || (ring.length && ring[0][0] < data.now - SPARK_WINDOW_S * 2)) ring.shift();
         Live.rings.set(key, ring);
       }
@@ -161,10 +164,13 @@
     Live.inflight = true;
     const generation = Live.generation;
     const abort = Live.abort = new AbortController();
+    const bound = setTimeout(() => abort.abort(), LOAD_BOUND_MS); // WHY: Live.inflight is held until this ends, so a hung poll would be the last one
     try {
       const response = await fetch(`/api/v1/values?path=${enc(path)}&since=${Live.cursor}`, { cache: 'no-store', signal: abort.signal });
       if (response.status === 404) {
-        if (Live.path === path && Live.generation === generation) { Live.none = true; Live.loaded = true; }
+        // WHY not "no state of its own" when it had some: the host does not have it right now (restarted, its driver has not reported), and the rows stay until it does
+        if (Live.path === path && Live.generation === generation && Live.groups.length) Live.error = 'not here right now';
+        else if (Live.path === path && Live.generation === generation) { Live.none = true; Live.loaded = true; }
       } else {
         const data = await response.json();
         if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`);
@@ -177,8 +183,12 @@
         }
       }
     } catch (error) {
-      if (Live.path === path && Live.generation === generation) Live.error = String(error.message || error);
+      // WHY a sentence and not the abort's own words: "signal is aborted without reason" says nothing to a person
+      if (Live.path === path && Live.generation === generation) {
+        Live.error = abort.signal.aborted ? `no answer in ${LOAD_BOUND_MS / 1000} s` : error instanceof TypeError ? 'the host is not answering' : String(error.message || error);
+      }
     } finally {
+      clearTimeout(bound);
       if (Live.generation === generation) Live.inflight = false;
     }
     if (Live.path === path && Live.generation === generation && last) last.ctx.redraw();
@@ -186,7 +196,10 @@
 
   function startLive(path, supported, framePeriod = 0) {
     stopLive();
-    Object.assign(Live, { path, cursor: 0, rings: new Map(), groups: [], streams: [], watch: null, heard: null, loaded: false, none: false, error: '', rendered: performance.now() });
+    const held = Live.held && Live.held.path === path ? Live.held : null;
+    Live.held = null;
+    Object.assign(Live, { path, cursor: 0, rings: held ? held.rings : new Map(), groups: held ? held.groups : [], streams: held ? held.streams : [], watch: null, heard: null,
+      loaded: false, none: false, error: '', rendered: performance.now() });
     if (supported) {
       heartbeat(path);
       Live.beat = setInterval(() => { if (!liveAlive(path)) { stopLive(); return; } heartbeat(path); }, BEAT_MS);
@@ -506,7 +519,11 @@
     const note = watchNote(detail);
     const streams = Live.streams && Live.streams.length ? Live.streams : (detail.streams || []);
     const head = `<div class="d6-note ${note.cls}" role="status" data-d6-watch="${h.esc(!Live.loaded && (Live.watch || detail.watch || {}).supported ? 'starting' : (Live.watch || detail.watch || {}).state || '')}">${note.cls === 'paused' ? '⏸ ' : note.cls === 'live' ? '<span class="d6-dot"></span>' : ''}${h.esc(note.text)}</div>`;
-    if (!Live.loaded) return `${head}<div class="muted">loading…</div>`;
+    if (!Live.loaded && !Live.groups.length) {
+      return `${head}${Live.error
+        ? `<div class="muted">The live values have not answered (${h.esc(Live.error)}). They are asked for again by themselves. <button class="al-act" data-d6-repoll>Retry</button></div>`
+        : '<div class="muted">Reading its live state from the host…</div>'}`;
+    }
     if (Live.none && !streams.length) return `${head}<div class="muted">This entity reports no state of its own.</div>`;
     const images = streams.filter((s) => s.kind === 'image');
     const open = !U.folded.has('images');
@@ -546,7 +563,9 @@
   const LogView = { inst: null, el: null, path: null };
   function logPanel(node) {
     if (!window.IOActivityLog) return '<div class="muted">The Activity log did not load.</div>';
-    const keep = LogView.inst && LogView.el && LogView.el.isConnected && LogView.path === node.path ? LogView.el.innerHTML : '';
+    // WHY whichever entity it last showed: the page goes straight from one entity to the next now, so morph keeps this element and only setScope (in
+    // bindLog, this same tick) changes its rows; an empty string here took the mounted log's own skeleton out from under it
+    const keep = LogView.inst && LogView.el && LogView.el.isConnected ? LogView.el.innerHTML : '';
     return `<div class="d6-log" data-d6-log>${keep}</div>`;
   }
   function bindLog(container, node, active) {
@@ -905,6 +924,14 @@
     }
   }
 
+  // A page is never blank (Zach, 2026-11-04: "Pages are just there"): until its /node answers, the header, the tabs and the panel are drawn from the
+  // tree's row, which the page already has, and say what is still on the way. The Log needs no /node at all.
+  function rowPanel(active, node, ctx) {
+    if (active === 'log') return logPanel(node);
+    const what = { diagnostics: 'its checks', state: 'its live state', config: 'its configuration', utilities: 'its utilities' }[active] || 'this tab';
+    return `<div class="d6-rowonly">${ctx.parts.status()}</div><div class="muted d6-reading">Reading ${what} from the host…</div>`;
+  }
+
   function afterDraw(container) {
     if (!U.flash) return;
     if (Date.now() > U.flash.until) { U.flash = null; return; }
@@ -929,7 +956,13 @@
     const node = ctx.node;
     if (!detail) {
       stopLive();
-      ctx.draw(`${p.head()}${p.banners()}<div class="d-body" data-d6><div class="muted">loading…</div></div>`);
+      if (Heard.path !== node.path) { if (typeof node.age_s === 'number') setHeard(node.age_s); else Heard.base = null; }
+      const tabs = tabsFor(null);
+      const active = activeTab(ctx, node, tabs);
+      const banners = p.banners();
+      ctx.draw(`<div class="d6-top">${headerHtml(node, null, ctx, ctx.row)}${banners ? `<div class="d6-banners">${banners}</div>` : ''}${tabBar(ctx, node, null, tabs, active)}</div>`
+        + `<div class="d6-panel" role="tabpanel" id="d6-panel" aria-labelledby="d6-tab-${h.esc(active)}" data-d6 data-d6-panel="${h.esc(active)}">${rowPanel(active, node, ctx)}</div>`);
+      bindLog(container, node, active);
       return;
     }
     if (Heard.source !== detail) { // a new answer from the host: its age is the freshest we know, unless the live poll has a newer one
@@ -1006,7 +1039,7 @@
       const er = ER();
       if (er && er.dx && container.querySelector('[data-d6-panel="diagnostics"]') && er.dx.click(target, ctx)) return;
       if (er && er.onClick(target, { kind: node.kind || 'device', redraw: ctx.redraw })) return;
-      if (er && container.querySelector('[data-d6-panel="config"]') && er.config.click(target, ctx, detail)) return;
+      if (er && detail && container.querySelector('[data-d6-panel="config"]') && er.config.click(target, ctx, detail)) return;
       const badge = target.closest('.d6-log .al-badge'); // a fault's badge in the log: that fault, in Diagnostics
       if (badge) {
         const code = faultCodeOf(`${badge.title} ${badge.textContent}`);
@@ -1015,6 +1048,7 @@
       }
       const tab = target.closest('[data-d6-tab]');
       if (tab) { chooseTab(ctx, node, tabsFor(detail), tab.dataset.d6Tab); return; }
+      if (target.closest('[data-d6-repoll]')) { Live.error = ''; pollOnce(node.path); ctx.redraw(); return; }
       if (target.closest('[data-d6-lb]')) { U.lightbox = null; ctx.redraw(); return; }
       const fixToggle = target.closest('[data-d6-fix]');
       if (fixToggle) { const key = fixToggle.dataset.d6Fix; if (U.fixes.has(key)) U.fixes.delete(key); else U.fixes.add(key); ctx.redraw(); return; }
@@ -1055,7 +1089,7 @@
       const er = ER();
       if (er && er.dx && container.querySelector('[data-d6-panel="diagnostics"]') && er.dx.change(target, ctx)) return;
       if (er && er.onChange(target, { kind: ctx.node.kind || 'device', redraw: ctx.redraw })) return;
-      if (er && container.querySelector('[data-d6-panel="config"]') && er.config.change(target, ctx, detail)) return;
+      if (er && detail && container.querySelector('[data-d6-panel="config"]') && er.config.change(target, ctx, detail)) return;
       const stream = target.closest('[data-d6-stream]');
       if (stream) {
         const key = `${ctx.node.path}\u0001${stream.dataset.d6Stream}`;
@@ -1173,7 +1207,12 @@
       merge(data);
       if (last) last.ctx.redraw();
     },
-    resetLive() { stopLive(); },
+    resetLive() {
+      // WHY held: this is a reconnect, and a board's rows stay on the page until the first answer replaces them (Zach, 2026-11-04: "A server restart is invisible"); on a
+      // camera that answer is up to a second away (startLive), and the tab was empty until then
+      Live.held = Live.loaded ? { path: Live.path, groups: Live.groups, streams: Live.streams, rings: Live.rings } : null;
+      stopLive();
+    },
     pause() { stopLive(); if (LogView.inst) LogView.inst.stop(); },
     // for tests and the next lane
     internals: { Live, U, Heard, tabsFor },

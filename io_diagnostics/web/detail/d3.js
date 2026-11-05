@@ -38,7 +38,7 @@
       entry = { data: entry ? entry.data : undefined, error: null, at: now, loading: true };
       D3.cache.set(url, entry);
       const done = entry;
-      fetch(url).then((response) => response.json().then((body) => {
+      fetch(url, { signal: AbortSignal.timeout(8000) }).then((response) => response.json().then((body) => {
         if (!response.ok || body.error) throw new Error(body.error || `HTTP ${response.status}`);
         return body;
       })).then((body) => { done.data = body; done.error = null; })

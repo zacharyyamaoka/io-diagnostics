@@ -41,7 +41,7 @@
 
   // One run with its result (GET /api/v1/runs/<id>); the store learns it too.
   async function detail(id) {
-    const response = await fetch(`/api/v1/runs/${encodeURIComponent(id)}`, { cache: 'no-store' });
+    const response = await fetch(`/api/v1/runs/${encodeURIComponent(id)}`, { cache: 'no-store', signal: AbortSignal.timeout(8000) });
     const run = await response.json();
     if (!response.ok || run.error) throw new Error(run.error || `HTTP ${response.status}`);
     details.set(id, run);

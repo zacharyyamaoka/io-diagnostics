@@ -129,7 +129,7 @@
     if (known && (known.loading || now - known.at < POLL_MS)) return known;
     const entry = { ...(known || {}), loading: true, at: now };
     map.set(path, entry);
-    fetch(URLS[kind](path)).then((response) => (response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`))))
+    fetch(URLS[kind](path), { signal: AbortSignal.timeout(8000) }).then((response) => (response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`))))
       .then((data) => map.set(path, { at: Date.now(), loading: false, data, error: null }))
       .catch((error) => map.set(path, { at: Date.now(), loading: false, data: (known && known.data) || null, error: String(error.message || error) }));
     return entry;
