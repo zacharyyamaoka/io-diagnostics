@@ -52,6 +52,9 @@ nothing recorded as a run). The run's process is the plugin's own `act` command;
   A page treats `active` as the one question "is it still going"; an unknown future `state` counts as ended unless
   `active` is true. `done` says the process exited 0, not that the action succeeded: the plugin's records say that
   (`result` below), exactly as for today's result line.
+
+  A run's end is one moment for a client (2026-11-04, docs/peps/0003): `state`, `active`, `exit_code`, `result` and the stream's `end` change together, once `RunEnded` is in the next read
+  of `/activity`. Until then a client reads the run as it was, for as long as that takes to publish, and a write to it answers `NotRunning`.
 - `exit_code`: the process's exit status; negative = killed by that signal (`-2` SIGINT, `-15` SIGTERM, `-9` SIGKILL);
   `null` while active or when it never started.
 - `interactive`: this run was started from the page in THIS host process (a redeemed dry-run token) and is still

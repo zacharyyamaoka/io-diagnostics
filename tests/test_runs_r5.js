@@ -209,7 +209,8 @@ async function main() {
     await page.screenshot({ path: `${SHOTS}/r5-reloaded.png` });
     await typeInto(page, third, 'y');
     await H.waitEnded(page, third);
-    check('reload: the answer typed after the reload finished the run', (await H.runState(page, third)).state === 'done', '');
+    const answered = await H.runState(page, third);
+    check('reload: the answer typed after the reload finished the run', answered.state === 'done', answered);
 
     // ---- the top edge
     await page.dblclick('.r5-sash');

@@ -377,7 +377,9 @@ async function main() {
       && busy.color === busy.muted && !busy.sheet && !busy.modal && busy.stream === 0, busy);
     check('running: its menu row greys out', greyed.disabled && greyed.busy && /^Checking communication… \d+ s$/.test(greyed.line), greyed);
     await page.waitForSelector('.ent-run.ok', { timeout: 20000 });
-    const doneAt = Date.now();
+    // WHY the page's own stamp: this is the moment it finished the run, in the same function that asks /node again. The moment this process noticed the line came up to 450 ms later on a
+    // loaded machine, and the window below is 400 ms, so a page that had done it at once read as one that had not (-417, -448).
+    const doneAt = await page.evaluate(() => [S.util, ...S.runs.values()].find((util) => util && util.doneAt).doneAt);
     await page.unroute('**/api/v1/act');
     await page.waitForTimeout(300);
     const result = await page.evaluate(() => ({ line: document.querySelector('.ent-run.ok').textContent, diagnostic: document.querySelector('.ent-run.ok').hasAttribute('data-diagnostic'),
