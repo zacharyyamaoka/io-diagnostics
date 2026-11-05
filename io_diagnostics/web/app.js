@@ -1692,6 +1692,9 @@ function startUtility(name) {
     });
     return;
   }
+  // WHY asking before the first draw: drawn first, the Run page offered Run with no token yet, nothing drew again until the answer, and a press fell on `util.asking` in confirmRun and went
+  // nowhere, without a word. A press on Run must never go nowhere.
+  util.asking = name !== 'set_id';
   render();
   if (name !== 'set_id') dryRun(util).then(() => { if (S.util === util) render(); }); // set_id's token names its new id
 }

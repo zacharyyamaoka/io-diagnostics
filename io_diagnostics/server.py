@@ -234,6 +234,7 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(200, body, TYPES.get(path.suffix, "application/octet-stream"))
 
     def do_POST(self):  # noqa: N802 - http.server's name
+        self.changed_nothing = False  # per request: a connection is kept alive across them
         endpoint = urlparse(self.path).path
         if release_channels.is_sps_path(endpoint):
             return self._sps("POST")
@@ -789,6 +790,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"refused": "BadRequest", "error": "path and action are strings; node and new_id are integers or null"}, 400)
         batch = action.startswith(BATCH_PREFIX)
         if body.get("dry_run") is True:
+            self.changed_nothing = True  # WHY: a Run page's Run waits for this answer, and there is nothing here for a next read to show
             result = self.host.act(path, action, node=node, dry_run=True, human=False, new_id=new_id)
             # a batch's plugin tokens (one per board) stay in the gate with the page's one token; the page never sees them
             tokens = result.pop("plugin_tokens", None)
@@ -850,7 +852,7 @@ class Handler(BaseHTTPRequestHandler):
         self._send(code, json.dumps(payload, default=str, ensure_ascii=False).encode(), "application/json; charset=utf-8", extra)
 
     def _send(self, code: int, body: bytes, content_type: str, extra: dict | None = None):
-        if self.command == "POST" and urlparse(self.path).path in SHOWN_WRITES:
+        if self.command == "POST" and urlparse(self.path).path in SHOWN_WRITES and not self.changed_nothing:
             self.host.after_write()
         self.send_response(code)
         self.send_header("Content-Type", content_type)
