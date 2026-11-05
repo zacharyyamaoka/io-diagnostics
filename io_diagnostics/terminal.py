@@ -311,7 +311,8 @@ class Run:
                    "title": self.spec.title, "label": self.spec.label, "danger": self.spec.danger, "node": self.spec.node,
                    "new_id": self.spec.new_id, "argv": redact(self.spec.argv), "started": self.started,
                    "started_iso": iso(self.started), "ended": self.ended, "ended_iso": iso(self.ended),
-                   "elapsed_s": round(self.elapsed(), 3), "state": self.state, "active": self.active,
+                   # WHY finished too: a run is over once its ending is on record, so a client told it is over finds RunEnded in the next read (Host._run_ended publishes it)
+                   "elapsed_s": round(self.elapsed(), 3), "state": self.state, "active": self.active or not self.finished.is_set(),
                    "stopping": self.stopping, "exit_code": self.exit_code,
                    "interactive": bool(self.interactive_start and self.active and not self.from_disk),
                    "cols": self.cols, "rows": self.rows, "output_bytes": self.end_offset, "dropped_bytes": self.dropped,

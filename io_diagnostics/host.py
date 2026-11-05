@@ -11,6 +11,7 @@ import collections
 import contextlib
 import dataclasses
 import datetime as dt
+import itertools
 import json
 import os
 import re
@@ -45,6 +46,7 @@ from io_diagnostics import tree
 from io_diagnostics.faults import Faults
 from io_diagnostics import terminal as terminal_module
 from io_diagnostics.plugins import load_plugins, match_devices, source_stamp
+from io_facts import open_files
 from io_diagnostics.runner import (RUNNER_SOURCE, RUNNING, Follower, Gates, Job, RunOutcome, Scheduler, Watcher, absolute,
                                    _outcome, _records, act_argv, describe, follow_period, follow_status, host_status, plugin_env, rebase,
                                    relative, run_act, run_check, run_plugin)
@@ -76,6 +78,7 @@ GATE_CACHE_S = 2.0
 PERSON_CHECKS = frozenset({"joint_free", "joint_clear", "joints_clear", "target_in_view"})
 BLOCK_WHEN_UNKNOWN = {"config_recorded": "no recorded configuration for this board"}
 OS_GATES = frozenset({"port_free", "bus_lock_free", "camera_free"})
+GATE_READING = "being read"  # a gate nobody has an answer to yet: a page asked before the first pass over /proc came back
 PRECONDITION_VALUE = "precondition."  # a driver's own answer, a status value precondition.<check> = "pass: ..." | "fail: ..."
 ID_SHARED_CODES = frozenset({"IdCollision", "PossibleIdCollision", "SourceIdShared"})
 # docs/state-config-v1.md section 4: a page's heartbeat keeps a plugin's ``watch`` running; it stops this long after the last one
@@ -90,6 +93,20 @@ FRAME_FPS_WINDOW_S = 3.0
 RECENT = 6
 FOLD_EVENTS = 8000  # the newest events the Activity log folds (the store may hold 50,000; a row needs only its neighbours)
 RUNS_IN_STATE = 30  # the newest runs /api/v1/state carries (docs/runs-v1.md)
+NODE_EVENTS = 20  # the newest events of an entity /api/v1/node carries
+# The published view (Host.read_view). WHY a bounded share of one core, and not a period: under a load of 60 a build takes ten times as long, so it runs a
+# tenth as often and the host stays answerable; on a quiet machine a change reaches a read in a quarter of a second.
+VIEW_GAP_S = 0.25  # at least this long between two builds
+VIEW_REST = 4.0  # ... and this many times what the last build took
+VIEW_MAX_AGE_S = 2.0  # nothing changed: a build anyway, because what goes stale goes stale with time alone
+VIEW_QUIET_S = 10.0  # nobody has read for this long: only that build, which keeps the event log (Host._keep_log's reason)
+VIEW_WAIT_S = 2.0  # how long a stream waits for the view of the change that woke it
+FIRST_VIEW_WAIT_S = 30.0  # a read that came before the host's first view
+HISTORY_FILE = "history.json"
+HISTORY_SAVE_S = 120.0  # how much of the history a host killed outright can lose; a stop saves it all. WHY not less: it is megabytes (Preview's Computer alone: 1.2 MB in 7 min)
+DESCRIBES_FILE = "describes.json"
+STOP_BOUND_S = 4.0  # a stop that takes longer is cut short: the runtime's SIGKILL comes at 5 s, and a restart should not take that long
+DRIVERS_WAIT_S = 60.0  # the longest ``serve`` waits to print its line; describe is bounded by 30 s a plugin, in parallel
 
 
 # ----- clocks -------------------------------------------------------------------------------------------------
@@ -133,6 +150,8 @@ class LiveOs:
     """This machine, passively: sysfs / by-id / io_facts sources, the kernel log, /proc for holders and locks."""
 
     mode = "live"
+    _files: open_files.OpenFiles | None = None  # the /proc pass every gate answers from; made when a gate is first asked
+    _holders = None  # a test's own (port, camera) holder functions, each with a ``.function``, in place of a pass
 
     def __init__(self, skeleton_ttl_s: float = 2.0):
         from io_facts import udev
@@ -143,7 +162,6 @@ class LiveOs:
         self._skeleton_ttl_s = skeleton_ttl_s
         self._skeleton_at = -1e18
         self._skeleton: tuple[list[dict], list[dict]] = ([], [])
-        self._holders = None  # (port_holders Imported, camera_holders Imported), imported once, lazily
         self._gate_cache: dict[tuple[str, str], tuple[float, tuple[bool | None, str]]] = {}
 
     def invalidate(self) -> None:
@@ -161,21 +179,87 @@ class LiveOs:
 
     def close(self) -> None:
         self.kernel_log.close()
+        if self._files is not None:
+            self._files.close()
+
+    def _open_files(self) -> open_files.OpenFiles:
+        if self._files is None:
+            self._files = open_files.OpenFiles(self._reread_gates)
+        return self._files
+
+    def use_scan(self, source) -> None:
+        """Where a pass over /proc comes from (a test's fake). Otherwise: ``open_files.scan`` in a process of its own."""
+
+        self._open_files().source = source
 
     def gate(self, device: dict | None, check: str) -> tuple[bool | None, str]:
-        """Passive precondition checks: who holds the port / camera, who holds the rack bus lock. Never takes it."""
+        """Passive precondition checks: who holds the port / camera, who holds the rack bus lock. Never takes it.
+
+        What a watch or a configuration write decides on, so it keeps its promise: an answer no older than ``GATE_CACHE_S``, waiting for a pass if it
+        must. A page reads ``peek``, which never waits."""
 
         key = (str((device or {}).get("id")), check)
+        self._asked(key, device, check)
         cached = self._gate_cache.get(key)
         if cached and time.monotonic() - cached[0] < GATE_CACHE_S:
             return cached[1]
+        if check != "bus_lock_free":
+            self._open_files().fresh(GATE_CACHE_S)
         result = self._gate(device or {}, check)
         self._gate_cache[key] = (time.monotonic(), result)
         return result
 
-    def _gate(self, device: dict, check: str) -> tuple[bool | None, str]:
-        from io_facts import gate, lock, reuse
+    def peek(self, device: dict | None, check: str) -> tuple[bool | None, str]:
+        """The same answer for a page: the last one, at once, and the next pass reads it again. WHY it never waits (measured 2026-11-04): an adapter's
+        /api/v1/node took 22 s, five actions each waiting for ``port_free``. A gate never read says so (``GATE_READING``), and the driver still checks
+        on the bus before it sends anything."""
 
+        key = (str((device or {}).get("id")), check)
+        self._asked(key, device, check, strict=False)
+        cached = self._gate_cache.get(key)
+        if cached:
+            return cached[1]
+        if check != "bus_lock_free" and self._open_files().latest(open_files.ASKED_S) is None:
+            return None, self._reading()
+        result = self._gate(device or {}, check)
+        self._gate_cache[key] = (time.monotonic(), result)
+        return result
+
+    def _asked(self, key: tuple[str, str], device: dict | None, check: str, *, strict: bool = True) -> None:
+        files = self._open_files()
+        files.wanted[key] = (device or {}, check, time.monotonic())
+        files.ask(strict=strict)
+
+    def _reread_gates(self) -> None:
+        """After each pass: every gate someone asked about lately. What nobody asked about for a while is dropped from the list, not from the cache."""
+
+        wanted = self._open_files().wanted
+        for key, (device, check, asked) in list(wanted.items()):
+            if time.monotonic() - asked > open_files.ASKED_S:
+                wanted.pop(key, None)
+            else:
+                self._gate_cache[key] = (time.monotonic(), self._gate(device, check))
+
+    def _reading(self) -> str:
+        """Why a gate has no answer: a pass is on its way, or what stopped it. WHY the second: "being read" for ever would be a page lying."""
+
+        return self._open_files().note or GATE_READING
+
+    def _holder_functions(self) -> tuple | None:
+        """``(holders of a port, holders of camera nodes)`` as the latest pass knows them; None before the first pass."""
+
+        if self._holders is not None:
+            return self._holders[0].function, self._holders[1].function
+        found = self._open_files().latest()
+        if found is None:
+            return None
+        return (lambda node: open_files.port_holders(found, node)), (lambda nodes=None: open_files.camera_holders(found, nodes))
+
+    def _gate(self, device: dict, check: str) -> tuple[bool | None, str]:
+        from io_facts import gate, lock
+
+        if check in host_utilities.CHECKS:
+            return usb_reset_gate(device, check, self._open_files().latest())
         attrs = device.get("attrs") or {}
         functions = device.get("functions") or []
 
@@ -193,16 +277,15 @@ class LiveOs:
             if not holders:
                 return True, "rack bus lock free (/proc/locks, never taken)"
             return bus_lock_state(holders)
-        if self._holders is None:
-            self._holders = (reuse.port_holders_function(), reuse.camera_holders_function())
-        port_holders, camera_holders = self._holders
+        holders = self._holder_functions()
         if check == "port_free":
             nodes = list(attrs.get("by_id") or []) or nodes_of("tty", "ttys")
             if not nodes:
                 return None, "no serial port node for this device"
-            if port_holders.function is None:
-                return None, f"port holder check {port_holders.source}"
-            held = [holder for node in nodes for holder in _without_own_watchers(port_holders.function)(node)]
+            if holders is None:
+                return None, self._reading()
+            port_holders = _without_own_watchers(holders[0])
+            held = [holder for node in nodes for holder in port_holders(node)]
             mine = [holder for holder in held if _holder_pid(holder) and RUNNING.owner(_holder_pid(holder))]
             if held and len(mine) == len(held):
                 # WHY waiting, not blocked (2026-10-29, "blocked: held by 1652054 python3"): that was a routine diagnose, ours or
@@ -214,33 +297,33 @@ class LiveOs:
                 return WAITING, "; ".join(holder_words(holder) for holder in others) + " (a few s)"
             if held:
                 return False, "held by " + "; ".join(holder_words(holder) for holder in others)
-            decision = gate.decide(nodes, holders_fn=_without_own_watchers(port_holders.function), uses_rack_lock=False)
+            decision = gate.decide(nodes, holders_fn=port_holders, uses_rack_lock=False)
         elif check == "camera_free":
-            if camera_holders.function is None:
-                return None, f"camera holder check {camera_holders.source}"
+            if holders is None:
+                return None, self._reading()
             video = [node for node in nodes_of("v4l", "video_nodes") if node.startswith("/dev/video")]
-            decision = gate.decide(video, camera=True, camera_holders_fn=_without_own_watchers(camera_holders.function),
-                                   uses_rack_lock=False)
+            decision = gate.decide(video, camera=True, camera_holders_fn=_without_own_watchers(holders[1]), uses_rack_lock=False)
         else:
             return None, f"{check}: not a check the host evaluates"
         if decision.state == "free":
-            return True, "no holder (find_port_holders, live)" if check == "port_free" else "no other process holds the camera"
+            return True, "no holder (/proc, live)" if check == "port_free" else "no other process holds the camera"
         if decision.state == "blocked":
             return False, decision.reason.replace("open by", "held by")
         return None, decision.reason
 
 
-def usb_reset_gate(device: dict, check: str) -> tuple[bool | None, str]:
+def usb_reset_gate(device: dict, check: str, scan: dict | None = None) -> tuple[bool | None, str]:
     """The host's own ``reset_port`` preconditions (docs/usb-reset.md). ``reset_privilege``: may this user reset the port by any
     of the three mechanisms. ``device_free``: nothing else has the device (or what hangs below it) open; this host's own watch /
-    follow processes do not count, they yield. Read passively (sysfs, /proc), never opens the device."""
+    follow processes do not count, they yield. Read passively (sysfs, /proc), never opens the device. ``scan``: a pass over /proc
+    to read that from (``open_files``), else a walk of its own."""
 
     target = usb_reset.target_of(device)
     if target is None:
         return None, "not a USB device with a port"
     if check == "reset_privilege":
         return usb_reset.privilege(target)
-    found, unseen = usb_reset.holders(target.port, frozenset(RUNNING.passive_sessions()))
+    found, unseen = usb_reset.holders(target.port, frozenset(RUNNING.passive_sessions()), scan)
     if found:
         return False, "; ".join(holder.text() for holder in found)
     return True, "no process has it open" + (f" (could not look at {unseen} other users' processes)" if unseen else "")
@@ -444,6 +527,20 @@ EXPECTED_SOURCE = "io_diagnostics.expected"
 RECENTLY_SEEN_S = 86400.0  # a seen-only device is listed for a day after it was last seen, then not
 
 
+def _write_json(path: Path, data: dict) -> None:
+    """``data`` as ``path``, atomically: a crash mid-write leaves the old file, never half of one."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(handle, "w") as file:
+            json.dump(data, file, default=str, separators=(",", ":"))
+        os.replace(temporary, path)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
+
+
 def _pid_alive(pid: int) -> bool:
     """A process that exists and is not a zombie (/proc, no signal sent)."""
 
@@ -549,6 +646,22 @@ class View:
     expected_paths: frozenset = frozenset()  # device rows the expected setup (or its retired list) names
     composition: composition_module.CompositeView | None = None  # the composites against this tree (docs/composition-v1.md)
     rates: dict[str, dict] = dataclasses.field(default_factory=dict)  # path -> received vs expected records per second (history.rates)
+    # every job as this view found it (its cache copied): what a read needs of a plugin, with no lock to wait for
+    jobs: dict[tuple[str, str], Job] = dataclasses.field(default_factory=dict)
+    memo: dict = dataclasses.field(default_factory=dict)  # what reads derive from this view, each thing once: the names, the folded log, /state's heavy parts
+    # WHY in the view: the log's rows pair a run's events with whether it still runs, and a run that ended just after the build would otherwise read "the host stopped while it ran"
+    active_runs: frozenset = frozenset()
+    revision: int = -1  # Host.revision when this build began
+
+
+def _frozen(job: Job) -> Job:
+    """``job`` with a copy of its cache as it stands. WHY no ``series``: its deques take every 10 Hz point, and nothing a view answers reads them (a ``values``
+    read does, under the host's lock). Never run or changed: it is a record of a moment."""
+
+    cache = job.cache
+    return dataclasses.replace(job, cache=dataclasses.replace(
+        cache, entities=dict(cache.entities), order=list(cache.order), icons=dict(cache.icons), statuses=dict(cache.statuses), events=dict(cache.events),
+        states=dict(cache.states), configs=dict(cache.configs), frames=dict(cache.frames), series={}))
 
 
 class _Blank(dict):
@@ -611,7 +724,7 @@ class Host:
                  run_bus_poll_s: float | None = None, run_bus_settle_s: float | None = None,
                  event_log_dir: Path | None = None, boot_id: str = "", boot_start: float | None = None,
                  event_log_cap_bytes: int | None = None, event_log_segment_bytes: int | None = None,
-                 ledger_file: Path | None = None,
+                 ledger_file: Path | None = None, history_file: Path | None = None, describes_file: Path | None = None, restore_later: bool = False,
                  watch_grace_s: float | None = None, watch_tick_s: float | None = None, frames_dir: Path | None = None,
                  describe_check_s: float | None = None, diagnostics_beat_s: float | None = None,
                  stock_diagnostics_defaults: bool = True):
@@ -647,6 +760,7 @@ class Host:
         self.roster = roster_module.Roster(ledger_file)
         # the person's rig manifest (docs/expected-setup.md); None = nothing expected and no edits (fixture / machine)
         self.setup = expected_module.ExpectedSetup(expected_file)
+        self.setup.answers = self.roster.rigs  # WHY the same dict: the rig rows write what the ledger keeps
         # the composites (docs/composition-v1.md): the file's, none while it has problems; the latest view's rollups and where each
         # child is, which a composite plugin's environment is made from
         self._composites: list = []
@@ -691,15 +805,29 @@ class Host:
         self.sample_changes = threading.Condition()
         self.sample_revision = 0
         self.feed = LiveFeed(self)  # GET /api/v1/live: one change-only diff of state() for every client (live.py)
+        # The published view (read_view): a service's reads answer from it, and only io-view builds it. A host built by hand, or `once`, builds what it reads.
+        self.published = threading.Condition()
+        self._published: View | None = None
+        self._published_revision = -1
+        self._view_lock = threading.RLock()  # one build at a time
+        self._serving = False
+        self._readers = threading.local()  # which threads answer from the published view (reads_published)
+        self._read_at = -1e18  # when one last did
+        self._view_wanted = threading.Event()  # a stream is waiting for the view of a change (wait_view): the build does not wait for its timer
+        self.drivers_started = threading.Event()  # the drivers are described and scheduled: what ``serve``'s "IO diagnostics on" line says
         self._wake = threading.Event()
         self.faults = Faults()
         # the host's events on disk (docs/activity-log-v1.md): ``event_log_dir`` None keeps the same history in memory
         # only (a host built by hand, a fixture replay, ``once``)
         boot_id, boot_start = self._boot_identity(boot_id, boot_start)
+        # WHY later for a service: the server answers first (cli.py), and reading the log is seconds under load
+        self._restore_later = restore_later
         self.eventlog = eventlog_module.EventLog(
             event_log_dir, boot_id=boot_id, boot_start=boot_start,
             cap_bytes=event_log_cap_bytes or eventlog_module.CAP_BYTES,
-            segment_bytes=event_log_segment_bytes or eventlog_module.SEGMENT_BYTES)
+            segment_bytes=event_log_segment_bytes or eventlog_module.SEGMENT_BYTES, load=not restore_later)
+        self.history_file = Path(history_file) if history_file else None
+        self.describes_file = Path(describes_file) if describes_file else None
         self.raw_kernel = logview_module.RawKernel()
         self.describes: dict[str, dict | None] = {spec.name: None for spec in self.specs}
         self.url = ""
@@ -717,7 +845,7 @@ class Host:
         # consoles a run launched (tview, realsense-viewer) that are still open: device id -> {pid, program, ...}; the
         # device's row says so while the process lives (docs/actions-vocabulary-v0.1.md, open_console)
         self.consoles: dict[str, dict] = {}
-        self.runs.on_end = self._on_run_end
+        self.runs.on_end = self._run_ended
         self.started = time.monotonic()
         self._last_os_level: dict[tuple[str, str], tuple[str, str]] = {}
         self._described: set[str] = set()
@@ -756,8 +884,6 @@ class Host:
         feed the absent rows. describe must be passive; it runs bounded by the plugin's timeout, in parallel, never
         more than once per plugin."""
 
-        from io_diagnostics.plugins import PluginConfigError, parse_match
-
         pending = [spec for spec in self.specs if spec.enabled and spec.kind == "driver" and spec.name not in self._described
                    and self.describes.get(spec.name) is None]
         results: dict[str, dict] = {}
@@ -772,28 +898,82 @@ class Host:
         for thread in threads:
             thread.join()
         for spec in pending:
-            self._described.add(spec.name)
-            answer = results.get(spec.name) or {"error": "describe did not run"}
-            self.describes[spec.name] = answer
-            if spec.matches:
-                continue  # its declaration's matches win; describe was asked for its expected devices
-            matches = []
-            for item in answer.get("matches") or []:
-                try:
-                    matches.append(parse_match(item))
-                except PluginConfigError as error:
-                    self.plugin_problems.append(f"{spec.name}: describe {error}")
-            if answer.get("error") or not matches:
-                self.plugin_problems.append(f"{spec.name}: no matches in its declaration or its describe"
-                                            + (f" ({answer['error']})" if answer.get("error") else ""))
-                self._adopted.add(spec.name)  # a later describe may have them
-                continue
-            self._adopted.add(spec.name)
-            self.specs = [dataclasses.replace(spec, matches=tuple(matches)) if other is spec else other for other in self.specs]
+            self._adopt(spec, results.get(spec.name) or {"error": "describe did not run"})
+        self._save_describes()
+
+    def _adopt(self, spec, answer: dict) -> None:
+        """One plugin's describe answer, for the first time this process: its matches, when its declaration names none."""
+
+        from io_diagnostics.plugins import PluginConfigError, parse_match
+
+        self._described.add(spec.name)
+        self.describes[spec.name] = answer
+        if spec.matches:
+            return  # its declaration's matches win; describe was asked for its expected devices
+        matches = []
+        for item in answer.get("matches") or []:
+            try:
+                matches.append(parse_match(item))
+            except PluginConfigError as error:
+                self.plugin_problems.append(f"{spec.name}: describe {error}")
+        if answer.get("error") or not matches:
+            self.plugin_problems.append(f"{spec.name}: no matches in its declaration or its describe"
+                                        + (f" ({answer['error']})" if answer.get("error") else ""))
+            self._adopted.add(spec.name)  # a later describe may have them
+            return
+        self._adopted.add(spec.name)
+        self.specs = [dataclasses.replace(spec, matches=tuple(matches)) if other.name == spec.name else other for other in self.specs]
+
+    # --- what a restarted service knows at once ------------------------------------------------------------------------
+    def _restore_describes(self) -> None:
+        """The drivers' last describe answers, for the ones whose source has not changed since. WHY (Zach, 2026-11-04: "A server restart is invisible"): a
+        driver described by ``uv run`` under load is seconds, and until then a camera has no job, so its streams, its tabs and its remembered rows
+        were gone from the page. ``_start_drivers`` asks again behind the first view; this only says what the same code said last time."""
+
+        if self.describes_file is None:
+            return
+        try:
+            saved = json.loads(self.describes_file.read_text())
+        except (OSError, ValueError):
+            return
+        for spec in self.specs:
+            entry = (saved.get("plugins") or {}).get(spec.name) if isinstance(saved, dict) else None
+            stamp = source_stamp(spec)
+            if spec.enabled and spec.kind == "driver" and isinstance(entry, dict) and isinstance(entry.get("answer"), dict) \
+                    and not entry["answer"].get("error") and stamp is not None and list(stamp) == entry.get("stamp"):
+                self._source_stamps[spec.name] = stamp
+                self._adopt(spec, entry["answer"])
+
+    def _save_describes(self) -> None:
+        if self.describes_file is None:
+            return
+        plugins = {name: {"stamp": list(self._source_stamps[name]), "answer": answer} for name, answer in self.describes.items()
+                   if answer and not answer.get("error") and self._source_stamps.get(name)}
+        _write_json(self.describes_file, {"version": 1, "plugins": plugins})
+
+    def _restore_history(self) -> None:
+        if self.history_file is None:
+            return
+        try:
+            self.history.restore(json.loads(self.history_file.read_text()), self.clock.now())
+        except (OSError, ValueError, AttributeError, KeyError, TypeError):  # a torn or foreign file: a history that starts here, never a host that does not start
+            return
+
+    def save_history(self) -> None:
+        if self.history_file is not None:
+            _write_json(self.history_file, self.history.dump(self.clock.now()))
+
+    def _history_loop(self) -> None:
+        while not self._stop.wait(HISTORY_SAVE_S):
+            try:
+                self.save_history()
+            except (OSError, ValueError) as error:  # a full disk must not stop the host; it shows in sources
+                self.sources = [*self.sources, {"name": "history file", "state": "skipped", "note": f"{type(error).__name__}: {error}"}]
 
     # --- refresh: OS skeleton + kernel log -> layer, jobs, OS checks ----------------------------------------------
     def refresh(self) -> None:
-        self.adopt_described_matches()
+        if not self._serving:  # WHY: a service's drivers are described behind the first view (_start_drivers)
+            self.adopt_described_matches()
         self.setup.reload_if_changed()  # a hand edit of expected.toml shows within one refresh
         now = self.clock.now()
         devices, sources = self.os.skeleton()
@@ -1352,23 +1532,128 @@ class Host:
             for name, why in list(self.describe_failed.items())]
 
     # --- background service ------------------------------------------------------------------------------------
+    def prepare_service(self) -> None:
+        """Before a service's first request (cli.py serves before ``start`` has run): a read waits for the first view, it does not build one on nothing."""
+
+        self._serving = True
+
     def start(self, *, udev: bool = True) -> None:
+        """The order is what makes a restart invisible (Zach, 2026-11-04): what the last process knew first, from disk; the tree and a first view at once; and
+        everything slow (the drivers' describe, their probes) behind it, on threads a read never waits for."""
+
+        self._serving = True
         kernel_log = getattr(self.os, "kernel_log", None)
         if hasattr(kernel_log, "on_lines"):
             kernel_log.on_lines = self.wake  # a new kernel line refreshes at once
         self._scheduler = Scheduler(self.scheduled_jobs, self._run_job, gates=self.gates)
+        if self._restore_later:
+            self.eventlog.load()
+        self._restore_history()
+        self._restore_describes()
         self.refresh()  # after the scheduler exists: the first refresh starts the followers, so they never run a diagnose
-        self._scheduler.start()
+        self.view()  # the first published view: from here on every read answers
+        threading.Thread(target=self._view_loop, name="io-view", daemon=True).start()
+        threading.Thread(target=self._start_drivers, name="io-start", daemon=True).start()
         threading.Thread(target=self._refresh_loop, name="io-refresh", daemon=True).start()
         threading.Thread(target=self._recheck_loop, name="io-recheck", daemon=True).start()
-        threading.Thread(target=self.describe_all, name="io-describe", daemon=True).start()
         threading.Thread(target=self._reload_loop, name="io-reload", daemon=True).start()
         threading.Thread(target=self._stock_diagnostics_loop, name="io-stock-diagnostics", daemon=True).start()
+        threading.Thread(target=self._history_loop, name="io-history", daemon=True).start()
         # WHY the OS source decides: only a live machine has a udev to listen to (a fixture or a fake machine has none)
         command = getattr(self.os, "udev_command", None)
         if udev and command:
             self._udev = activity_module.UdevWatcher(self.os.invalidate, self.on_udev, command)
             self._udev.start()
+
+    def _start_drivers(self) -> None:
+        """What a service does behind its first view: describe every driver (seconds under load, each bounded by its timeout), and only then run them, because
+        a job's first run depends on what its plugin declares: a probe or a diagnose, a follower or neither."""
+
+        known = {spec.name: self.describes.get(spec.name) for spec in self.specs}
+        self.adopt_described_matches()
+        self.refresh()
+        if self._stop.is_set():
+            return
+        self._scheduler.start()
+        self.drivers_started.set()
+        self.describe_all()
+        for spec in list(self.specs):
+            if known.get(spec.name) is not None and spec.enabled and spec.kind == "driver":
+                self._recheck_describe(spec)  # asked of the same code at the last start: a file it reads may have changed since
+        self._save_describes()
+
+    def _recheck_describe(self, spec) -> None:
+        old = self.describes.get(spec.name) or {}
+        answer = describe(spec, timeout_s=min(spec.timeout_s, 30.0), extra_env=self._job_env())
+        if answer.get("error") or answer == old or self._stop.is_set():
+            return
+        with self.lock:
+            self.describes[spec.name] = answer
+        self._apply_describe(spec, old, answer)
+        self.notify("plugin")
+
+    # --- the published view (Host.read_view) ----------------------------------------------------------------------------
+    def _view_loop(self) -> None:
+        """The one place a service builds its view: on each change, a quarter of a second apart at most, and a bounded share of a core whatever the load."""
+
+        seen = self._published_revision
+        while not self._stop.is_set():
+            if time.monotonic() - self._read_at > VIEW_QUIET_S:
+                self._view_wanted.wait(VIEW_MAX_AGE_S)  # WHY: nobody is looking, so a change can wait; a service with no window spends no more than it has to
+            else:
+                with self.changes:
+                    self.changes.wait_for(lambda: self.revision != seen or self._stop.is_set(), timeout=VIEW_MAX_AGE_S)
+            self._view_wanted.clear()
+            if self._stop.is_set():
+                return
+            began = time.monotonic()
+            try:
+                seen = self.view().revision
+            except Exception as error:  # noqa: BLE001 - a bad build must not end the view: the last one stands, and the reason shows in sources
+                self.sources = [*self.sources, {"name": "view", "state": "skipped", "note": f"{type(error).__name__}: {error}"}]
+            took = time.monotonic() - began
+            self._stop.wait(VIEW_GAP_S)
+            # WHY a stream may cut the rest short: a plug shows within a second (docs/activity-log-v1.md), and streams only ask on a change
+            self._view_wanted.wait(max(0.0, VIEW_REST * took - VIEW_GAP_S))
+
+    def reads_published(self) -> None:
+        """This thread answers people (a request, the live feed, the tray, the beat): from here on its reads never build."""
+
+        self._readers.published = True
+
+    def read_view(self) -> View:
+        """What a read answers from: on a thread that ``reads_published``, the view last published, at once. WHY (measured 2026-11-04): every GET built the whole
+        view for itself, behind the host's lock, and a page makes several a second; "never blocked behind a recompute or a slow beat". A published view is a
+        moment old (``VIEW_GAP_S`` behind a change) and a write answers only once its effect is published (``after_write``). Any other caller, a host built by
+        hand or a script asking in-process, builds what it reads, exact to the moment."""
+
+        if not self._serving or not getattr(self._readers, "published", False):
+            return self.view()
+        if time.monotonic() - self._read_at > VIEW_QUIET_S:
+            self._view_wanted.set()  # WHY: the first reader after a quiet spell ends it, or the builder sleeps on past what it came to see
+        self._read_at = time.monotonic()
+        view = self._published
+        if view is None:  # the host is still reading what it knows from disk
+            with self.published:
+                self.published.wait_for(lambda: self._published is not None or self._stop.is_set(), timeout=FIRST_VIEW_WAIT_S)
+            view = self._published
+        return view if view is not None else self.view()
+
+    def wait_view(self, revision: int, timeout_s: float = VIEW_WAIT_S) -> None:
+        """For a stream, on its own thread: until the view of change ``revision`` is published. WHY: a stream woken by a change would otherwise read the view
+        from before it, and say nothing until the next one."""
+
+        if self._serving:
+            self._read_at = time.monotonic()  # WHY: an open stream is someone looking, though it reads nothing until a change comes
+            self._view_wanted.set()
+            with self.published:
+                self.published.wait_for(lambda: self._published_revision >= revision or self._stop.is_set(), timeout=timeout_s)
+
+    def after_write(self) -> None:
+        """A person's write: what they did is in the next read. A POST can wait for a build; a GET never does."""
+
+        if self._serving and self._published is not None:
+            self.view()
 
     def _refresh_loop(self) -> None:
         while not self._stop.is_set():
@@ -1379,13 +1664,13 @@ class Host:
             try:
                 self.refresh()
                 self.faults.tick(self.clock.now())
-                self._keep_log()
             except Exception as error:  # noqa: BLE001 - a bad read must not stop the refresher; it shows in sources
                 self.sources = [*self.sources, {"name": "refresh", "state": "skipped", "note": f"{type(error).__name__}: {error}"}]
 
     # --- robotdx.diagnostics: the stock diagnostics, on a slow beat over the State history ----------------------------------
     def _stock_diagnostics_loop(self) -> None:
         # WHY a thread of its own on a slow beat (5 s): the library evaluates windows of history, never the 10 Hz watch path
+        self.reads_published()  # WHY: a beat reads the view; it is no reason to build one (Zach's brief, 2026-11-04: "a slow beat")
         while not self._stop.wait(self.stock_diagnostics.beat_s):
             try:
                 self.run_stock_diagnostics()
@@ -1469,7 +1754,7 @@ class Host:
         runner.reload_if_changed()
         if not runner.bindings and not self.stock_results and not self.stock_quiet:
             return []  # nothing configured (a replay without the person's file): no view, no tick
-        view = self.view()
+        view = self.read_view()
         now = view.now
         found: dict[tuple[str, str], DiagnosticStatus] = {}
         for path, entity in view.merged.entities.items():
@@ -1513,10 +1798,16 @@ class Host:
     def stop(self) -> None:
         try:
             self._keep_log()
+            self.save_history()
         except Exception:  # noqa: BLE001 - a failing flush never keeps the host from stopping
             pass
         self._stop.set()
         self._wake.set()
+        self._view_wanted.set()
+        with self.changes:
+            self.changes.notify_all()
+        with self.published:
+            self.published.notify_all()
         if self._scheduler:
             self._scheduler.stop()
         if self._udev:
@@ -1535,14 +1826,28 @@ class Host:
 
     # --- views -------------------------------------------------------------------------------------------------
     def view(self) -> View:
+        """Build the view now, publish it and return it. What a write acts on; a read calls ``read_view``."""
+
+        with self._view_lock:
+            revision = self.revision
+            view = self._build_view()
+            view.revision = revision
+            with self.published:
+                self._published, self._published_revision = view, revision
+                self.published.notify_all()
+        return view
+
+    def _build_view(self) -> View:
         with self.lock:
             now = self.clock.now()
-            jobs = list(self.jobs.values())
+            frozen = {key: _frozen(job) for key, job in self.jobs.items()}
+            jobs = list(frozen.values())
             layer = self.layer
             merged = tree.merge(layer, jobs, self.os_records)
             # WHY judged on the merged tree, every view: a rig counts boards and matches cameras by the serial their
             # DRIVER reports (the RealSense SDK serial), which only the plugins' records carry
             setup = expected_module.evaluate(self.setup, merged, layer, now, RUNNER_SOURCE)
+            self.roster.keep_rigs()
             notes = (self._host_notes(merged, now) + self._links_summary(merged, now) + self._console_notes(merged, now)
                      + roster_module.stopped_answering(merged, now) + self._describe_notes(now) + self._composition_notes(now))
             # WHY here: the rig rows and the host's own lines are judged per view, never stored; their changes are
@@ -1569,6 +1874,7 @@ class Host:
                                            self.layer.device_paths.get(str(job.device.get("id")), job.device_path)) for job in jobs])
             streaming = self._live_paths(jobs)
             claimed = frozenset(setup.by_path) | frozenset(setup.retired)
+            active_runs = frozenset(run.id for run in self.runs.active())  # before the events: a run that ends now has its ending in them
             live = [self._placed(event, self.layer) for event in self.live.events()]
             events, self.pending = activity_module.merge(self.usb.events, self.usb.consumed, live)
             events += self.faults.events
@@ -1590,7 +1896,7 @@ class Host:
         self.eventlog.record(events, now)
         events = [event for event in self.eventlog.overlay(events, now) if event.stamp is None or event.stamp <= now]
         return View(now, layer, merged, rows, events, self.faults.open_by_path(), setup, checks, memory, streaming, claimed, composed,
-                    self.history.rates(now))
+                    self.history.rates(now), frozen, active_runs=active_runs)
 
     def _device_hardware_id(self, job: Job) -> str:
         entity = self.layer.entities.get(self.layer.device_paths.get(str(job.device.get("id")), job.device_path))
@@ -1665,6 +1971,10 @@ class Host:
                                                   " holds it"),
                         KeyValue("working_adapter", other))))
         return notes
+
+    def _run_ended(self, run) -> None:
+        self._on_run_end(run)
+        self.after_write()  # WHY: as a write's: what a person started has ended, and the next read says so
 
     def _on_run_end(self, run) -> None:
         """A finished ``open_console`` run that says it launched a process (``ActionCompleted`` ``args.pid``): remember it."""
@@ -1791,7 +2101,10 @@ class Host:
                 "rank": sorted(RANK, key=RANK.__getitem__), "stale_factor": STALE_FACTOR, "stale_floor_s": STALE_FLOOR_S}
 
     def _names(self, view: View) -> dict[str, str]:
-        return {path: entity.name for path, entity in view.merged.entities.items()}
+        names = view.memo.get("names")
+        if names is None:
+            names = view.memo["names"] = {path: entity.name for path, entity in view.merged.entities.items()}
+        return names
 
     def summary_json(self, view: View) -> dict:
         root = view.rows.summaries[tree.HOST_PATH]
@@ -1815,16 +2128,20 @@ class Host:
     def state(self) -> dict:
         from io_diagnostics.tray import chip_model
 
-        view = self.view()
-        summary = self.summary_json(view)
-        recent = self.events_json(view, RECENT)
-        return {"api": API, "schema": SCHEMA, "record_version": RECORD_VERSION, "clock": self.clock_json(view.now), "fixture": self.fixture,
-                "host": {"name": self.os.hostname, "sources": list(self.sources)}, "summary": summary,
-                "chip": chip_model(summary, recent, self.url),
+        view = self.read_view()
+        made = view.memo.get("state")
+        if made is None:
+            summary = self.summary_json(view)
+            recent = self.events_json(view, RECENT)
+            made = view.memo["state"] = {
+                "summary": summary, "recent": recent, "chip": chip_model(summary, recent, self.url), "expected_setup": self.setup_summary(view),
+                "composition": self.composition_json(view),
                 "tree": tree.node_json(tree.HOST_PATH, view.rows, view.layer, view.faults_by_path, nested=True,
                                        memory=view.memory, live=view.live, expected_paths=view.expected_paths,
-                                       rates=view.rates),
-                "recent": recent, "expected_setup": self.setup_summary(view), "composition": self.composition_json(view),
+                                       rates=view.rates)}
+        # WHY the clock is now and not the view's: the page's clock and every age it works out run from it
+        return {"api": API, "schema": SCHEMA, "record_version": RECORD_VERSION, "clock": self.clock_json(self.clock.now() if self._serving else view.now),
+                "fixture": self.fixture, "host": {"name": self.os.hostname, "sources": list(self.sources)}, **made,
                 "runs": self.runs.json(RUNS_IN_STATE)}
 
     def setup_summary(self, view: View) -> dict:
@@ -1841,7 +2158,7 @@ class Host:
 
     # --- one row's detail ------------------------------------------------------------------------------------------
     def node(self, path: str) -> dict | None:
-        view = self.view()
+        view = self.read_view()
         if path not in view.merged.entities:
             return None
         merged, rows = view.merged, view.rows
@@ -1849,15 +2166,19 @@ class Host:
         while current is not None:
             ancestors.insert(0, {"path": current, "name": merged.entities[current].name, "edge": merged.edge.get(current)})
             current = merged.parent.get(current)
-        job_rel = self._watch_target(path)
+        job_rel = self._watch_target(path, view)
         extra = self._page_json(path, view, job_rel)
+        names = self._names(view)
+        below = path + "/"
+        # WHY lazily, and the names once: the 20 it sends were picked after every event of the log had been serialized, each with the whole name table built
+        # again for it: 26,867 x 93 entities, the host page's 3.8 s (2026-11-04)
+        events = itertools.islice((event for event in view.events if event.path == path or event.path.startswith(below)), NODE_EVENTS)
         return {"node": tree.node_json(path, rows, view.layer, view.faults_by_path, nested=False, memory=view.memory,
                                        live=view.live, expected_paths=view.expected_paths, rates=view.rates), "ancestors": ancestors,
                 "checks": [self.check_json(status, view.now) for status in rows.own.get(path, [])],
                 "actions": self.actions_json(path, view), **extra,
                 "faults": [self.fault_json(fault, view) for fault in self.faults.all() if fault.path == path],
-                "events": [activity_module.event_json(event, self.utc_offset_s, self._names(view)) for event in view.events
-                           if event.path == path or event.path.startswith(path + "/")][:20],
+                "events": [activity_module.event_json(event, self.utc_offset_s, names) for event in events],
                 "entity": to_dict(merged.entities[path]), "setup": self.setup_json(path, view),
                 "composite": (self.composite_json(view.composition.by_path[path], view.composition)
                               if view.composition is not None and path in view.composition.by_path else None)}
@@ -1872,12 +2193,11 @@ class Host:
             return out
         job, rel = target
         describe_answer = self.describes.get(job.spec.name)
-        with self.lock:
-            cache = job.cache
-            heard = cache.heard(rel)
-            out["config"] = entity_state.config_rows(cache, rel, view.now)
-            entity = cache.entities.get(rel)
-            out["editable"] = bool(entity and any(action.name == "set_config" for action in entity.actions))
+        cache = job.cache  # WHY no lock: this is the view's own copy
+        heard = cache.heard(rel)
+        out["config"] = entity_state.config_rows(cache, rel, view.now)
+        entity = cache.entities.get(rel)
+        out["editable"] = bool(entity and any(action.name == "set_config" for action in entity.actions))
         for row in out["config"]:
             row["edit"] = self.config_editor.edit_of(job, rel, row["key"])
         out["heard"] = {"received": heard, "age_s": round(view.now - heard, 3) if heard is not None else None}
@@ -2267,7 +2587,8 @@ class Host:
         device_path = tree.nearest_device(path, view.merged, view.layer)
         if device_path is None:
             return None, f"{check}: no physical device above {entity.name}"
-        return self.os.gate(view.layer.matchable(view.layer.device_of_path[device_path]), check)
+        # WHY peek where the OS source has one: this is a page's read. A fixture's gates are recorded answers, and a run asks again on the bus
+        return getattr(self.os, "peek", self.os.gate)(view.layer.matchable(view.layer.device_of_path[device_path]), check)
 
     def _driver_says(self, check: str, path: str, view: View) -> tuple[bool, str] | None:
         key = f"{PRECONDITION_VALUE}{check}"
@@ -2283,12 +2604,11 @@ class Host:
         has gone stale says nothing; the driver reads the board on the bus before it moves it, and sends nothing if not."""
 
         entity = view.merged.entities[path]
-        target = self._watch_target(path)
+        target = self._watch_target(path, view)
         if target is None:
             return None, f"no State from {entity.name}"
         job, rel = target
-        with self.lock:
-            groups = entity_state.state_groups(job.cache, rel, view.now)
+        groups = entity_state.state_groups(job.cache, rel, view.now)  # WHY no lock: the view's own copy
         found = {}
         for group in groups:
             if group["stale"]:
@@ -2340,7 +2660,8 @@ class Host:
         # the module at a fake sysfs tree (IO_DIAGNOSTICS_USB_SYSFS), which then answers like a live one
         if getattr(self.os, "mode", "live") != "live" and not usb_reset.sysfs_overridden():
             return (False if check == "reset_privilege" else None), "this host replays a recording or a fake machine: there is no real port to reset"
-        return usb_reset_gate(device, check)
+        peek = getattr(self.os, "peek", None)
+        return peek(device, check) if peek is not None and not usb_reset.sysfs_overridden() else usb_reset_gate(device, check)
 
     def _active_run_near(self, path: str, layer, found: tuple[dict | None, str]) -> str:
         """Why a reset would collide with a RobotDx run: an active run on the device, on anything below it (a hub), or on a
@@ -2440,11 +2761,11 @@ class Host:
 
         actions = list(entity.actions)
         for utility in host_utilities.OFFERED:
-            if not any(action.name == utility.name for action in actions) and self._offers(utility.name, path, view.layer):
+            if not any(action.name == utility.name for action in actions) and self._offers(utility.name, path, view.layer, view):
                 actions.append(utility)
         return actions
 
-    def _offers(self, name: str, path: str, layer) -> bool:
+    def _offers(self, name: str, path: str, layer, view: View | None = None) -> bool:
         """Whether the host offers its utility ``name`` on this row: a USB device or port, and no driver whose device sits at
         or below it opted out in ``describe`` (``"opt_out": ["reset_port"]``: a device that must not be reset mid-run; a hub
         is not reset under such a device either)."""
@@ -2453,22 +2774,21 @@ class Host:
         if found is None:
             return False
         ids = set(host_utilities.subtree_device_ids(found[1], layer))
-        with self.lock:
-            jobs = [job for job in self.jobs.values() if str(job.device.get("id")) in ids]
+        jobs = [job for job in (view.jobs if view is not None else self.jobs).values() if str(job.device.get("id")) in ids]  # never mutated: replaced whole
         return not any(name in ((self.describes.get(job.spec.name) or {}).get("opt_out") or []) for job in jobs)
 
     # --- actions: run one, for a person ------------------------------------------------------------------------------
-    def _owning_job(self, path: str, entity) -> Job | None:
-        """The job whose device row is ``path`` or above it; with several plugins on one device, the entity's owner."""
+    def _owning_job(self, path: str, entity, view: View | None = None) -> Job | None:
+        """The job whose device row is ``path`` or above it; with several plugins on one device, the entity's owner. ``view``: as that view knew them, with no lock."""
 
-        with self.lock:
-            candidates = []
-            for job in self.jobs.values():
-                device_path = self.layer.device_paths.get(str(job.device.get("id")), job.device_path)
-                # WHY the host's own row only: every path is below the host, and the computer plugin owns nothing below it
-                below = device_path != tree.HOST_PATH and path.startswith(device_path + "/")
-                if path == device_path or below:
-                    candidates.append((len(device_path), job))
+        jobs, layer = (view.jobs, view.layer) if view is not None else (self.jobs, self.layer)
+        candidates = []
+        for job in list(jobs.values()):
+            device_path = layer.device_paths.get(str(job.device.get("id")), job.device_path)
+            # WHY the host's own row only: every path is below the host, and the computer plugin owns nothing below it
+            below = device_path != tree.HOST_PATH and path.startswith(device_path + "/")
+            if path == device_path or below:
+                candidates.append((len(device_path), job))
         if not candidates:
             return None
         deepest = max(length for length, _ in candidates)
@@ -2715,15 +3035,19 @@ class Host:
             self._frames_dir.mkdir(parents=True, exist_ok=True)
             return self._frames_dir
 
-    def _watch_target(self, path: str) -> tuple[Job, str] | None:
-        """``(job, path relative to its device)`` of an entity a plugin described (or its device row), else None."""
+    def _watch_target(self, path: str, view: View | None = None) -> tuple[Job, str] | None:
+        """``(job, path relative to its device)`` of an entity a plugin described (or its device row), else None. ``view``: the job as that view knew it, with
+        no lock to wait for; without one, the job itself."""
 
-        job = self._owning_job(path, _NoOwner)
+        job = self._owning_job(path, _NoOwner, view)
         if job is None:
             return None
-        with self.lock:
-            device_path = self.layer.device_paths.get(str(job.device.get("id")), job.device_path)
-            known = set(job.cache.entities)
+        if view is not None:
+            device_path, known = view.layer.device_paths.get(str(job.device.get("id")), job.device_path), job.cache.entities
+        else:
+            with self.lock:
+                device_path = self.layer.device_paths.get(str(job.device.get("id")), job.device_path)
+                known = set(job.cache.entities)
         rel = relative(path, device_path)
         return (job, rel) if rel == "" or rel in known else None
 
@@ -3426,7 +3750,7 @@ class Host:
         unknown = sorted(set(types or ()) - set(activity_module.TYPES))
         if unknown:
             raise ValueError(f"unknown event type {', '.join(map(repr, unknown))}: one of {', '.join(activity_module.TYPES)}")
-        view = self.view()
+        view = self.read_view()
         if fold:
             return self.log_json(view, limit, types, channel=channel, path=path, scope=scope, severity=severity)
         return {"clock": self.clock_json(view.now), "events": self.events_json(view, limit, types),
@@ -3446,7 +3770,10 @@ class Host:
         out: list[dict] = []
         total = 0
         if channel in ("activity", "all"):
-            folded = logview_module.fold(view.events[:FOLD_EVENTS], active_runs={run.id for run in self.runs.active()})
+            # WHY once per view: a Log tab, the Activity view and each open /events stream all read the same rows
+            folded = view.memo.get("fold")
+            if folded is None:
+                folded = view.memo["fold"] = logview_module.fold(view.events[:FOLD_EVENTS], active_runs=view.active_runs)
             chosen = logview_module.select(folded, entity=path, entity_hardware_id=hardware_id, scope=scope, floor=severity, types=types)
             total += len(chosen)
             out += [logview_module.row_json(row, self.utc_offset_s, names) for row in chosen[:limit]]
@@ -3479,7 +3806,7 @@ class Host:
         return out, count
 
     def records(self) -> dict:
-        view = self.view()
+        view = self.read_view()
         latest = {}
         for status in view.merged.statuses:
             latest[(status.path, status.name)] = status
@@ -3503,7 +3830,7 @@ class Host:
     def plugins(self) -> dict:
         with self.lock:
             jobs = list(self.jobs.values())
-        attached = {status.name: status.path for status in (self.view().checks if self.check_jobs else [])}
+        attached = {status.name: status.path for status in (self.read_view().checks if self.check_jobs else [])}
         out = []
         for spec in self.specs:
             out.append({"name": spec.name, "file": str(spec.file), "command": list(spec.command),
@@ -3544,7 +3871,7 @@ class Host:
     def history_json(self, path: str, status: str | None = None, window=None) -> dict | None:
         """Per-status level spans and measurement series of one entity over the window; None: no such entity."""
 
-        view = self.view()
+        view = self.read_view()
         keys = [key for key in self.history.keys(path, health=False) if status in (None, "", key[1])]
         if path not in view.merged.entities and not keys:
             return None
@@ -3564,7 +3891,7 @@ class Host:
     def bar_json(self, path: str, bins: int = 60, window=None) -> dict | None:
         """The health bar of one entity and of each child row: per bin, the worst level any of the row's statuses held."""
 
-        view = self.view()
+        view = self.read_view()
         if path not in view.merged.entities:
             return None
         seconds = self._window(window)
@@ -3598,7 +3925,7 @@ class Host:
         WHY one answer: the page's tree rewinds to before it opened, and a request per row is what this replaces. A group's bar reads every
         status below it, so a timeline is made once per status and shared by every row that reads it."""
 
-        view = self.view()
+        view = self.read_view()
         seconds = self._window(window)
         bins = max(1, min(int(bins), history_module.MAX_BINS))
         start, end = view.now - seconds, view.now
@@ -3622,7 +3949,7 @@ class Host:
         """The latest checks (diagnostic statuses) of every entity that has any, keyed by entity path, each in the shape ``/node`` gives its
         ``checks`` (``check_json``). WHY: a Diagnostics table across a rack is one request, not one ``/node`` per entity."""
 
-        view = self.view()
+        view = self.read_view()
         return {"clock": self.clock_json(view.now),
                 "checks": {path: [self.check_json(status, view.now) for status in own]
                            for path, own in view.rows.own.items() if own and path in view.merged.entities}}
@@ -3639,7 +3966,7 @@ class Host:
         """``GET /api/v1/diagnostics/config?path=``: the diagnostics configured on one entity, each field's effective value and where it
         came from (default / toml / edited), and the latest status of each. None: no such entity."""
 
-        view = self.view()
+        view = self.read_view()
         entity = view.merged.entities.get(path)
         if entity is None:
             return None
@@ -3716,28 +4043,31 @@ def fixture_info(document: dict, frame: dict) -> dict:
 
 def make_host(*, fixture: str | None = None, plugins_dir: Path | None = None, once: bool = False, at_s: float = 0.0,
               offset_s: float = 0.0, enable: tuple[str, ...] = (), machine: Path | None = None,
-              expected: Path | None = None, history_window_s: float | None = None) -> Host:
+              expected: Path | None = None, history_window_s: float | None = None, restore_later: bool = False) -> Host:
     """Live: ``plugins.d`` on this machine's clock. Fixture: the recorded frame's OS side, its clock, and the fixture
     plugin directory (``tests/fixtures/plugins``), whose plugin learns the frame from ``IO_DIAGNOSTICS_FIXTURE``.
     Machine: a fake machine's skeleton (``MachineOs``) on this clock. ``enable`` turns on plugins their declaration
     disables, for this host only. ``expected``: the expected-setup file; live mode defaults to
     ``~/.config/io-diagnostics/expected.toml``, a fixture or a fake machine reads one only when it is named.
     ``history_window_s``: this run's history window (``serve --history-window``); every mode reads and writes the
-    person's ``settings.toml`` (an app-wide preference, not a record of this machine)."""
+    person's ``settings.toml`` (an app-wide preference, not a record of this machine). ``restore_later``: the service's ``start`` reads
+    the event log, not this constructor, so the server can answer first (cli.py)."""
 
     settings = {"settings_file": expected_module.default_config_dir() / settings_module.SETTINGS_FILE,
-                "history_window_s": history_window_s}
+                "history_window_s": history_window_s, "restore_later": restore_later}
     # WHY runs are recorded live, and in a replay only when the state dir is named: a replayed frame's runs must never
     # land in the person's own run history (docs/runs-v1.md section 4)
     replay_runs = default_state_dir() / "runs" if os.environ.get("IO_DIAGNOSTICS_STATE_DIR") else None
     # the same rule for the event log (docs/activity-log-v1.md): live it is on disk for a service, never for a one-shot ``once``
     replay_log = default_state_dir() / "log" if os.environ.get("IO_DIAGNOSTICS_STATE_DIR") else None
+    replay_memory = {"history_file": default_state_dir() / HISTORY_FILE, "describes_file": default_state_dir() / DESCRIBES_FILE} \
+        if os.environ.get("IO_DIAGNOSTICS_STATE_DIR") and not once else {}
     if machine is not None:
         if fixture is not None:
             raise SystemExit("--machine and --fixture are two different OS sides: pick one")
         clock = FixedClock(time.time()) if once else Clock()
         return Host(plugins_dir=plugins_dir or PLUGINS_DIR, clock=clock, os_source=MachineOs(machine), enable=enable,
-                    expected_file=expected, runs_dir=replay_runs, event_log_dir=replay_log, **settings)
+                    expected_file=expected, runs_dir=replay_runs, event_log_dir=replay_log, **replay_memory, **settings)
     if fixture is None:
         # WHY live only: the remembered devices are this machine's; a fixture or a fake machine must never add to them
         clock = FixedClock(time.time()) if once else Clock()
@@ -3745,6 +4075,8 @@ def make_host(*, fixture: str | None = None, plugins_dir: Path | None = None, on
                     state_file=default_state_dir() / SEEN_FILE, runs_dir=default_state_dir() / "runs",
                     event_log_dir=None if once else default_state_dir() / "log",
                     ledger_file=default_state_dir() / roster_module.LEDGER_FILE,
+                    history_file=None if once else default_state_dir() / HISTORY_FILE,
+                    describes_file=None if once else default_state_dir() / DESCRIBES_FILE,
                     expected_file=expected or expected_module.default_config_dir() / expected_module.EXPECTED_FILE,
                     **settings)
     document, frame = load_fixture(fixture)
@@ -3756,7 +4088,7 @@ def make_host(*, fixture: str | None = None, plugins_dir: Path | None = None, on
     return Host(plugins_dir=plugins_dir or FIXTURE_PLUGINS_DIR, clock=clock, os_source=FixtureOs(frame),
                 fixture=fixture_info(document, frame), enable=enable, expected_file=expected, stock_diagnostics_defaults=False,
                 plugin_env={"IO_DIAGNOSTICS_FIXTURE": frame["name"], "IO_DIAGNOSTICS_FIXTURE_FILE": str(FIXTURE_FILE)},
-                runs_dir=replay_runs, event_log_dir=replay_log, **settings)
+                runs_dir=replay_runs, event_log_dir=replay_log, **replay_memory, **settings)
 
 
 __all__ = ["Clock", "ReplayClock", "FixedClock", "LiveOs", "FixtureOs", "MachineOs", "Host", "View", "make_host",

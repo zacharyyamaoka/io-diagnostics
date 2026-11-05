@@ -209,16 +209,30 @@ def get(host, path: str, timeout: float = 30.0) -> dict:
         return json.load(response)
 
 
+def wait_for_board(host, seconds: float = 30.0) -> str:
+    """The fixture board's /node path, once its plugin has reported it."""
+
+    path = "/api/v1/node?path=" + urllib.parse.quote(BOARD)
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        try:
+            get(host, path)
+            return path
+        except urllib.error.HTTPError:
+            time.sleep(0.1)
+    raise AssertionError("the fixture board never reported")
+
+
 def test_reads_answer_from_the_published_view_they_never_build_their_own(service, monkeypatch):
     """Every GET built the whole view: the tree, the rollup, the rig rows, a sort of the whole log. Thirty reads are one view."""
 
-    get(service, "/api/v1/state")
+    path = wait_for_board(service)
     builds = []
     real = Host.view
     monkeypatch.setattr(Host, "view", lambda self: builds.append(threading.current_thread().name) or real(self))
     for _ in range(10):
         get(service, "/api/v1/state")
-        get(service, "/api/v1/node?path=" + urllib.parse.quote(BOARD))
+        get(service, path)
         get(service, "/api/v1/activity?limit=5")
     on_requests = [name for name in builds if name.startswith("Thread-") or "process_request" in name]
     assert not on_requests, f"{len(on_requests)} of 30 reads built a view on the request's own thread"
@@ -227,8 +241,7 @@ def test_reads_answer_from_the_published_view_they_never_build_their_own(service
 def test_a_slow_build_never_holds_up_a_node(service, monkeypatch):
     """"never blocked behind a recompute or a slow beat": with every build taking 1.5 s, a node still answers at once."""
 
-    path = "/api/v1/node?path=" + urllib.parse.quote(BOARD)
-    get(service, path)
+    path = wait_for_board(service)
     real = host_module.tree.build_rows
 
     def slow(*args, **kwargs):
@@ -246,19 +259,44 @@ def test_a_slow_build_never_holds_up_a_node(service, monkeypatch):
     assert max(samples) < 0.5, f"a node waited {max(samples):.2f} s behind a build"
 
 
-def test_a_change_reaches_a_read_soon_and_a_write_sees_it_at_once(service):
-    """A published view is a moment ago, never a long time ago, and what a person just wrote is in the next read."""
+def test_a_run_that_just_ended_is_not_read_as_interrupted(service, monkeypatch):
+    """The log pairs a run's events with whether it still runs. Both must come from one moment: read live beside a published view, a run that ended a moment ago had no
+    ending in the view and no place among the active, and read "the host stopped while it ran"."""
+
+    seen = []
+    real = logview.fold
+    monkeypatch.setattr(logview, "fold", lambda events, *, active_runs=None: seen.append(active_runs) or real(events, active_runs=active_runs))
+    view = service.view()
+    view.active_runs = frozenset({"from-the-view"})
+    service.log_json(view, 5, None, channel="activity", path="", scope="children", severity="debug")
+    assert seen == [frozenset({"from-the-view"})]
+
+
+def test_a_change_reaches_a_read_soon(service):
+    """A published view is a moment ago, never a long time ago."""
 
     before = get(service, "/api/v1/state")["clock"]["now"]
     time.sleep(2.5)
     after = get(service, "/api/v1/state")
     assert after["clock"]["now"] - before >= 2.0, "the clock of a read keeps moving"
     service.notify("test")
-    end = time.monotonic() + 3.0
     revision = service.revision
-    while time.monotonic() < end and getattr(service, "_published_revision", revision) < revision:
+    end = time.monotonic() + 3.0
+    while time.monotonic() < end and service._published_revision < revision:
         time.sleep(0.02)
-    assert getattr(service, "_published_revision", revision) >= revision, "a change is published within seconds"
+    assert service._published_revision >= revision, "a change is published within seconds"
+
+
+def test_a_write_answers_only_once_it_is_published(service):
+    """What a person just did is in their next read: a POST can wait for a build, a GET never does. The refusal counts: the answer is sent the same way."""
+
+    get(service, "/api/v1/state")
+    service.notify("a write changed something")
+    revision = service.revision
+    request = urllib.request.Request(service.url.rstrip("/") + "/api/v1/forget", data=b"{}", method="POST")
+    with pytest.raises(urllib.error.HTTPError):  # no page header: refused, and answered
+        urllib.request.urlopen(request, timeout=10)
+    assert service._published_revision >= revision
 
 
 # ----- a page never waits for /proc ------------------------------------------------------------------------------------------
@@ -358,6 +396,38 @@ def test_every_precondition_shares_one_pass_over_proc(tmp_path):
     assert found["viewers"] == [[11, "realsense-viewer"]]
 
 
+def test_a_pass_finds_what_the_drivers_own_function_finds(monkeypatch):
+    """The independent ruler: ``find_port_holders``, the driver's own, on the real /proc, against one pass. A symlink resolves, as it does there."""
+
+    from io_facts import open_files
+
+    imported = reuse.port_holders_function()
+    if imported.function is None:
+        pytest.skip(f"the driver's checkout: {imported.source}")
+    monkeypatch.setattr(open_files, "QUIET", frozenset())  # WHY: /dev/null is the one node a test may hold, and the pass leaves it out
+    holder = subprocess.Popen([sys.executable, "-c", "import time; f = open('/dev/null'); time.sleep(30)"])
+    try:
+        time.sleep(0.5)
+        found = open_files.scan()
+        ours = {int(entry.split()[0]) for entry in open_files.port_holders(found, "/dev/null")}
+        theirs = {int(entry.split()[0]) for entry in imported.function("/dev/null")}
+        assert holder.pid in ours and holder.pid in theirs
+        assert ours & theirs, "the two read the same machine"
+    finally:
+        holder.kill()
+        holder.wait()
+
+
+def test_a_viewer_is_the_one_the_drivers_rule_names():
+    from io_facts import open_files
+
+    record = next((path for root in (reuse.WORKTREE, reuse.MAIN) if (path := root / reuse.RACK_TWIN / "bam_rack_twin" / "hardware" / "record.py").is_file()), None)
+    if record is None:
+        pytest.skip("the driver's checkout is not here")
+    names = next(line for line in record.read_text().splitlines() if line.startswith("VIEWER_NAMES"))
+    assert all(f'"{name}"' in names for name in open_files.VIEWERS), names
+
+
 def test_a_write_sees_a_holder_that_appeared_a_moment_ago(tmp_path):
     """A page may show a gate a few seconds old; a watch or a configuration write may not start on one. ``gate`` keeps its 2 s
     promise, however quiet the pass has been."""
@@ -368,6 +438,7 @@ def test_a_write_sees_a_holder_that_appeared_a_moment_ago(tmp_path):
     live.use_scan(lambda: answers[0])
     try:
         assert live.gate(device, "port_free")[0] is True
+        live._open_files().close()  # WHY: no background pass may refresh it for the test: gate itself must go and look
         answers.pop(0)
         assert live.peek(device, "port_free")[0] is True, "a page reads the last pass, never a new one"
         time.sleep(host_module.GATE_CACHE_S + 0.05)
@@ -461,6 +532,26 @@ def test_the_history_survives_a_restart(tmp_path):
         served.stop()
         if second is not None:
             second.stop()
+
+
+def test_a_stop_is_quick_and_frees_the_port(tmp_path):
+    """A restart is the old process's stop plus the new one's start, and the port is busy until the first is gone. SIGTERM now saves the history on the way out, which must
+    not cost the restart what the fast start gained."""
+
+    served = Serve(tmp_path, plugins=state_plugins(tmp_path))
+    try:
+        served.wait_up()
+        served.get("/api/v1/state")
+        began = time.monotonic()
+        os.killpg(served.process.pid, signal.SIGTERM)
+        served.process.wait(15)
+        took = time.monotonic() - began
+        assert took < 3.5, f"{took:.1f} s from SIGTERM to the port being free"  # WHY 3.5: under the whole 4 s of STOP_BOUND_S, which is what a stop that leaks costs
+        with socket.socket() as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            probe.bind(("127.0.0.1", served.port))
+    finally:
+        served.stop()
 
 
 def test_checking_keeps_the_last_answer_beside_it(tmp_path):

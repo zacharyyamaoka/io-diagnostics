@@ -12,7 +12,7 @@ The honest async rule (Zach, 2026-10-23: "per-status timestamps make out-of-sync
 So two checks of one board that arrive 3 s apart never draw a step between them (rqt_robot_monitor's timeline shows
 each status's own last level, not a snapshot of whoever spoke last), and a gap is drawn only where a promise was broken.
 
-Bounded, in memory, nothing on disk: at most ``MAX_SERIES`` statuses (the least recently heard is dropped), at most
+Bounded, in memory (``dump`` / ``restore`` carry it across a restart: Host.save_history): at most ``MAX_SERIES`` statuses (the least recently heard is dropped), at most
 ``MAX_MEASUREMENTS`` measurement keys per status, and at most ``MAX_POINTS`` points in all (a level span or one
 measurement value each; past it the longest series loses its oldest point). Points older than the retention, the
 window but at least ``DEFAULT_WINDOW_S``, are pruned on arrival. Measured (tests/test_history.py, tracemalloc): a full
@@ -302,6 +302,50 @@ class History:
                 if last.last + limit >= oldest:
                     out.append((last.last + limit, path, name, last.level, STALE, "", ""))
         return sorted(out, key=lambda item: item[0])
+
+    # --- across a restart -----------------------------------------------------------------------------------------------
+    def dump(self, now: float) -> dict:
+        """Everything a restarted host needs to draw the same bars and trends. WHY no sources and no arrivals: the first report after the restart makes the
+        one again, and a rate should measure from when this process began listening."""
+
+        with self._lock:
+            series = [{"path": item.path, "name": item.name, "state": item.state, "heard": item.heard, "measured": item.measured, "units": item.units,
+                       "spans": [[span.start, span.last, span.level, span.period, span.code, span.message] for span in item.spans],
+                       "values": {key: [list(point) for point in points] for key, points in item.values.items()}}
+                      for item in self._series.values()]
+        return {"version": 1, "saved": now, "series": series}
+
+    def restore(self, data: dict, now: float) -> int:
+        """What ``dump`` wrote, as far as it is still inside the retention and not in the future (a replay's clock starts again). Returns the series restored.
+
+        The honest async rule holds across the gap: a periodic status keeps its level until it goes stale, as it would have; an event-driven one has
+        no promise to keep, and nobody was listening, so it ends at the save, and its next report starts it again."""
+
+        if data.get("version") != 1:
+            return 0
+        oldest = now - self.retention_s
+        saved = min(float(data.get("saved") or now), now)
+        restored = 0
+        with self._lock:
+            for entry in data.get("series") or []:
+                key = (str(entry["path"]), str(entry["name"]))
+                if key in self._series:
+                    continue
+                spans = deque(_Span(*span) for span in entry.get("spans") or [] if span[0] <= now)
+                values = {name: deque(tuple(point) for point in points if oldest <= point[0] <= now) for name, points in (entry.get("values") or {}).items()}
+                values = {name: points for name, points in values.items() if points}
+                if not spans and not values:
+                    continue
+                if spans and spans[-1].level is not None and spans[-1].period is None:
+                    spans.append(_Span(saved, saved, None, None))
+                series = _Series(key[0], key[1], spans=spans, values=values, units=dict(entry.get("units") or {}), heard=float(entry.get("heard") or 0.0),
+                                 state=bool(entry.get("state")), measured=float(entry.get("measured") or -1e18))
+                self._series[key] = series
+                self._points += series.points()
+                self._prune(series, now)
+                restored += 1
+            self._enforce(now)
+        return restored
 
     def is_state(self, key: tuple[str, str]) -> bool:
         with self._lock:

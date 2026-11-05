@@ -62,6 +62,12 @@ Errors: an unknown `path` → **404** `{"error": "..."}`; an exception while bui
   port; `hardware_id` does not.
 - Unknown fields may be added to any object later (additive changes keep `api` = `"io-diagnostics/1"`); a page
   must ignore fields it does not know.
+- **A read answers from the published view** (2026-11-04, docs/peps/0003-reads-answer-from-a-published-view.md). A running host builds its one view on a
+  thread of its own, on each change and at least every 2 s, and every `GET` answers from the latest, at once: no read builds one, waits for one or waits for
+  a pass over `/proc`. So an answer is a moment old (0.25 s behind a change on a quiet machine, more under load: a build never takes more than a fifth of
+  a core). `clock.now` of `/api/v1/state` is the host's clock at the answer. A `POST` that changes what a read shows (`/act`, `/expect`, `/forget`,
+  `/retire`, `/config/*`) publishes before it answers, so a person's write is in their next read. Before its first view a host answers
+  `/api/v1/health` and the page itself; every other read waits for that view (seconds, once).
 
 ## The plugin environment
 
@@ -331,11 +337,15 @@ specified in `docs/state-config-v1.md`; `history`'s `state: true` marks a series
   `"io_facts.usb"` (presence, port link).
 - `actions`: registered by the entity's owner, with each precondition evaluated **passively** by the host:
   - each precondition's `state` is `"pass"`, `"fail"`, `"unknown"` or `"waiting"` (held by this host's own check);
-  - `port_free` (no process holds the device's tty / by-id; `find_port_holders`), `bus_lock_free` (rack bus lock
+  - `port_free` (no process holds the device's tty / by-id), `bus_lock_free` (rack bus lock
     `/home/bam/.cache/rack-commissioning/bus.lock`, read from `/proc/locks`, never taken; only an exclusive `WRITE`
     holder, a rack experiment, blocks it: probes hold it shared), `camera_free`
-    (`camera_holders`), `board_answers` (the entity has a fresh own record whose code is not `NoReply` / `NoAck` /
+    (no process holds its video nodes, no viewer is open), `board_answers` (the entity has a fresh own record whose code is not `NoReply` / `NoAck` /
     `PortBusy`), `update_available` (its `firmware` check says `UpdateAvailable`).
+  - **The holders are read in one pass, off the request (2026-11-04, `io_facts/open_files.py`).** One process walks `/proc` every few seconds while a page looks
+    and answers every gate of every device; `/node` reads the last answer and never waits, so a precondition here can be a few seconds old. A gate that has
+    no answer yet is `unknown` with the detail `being read`. What acts on a gate (a watch starting, a configuration write) asks for a pass no older than
+    2 s, and a run is checked again on the bus before anything is sent.
   - `state`: `"nothing_to_do"` (`update_available` fails: "up to date", whatever else holds, since a free port
     would not make the button useful), else `"blocked"` (a precondition `resolves` `"blocks"`), else `"waiting"` (one
     is held by this host's own running check, below), else `"ready"`. `reason` is the text to show beside a disabled
@@ -805,9 +815,12 @@ The answer is **200** `{"ok": true, "op", "path", "refused": null, "message": "d
 
 `{"ok": true, "api": "io-diagnostics/1", "mode": "live" | "fixture", "uptime_s": 12.3}`
 
+Answered from the moment the server is up (2026-11-04): a restarted host is up long before it has read its log, and a page or a release chip asking in that moment is answered, not refused.
+
 ## `GET /api/v1/history?path=<entity path>[&status=<name>][&window=<duration>]`
 
-The host keeps a rolling history per (entity path, status name), in memory (`io_diagnostics/history.py`): the
+The host keeps a rolling history per (entity path, status name), in memory (`io_diagnostics/history.py`), saved at a stop and every 2 min so a restart
+keeps it (`history.json` in the state directory, 2026-11-04): the
 level transitions and every measurement value, each on its own receive stamp (`received`, the host's clock). What
 it is fed: every NEW evaluation a plugin run brings (a replay re-sending its recording is one report), the host's
 own `plugin run` checks, and, on change, the OS checks (presence, port link, PCIe link, expected-absent) and the

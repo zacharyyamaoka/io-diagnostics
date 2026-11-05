@@ -234,16 +234,28 @@ def own_sessions() -> frozenset[int]:
     return frozenset(session for session in (_int(part) for part in os.environ.get(OWN_SESSIONS_ENV, "").split(",")) if session)
 
 
-def holders(port: str, ignore_sessions: frozenset[int] = frozenset()) -> tuple[list[Holder], int]:
+def holders(port: str, ignore_sessions: frozenset[int] = frozenset(), scan: dict | None = None) -> tuple[list[Holder], int]:
     """``(holders, processes that could not be looked at)``: every other process with one of the port's nodes open.
 
     WHY /proc and not ``lsof``: it is the same data without a subprocess, and a fake proc tree tests it. A process of another
-    user cannot be looked into (EACCES); the count is returned so the answer can say it did not see everything."""
+    user cannot be looked into (EACCES); the count is returned so the answer can say it did not see everything.
+
+    ``scan``: a pass over /proc already made (``io_facts.open_files``), which the page's gates share; without one, a walk of its own,
+    as the run itself does just before it resets."""
 
     nodes = set(device_nodes(port))
     if not nodes:
         return [], 0
     me, found, unseen = os.getpid(), [], 0
+    if scan is not None:
+        held = {}
+        for node in sorted(nodes):
+            for pid, _comm in scan["dev"].get(node, []):
+                held.setdefault(pid, node)
+        for pid, node in sorted(held.items()):
+            if pid != me and not (ignore_sessions and _session_of(pid) in ignore_sessions):
+                found.append(Holder(pid, _program(pid), node))
+        return found, int(scan.get("unseen") or 0)
     try:
         pids = sorted(int(entry.name) for entry in proc_root().iterdir() if entry.name.isdigit())
     except OSError:

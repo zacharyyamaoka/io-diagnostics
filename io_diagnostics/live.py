@@ -176,6 +176,7 @@ class LiveFeed:
 
     def _run(self) -> None:
         host = self.host
+        host.reads_published()
         revision = host.revision
         poll = max(0.05, min(1.0, self.idle_grace_s / 2))
         try:
@@ -192,6 +193,7 @@ class LiveFeed:
                     continue
                 time.sleep(COALESCE_S)
                 revision = host.revision
+                host.wait_view(revision)  # WHY: the view of this change, not the one from before it
                 try:
                     self._tick()
                 except Exception:  # noqa: BLE001 - a bad build must not end the feed; the next tick tries again

@@ -1,0 +1,26 @@
+{
+  "t": "2026-11-04T18:36:19-0700",
+  "sha": "77c86ee",
+  "label": "before",
+  "checkout": "/tmp/claude-1000/-home-bam-bam-ws--claude-worktrees-vibrant-jemison-a12441-v3/d032bcef-a523-4189-980d-aab530f0cb12/scratchpad/verify-client",
+  "machine_load": 13.67431640625,
+  "load": {
+    "events": 26867,
+    "boards_per_adapter": 300,
+    "describe_s": 3.0,
+    "busy_processes": 24
+  },
+  "cold_start": {
+    "to_first_answer_s": 3.58,
+    "to_state_s": 3.61,
+    "to_log_s": 3.65
+  },
+  "idle_cpu_pct": 4.8,
+  "node_ms": {
+    "p50": 851.8,
+    "p95": 2021.3,
+    "max": 2021.3,
+    "n": 15
+  },
+  "status": "measured"
+}

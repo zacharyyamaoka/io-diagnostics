@@ -55,6 +55,8 @@ CONFIG_WRITES = {"/api/v1/config/edit": "edit", "/api/v1/config/set": "set", "/a
 SETUP_EDITS = {"/api/v1/expect": "expect", "/api/v1/forget": "forget", "/api/v1/retire": "retire"}
 DESCRIPTION_WRITES = {f"{robot_description.API}/{op}": op for op in ("upload", "assign", "activate", "remove")}  # robot_library.py, the page's only
 DIAGNOSTICS_CONFIG = "/api/v1/diagnostics/config"  # GET reads an entity's stock diagnostics; POST writes one value (the page's only)
+# the POSTs that change what a read shows: each publishes a view before it answers, so a person's write is in their next read (Host.after_write)
+SHOWN_WRITES = frozenset({"/api/v1/act", *SETUP_EDITS, *CONFIG_WRITES})
 UI_HEADER = "X-IO-Diagnostics"
 UI_HEADER_VALUE = "ui"
 MAX_BODY = 64 * 1024
@@ -149,6 +151,10 @@ class Handler(BaseHTTPRequestHandler):
     gate: ActGate  # likewise
     server_version = "io-diagnostics/1"
 
+    def setup(self):
+        super().setup()
+        self.host.reads_published()  # a thread of its own per connection (ThreadingHTTPServer)
+
     def do_GET(self):  # noqa: N802 - http.server's name
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
@@ -231,6 +237,7 @@ class Handler(BaseHTTPRequestHandler):
         endpoint = urlparse(self.path).path
         if release_channels.is_sps_path(endpoint):
             return self._sps("POST")
+        self.host.read_view()  # WHY: a host still starting has no tree to act on; a write waits for it, as a read does
         found = RUN_PATH.match(endpoint)
         if found and found[2] in RUN_WRITES:
             try:
@@ -290,6 +297,7 @@ class Handler(BaseHTTPRequestHandler):
                     continue
                 time.sleep(EVENTS_COALESCE_S)
                 revision, reason = host.revision, host.change_reason
+                host.wait_view(revision)  # WHY: the view of this change, not the one from before it
                 current = host.activity(EVENTS_WINDOW, types, **log)
                 for event in reversed(current["events"]):  # oldest first, as they happened
                     if sent.get(event["id"]) != _signature(event):
@@ -842,6 +850,8 @@ class Handler(BaseHTTPRequestHandler):
         self._send(code, json.dumps(payload, default=str, ensure_ascii=False).encode(), "application/json; charset=utf-8", extra)
 
     def _send(self, code: int, body: bytes, content_type: str, extra: dict | None = None):
+        if self.command == "POST" and urlparse(self.path).path in SHOWN_WRITES:
+            self.host.after_write()
         self.send_response(code)
         self.send_header("Content-Type", content_type)
         self.send_header("Cache-Control", "no-store")

@@ -88,7 +88,7 @@ def boot_file_prefix(boot_start: float, boot_id: str) -> str:
 
 class EventLog:
     def __init__(self, directory: Path | None, *, boot_id: str = "", boot_start: float = 0.0, cap_bytes: int = CAP_BYTES,
-                 segment_bytes: int = SEGMENT_BYTES, max_loaded: int = MAX_LOADED):
+                 segment_bytes: int = SEGMENT_BYTES, max_loaded: int = MAX_LOADED, load: bool = True):
         self.directory = Path(directory) if directory is not None else None
         self.boot_id, self.boot_start = boot_id, boot_start
         self.prefix = boot_file_prefix(boot_start, boot_id)
@@ -102,7 +102,8 @@ class EventLog:
         self._first_seen: dict[str, float] = {}
         self._offsets: dict[str, int] = {}  # file name -> bytes of it already read
         self._sorted: list[tuple[str, Event]] | None = None
-        self._load()
+        if load:  # WHY optional: a service answers first (cli.py), and reads this behind the socket
+            self.load()
 
     # --- reading ---------------------------------------------------------------------------------------------------
     def files(self) -> list[Path]:
@@ -110,7 +111,7 @@ class EventLog:
             return []
         return sorted(path for path in self.directory.iterdir() if path.suffix == SUFFIX and path.is_file())
 
-    def _load(self) -> None:
+    def load(self) -> None:
         for path in self.files():
             self._read_new(path)
         if len(self._index) > self.max_loaded:

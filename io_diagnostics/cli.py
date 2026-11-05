@@ -36,7 +36,9 @@ import argparse
 import errno
 import json
 import os
+import signal
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -179,7 +181,7 @@ def _setup_edit(args) -> int:
 
 
 def _serve(args, *, tray: bool) -> int:
-    from io_diagnostics.host import make_host
+    from io_diagnostics.host import DRIVERS_WAIT_S, STOP_BOUND_S, make_host
     from io_diagnostics.server import make_server, serve_in_thread
 
     from io_diagnostics.settings import SettingsError, check_window, parse_duration
@@ -190,7 +192,7 @@ def _serve(args, *, tray: bool) -> int:
         print(f"--history-window: {error}", file=sys.stderr)
         return 2
     host = make_host(fixture=args.fixture, plugins_dir=args.plugins, offset_s=args.offset, enable=tuple(args.enable),
-                     machine=args.machine, expected=args.expected, history_window_s=window)
+                     machine=args.machine, expected=args.expected, history_window_s=window, restore_later=True)
     try:
         server = make_server(host, args.port, args.bind)
     except OSError as error:
@@ -198,25 +200,42 @@ def _serve(args, *, tray: bool) -> int:
             print(f"port {args.port} is in use (another io-diagnostics?); pass --port", file=sys.stderr)
             return 2
         raise
-    host.start(udev=not args.no_udev)
-    mode = (f"fixture {host.fixture['name']} ({host.fixture['label']})" if host.fixture
-            else f"fake machine {args.machine}" if args.machine else "live")
-    print(f"IO diagnostics on {host.url} · {mode} · {len(host.specs)} plugin(s) from {host.plugins_dir}", flush=True)
+    # WHY the server first (Zach, 2026-11-04: "A server restart is invisible"): sps restarts Preview on every .py that lands, and the port stayed dead for as long
+    # as the log took to read and the drivers took to describe themselves under load. The page and the chip are answered from here on; a read waits for the first view.
+    host.prepare_service()
+    serving = serve_in_thread(server)
+    if not tray:
+        # WHY: a stop must save the history, and SIGTERM (the runtime's restart) otherwise ends the process on the spot. Not under the tray: GTK's loop would hold the handler
+        signal.signal(signal.SIGTERM, _terminated)
     try:
+        host.start(udev=not args.no_udev)
+        host.drivers_started.wait(DRIVERS_WAIT_S)  # WHY: the line has always meant "the host is running its drivers", and tools wait for it; the page has been answered since the socket
+        mode = (f"fixture {host.fixture['name']} ({host.fixture['label']})" if host.fixture
+                else f"fake machine {args.machine}" if args.machine else "live")
+        print(f"IO diagnostics on {host.url} · {mode} · {len(host.specs)} plugin(s) from {host.plugins_dir}", flush=True)
         if tray:
             from io_diagnostics.tray import run_tray
 
-            serve_in_thread(server)
+            host.reads_published()
             run_tray(lambda: host.state()["chip"])
         else:
-            server.serve_forever()
+            serving.join()
     except KeyboardInterrupt:
         pass
     finally:
+        # WHY a bound: a run being stopped, or a plugin that will not die, must not hold up the next start; the runtime sweeps what is left.
+        # WHY daemon: a Timer is otherwise a thread the process waits for, so every stop took the whole bound
+        watchdog = threading.Timer(STOP_BOUND_S, os._exit, (0,))
+        watchdog.daemon = True
+        watchdog.start()
         host.stop()
-        server.shutdown() if tray else None
+        server.shutdown()
         server.server_close()
     return 0
+
+
+def _terminated(*_args) -> None:
+    raise KeyboardInterrupt
 
 
 def main(argv: list[str] | None = None) -> int:

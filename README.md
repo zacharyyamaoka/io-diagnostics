@@ -211,7 +211,17 @@ uv run --project /home/bam/io-diagnostics --group dev --group interop pytest /ho
 ```
 
 ```bash
+/usr/bin/node /home/bam/io-diagnostics/tests/test_instant_pages.js
+```
+
+```bash
 /usr/bin/node /home/bam/io-diagnostics/tools/shoot_dashboard.js
+```
+
+How long a page waits for the host, and what the host costs when nobody asks (cold start, idle CPU, `/api/v1/node` under load; JSON in `bench/classic/`):
+
+```bash
+/usr/bin/python3 /home/bam/io-diagnostics/tools/bench_instant.py --label run
 ```
 
 The driver plugins' own tests live in bam_ws. intel_rgbd's package suite queries the SDK at import, so on a machine

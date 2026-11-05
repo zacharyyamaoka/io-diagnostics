@@ -262,6 +262,7 @@ class ExpectedSetup:
         self.manifest = Manifest()
         self.note = ""  # why the file could not be read (edits are refused until it reads again)
         self._stamp: tuple | None = None
+        self.answers: dict[str, str] = {}  # rig name -> its last counts ("2/2 adapters · 7/7 boards"): the Roster keeps them across a restart
         self.reload()
 
     def _file_stamp(self) -> tuple | None:
@@ -617,8 +618,10 @@ def _rig_row(rig: Rig, path: str, members: list[Found], merged: tree.Merged, own
              setup: ExpectedSetup) -> tuple[Entity, DiagnosticStatus | None]:
     if any(found.checking for found in members):
         # WHY no verdict yet (Zach, 2026-10-24: a restarted host showed "0/7 boards" and "?" until the first probes
-        # finished): a count taken before any driver has looked is not a count. The row waits, without a mark.
-        return Entity(path, f"{rig.name} · checking…", RIG_KIND, via=tree.HOST_PATH, owner="io_diagnostics"), None
+        # finished): a count taken before any driver has looked is not a count. The row waits, without a mark, and
+        # says what it last knew (Zach, 2026-11-04: "checking…" keeps the last known answer next to it).
+        last = setup.answers.get(rig.name)
+        return Entity(path, f"{rig.name} · {last + ' · ' if last else ''}checking…", RIG_KIND, via=tree.HOST_PATH, owner="io_diagnostics"), None
     kinds: dict[str, list[int]] = {}  # kind word -> [here, expected]
     boards = [0, 0]
     missing, unknown, extras, moved, mismatched, checks = [], [], [], [], [], []
@@ -682,6 +685,8 @@ def _rig_row(rig: Rig, path: str, members: list[Found], merged: tree.Merged, own
         shown = "?" if word == "_boards" and here == 0 and unknown else here
         counts.append(f"{shown}/{total} {_plural(total, NODE_WORD if word == '_boards' else word)}")
     name = f"{rig.name} · {' · '.join(counts)}" if counts else f"{rig.name} · nothing expected yet"
+    if counts:
+        setup.answers[rig.name] = " · ".join(counts)
     values = [KeyValue(_plural(2, NODE_WORD if word == "_boards" else word), f"{here}/{total}") for word, (here, total) in kinds.items()]
     if missing:
         level, code, message = WARN, "ExpectedMissing", f"missing: {' · '.join(missing)}"

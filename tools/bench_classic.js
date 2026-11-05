@@ -84,11 +84,27 @@ async function startFixture(root, loaded) {
     const listing = await fetch(`${base}/api/v1/plugins`).then((response) => response.json());
     const names = listing.plugins.map((plugin) => plugin.name).sort().join(',');
     if (names !== 'state_camera,state_joint') throw Error(`unexpected plugins: ${names}`);
+    // WHY: the server answers before its drivers have reported (PEP 0003), and this bench is about a board that streams
+    const board = `${base}/api/v1/node?path=${encodeURIComponent(BOARD)}`;
+    for (let tries = 0; tries < 600 && !(await fetch(board).then((response) => response.ok)); tries += 1) await wait(100);
     return { child, base };
   } catch (error) {
     await stopFixture(child);
     throw error;
   }
+}
+
+// The fixture's whole process group, in CPU seconds. WHY additive, a field of its own: the Vibe Tracks KPI reads the others by name.
+function groupCpuS(group) {
+  let ticks = 0;
+  for (const name of fs.readdirSync('/proc')) {
+    if (!/^\d+$/.test(name)) continue;
+    try {
+      const fields = fs.readFileSync(`/proc/${name}/stat`, 'utf8').split(') ').pop().split(' ');
+      if (Number(fields[2]) === group) ticks += Number(fields[11]) + Number(fields[12]);
+    } catch (_) { /* it left */ }
+  }
+  return ticks / 100;
 }
 
 function installRuler() {
@@ -226,10 +242,12 @@ async function measure(browser, loaded, seconds, label) {
     await cdp.send('Profiler.start');
     await page.evaluate(() => { Object.assign(__bench, { record: true, lag: [], frames: [], tasks: [], sampleAge: [], arrivals: [], paints: [], renders: 0 }); });
     const started = Date.now();
+    const cpuBefore = groupCpuS(host.child.pid);
     recording = true;
     await wait(seconds * 1000);
     recording = false;
     const elapsed = (Date.now() - started) / 1000;
+    const hostCpuPct = Math.round((groupCpuS(host.child.pid) - cpuBefore) / elapsed * 1000) / 10;
     const raw = await page.evaluate(() => {
       __bench.record = false;
       return { lag: __bench.lag, frames: __bench.frames, tasks: __bench.tasks, sampleAge: __bench.sampleAge,
@@ -253,7 +271,7 @@ async function measure(browser, loaded, seconds, label) {
       mode, seconds: elapsed, observed,
       delivery_ms: stats(raw.arrivals.map((event) => event.received - event.emitted)),
       emission_gap_ms: stats(raw.arrivals.slice(1).map((event, index) => event.emitted - raw.arrivals[index].emitted)),
-      paint_delay_ms: stats(raw.paints), lag_ms: stats(raw.lag), sample_age_ms: stats(raw.sampleAge),
+      paint_delay_ms: stats(raw.paints), lag_ms: stats(raw.lag), sample_age_ms: stats(raw.sampleAge), host_cpu_pct: hostCpuPct,
       long_tasks_per_min: raw.tasks.length * 60 / elapsed,
       blocked_ms: raw.tasks.reduce((total, duration) => total + duration, 0),
       long_task_max_ms: stats(raw.tasks).max || 0, frame_ms: stats(raw.frames), heard,

@@ -75,6 +75,8 @@ class Roster:
         self.devices: dict[str, dict] = {}
         self.forgotten: dict[str, dict[str, float]] = {}  # key -> {hardware_id or rel path: when}
         self.restored: dict[str, dict[str, float]] = {}  # key -> {rel path: last_heard} not yet re-reported by a good run
+        self.rigs: dict[str, str] = {}  # rig name -> its last counts: what "checking…" says beside it after a restart (ExpectedSetup.answers)
+        self._rigs_written: dict[str, str] = {}
         self.note = ""  # why the file could not be read at start (sticky: the content was dropped)
         self.write_note = ""
         self._written = -1e18
@@ -85,6 +87,8 @@ class Roster:
                 self.devices = {str(key): dict(value) for key, value in (data.get("devices") or {}).items() if isinstance(value, dict)}
                 self.forgotten = {str(key): {str(item): float(when) for item, when in dict(value).items()}
                                   for key, value in (data.get("forgotten") or {}).items() if isinstance(value, dict)}
+                self.rigs = {str(key): str(value) for key, value in (data.get("rigs") or {}).items()}
+                self._rigs_written = dict(self.rigs)
             except (OSError, ValueError, AttributeError, TypeError) as error:
                 self.devices, self.forgotten = {}, {}
                 self.note = f"{self.path}: unreadable ({type(error).__name__}: {error}); starting empty"
@@ -290,6 +294,13 @@ class Roster:
         return out
 
     # --- persistence --------------------------------------------------------------------------------------------------
+    def keep_rigs(self) -> None:
+        """A rig's counts changed: on disk now, because a restart reads them back. Compared first: a view is built many times a minute."""
+
+        if self.rigs != self._rigs_written:
+            self._rigs_written = dict(self.rigs)
+            self._save(True)
+
     def _save(self, urgent: bool) -> None:
         if not self.path or not (urgent or time.monotonic() - self._written > LEDGER_WRITE_S):
             return
@@ -298,7 +309,7 @@ class Roster:
             handle, temporary = tempfile.mkstemp(prefix=f".{self.path.name}.", dir=self.path.parent)
             with os.fdopen(handle, "w") as file:
                 json.dump({"version": 1, "devices": self.devices,
-                           "forgotten": {key: value for key, value in self.forgotten.items() if value}},
+                           "forgotten": {key: value for key, value in self.forgotten.items() if value}, "rigs": self.rigs},
                           file, indent=1, sort_keys=True, default=str)
                 file.flush()
                 os.fsync(file.fileno())

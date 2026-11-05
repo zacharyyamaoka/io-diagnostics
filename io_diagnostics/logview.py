@@ -23,6 +23,7 @@ entity scope and the channel are the API's query (``select``); typed search and 
 
 from __future__ import annotations
 
+import bisect
 import dataclasses
 import re
 from dataclasses import dataclass, field
@@ -169,13 +170,39 @@ def fold(events: Iterable[Event], *, active_runs: Iterable[str] | None = None) -
     plugs = [event for event in ordered if event.code in PLUG_CODES]
     ordinary = [event for event in ordered if event.code not in LIFECYCLE and event.code != "LevelChanged" and event.code not in RUN_CODES]
 
+    # WHY indexes, the rules unchanged (Zach, 2026-11-04: "for the log shouldn't it just be there?"): every confirmation was compared with every event, so
+    # Preview's log took 946,693 fault_key calls and 1.5-3.5 s, on every load of a Log tab and every tick of every open /events stream. Each
+    # index narrows a question to the events that can answer it, in their order; the same predicates below still decide.
+    orders_of: dict[tuple[str, str], list[tuple]] = {}
+    confirmed_of: dict[tuple[str, str], list[Event]] = {}
+    for fault in confirmed:
+        key = fault_key(fault)
+        orders_of.setdefault(key, []).append(_order(fault))
+        confirmed_of.setdefault(key, []).append(fault)
+    on_path: dict[str, list[Event]] = {}
+    for fault in confirmed:
+        on_path.setdefault(fault.path, []).append(fault)
+    path_stamps = {path: [fault.stamp or 0.0 for fault in faults] for path, faults in on_path.items()}
+
     # 1. the confirmations: onto a cause, into a start-up group, or a row of their own
     causes = [event for event in ordinary if event.code not in NOT_A_CAUSE and not _args(event).get("provisional")]
+    causes_on: dict[str, list[Event]] = {}
+    for event in causes:
+        if SEVERITY_ORDER.get(event.severity, 1) >= SEVERITY_ORDER["warn"]:
+            causes_on.setdefault(event.path, []).append(event)
+    cause_stamps = {path: [event.stamp or 0.0 for event in events] for path, events in causes_on.items()}
+
+    def near(events: list[Event], stamps: list[float], low: float, high: float) -> list[Event]:
+        """Those of ``events`` (ascending, ``stamps`` theirs) stamped in [low, high], and a hair more: the rule decides the edge."""
+
+        return events[bisect.bisect_left(stamps, low - 1e-6):bisect.bisect_right(stamps, high + 1e-6)]
+
     cause_of: dict[str, Event] = {}
     started_groups: dict[object, list[Event]] = {}
     alone: list[Event] = []
     for fault in confirmed:
-        cause = _cause(fault, causes)
+        at = fault.stamp or 0.0
+        cause = _cause(fault, near(causes_on.get(fault.path, []), cause_stamps.get(fault.path, []), at - CAUSE_WINDOW_S, at + 1.0))
         if cause is not None:
             cause_of[event_id(fault)] = cause
         elif _args(fault).get("at_start") is not None:
@@ -186,15 +213,20 @@ def fold(events: Iterable[Event], *, active_runs: Iterable[str] | None = None) -
     for event in lifecycle:
         if event.code != "FaultConfirmed":
             closing.setdefault(fault_key(event), []).append(event)
+    closing_orders = {key: [_order(event) for event in events] for key, events in closing.items()}
 
     def ending(fault: Event) -> tuple[str, float | None]:
         """How this occurrence ended: the first healed / cleared of the same fault after it and before the next confirmation."""
 
-        later = [e for e in confirmed if fault_key(e) == fault_key(fault) and _order(e) > _order(fault)]
-        limit = _order(later[0]) if later else (float("inf"), 0)
-        for event in closing.get(fault_key(fault), []):
-            if _order(fault) < _order(event) < limit:
-                return ("healed" if event.code == "FaultHealed" else "cleared"), event.stamp
+        key, order = fault_key(fault), _order(fault)
+        same = orders_of[key]
+        following = bisect.bisect_right(same, order)
+        limit = same[following] if following < len(same) else (float("inf"), 0)
+        orders = closing_orders.get(key, [])
+        first = bisect.bisect_right(orders, order)
+        if first < len(orders) and orders[first] < limit:
+            event = closing[key][first]
+            return ("healed" if event.code == "FaultHealed" else "cleared"), event.stamp
         return "confirmed", None
 
     # 2. coalesce the ordinary events (a cause keeps its own row: it carries a fault)
@@ -238,25 +270,29 @@ def fold(events: Iterable[Event], *, active_runs: Iterable[str] | None = None) -
     for event in lifecycle:
         if event.code == "FaultConfirmed":
             continue
-        opened = [fault for fault in confirmed if fault_key(fault) == fault_key(event) and _order(fault) < _order(event)]
-        link = landed.get(event_id(opened[-1])) if opened else None
+        key = fault_key(event)
+        before = bisect.bisect_left(orders_of.get(key, []), _order(event))  # the confirmations of this fault before it
+        link = landed.get(event_id(confirmed_of[key][before - 1])) if before else None
         rows.append(Row(dataclasses.replace(event, args={**_args(event), "confirmed_row": link}) if link else event))
 
     # 4. the transitions
     row_index = {row.id: row for row in rows}
+    plug_stamps = [plug.stamp or 0.0 for plug in plugs]
     for event in transitions:
         args = _args(event)
         to = str(args.get("to", ""))
         code = str(args.get("status_code") or args.get("status") or "")
         if to in ("warn", "error"):
-            following = [fault for fault in confirmed if fault.path == event.path and str(_args(fault).get("fault", "")) in (code, str(args.get("status", "")))
-                         and -1.0 <= (fault.stamp or 0.0) - (event.stamp or 0.0) <= TRANSITION_FAULT_S]
+            at = event.stamp or 0.0
+            nearby = near(on_path.get(event.path, []), path_stamps.get(event.path, []), at - 1.0, at + TRANSITION_FAULT_S)
+            following = [fault for fault in nearby if str(_args(fault).get("fault", "")) in (code, str(args.get("status", "")))
+                         and -1.0 <= (fault.stamp or 0.0) - at <= TRANSITION_FAULT_S]
             target = row_index.get(landed.get(event_id(following[0]), "")) if following else None
             if target is not None:
                 target.members.append(event)
                 continue
             shown = dataclasses.replace(event, severity="debug")
-        elif to in SILENCE and not _explained(event, plugs):
+        elif to in SILENCE and not _explained(event, near(plugs, plug_stamps, (event.stamp or 0.0) - EXPLAIN_WINDOW_S, (event.stamp or 0.0) + 5.0)):
             shown = dataclasses.replace(event, severity="warn")
         else:
             shown = dataclasses.replace(event, severity="debug")
