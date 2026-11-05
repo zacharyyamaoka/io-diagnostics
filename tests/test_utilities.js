@@ -481,6 +481,8 @@ async function main() {
       && /dry-run/.test(refusals.noToken.error), refusals);
 
     // ---- ExpectedAbsent: injected into /state and /node, in every structure
+    // WHY the feed held, unanswered: a page with a feed goes by its snapshot, so what is injected here reaches the page only on its polling fallback. Unanswered, not aborted: an abort logs a console error
+    await page.route('**/api/v1/live', () => {});
     await page.route('**/api/v1/state', async (route) => {
       const response = await route.fetch();
       await route.fulfill({ response, json: injectAbsent(await response.json()) });
@@ -505,6 +507,7 @@ async function main() {
     }
     check('absent: a warn row in every structure', inEvery.every((item) => item.row), inEvery);
     await page.unroute('**/api/v1/state');
+    await page.unroute('**/api/v1/live');
     await pick(page, '#structure', 'p1');
 
     // ---- the seams, drawn

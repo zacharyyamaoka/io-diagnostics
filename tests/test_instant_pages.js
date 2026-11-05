@@ -186,19 +186,22 @@ async function scenario(browser, name, body) {
     await scenario(browser, 'log keeps rows', async (page) => {
       // WHY openPage: the page's own way to a tab, whichever tab this kind of entity remembers
       const toLog = (path) => page.evaluate((target) => { select(target); openPage('log'); }, path);
+      // WHY the rows' ids, not how many: for a moment after the page moves, the entity it left is still on screen, so a count said "at once" of the camera's rows
+      const rowIds = () => page.$$eval('[data-d6-log] .ev', (rows) => rows.map((row) => row.dataset.alRow));
+      const holds = (ids, wanted) => wanted.every((id) => ids.includes(id));
       await H.open(page, server.base, ADAPTER, 'log');
       await page.waitForSelector('[data-d6-log] .ev', { timeout: 20000 });
-      const before = await page.locator('[data-d6-log] .ev').count();
+      const left = await rowIds();
       await toLog(CAMERA);
       await page.waitForSelector('[data-d6-log] .al-list', { timeout: 20000 });
       await page.route('**/api/v1/activity*', (route) => route.abort());
       await page.route('**/api/v1/node*', (route) => route.abort());
       await toLog(ADAPTER);
-      const back = await waitFor(() => page.locator('[data-d6-log] .ev').count(), 400, 20);
-      check('coming back to a log shows its rows at once, the host not answering', back >= before, `${back} rows, ${before} when it was left`); // WHY >=: the fixture logs on
+      const back = await waitFor(async () => { const ids = await rowIds(); return holds(ids, left) ? ids : null; }, 400, 20);
+      check('coming back to a log shows its rows at once, the host not answering', Boolean(back), `${(back || []).length} rows, ${left.length} when it was left`);
       await wait(9500); // the log's own 8 s refresh fails too
-      const kept = await page.locator('[data-d6-log] .ev').count();
-      check('a log that fails to refresh keeps the rows it has', kept >= back, `${kept} rows, ${back} before it failed`); // WHY >=: the live stream still brings new ones
+      const kept = await rowIds();
+      check('a log that fails to refresh keeps the rows it has', Boolean(back) && holds(kept, back), `${kept.length} rows, ${(back || []).length} before it failed`);
       check('and says so, with Retry', Boolean(await page.locator('[data-d6-log] .al-late [data-al-retry]:visible').count()));
       await page.unroute('**/api/v1/activity*');
       await page.locator('[data-d6-log] .al-late [data-al-retry]').click();

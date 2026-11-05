@@ -134,6 +134,8 @@ async function main() {
       'CAN 14': { received_per_s: null, expected_per_s: 0.0056, window_s: null },
     };
     const patchState = async (page) => {
+      // WHY the feed held, unanswered: a page with a feed goes by its snapshot, so what is injected here reaches the page only on its polling fallback. Unanswered, not aborted: an abort logs a console error
+      await page.route('**/api/v1/live', () => {});
       await page.route('**/api/v1/state*', async (route) => {
         const response = await route.fetch();
         const body = await response.json();
@@ -171,6 +173,7 @@ async function main() {
       await page.screenshot({ path: path.join(SHOTS, `rate-column-${scheme}.png`) });
       // the same page on a USB selection: breadcrumb and header in the new words
       await page.unroute('**/api/v1/state*');
+      await page.unroute('**/api/v1/live');
       await open(page, base, 'l1', '?sel=host%2Fusb1%2Fport-1-3');
       await page.screenshot({ path: path.join(SHOTS, `usb-labels-tree-${scheme}.png`) });
       await open(page, base, 'l1', '?view=table&sel=host%2Fusb1');
