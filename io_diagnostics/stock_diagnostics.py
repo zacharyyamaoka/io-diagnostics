@@ -495,9 +495,11 @@ _NO_DRIVER = "no {what} on RobotDx; a driver of one that reports {keys} in its S
 _RUN = ("a driver or runner that reports its commanded position{velocity} live, or the rack's recorded runs of this joint (bam_rack_twin "
         "npz in the rack archive), of which there is none")
 _TAG = ("no fiducial tag is mounted in view and nothing detects one; a fixed tag and a detector that reports {what} would provide them")
-_FLAT = ("Intel's depth-quality metrics are defined on a flat target at a measured distance filling the central 40 %, with raw z16 "
-         "frames of it; no flat target is set up in front of any camera and no such capture exists (the archive's RealSense captures are "
-         "8-bit, the driver's depth tile a colourised preview); a flat target in view, with the driver writing its raw depth, would provide them")
+_DEPTH_CAPTURE = ("the newest raw-depth capture of this camera in the rack archive (bam_ws intel_rgbd.depth_capture: "
+                  "depth_<RealSense serial>_<UTC>.npz, N metric depth frames, intrinsics, depth scale)")
+_FLAT = ("plane RMS is defined on a flat target at a measured distance filling the central 40 % (Intel's depth-quality method), and the "
+         "newest capture of this camera is not tagged as one; a capture of a flat target with its distance (depth_capture --flat-target-mm) "
+         "would provide it")
 _SIM_CELL = "the newest UR5e sim cell (traj_integration_tests ur_compare: its traj_compare report's commanded and simulated trajectory)"
 W, M = NOT_WIRED_GAP, NOT_MEASURED_GAP
 SOURCES: dict[str, Source] = {
@@ -541,11 +543,12 @@ SOURCES: dict[str, Source] = {
     "camera.extrinsic_drift": _none("fixed tag detections", _TAG.format(what="the tag's pixel centre"), M),
     "camera.blur": Source("frames", "grey frames", "the newest image of the colour stream in the frame directory (JPEG or PNG)", W),
     "camera.tag_detect": _none("tag detections (found or not, per frame)", _TAG.format(what="each frame's result"), M),
-    # WHY NotMeasured (round 4): Intel's depth-quality metrics are defined on a flat target at a measured distance filling the central ROI;
-    # none is set up in front of any camera, so raw depth of the scene in view would be a number about the scene, not the camera
-    "depth.plane_rms": _none("depth values of a flat target", _FLAT, M),
-    "depth.fill_rate": _none("depth values of a flat target", _FLAT, M),
-    "depth.temporal_noise": _none("depth values of a flat target", _FLAT, M),
+    # WHY a raw-depth capture (round 5, Codex audit 2026-11-04 r5, gap 2): the watch's depth tile is a colourised preview; bam_ws
+    # intel_rgbd.depth_capture writes N metric depth frames with intrinsics. Fill rate and temporal noise hold on any still scene; plane RMS
+    # needs a flat target at a known distance, so it is NotMeasured (the physical gap) on a capture not tagged as one (_feed_depth)
+    "depth.plane_rms": Source("depth_capture", "depth values of a flat target", _DEPTH_CAPTURE, W),
+    "depth.fill_rate": Source("depth_capture", "raw depth frames", _DEPTH_CAPTURE, W),
+    "depth.temporal_noise": Source("depth_capture", "raw depth frames", _DEPTH_CAPTURE, W),
     "depth.health_check": Source("action", "the on-chip calibration's health score", "intel_rgbd's calibrate run kept by this host "
                                  "(run_on_chip_calibration: the health before and after, and whether it was written)", W),
     # camera_hsi
@@ -779,6 +782,7 @@ def decode_image(data: bytes, format: str = "png"):
 
 # ----- the rack's recordings on disk: recorded runs and the acceptance (round 3, gap 2) ---------------------------------------------
 ACCEPTANCE_SCHEMA = "bam_rack_twin.acceptance/1"
+DEPTH_CAPTURE_SCHEMA = "intel_rgbd.depth_capture/1"  # bam_ws intel_rgbd.depth_capture.SCHEMA
 _CAN_IN_NAME = re.compile(r"(?<![0-9A-Za-z])can(\d+)(?![0-9])")  # s02_can11_waypoints.npz -> 11; never "can1" inside "can11"
 _CAN_IN_PATH = re.compile(r"/can/(\d+)$")  # a board's entity path: <adapter>/can/<id>
 
@@ -832,6 +836,7 @@ class RackArchive:
         self._analysis = sorted(self.root.glob("rack_*/analysis/*.json"))
         self._cards = sorted(self.root.glob("rack_*/analysis/model_cards/can*.json"))
         self._captures = sorted(self.root.glob("rack_*/**/cam_*.npz"))
+        self._depth = sorted(self.root.glob("rack_*/**/depth_*.npz"))
         self._cal_logs = sorted(self.calibrations.glob("*/moteus-cal-*.log")) if self.calibrations is not None else []
         self._cells = sorted(self.sim_cells.glob("ur_compare_*/report.html")) if self.sim_cells is not None else []
         self._listed_at = now
@@ -936,6 +941,36 @@ class RackArchive:
             return max(found, key=lambda file: (file.stat().st_mtime, str(file)), default=None)
         except OSError:
             return None
+
+    def newest_depth_capture(self, serial: str):
+        """The newest intel_rgbd.depth_capture/1 of RealSense ``serial`` (by its recorded_at) as ``(file, meta, depth_m)``, or None."""
+
+        def load(file: Path):
+            from robotdx.diagnostics._numpy import np
+
+            try:
+                with np.load(file) as archive:
+                    meta = json.loads(str(archive["meta"]))
+                    return (meta, np.asarray(archive["depth_m"], float)) if meta.get("schema") == DEPTH_CAPTURE_SCHEMA else None
+            except (OSError, ValueError, KeyError):
+                return None
+
+        with self._lock:
+            self._list()
+            found = []
+            for file in self._depth:
+                if not file.name.startswith(f"depth_{serial}_"):
+                    continue
+                try:
+                    loaded = self._cached(file, load)
+                except OSError:
+                    continue
+                if loaded is not None and loaded[0].get("serial") == serial:
+                    found.append((str(loaded[0].get("recorded_at") or ""), str(file), file, *loaded))
+        if not found:
+            return None
+        _stamp, _name, file, meta, depth = max(found, key=lambda item: item[:2])
+        return file, meta, depth
 
     def moteus_calibration(self, serial: str) -> tuple[Path, dict] | None:
         """The newest moteus_tool calibration log of the board with serial ``serial`` (its device_info, by its timestamp), or None."""
@@ -1287,6 +1322,29 @@ def _feed_captures(binding, config, source, path, entity, inputs: Inputs, start,
     raise _no_source(source, entity, f"the rack archive {inputs.archive.root} holds no capture of RealSense {', '.join(inputs.realsense_serials)}")
 
 
+def _feed_depth(binding, config, source, path, entity, inputs: Inputs, start, now):
+    from robotdx.diagnostics.stock.camera import DepthFrames
+
+    if inputs.archive is None:
+        raise _no_source(source, entity, "this host has no rack archive (IO_DIAGNOSTICS_RACK_ARCHIVE)")
+    if not inputs.realsense_serials:
+        raise _no_source(source, entity, "its driver names no RealSense serial (realsense_serial) to find its depth captures by")
+    found = next((item for item in (inputs.archive.newest_depth_capture(serial) for serial in inputs.realsense_serials) if item), None)
+    if found is None:
+        raise _no_source(source, entity, f"the rack archive {inputs.archive.root} holds no depth_capture of RealSense "
+                                         f"{', '.join(inputs.realsense_serials)}")
+    file, meta, depth_m = found
+    flat = meta.get("flat_target_mm")
+    if config.headline == "plane_rms" and not (isinstance(flat, (int, float)) and flat > 0):
+        raise _Missing(NOT_MEASURED, f"no flat target depth source on {entity}: its newest depth capture ({file.name}) is not tagged; {_FLAT}")
+    intrinsics = meta.get("intrinsics") or {}
+    data = DepthFrames(depth=1000.0 * depth_m, depth_unit_mm=1.0, fx=intrinsics.get("fx"), fy=intrinsics.get("fy"), cx=intrinsics.get("ppx"),
+                       cy=intrinsics.get("ppy"), ground_truth_mm=float(flat) if isinstance(flat, (int, float)) else None, source_id=str(file))
+    window = {"from": None, "to": None, "window_s": None, "state": "", "samples": int(depth_m.shape[0]), "source": "depth_capture",
+              "file": str(file), "frames": int(depth_m.shape[0]), "recorded_at": meta.get("recorded_at"), "flat_target_mm": flat}
+    return data, int(depth_m.shape[0]), window
+
+
 def _feed_action(binding, config, source, path, entity, inputs: Inputs, start, now):
     from robotdx.diagnostics.stock.truthfulness import Pair
 
@@ -1492,7 +1550,7 @@ def _feed_sim_cell(binding, config, source, path, entity, inputs: Inputs, start,
 
 # WHY a feed may return a third item, its own window: a recorded run's or an acceptance's time is its own, not the last window_s of now
 _FEEDS = {"state_stamps": _feed_state_stamps, "frame_stamps": _feed_frame_stamps, "frames": _feed_frames, "reply_counts": _feed_reply_counts,
-          "holds": _feed_holds, "acceptance": _feed_acceptance, "captures": _feed_captures, "action": _feed_action, "kv_check": _feed_kv,
+          "holds": _feed_holds, "acceptance": _feed_acceptance, "captures": _feed_captures, "depth_capture": _feed_depth, "action": _feed_action, "kv_check": _feed_kv,
           "followup": _feed_followup, "wear": _feed_wear, "sim_cell": _feed_sim_cell, "config": _feed_config, "faults": _feed_faults, "link_events": _feed_link_events, "members": _feed_members, "evidence": _feed_evidence}
 
 

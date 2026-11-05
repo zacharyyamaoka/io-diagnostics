@@ -1787,7 +1787,7 @@ class Host:
         can_ids = tuple(dict.fromkeys(found for found in (stock_diagnostics_module.can_id_of(leaf) for leaf in devices) if found is not None))
         computer = self._computer_temperature(view.now, span_s) if composite is not None and "state" in kinds else []
         serials, action_runs, leaf_identity, leaf_configs = (), (), {}, ()
-        if "captures" in kinds:  # the camera's SDK serial, as its driver names it (intel_rgbd: realsense_serial), never the USB one
+        if kinds & {"captures", "depth_capture"}:  # the camera's SDK serial, as its driver names it (intel_rgbd: realsense_serial), never the USB one
             serials = tuple(dict.fromkeys(value for status in view.merged.statuses if status.path == path
                                           for key, value in status.values if key == "realsense_serial" and value))
         if "action" in kinds:
