@@ -443,6 +443,20 @@ def test_a_client_sees_a_runs_end_as_one_moment(rig):
     assert rig.run(run["id"])["active"] is False
 
 
+def test_a_client_told_a_run_is_over_finds_its_ending_in_the_next_read(tmp_path):
+    rig = make_rig(tmp_path)
+    try:
+        # WHY serving with no builder thread: a read answers from the published view and nothing else publishes here, so RunEnded can only be in that read if the ending
+        # itself published it before the client was told. This is what the page does on `end`: it looks for the run's row in the log.
+        rig.host._serving = True
+        rig.host.view()
+        run = rig.start("old", node=None)
+        Watcher(rig, run["id"]).wait_end()
+        assert [e["args"]["state"] for e in rig.call("GET", "/api/v1/activity?types=run")[1]["events"] if e["code"] == "RunEnded"] == ["done"]
+    finally:
+        rig.close()
+
+
 def test_a_run_is_over_on_disk_and_in_the_host_before_clients_are_told(rig):
     reached, release = _hold_the_ending(rig)
     run = rig.start("old", node=None)
