@@ -251,6 +251,35 @@ async function scenario(browser, name, body) {
       check('a /state poll that does not answer is not stacked up (at most one in flight)', polls <= 1, `${polls} in 5 s`);
     });
 
+    // ----- a page opened during a cold start ---------------------------------------------------------------------------------------
+    // Found by test_utilities_ux, about one run in eight, 2026-11-04: the server is up before the drivers have answered, so a page can read /state a moment before a board reports
+    // and subscribe a moment after. The feed's baseline has the board, so no delta will ever say it, and the snapshot that had it was thrown away: /state was "the canonical bootstrap".
+    // The tree stayed without the board until the row next changed, which on a healthy board is never. Forced here: a /state from before the board, the feed from after it.
+    const fromBeforeTheBoard = (page, holdMs) => page.route('**/api/v1/state', async (route) => {
+      const reply = await route.fetch();
+      const body = await reply.json();
+      const without = (row) => { row.children = row.children.filter((child) => child.path !== BOARD); row.children.forEach(without); };
+      without(body.tree);
+      await wait(holdMs);
+      await route.fulfill({ response: reply, json: body }).catch(() => {});
+    });
+    const inTheTree = (page, path) => waitFor(() => page.evaluate((target) => Boolean(S.byPath && S.byPath.has(target)), path), 4000, 100);
+
+    await scenario(browser, 'older state, then the feed', async (page) => {
+      await fromBeforeTheBoard(page, 0);
+      await page.route('**/api/v1/live*', async (route) => { await wait(1200); await route.continue().catch(() => {}); });
+      await page.goto(url(ADAPTER));
+      check('a board that reported between /state and the feed is in the tree: /state landed first', Boolean(await inTheTree(page, BOARD)));
+    });
+
+    await scenario(browser, 'the feed, then older state', async (page) => {
+      await fromBeforeTheBoard(page, 1500);
+      await page.goto(url(ADAPTER));
+      await page.waitForFunction(() => typeof S !== 'undefined' && S.data, null, { timeout: 15000 });
+      check('and when the feed landed first', Boolean(await inTheTree(page, BOARD)));
+      check('the page is on the entity it opened on', (await page.evaluate(() => S.sel)) === ADAPTER);
+    });
+
     // ----- the chip of the release channels ------------------------------------------------------------------------------------------
     await scenario(browser, 'chip', async (page) => {
       await H.open(page, server.base, ADAPTER);
