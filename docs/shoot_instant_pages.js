@@ -32,7 +32,7 @@ const STEPS = ['fdcanusb · 0607623A', 'CAN 11', 'bam-GPU', 'fdcanusb · 272813E
       const heading = document.querySelector('.d-title');
       return heading && heading.textContent.includes(title) && document.querySelector('.d6-tab') && !/loading…/.test(document.body.innerText);
     }, name, { timeout: 5000, polling: 'raf' }).then(() => true, () => false);
-    paints.push({ name, ms: Date.now() - started, drawn });
+    paints.push({ name, ms: Date.now() - started, drawn, heard: await page.$eval('[data-d6-heard]', (element) => element.textContent).catch(() => null) });
     await page.waitForTimeout(1500);
     if (name === 'CAN 11') {
       await page.locator('button.d6-tab', { hasText: 'Log' }).first().click();

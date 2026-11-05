@@ -13,7 +13,7 @@ import sys
 import cv2
 
 FOLDER = sys.argv[1]
-SHA = 'fc01258'
+SHA = 'defcb78'
 
 
 def data_uri(name: str, mime: str) -> str:
@@ -72,6 +72,7 @@ DONE = [
     'pytest 1457 passed at <code>1519fb7</code>; <code>fc01258</code> on top of it changes only the PEP',
     'Page suites at <code>1519fb7</code>: entity_page 92/92, utilities 90/90, utilities_ux 25/25, activity_view 78/78, layouts 200/200, threed_view 68/68',
     'Run-end fix: 7 of 7 mutations went red',
+    'Found while recording this report: after a restart with the bus held, a board\'s header said "never heard" above its own log. It now says when it was last heard. <code>test_heard_restored.js</code> 5/5, red first; <code>test_entity_page.js</code> 92/92',
     'Edits to existing tests read by the dispatcher: no assertion changed. Two suites now hold the feed unanswered, one takes the page\'s own timestamp, one prints the state on failure',
 ]
 
@@ -80,6 +81,7 @@ DECIDED = [
     'A run\'s end reaches clients as one moment; the host and disk still get it at once. Undo: <code>git -C /home/bam/io-diagnostics revert 066c8f1</code>',
     'Once there is a feed, its snapshot is the page\'s base. Undo: <code>git -C /home/bam/io-diagnostics revert 4154682</code>',
     'An entity log\'s band no longer covers the newest row. Undo: <code>git -C /home/bam/io-diagnostics revert 84f5dde</code>',
+    'A remembered board reads "heard 17 min ago · stale". Undo: <code>git -C /home/bam/io-diagnostics revert defcb78</code>',
 ]
 
 LEFT = [
@@ -110,9 +112,9 @@ table{{border-collapse:collapse;width:100%}}td,th{{padding:6px 8px;border-bottom
 figure{{margin:0}}figcaption{{color:var(--muted);font-size:13px;margin-top:4px}}code{{background:var(--soft);padding:1px 4px;border-radius:3px;font-size:13px}}li{{margin:4px 0}}
 </style></head><body><main>
 <h1>RobotDx pages no longer sit on "loading…"</h1>
-<p class="verdict">On <code>main</code> @ <code>{SHA}</code>, live on Preview, not on Stable. Four small issues below are unexplained or unchanged, none of them a loading problem.</p>
+<p class="verdict">On <code>main</code> @ <code>{SHA}</code>, live on Preview, not on Stable. The items under Not settled are unexplained or unchanged; none is a loading problem.</p>
 <video controls autoplay muted loop playsinline poster=""><source src="{data_uri('hero.mp4', 'video/mp4')}" type="video/mp4"><img alt="Clicking through RobotDx pages on Preview" src="{data_uri('hero.gif', 'image/gif')}"></video>
-<p class="verdict">Preview on the real host, Nov 4 at 23:50. Clicks only move between rows and tabs; nothing writes. The rack was in a session, so its boards read unknown, which is correct.</p>
+<p class="verdict">Preview on the real host, late Nov 4. Clicks only move between rows and tabs; nothing writes. A rack session holds the bus, so the boards have no fresh report, which is correct.</p>
 <h2>Before and after</h2><table><tr><th>Measure</th><th>Before</th><th>After</th></tr>{rows(MEASURES)}</table>
 <h2>The same page</h2><div class="pair">
 {still('preview-before-computer.png', 'Before: the computer, "loading…" and nothing else')}{still('preview-after-computer.png', 'After: the same page, full at first paint')}
