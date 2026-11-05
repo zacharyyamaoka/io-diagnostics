@@ -2,95 +2,148 @@
 # ~/.config/io-diagnostics/robot-description.toml to draw the rack in the 3D view.
 #
 # Model: the Windows Cad2Robot export, bundle a7b1095 (Fusion "One Dof Test Rack" v39, exported 2026-10-10): 20 links, 19 joints,
-# 267 STL meshes (~70 MB). No newer bundle exists on disk (2026-10-29).
-# Devices: /home/bam/.config/io-diagnostics/expected.toml (adapter 272813EF: CAN 1/14/15; adapter 0607623A: CAN 21/11/12/13; two D405s).
+# 223 visual STL meshes. No newer bundle was on disk on 2026-11-04.
 #
-# Only two devices could be tied to a link from a written source; the rest are listed under [[unmapped_device]] with the reason, never
-# guessed. Two things make the join thin in this bundle:
-#   - The ArUco ids the boards were camera-matched to (tags 0-2, 5-12, 21) are not in the mesh names. The names carry Fusion's
-#     occurrence index ("GIM43 Aruco Tag:1", "Aruco Marker:3"), which is not the tag id: deployment.json pairs tag 21 with
-#     "GIM43 Aruco Tag:1", not tag 1.
-#   - The GIM43 plate's three joints (CAN 1/14/15) are not joints in the v1 export (deployment.json, 2026-10-21), and robot.json has a
-#     CAN id for one joint only (revolute_2 = CAN 12).
-# Sources cited below:
-#   robot.json      = <bundle>/robot.json (cad2robot/1 manifest)
-#   frames.json     = <bundle>/frames.json
-#   deployment.json = /home/bam/bam_ws/.claude/worktrees/traj-sim2real-rack/src/dev/bam_rack_twin/records/one-dof-test-rack/deployment.json
-#   chat 10-21      = ~/zach_brain/Sources/Chats/Claude Code/2026-10-21 — bc1ac6cc (CHAT).md (the CAN -> tag table after the 10-21 re-tag)
+# Every mapping below stands on two proofs, and nothing is placed on less (2026-11-04, the camera route, no motor moved; the images and
+# the numbers are in reports/media/rack-3d-2026-11-04/report.html):
+#
+#   1. WHICH TAG THE BOARD TURNS. Recorded video in which only that board moved, with DICT_4X4_50 tags tracked over both D405s; the
+#      plate headers (16-26) are the noise floor. Sessions are under /archive/datasets/bam_rig/. The rack's tags have held their ids
+#      since Zach's re-tag of 2026-10-21; today's frames still read 0, 1, 2, 4, 5, 6, 8, 16-26 where they were.
+#   2. WHICH CAD BODY THE TAG IS ON. Each plate's tags against the CAD's motor axes, from the as-built tag map (camera-measured
+#      2026-10-21, rack frame: x left to right from the front, y up): rack (x, y) -> CAD (y, z).
+#        plate A, GIM43:     tags 0, 1, 2 spaced 77.5 / 78.0 mm     CAD motors 75 / 76 mm, the same L     (offset 60-62, 265-267 mm)
+#        plate B, JMC60:     tags 4, 5 side by side, 81.1 mm         CAD motors :1, :2 side by side, 80     (offset 144-145, 268)
+#        plate C, gearbox:   tags 6, 7 stacked, 111.0 mm             CAD gearboxes :1, :2 stacked, 110      (offset 166-167, 263-264)
+#        plate D, one DOF:   tags 8-15 on the long weighted link     CAD one_dof_arm, the only long link
+#      The CAD's +y runs left to right from the front (its plates face +x), in the rack's order, so the model is not mirrored. The
+#      heights agree across all plates to 5 mm. The plates' places along the rail do not (CAD spacing 425 / 225 / 190 mm, real 342 / 201 /
+#      237 mm): they slide on the extrusion. That is why the fit is per plate, and why nothing here hangs on a position along the rail.
+#
+# The one surprise: robot.json says revolute_2 (one_dof_arm) has can_id 12, from the drive file. The cameras say otherwise: CAN 11 turns
+# the arm, CAN 12 turns tag 7 on plate C (below). The older description of this rack had CAN 12 on the arm; that was wrong.
+#
+# Sources:
+#   robot.json      = <bundle>/robot.json, frames.json, fusion360_data.json (cad2robot/1)
+#   as-built        = /archive/datasets/bam_rig/rack_2026-10-21/asbuilt/bundle/robot.json (camera-measured, not CAD)
+#   deployment.json = bam_rack_twin records/one-dof-test-rack/deployment.json, the 2026-10-29 copy on sim-to-real-motor-models-f1ee43
+#   identify-can*.png = /home/bam/io-diagnostics/reports/media/round2/live/ (each board turned once, rest vs held, 2026-10-23)
 version = 1
+name = "one-dof-test-rack"
 urdf = "/home/bam/.cache/cad2robot-build/bundles/a7b1095/fixtures/cad2robot/one_dof_test_rack/urdf/one_dof_test_rack.urdf"
 
-# CAN 12 on fdcanusb 0607623A -> link one_dof_arm (the child of revolute_2, the One Dof Test Rig's JMC servo arm).
-# Source: robot.json joints[revolute_2].can_id = 12 (from the drive file robots/one_dof_test_rack.py:57), 10:1 (stepperonline_ad60_g10);
-# expected.toml agrees on the ratio (can/12 "tag 7 · 10:1", rotor_to_output_ratio 0.1). The arm link moves with the joint the board drives.
-[[part]]
-name = "CAN 12 · one-DOF arm"
-link = "one_dof_arm"
-hardware_id = "usb:0483:5740:0607623A"
-node = "can/12"
-note = "robot.json revolute_2 can_id 12"
+[view]
+front = "+x"                     # the plates' tags and motor outputs face +x, towards the cameras
 
-# CAN 14 on fdcanusb 272813EF -> link v6shs_..._x0_5, the only link holding the "SteadyWin GIM43 Plate:1 + GIM43 Aruco Tag:1" holder
-# (mesh SteadyWin_GIM43_Plate_1__GIM43_Aruco_Tag_1__Holder_1__0.stl). Source: deployment.json components[can14].camera_tags = tag 1 and
-# tag 21, part "SteadyWin GIM43 Plate:1 + GIM43 Aruco Tag:1" (camera-confirmed 2026-10-21; chat 10-21 line 459: "CAN 14 = tag 1").
-# That link is the tag's holder, welded to the base in this export: the most specific link the source names for this board.
+# ---- fdcanusb 272813EF: plate A, the SteadyWin GIM43 plate ------------------------------------------------------------------------------
+# CAN 1 turns tag 0, upper left. rack_2026-10-23/session_16 (only CAN 1 moved): tag 0 turned 20.5 deg, plate headers under 2.1 deg; session_05: 212 deg.
+# Tag 0 sits over GIM4305-10SHS:3 (CAD y 0.022, z 0.13): the motor's link and the hardstop + shorter holder on its output.
 [[part]]
-name = "CAN 14 · GIM43 tag holder"
-link = "v6shs_x2_540e673a58f3_x0_x2_5b8988c556fe_x0_5"
-hardware_id = "usb:0483:5740:272813EF"
-node = "can/14"
-note = "deployment.json can14 tag 21 = GIM43 Aruco Tag:1"
-
-# ---- devices that could not be placed (listed in the 3D view, never drawn) ------------------------------------------------------------
-[[unmapped_device]]
-name = "CAN 1 on fdcanusb 272813EF"
+name = "CAN 1 · GIM4305 upper left (tag 0)"
+links = ["v6shs_x2_540e673a58f3_x0_x2_5b8988c556fe_x0_4", "v6shs_x2_540e673a58f3_x0_x2_5b8988c556fe_x0_6"]
 hardware_id = "usb:0483:5740:272813EF"
 node = "can/1"
-reason = "GIM43 plate upper-left joint (tag 0): not a joint in the v1 export (deployment.json can1, cad_joint null); its GIM4305 motor mesh cannot be told from the plate's other two by name"
+note = "video: rack_2026-10-23/session_16, tag 0 turned 20.5 deg; geometry: plate A upper left = GIM4305-10SHS:3"
 
-[[unmapped_device]]
-name = "CAN 15 on fdcanusb 272813EF"
+# CAN 14 turns tag 1, lower left. rack_2026-10-21/session_10 (only CAN 14 moved): tag 1 turned 36.5 deg on D405 274411, 35.7 on 276036.
+# Tag 1 sits over GIM4305-10SHS:1 (y 0.022, z 0.055) with the "GIM43 Aruco Tag:1" holder on its output.
+[[part]]
+name = "CAN 14 · GIM4305 lower left (tag 1)"
+links = ["v6shs_x2_540e673a58f3_x0_x2_5b8988c556fe_x0_3", "v6shs_x2_540e673a58f3_x0_x2_5b8988c556fe_x0_5"]
+hardware_id = "usb:0483:5740:272813EF"
+node = "can/14"
+note = "video: rack_2026-10-21/session_10, tag 1 turned 36 deg on both cameras; geometry: plate A lower left = GIM4305-10SHS:1"
+
+# CAN 15 turns tag 2, the small pendulum arm, lower right. rack_2026-10-24/session_14 (only CAN 15 moved): tag 2 turned 272 deg. The record
+# had this as inferred by elimination on 10-21; this session is direct proof. Tag 2 sits over GIM4305-10SHS:2 (y 0.098, z 0.055) and
+# hangs today as the CAD's GIM43 Arm:1 does, downward from that motor (D405 274411's frame of 2026-11-04).
+[[part]]
+name = "CAN 15 · GIM pendulum arm (tag 2)"
+links = ["v6shs_x2_540e673a58f3_x0_x2_5b8988c556fe_x0_2", "gim43_arm"]
 hardware_id = "usb:0483:5740:272813EF"
 node = "can/15"
-reason = "GIM43 plate lower-right joint (tag 2, by elimination): not a joint in the v1 export (deployment.json can15, cad_joint null)"
+note = "video: rack_2026-10-24/session_14, tag 2 turned 272 deg; geometry: plate A lower right = GIM4305-10SHS:2 + GIM43 Arm:1"
 
-[[unmapped_device]]
-name = "CAN 21 on fdcanusb 0607623A"
+# ---- fdcanusb 0607623A: plates B, C and D, the JMC motors --------------------------------------------------------------------------------
+# CAN 4 turns tag 4, plate B lower left. rack_2026-10-23/session_10 (only CAN 4 moved): tag 4 turned 190 deg; rack_2026-10-24/session_25: 132 deg.
+# Tag 4 sits on the left motor of the side-by-side pair, JMC 60ASM200:1 in the CAD (y 0.445, z 0.06), and the deployment record calls it
+# the motor-face disc: JMC60 Aruco Holder:1. Those meshes are inside base_link, so the part names them.
+[[part]]
+name = "CAN 4 · JMC left, plate B (tag 4)"
+meshes = ["JMC60_Plate_1___JMC_60ASM200-5-17BCZ_1__*", "JMC60_Plate_1__JMC60_Aruco_Holder_1__*"]
+hardware_id = "usb:0483:5740:0607623A"
+node = "can/4"
+note = "video: rack_2026-10-23/session_10, tag 4 turned 190 deg; geometry: plate B left = JMC60 Plate:1 + (JMC) 60ASM200:1"
+
+# CAN 21 turns tag 5, plate B lower right. rack_2026-10-24/session_26 (only CAN 21 moved): tag 5 turned 137 deg; identify-can21.png.
+# Tag 5 sits on the right motor, JMC 60ASM200:2 (y 0.525, z 0.06), and the black pole on the rack hangs from it: the CAD's revolute_3,
+# JMC60 Arm:1 > Pole Mount:1.
+[[part]]
+name = "CAN 21 · JMC right + pole, plate B (tag 5)"
+links = ["pole_mount"]
+meshes = ["JMC60_Plate_1___JMC_60ASM200-5-17BCZ_2__*"]
 hardware_id = "usb:0483:5740:0607623A"
 node = "can/21"
-reason = "drives tag 5, direct (chat 10-21); no CAD link carries tag 5 by name, and robot.json gives no joint can_id 21"
+note = "video: rack_2026-10-24/session_26, tag 5 turned 137 deg; geometry: plate B right = JMC60 Plate:1 + (JMC) 60ASM200:2, revolute_3"
 
-[[unmapped_device]]
-name = "CAN 11 on fdcanusb 0607623A"
-hardware_id = "usb:0483:5740:0607623A"
-node = "can/11"
-reason = "drives the link with tags 8-12, 10:1 (chat 10-21); no CAD link carries those tags by name, and robot.json gives no joint can_id 11"
-
-[[unmapped_device]]
-name = "CAN 13 on fdcanusb 0607623A"
+# CAN 13 turns tag 6, plate C upper. rack_2026-10-23/session_11 (only CAN 13 moved): tag 6 turned 15.8 deg on D405 276036; identify-can13.png.
+# Tag 6 sits on the upper gearbox, AD60-G10-D14:1 (y 0.71, z 0.185), revolute_6. The CAD draws no motor behind this gearbox.
+[[part]]
+name = "CAN 13 · gearbox upper, plate C (tag 6)"
+links = ["jmc60_hardstop_plate"]
+meshes = ["JMC60____Gearbox_Plate_1___SO_1_20_Planetary_AD60-G10-D14_1__*"]
 hardware_id = "usb:0483:5740:0607623A"
 node = "can/13"
-reason = "drives tag 6, 10:1 (chat 10-21); no CAD link carries tag 6 by name (frames.json's 'GIM43 Aruco Tag:6' is an occurrence index), and robot.json gives no joint can_id 13"
+note = "video: rack_2026-10-23/session_11, tag 6 turned 15.8 deg; geometry: plate C upper = AD60-G10-D14:1, revolute_6"
 
-[[unmapped_device]]
-name = "fdcanusb 272813EF"
-hardware_id = "usb:0483:5740:272813EF"
-reason = "the adapter is not in the CAD model"
-
-[[unmapped_device]]
-name = "fdcanusb 0607623A"
+# CAN 12 turns tag 7, plate C lower. identify-can12.png (2026-10-23, rest vs held): tag 7 turned +28.6 deg, every other tag still. It is the only
+# proof of the eight without a tracked recording: since 276036 was re-aimed, no session's camera sees tag 7. Tag 7 sits on the lower gearbox,
+# AD60-G10-D14:2 (y 0.71, z 0.075), revolute_8, with JMC 60ASM200:3 behind it.
+[[part]]
+name = "CAN 12 · JMC + gearbox lower, plate C (tag 7)"
+links = ["jmc60_gearbox_aruco_mount"]
+meshes = ["JMC60____Gearbox_Plate_1___SO_1_20_Planetary_AD60-G10-D14_2__*", "JMC60____Gearbox_Plate_1___JMC_60ASM200-5-17BCZ_3__*"]
 hardware_id = "usb:0483:5740:0607623A"
-reason = "the adapter is not in the CAD model"
+node = "can/12"
+note = "still: identify-can12.png, tag 7 turned +28.6 deg, nothing else; geometry: plate C lower = AD60-G10-D14:2, revolute_8"
 
-[[unmapped_device]]
-name = "RealSense D405 218622274411"
+# CAN 11 turns the long weighted link with the tag strip. rack_2026-10-23/session_12 (only CAN 11 moved): tag 8 turned 20.5 deg and travelled 9 px;
+# rack_2026-10-24/session_29: 24.6 deg; identify-can11.png: tags 8-12 together, ~14 deg. That link is the CAD's one_dof_arm, revolute_2.
+# robot.json's can_id 12 for this joint is stale (see the top of this file). Its motor, gearbox and controller are the rig's JMC Servo:1.
+[[part]]
+name = "CAN 11 · one-DOF arm, plate D (tags 8-15)"
+links = ["one_dof_arm"]
+meshes = ["One_Dof_Test_Rig_-_60mm_JMC_Servo_1__Mounting_Plate_for_60mm_Servo_1__JMC_Servo_1__*"]
+hardware_id = "usb:0483:5740:0607623A"
+node = "can/11"
+note = "video: rack_2026-10-23/session_12, tag 8 turned 20.5 deg; identify-can11.png, tags 8-12 together; geometry: the long link = one_dof_arm"
+
+# ---- cameras: the CAD has no D405, so each is drawn where solvePnP puts it ---------------------------------------------------------------
+# Solved 2026-11-04 from one read-only colour frame of each, against the as-built positions of the static header tags. Metres in the URDF's
+# base frame, through the plates' header strips (rack x -> CAD y by plate): where it stands relative to the plates, not a CAD position.
+# 274411 (tags 16-21, RMS 0.77 px): rack (-17.5, -10.4, 459.9) mm, 2 mm from its 2026-10-21 pose, so it has not moved.
+[[part]]
+name = "D405 218622274411"
+at = [0.614, 0.042, 0.25]
+look_at = [0.154, 0.048, 0.144]
 serial = "218622274411"
-reason = "the model has no D405 mount (its one camera link is intel_realsense_d435)"
+note = "solvePnP on 16 17 18 19 20 21, 2026-11-04, RMS 0.77 px, 2 mm from its 2026-10-21 pose"
+
+# 276036 (tags 16-26, RMS 0.88 px): rack (430.8, -9.4, 524.3) mm, looking up at the header strips: it is the one re-aimed since 2026-10-21.
+[[part]]
+name = "D405 218622276036"
+at = [0.678, 0.584, 0.251]
+look_at = [0.154, 0.596, 0.358]
+serial = "218622276036"
+note = "solvePnP on 16-26, 2026-11-04, RMS 0.88 px; aimed above the plates since it was moved"
+
+# ---- devices that could not be placed (listed in the 3D view, never drawn) ---------------------------------------------------------------
+[[unmapped_device]]
+name = "RealSense D435 044322072026"
+serial = "044322072026"
+reason = "The CAD has one D435 (link intel_realsense_d435), looking at the plates from a 2020 mount. This camera's frame of 2026-11-04 shows the ceiling and no tag, so it is not on that mount looking at the rack, and nothing else ties its serial to that link."
 
 [[unmapped_device]]
-name = "RealSense D405 218622276036"
-serial = "218622276036"
-reason = "the model has no D405 mount (its one camera link is intel_realsense_d435)"
-
-# The model's camera link intel_realsense_d435 stays unmapped (grey): robot.json cameras[0].serial is unset ("serial": "unset"), and
-# expected.toml lists no D435, so no serial ties a device to it.
+name = "Logi Webcam C920e"
+hardware_id = "usb:046d:08b6:AFF1789F"
+reason = "On the desk's USB hub with the keyboard and mouse; not a rack device in expected.toml, not in the CAD."

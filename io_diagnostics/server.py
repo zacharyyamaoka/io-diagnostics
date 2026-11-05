@@ -23,13 +23,14 @@ import re
 import secrets
 import select
 import socket
+import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
 from io_diagnostics import WEB
-from io_diagnostics import host_utilities, release_channels, robot_description
+from io_diagnostics import host_utilities, release_channels, robot_description, robot_library
 from io_diagnostics.arrangements import ArrangementError
 from io_diagnostics.composition import BATCH_PREFIX
 from io_diagnostics.dashboards import MAX_BYTES as MAX_DASHBOARD
@@ -52,6 +53,7 @@ TOKEN_WINDOW_S = 300.0
 CONFIG_WRITES = {"/api/v1/config/edit": "edit", "/api/v1/config/set": "set", "/api/v1/config/persist": "persist",
                  "/api/v1/config/reset": "reset"}
 SETUP_EDITS = {"/api/v1/expect": "expect", "/api/v1/forget": "forget", "/api/v1/retire": "retire"}
+DESCRIPTION_WRITES = {f"{robot_description.API}/{op}": op for op in ("upload", "assign", "activate", "remove")}  # robot_library.py, the page's only
 DIAGNOSTICS_CONFIG = "/api/v1/diagnostics/config"  # GET reads an entity's stock diagnostics; POST writes one value (the page's only)
 UI_HEADER = "X-IO-Diagnostics"
 UI_HEADER_VALUE = "ui"
@@ -64,6 +66,7 @@ RUN_PATH = re.compile(r"^/api/v1/runs/([0-9A-Za-z_-]+)(?:/(stream|cast|input|sig
 RUN_WRITES = ("input", "signal", "resize")
 # WHY the whole tail, not [^/]+: a name with a (decoded or raw) separator in it is answered 400 BadName, not a quiet 404
 DASHBOARD_PATH = re.compile(r"^/api/v1/dashboards(?:/(.*))?$")
+UPLOAD_DROPPED = 16 * 1024 * 1024  # a refused upload up to this size is read and dropped; above it the connection closes
 FILE_WRITES = ("PUT", "DELETE")  # the write methods the dashboard files take; the allowlist beside do_POST's endpoints
 MAX_TERMINAL = 500  # columns or rows a resize may ask for
 EVENTS_KEEPALIVE_S = 15.0  # an SSE comment this often while nothing changes, so a dead client is noticed
@@ -200,11 +203,12 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/api/v1/settings":
                 return self._json(self.host.settings_json())
             if parsed.path == robot_description.API:
-                where = robot_description.config_dir(self.host.settings.path) / robot_description.DESCRIPTION_FILE
-                return self._json(robot_description.describe(self._robot_description(), self.host.state()["tree"], where))
+                directory = robot_description.config_dir(self.host.settings.path)
+                return self._json(robot_description.describe(self._robot_description(), self.host.state()["tree"], directory / robot_description.DESCRIPTION_FILE,
+                                                             robot_library.listing(directory)))
             if parsed.path.startswith(robot_description.FILES):
                 return self._robot_file(parsed.path[len(robot_description.FILES):])
-            if parsed.path in ("/api/v1/act", "/api/v1/watch") or parsed.path in SETUP_EDITS or parsed.path in CONFIG_WRITES:
+            if parsed.path in ("/api/v1/act", "/api/v1/watch") or parsed.path in SETUP_EDITS or parsed.path in CONFIG_WRITES or parsed.path in DESCRIPTION_WRITES:
                 return self._json({"error": "POST only, and only from the page (docs/api-v1.md)"}, 405, extra={"Allow": "POST"})
             if parsed.path.startswith("/api/"):
                 return self._json({"error": f"no endpoint {parsed.path!r} (see docs/api-v1.md)"}, 404)
@@ -234,9 +238,11 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as error:  # noqa: BLE001 - show the failure, keep serving
                 return self._json({"error": f"{type(error).__name__}: {error}"}, 500)
         if endpoint not in ("/api/v1/act", "/api/v1/settings", "/api/v1/watch", "/api/v1/arrangements", DIAGNOSTICS_CONFIG, *CONFIG_WRITES,
-                            *SETUP_EDITS):
+                            *SETUP_EDITS, *DESCRIPTION_WRITES):
             return self._refuse()
         try:
+            if endpoint in DESCRIPTION_WRITES:
+                return self._description_write(DESCRIPTION_WRITES[endpoint])
             if endpoint == "/api/v1/settings":
                 return self._settings()
             if endpoint == "/api/v1/watch":
@@ -635,7 +641,63 @@ class Handler(BaseHTTPRequestHandler):
         path = robot_description.served_file(self._robot_description(), relative)
         if path is None:
             return self._json({"error": "no such file in the robot description's URDF folder"}, 404)
-        return self._send(200, path.read_bytes(), robot_description.MEDIA.get(path.suffix.lower(), "application/octet-stream"))
+        # WHY the two headers: since the page can upload, these bytes may be anyone's; a browser sent straight to one must not run it as
+        # this origin's page. The 3D view fetches them, which neither header touches
+        return self._send(200, path.read_bytes(), robot_description.MEDIA.get(path.suffix.lower(), "application/octet-stream"),
+                          {"X-Content-Type-Options": "nosniff", "Content-Security-Policy": "sandbox"})
+
+    # --- the page's writes of a description (robot_library.py): the person's own files, never a device, so the same page-only rule as
+    # the Expected setup card and no token. WHY an upload is its own path: a folder of meshes is not a 64 KB JSON body
+    def _description_write(self, op: str):
+        directory = robot_description.config_dir(self.host.settings.path)
+        try:
+            if op == "upload":
+                return self._description_upload(directory)
+            body, answer = self._body()
+            if body is None:
+                return self._json(*answer)
+            if op == "assign":
+                return self._json({"ok": True, **robot_library.assign(directory, self.host.state()["tree"], body)})
+            action = robot_library.activate if op == "activate" else robot_library.remove
+            return self._json({"ok": True, **action(directory, body.get("name"))})
+        except robot_library.Refused as error:
+            return self._json({"refused": error.code, "error": str(error)}, error.status)
+
+    def _drop_body(self, length: int) -> None:
+        """A refused upload's body: a modest one is read and dropped so the page gets the reason, not a broken pipe (the dashboard files'
+        rule); a huge one is left unread and the connection closed."""
+
+        if length > UPLOAD_DROPPED:
+            self.close_connection = True
+            return
+        while length > 0:
+            chunk = self.rfile.read(min(length, 1 << 20))
+            if not chunk:
+                return
+            length -= len(chunk)
+
+    def _description_upload(self, directory):
+        length = int(self.headers.get("Content-Length") or 0)
+        refused, reason = self._from_page(json_body=False)
+        if refused:
+            self._drop_body(length)
+            return self._json({"refused": refused, "error": reason}, 403)
+        if length <= 0:
+            return self._json({"refused": "BadUpload", "error": "a zip, or a folder as multipart, with a Content-Length is required"}, 411)
+        if length > robot_library.MAX_UPLOAD:
+            self._drop_body(length)
+            return self._json({"refused": "TooLarge", "error": f"an upload is at most {robot_library.MAX_UPLOAD} bytes, got {length}"}, 413)
+        hint = (parse_qs(urlparse(self.path).query).get("name") or [""])[0]
+        with tempfile.SpooledTemporaryFile(max_size=1 << 24) as spool:
+            remaining = length
+            while remaining > 0:
+                chunk = self.rfile.read(min(remaining, 1 << 20))
+                if not chunk:
+                    return self._json({"refused": "BadUpload", "error": f"the body ended {remaining} bytes early"}, 400)
+                spool.write(chunk)
+                remaining -= len(chunk)
+            spool.seek(0)
+            return self._json({"ok": True, **robot_library.upload(directory, spool, self.headers.get("Content-Type") or "", hint)})
 
     def _settings(self):
         # WHY the same page-only rule as /act: a setting is the person's preference, written to their file

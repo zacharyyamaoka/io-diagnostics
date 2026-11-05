@@ -6,7 +6,8 @@ and a camera. Stdlib only; it never opens a port or a camera: every value is mad
 
 ``$RD_LEVELS`` (a JSON file, re-read on every run) sets a board's level by "<USB serial>/can/<n>", e.g.
 ``{"272813EF/can/1": "warn"}``; a board it does not name is ``ok``. ``$RD_NODES`` (default 2): how many boards each adapter
-reports (``can/1`` .. ``can/N``). ``$RD_LOG`` (a file) gets one JSON line per run (the verb and the device), so a test can see it ran.
+reports (``can/1`` .. ``can/N``). ``$RD_BOARDS`` (a JSON object, USB serial -> CAN ids) overrides that per adapter: the report's rack
+recording uses the rack's own ids. ``$RD_LOG`` (a file) gets one JSON line per run (the verb and the device), so a test can see it ran.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ ARGS = sys.argv[1:]
 VERB = next((word for word in ARGS if word in ("describe", "diagnose")), "")
 ROLE = ARGS[ARGS.index("--role") + 1] if "--role" in ARGS[:-1] else "joint"
 NODES = max(1, int(os.environ.get("RD_NODES") or 2))
+BOARDS = json.loads(os.environ.get("RD_BOARDS") or "{}")
 _BASE = float(os.environ.get("IO_DIAGNOSTICS_NOW") or time.time())
 _START = time.monotonic()
 MESSAGES = {"ok": "answers in 1.1 ms", "warn": "board temperature 68 °C (warn above 65 °C)", "error": "the driver is in fault (33)",
@@ -61,7 +63,7 @@ def diagnose() -> None:
              identity={"manufacturer": "mjbots", "model": "fdcanusb", "serial_number": serial})
         emit(record="entity", path="can", name="CAN bus", kind="bus", via="")
         chosen = levels()
-        for number in range(1, NODES + 1):
+        for number in BOARDS.get(serial, range(1, NODES + 1)):
             node = f"can/{number}"
             level = chosen.get(f"{serial}/{node}", "ok")
             emit(record="entity", path=node, name=f"CAN {number}", kind="servo", via="can",

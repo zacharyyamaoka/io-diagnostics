@@ -7,7 +7,8 @@ The page is served offline and has no bundler, so the 3D view's libraries ship i
 - `examples/jsm/controls/OrbitControls.js`: the camera's orbit, pan and zoom.
 - `examples/jsm/loaders/STLLoader.js`: the URDF's meshes.
 - `examples/jsm/loaders/ColladaLoader.js`, `TGALoader.js`, `collada/ColladaParser.js`, `collada/ColladaComposer.js`: imported by urdf-loader
-  for `.dae` meshes (a Cad2Robot bundle has none; they are here so the import resolves).
+  and by scene.js for `.dae` meshes (a Cad2Robot bundle has none; a ROS package's often are).
+- `examples/jsm/loaders/OBJLoader.js`: a URDF's `.obj` meshes (scene.js; the upload takes any URDF, 2026-11-04).
 - `examples/jsm/utils/BufferGeometryUtils.js`: merges a link's meshes into one when a model has many.
 
 All are copied unmodified from the npm package `three@0.186.1` (here from `/home/bam/aruco-studio/web/node_modules/three`).

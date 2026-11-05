@@ -42,7 +42,7 @@ uv run --project /home/bam/io-diagnostics python /home/bam/io-diagnostics/io_dia
 | `GET /api/v1/dashboards`, `GET`, `PUT`, `DELETE /api/v1/dashboards/<name>.base` | The person's dashboards as files (data-ui's `.base` text, opaque to the host) under the config directory: list, read, write (atomic, optional `If-Match`, or `If-None-Match: *` to create only) and move to `.trash/`; the PUT and DELETE are the page's ONLY | on load / on save |
 | `GET /api/v1/diagnostics` | The stock diagnostics' registry (robotdx.diagnostics, stock and custom): each one's title, part types, kind and config dataclass as a schema (field, type, default, unit, doc) | on open |
 | `GET /api/v1/diagnostics/config?path=<entity path>`, `POST /api/v1/diagnostics/config` | The stock diagnostics configured on one entity, each value with where it came from (default / toml / edited) and the latest status; the POST is the entity page's drill-in ONLY: one value, validated and written to diagnostics.toml | on unfold, then 4 s / on Enter |
-| Robot description (2026-10-29): `GET /api/v1/robot-description`, `GET /api/v1/robot-description/files/<path>` | The 3D view's optional model: the URDF's URL, each `[[part]]`'s links and the entity path it resolves to (`null`: not detected), and the files under the URDF's folder (the URDF, its meshes), read-only. `present: false` without `<config dir>/robot-description.toml`. Docs: "Robot description" below and docs/robot-description.md | on open, then 5 s / per mesh |
+| Robot description (2026-10-29): `GET /api/v1/robot-description`, `GET /api/v1/robot-description/files/<path>` | The 3D view's optional model: the URDF's URL, each `[[part]]`'s links, meshes or point and the entity path it resolves to (`null`: not detected), the adapters and computers with their parts, the devices not in the model, the kept descriptions, and the files of the description's folder (the URDF, its meshes), read-only. `present: false` without `<config dir>/robot-description.toml`. Docs: "Robot description" below and docs/robot-description.md | on open, then 5 s / per mesh |
 | `POST /api/v1/act` | The Utilities panel ONLY: a dry run, then a person's confirmed run with the dry run's token | on click |
 | `POST /api/v1/expect`, `/forget`, `/retire` | The Expected setup card ONLY: one edit of the rig file after a person's confirm | on click |
 | `GET /`, `/<file>`, `/<dir>/` | The page in `io_diagnostics/web/`. A path ending in `/` is that directory's `index.html` when it has one (`/dx/` is `dx/index.html`; `/` is the web root's), else **404**; `/dx` with no slash is not redirected. `.base` files (data-ui's dashboards) are `text/plain; charset=utf-8`. Nothing outside the web root is served (a `..`, an encoded one, a symlink out: **404**) | — |
@@ -1196,10 +1196,17 @@ Without the file the answer is `present: false` and everything else on the page 
   "urdf": "/api/v1/robot-description/files/one_dof_test_rack.urdf",
   "robot": "one_dof_test_rack",
   "links": ["base_link", "one_dof_arm"],
-  "parts": [{"name": "CAN 12", "links": ["one_dof_arm"], "match": {"hardware_id": "usb:0483:5740:0607623A", "node": "can/12"},
-             "note": "robot.json revolute_2 can_id 12", "path": "host/usb1/port-1-3/usb-1-3/can/12", "problem": null}],
-  "unmapped_devices": [{"name": "CAN 1 on fdcanusb 272813EF", "match": {"hardware_id": "usb:0483:5740:272813EF", "node": "can/1"},
-                        "reason": "its joint is not in the v1 CAD export", "path": null}]
+  "parts": [{"name": "CAN 21", "links": ["pole_mount"], "meshes": ["JMC60_Plate_1___JMC_60ASM200-5-17BCZ_2__*"], "at": null, "look_at": null,
+             "match": {"hardware_id": "usb:0483:5740:0607623A", "node": "can/21"},
+             "note": "video: tag 5 turned 137 deg", "path": "host/usb1/port-1-5/usb-1-5/can/21", "problem": null}],
+  "unmapped_devices": [{"name": "RealSense D435 044322072026", "match": {"serial": "044322072026"},
+                        "reason": "its frame shows the ceiling, not the rack", "path": "host/usb1/port-1-1/usb-1-1"}],
+  "name": "one-dof-test-rack",
+  "packages": {},
+  "view": {"front": "+x"},
+  "hardware": [{"path": "host/usb1/port-1-5/usb-1-5", "name": "fdcanusb 0607623A", "kind": "adapter", "parts": [0]}],
+  "not_in_model": [{"path": "host/usb1/port-1-1/usb-1-1", "name": "RealSense D435 044322072026", "reason": "its frame shows the ceiling, not the rack"}],
+  "library": [{"name": "one-dof-test-rack", "robot": "one_dof_test_rack", "parts": 10, "problem": null, "active": true}]
 }
 ```
 
@@ -1207,20 +1214,51 @@ Without the file the answer is `present: false` and everything else on the page 
   `null`; with a problem `urdf` is `null` and no file is served. `file` is the file the host reads (also when it is absent: where to
   put one); `file_name` and `docs` (the format's documentation in this checkout) are what the empty state tells a person.
 - `urdf`: the URL the page loads the URDF from; a mesh's relative `filename` resolves next to it. `robot` and `links`: the URDF's
-  `<robot name>` and its link names in file order.
-- `parts`: one per `[[part]]`, in the file's order. `match` is the part's keys as written (`path`, `hardware_id`, `serial`, `node`,
-  `model_id`, `can_id`); `path` is the entity it resolves to on this host now (expected.toml's rules: a device by hardware_id and / or
-  serial, then `node` below it; `path` fnmatch, `model_id` and `can_id` narrow; the first row in tree order), or `null` when nothing
-  matches (the page draws a ghost: not detected). `problem` names a link the URDF does not have.
+  `<robot name>` and its link names in file order. `name`: the description's name (its `name`, else from the URDF's file name).
+  `packages`: each `package://<name>/...` the URDF uses -> the folder under `files/` that holds it. `view`: the file's `[view]` table.
+- `parts`: one per `[[part]]`, in the file's order. `links` are whole links, `meshes` patterns over the visuals' mesh file names,
+  `at` and `look_at` a point of the base frame for a device the model does not have (`null` otherwise). `match` is the part's keys as
+  written (`path`, `hardware_id`, `serial`, `node`, `model_id`, `can_id`); `path` is the entity it resolves to on this host now
+  (expected.toml's rules: a device by hardware_id and / or serial, then `node` below it; `path` fnmatch, `model_id` and `can_id` narrow;
+  the first row in tree order), or `null` when nothing matches (the page draws a ghost: not detected). `problem` names a link the URDF
+  does not have, or a pattern no mesh matches.
 - `unmapped_devices`: the file's `[[unmapped_device]]` tables (devices its author could not place in the model, with the `reason`),
-  each resolved the same way; the page lists them and never draws them.
-- **Colour is not here.** The page colours a mapped link by its entity's own row in `/state` / `/live` (`level`, `connected`, `stale`);
+  each resolved the same way, as written.
+- `hardware`: each computer and adapter on this host (`kind`: `computer`, `adapter`), with `parts`, the indexes into `parts` of the devices
+  below it: the page's chips and their leader lines. `not_in_model`: every device a person could place and nobody has, once each: the
+  `unmapped_devices` that are still not placed, then every board and camera detected (`reason` empty). A chip is never in it.
+- `library`: every description this PC has, by name; `active` is the one shown.
+- **Colour is not here.** The page colours a mapped part by its entity's own row in `/state` / `/live` (`level`, `connected`, `stale`);
   this endpoint never carries a level.
 
-`GET /api/v1/robot-description/files/<path>` serves one file under the URDF's directory (`.urdf` / `.xml` as
-`application/xml`, `.stl` as `model/stl`, else `application/octet-stream`), read-only and `GET` only. Nothing outside that
+`GET /api/v1/robot-description/files/<path>` serves one file under the description's folder (`root`, else the URDF's directory; `.urdf` /
+`.xml` as `application/xml`, `.stl` as `model/stl`, else `application/octet-stream`; always `X-Content-Type-Options: nosniff` and
+`Content-Security-Policy: sandbox`, since the page can upload them), read-only and `GET` only. Nothing outside that
 directory is served: a `..` (raw or percent-encoded), an absolute path, a symlink that resolves outside it, a directory or a missing
 file is **404**, as is every file when there is no description or it has a problem. The same guard as the web root's static files.
+
+### The description's writes: `POST /api/v1/robot-description/upload | assign | activate | remove`
+
+The page's own (2026-11-04, Zach: "I can just upload the URDF"), under the rule of the Expected setup card: `X-IO-Diagnostics: ui`, a
+same-origin `Sec-Fetch-Site` and no token, because they write the person's files and never a device. A request without them is **403**
+(`NotFromPage`, `NotSameOrigin`); a `GET` is **405**. Docs: docs/robot-description.md "From the page". Each answer is `{"ok": true, ...}`, or
+`{"refused": <code>, "error": <why>}` with the status below.
+
+- `POST /api/v1/robot-description/upload`, body a zip (`application/zip`) or a folder (`multipart/form-data`, one file field per
+  file, its `filename` the path inside the folder), at most 1 GiB. `?name=` names it, else the URDF's `<robot name>`. It unpacks into
+  `<config dir>/robot-descriptions/<name>/`, keeps the description that was active there, and makes this one active. Answer: `name`,
+  `robot`, `links`, `meshes`, `missing_meshes`, `mapped` (parts read from a cad2robot/1 `robot.json`), `schema`, `warnings`, `previous`.
+  Refused, leaving nothing behind: **400** `UnsafePath` (a member that would land outside the folder, a symlink), `BadUpload` (not a
+  zip, an empty body), `NoRobot` (no `.urdf`, not XML, not `<robot>`); **413** `TooLarge` (the body, or more than 3 GiB or 20,000 files
+  unpacked, counted as read).
+- `POST /api/v1/robot-description/assign`, `{"path": <entity>, "links": [...], "meshes": [...]}`: puts them on the device at `path`,
+  in the active file. What that device already holds comes off again (`"assigned": false`: the click that undoes); what another device
+  holds moves here; a part left with nothing is removed. The new part is found by the device's repeatable keys (`hardware_id` and `node`,
+  else `serial`, else `path`). Comments and other tables stay as written; the old file stays beside it as `.bak`. **400** `BadRequest`,
+  `NoSuchLink`; **404** `NoSuchEntity`; **409** `NoDescription`.
+- `POST /api/v1/robot-description/activate`, `{"name": <kept name>}`: keeps the active file under its own name and makes this one
+  active. `POST /api/v1/robot-description/remove`, `{"name": <kept name>}`: removes it and its kept folder, nothing outside that folder;
+  the active one goes back to `present: false`. **404** `NoSuchDescription`.
 
 ## What a page must NOT assume
 

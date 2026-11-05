@@ -38,12 +38,6 @@
 .td-leg-plain i { background: #c2c5cb; }
 :root[data-mode="dark"] .td-leg-plain i { background: #8d929b; }
 :root[data-mode="dark"] .td-leg-ok i { background: color-mix(in srgb, var(--io-ok) 38%, #8d929b); }
-.td-unmapped { margin-top: 5px; }
-.td-unmapped summary { cursor: pointer; color: var(--io-muted); }
-.td-unmapped ul { margin: 4px 0 0; padding: 0 0 0 14px; max-height: 132px; overflow: auto; }
-.td-unmapped li { margin: 2px 0; }
-.td-unmapped li span { color: var(--io-text); }
-.td-unmapped li small { display: block; color: var(--io-faint); white-space: normal; }
 .td-load { margin-top: 4px; color: var(--io-faint); font-variant-numeric: tabular-nums; }
 .td-status { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 3; padding: 4px 10px; border-radius: var(--io-radius-pill);
   background: var(--io-surface); border: 1px solid var(--io-border-soft); font-size: 12px; color: var(--io-muted); }
@@ -176,3 +170,77 @@ body.td-dragging.td-y { cursor: row-resize; }
 .td-problem { color: var(--io-error-text); overflow-wrap: anywhere; }
 .td-copy { height: 24px; font-size: 11.5px; }
 .td-empty-in .muted, .td-dr-body .muted { color: var(--io-faint); }
+
+/* the hardware row: what no CAD has. One chip per adapter and computer, and the devices not in the model beside them */
+.td-hw { position: absolute; top: 46px; left: 10px; right: 146px; z-index: 4; display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; pointer-events: none; }
+.td-hw > * { pointer-events: auto; }
+.td-hw-chip { display: inline-flex; align-items: center; gap: 6px; height: 28px; max-width: 240px; padding: 0 8px; border: 1px solid var(--io-border); border-radius: var(--io-radius-pill);
+  background: color-mix(in srgb, var(--io-surface) 94%, transparent); color: var(--io-text); font: inherit; font-size: 12px; cursor: pointer; }
+.td-hw-chip:hover { background: var(--io-hover); }
+.td-hw-chip .ic { width: 15px; height: 15px; flex: none; color: var(--io-icon); }
+.td-hw-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.td-hw-chip small { color: var(--io-faint); font-variant-numeric: tabular-nums; }
+.td-hw-chip.sel { border-color: #2f7cf6; box-shadow: 0 0 0 2px color-mix(in srgb, #2f7cf6 30%, transparent); }
+.td-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: color-mix(in srgb, var(--io-ok) 45%, var(--io-border)); display: inline-block; }
+.lv-ok .td-dot, .td-dot.lv-ok { background: color-mix(in srgb, var(--io-ok) 60%, var(--io-border)); }
+.lv-warn .td-dot, .td-dot.lv-warn { background: var(--io-warn); }
+.lv-error .td-dot, .td-dot.lv-error { background: var(--io-error); }
+.lv-unknown .td-dot, .td-dot.lv-unknown { background: var(--io-unknown); }
+.lv-stale .td-dot, .td-dot.lv-stale { background: var(--io-stale); }
+.lv-none .td-dot, .td-dot.lv-none { background: var(--io-border); }
+.lv-absent .td-dot, .td-dot.lv-absent { background: transparent; border: 1.5px dashed var(--io-faint); }
+.td-nim { min-width: 0; max-width: 320px; border: 1px solid var(--io-border-soft); border-radius: var(--io-radius); background: color-mix(in srgb, var(--io-surface) 94%, transparent); font-size: 12px; }
+.td-nim summary { height: 26px; display: flex; align-items: center; gap: 6px; padding: 0 9px; cursor: pointer; color: var(--io-muted); list-style-position: inside; white-space: nowrap; }
+.td-nim summary b { color: var(--io-text-strong); font-weight: 600; }
+.td-nim ul { list-style: none; margin: 0; padding: 2px 0 4px; max-height: min(42vh, 360px); overflow: auto; border-top: 1px solid var(--io-border-soft); }
+.td-nim li p { margin: 0 0 4px; padding: 0 9px 0 24px; color: var(--io-faint); font-size: 11px; line-height: 1.35; white-space: normal; }
+.td-nim-item { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 25px; padding: 2px 9px; border: 0; background: transparent; color: var(--io-text); font: inherit; text-align: left; cursor: pointer; }
+.td-nim-item:hover:not([disabled]) { background: var(--io-hover); }
+.td-nim-item[disabled] { cursor: default; color: var(--io-muted); }
+.td-nim-item.sel { background: var(--io-selected); }
+.td-nim-item span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.td-nim-item small { color: var(--io-faint); }
+.td-nim-none { margin: 0; padding: 6px 9px; color: var(--io-faint); border-top: 1px solid var(--io-border-soft); }
+.td-leaders { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; overflow: visible; }
+.td-leaders line { stroke: #2f7cf6; stroke-width: 1.3; }
+.td-leaders circle { fill: var(--io-surface); stroke: #2f7cf6; stroke-width: 1.5; }
+.td-leaders .lv-error { stroke: var(--io-error); } .td-leaders .lv-warn { stroke: var(--io-warn); } .td-leaders .lv-unknown { stroke: var(--io-unknown); }
+.td-leaders .lv-stale { stroke: var(--io-stale); } .td-leaders .lv-absent { stroke: var(--io-faint); stroke-dasharray: 3 2; }
+
+/* Map devices */
+.td-btn:disabled { opacity: .45; cursor: default; }
+.td-btn:disabled:hover { background: var(--io-surface); color: var(--io-muted); }
+.td-mapbar { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 5; display: grid; grid-template-columns: auto auto auto; align-items: center; gap: 4px 10px; max-width: min(640px, calc(100% - 200px));
+  padding: 6px 8px 6px 12px; border: 1px solid #2f7cf6; border-radius: var(--io-radius); background: var(--io-surface); box-shadow: var(--io-shadow-pop); font-size: 12.5px; }
+.td-mapbar[hidden] { display: none; }
+.td-map-t b { color: var(--io-text-strong); font-weight: 600; }
+.td-map-pick { display: inline-flex; align-items: center; gap: 4px; }
+.td-map-pick small { color: var(--io-faint); font-variant-numeric: tabular-nums; }
+.td-map-said { grid-column: 1 / -1; color: var(--io-muted); font-size: 12px; }
+.td-map-said:empty { display: none; }
+.td-mapping .td-canvas { cursor: crosshair; }
+.td-mapping .td-hw { top: 92px; } /* below the bar: it is wide, and says what was saved */
+
+/* bringing a robot in */
+.td-menu { position: absolute; top: 44px; left: 10px; z-index: 8; width: 320px; padding: 10px 12px 12px; border: 1px solid var(--io-border); border-radius: var(--io-radius); background: var(--io-surface); box-shadow: var(--io-shadow-pop); font-size: 12.5px; }
+.td-menu[hidden] { display: none; }
+.td-menu p { margin: 4px 0 8px; color: var(--io-muted); }
+.td-menu-t { font-weight: 600; color: var(--io-text-strong); }
+.td-dropzone { margin: 14px 0; padding: 18px 16px; display: flex; flex-direction: column; align-items: center; gap: 4px; text-align: center; border: 1.5px dashed var(--io-border); border-radius: var(--io-radius); background: var(--io-surface); }
+.td-dropzone b { font-weight: 600; color: var(--io-text-strong); font-size: 14px; }
+.td-dropzone span { color: var(--io-muted); }
+.td-dropzone-btns { display: flex; gap: 6px; margin-top: 8px; }
+.td-empty-status { min-height: 1.3em; margin-top: 6px; color: var(--io-muted); font-size: 12px; }
+.td-empty-status.err { color: var(--io-error-text); }
+.td-kept { margin: 14px 0; }
+.td-kept h3 { margin: 0 0 4px; font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .02em; color: var(--io-muted); }
+.td-kept-row { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 2px 0; border-top: 1px solid var(--io-border-soft); }
+.td-kept-n { font-weight: 500; color: var(--io-text-strong); }
+.td-kept-row small { flex: 1; min-width: 0; color: var(--io-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.td-kept-row em { color: var(--io-muted); font-style: normal; font-size: 12px; }
+.td-kept-row .td-btn { height: 24px; font-size: 11.5px; }
+.td-drop { display: none; position: absolute; inset: 8px; z-index: 20; align-items: center; justify-content: center; border: 2px dashed #2f7cf6; border-radius: var(--io-radius);
+  background: color-mix(in srgb, var(--io-surface) 78%, transparent); color: var(--io-text-strong); font-size: 16px; font-weight: 600; pointer-events: none; }
+.td-dropping .td-drop { display: flex; }
+.td-root.td-none > .td-drop { display: none !important; }
+.td-root.td-none.td-dropping > .td-drop { display: flex !important; }
