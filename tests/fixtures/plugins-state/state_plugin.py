@@ -208,6 +208,10 @@ def turbo(t: float) -> tuple[int, int, int]:
 
 
 def image(kind: str, seq: int) -> bytes:
+    return png(pixel_rows(kind, seq))
+
+
+def pixel_rows(kind: str, seq: int) -> list[bytes]:
     cx, cy = WIDTH / 2 + 40 * math.sin(seq * 0.25), HEIGHT / 2 + 25 * math.cos(seq * 0.19)
     rows = []
     for y in range(HEIGHT):
@@ -225,17 +229,35 @@ def image(kind: str, seq: int) -> bytes:
                 pixel = turbo(0.15 + 0.6 * min(near, 80) / 80 + 0.2 * y / HEIGHT)
             row += bytes(pixel)
         rows.append(bytes(row))
-    return png(rows)
+    return rows
+
+
+# WHY a choice: the real intel_rgbd driver writes each tile as <stream>.jpg and leaves the record's format out (the contract's default,
+# jpeg); STATE_FRAME_FORMAT=jpeg makes this camera do the same (Pillow, as the driver), png stays the default for the page tests
+FRAME_FORMAT = os.environ.get("STATE_FRAME_FORMAT") or "png"
+
+
+def encoded(stream: str, seq: int) -> bytes:
+    if FRAME_FORMAT != "jpeg":
+        return image(stream, seq)
+    import io
+
+    from PIL import Image
+
+    out = io.BytesIO()
+    Image.frombytes("RGB", (WIDTH, HEIGHT), b"".join(pixel_rows(stream, seq))).save(out, "JPEG", quality=88)
+    return out.getvalue()
 
 
 def write_frame(folder: str, stream: str, seq: int) -> None:
-    final = os.path.join(folder, f"{stream}.png")
-    temporary = os.path.join(folder, f".{stream}.png.tmp")
+    suffix = "jpg" if FRAME_FORMAT == "jpeg" else "png"
+    final = os.path.join(folder, f"{stream}.{suffix}")
+    temporary = os.path.join(folder, f".{stream}.{suffix}.tmp")
     with open(temporary, "wb") as handle:
-        handle.write(image(stream, seq))
+        handle.write(encoded(stream, seq))
     os.replace(temporary, final)  # atomic: a reader sees the old frame or the new one
-    emit(record="frame", path="", stream=stream, file=f"{stream}.png", format="png", width=WIDTH, height=HEIGHT,
-         stamp=clock(), seq=seq)
+    emit(record="frame", path="", stream=stream, file=f"{stream}.{suffix}", width=WIDTH, height=HEIGHT, stamp=clock(), seq=seq,
+         **({} if FRAME_FORMAT == "jpeg" else {"format": "png"}))
 
 
 # ----- configuration: read-only on the camera, live-editable on the joint (docs/state-config-v1.md section 8) ----------

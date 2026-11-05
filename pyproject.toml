@@ -9,8 +9,11 @@ dependencies = []
 # stdlib-only (Zach's "zero or one runtime dep" rule for cores); only the stock diagnostics' arithmetic needs numpy. Without it the
 # host still starts, the registry still lists every diagnostic, and each configured one reports not_run with the reason
 # (robotdx/diagnostics/_numpy.py): uv run --project /home/bam/io-diagnostics --extra diagnostics io-diagnostics serve
+# WHY Pillow in the same extra (Codex audit 2026-11-04 r3, gap 2): the configured camera driver (intel_rgbd) writes its frames as JPEG,
+# which neither the stdlib nor numpy decodes; Pillow is the stock decoder (the driver encodes with it, and the Stable channel's
+# /usr/bin/python3 has it as python3-pil). Without it a JPEG frame is not_run with NoDecoder, as without numpy.
 [project.optional-dependencies]
-diagnostics = ["numpy>=1.26"]
+diagnostics = ["numpy>=1.26", "Pillow>=10"]
 
 [project.scripts]
 # The one command (serve | tray | once --json): uv run --project /home/bam/io-diagnostics io-diagnostics serve
@@ -28,7 +31,7 @@ packages = ["io_diagnostics", "contract", "io_facts", "robotdx"]
 [dependency-groups]
 # WHY numpy in dev too: the tests (tests/diagnostics) and the page suites run the stock diagnostics; the wheel's runtime stays
 # stdlib-only, and the no-numpy path is proven with uv run --isolated --no-dev (tests/diagnostics/test_without_numpy.py)
-dev = ["pytest>=8", "numpy>=1.26"]
+dev = ["pytest>=8", "numpy>=1.26", "Pillow>=10"]
 # Lane C interop (io_diagnostics/interop): foxglove-sdk serves /diagnostics to Lichtblick/Foxglove, rosbags writes
 # ROS 2 CDR + the ros2msg schema, websockets is the stock client in tests. A group, so the record contract stays
 # stdlib-only: uv run --project /home/bam/io-diagnostics --group dev --group interop pytest ...

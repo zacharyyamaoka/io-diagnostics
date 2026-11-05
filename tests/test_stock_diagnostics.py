@@ -344,5 +344,5 @@ def test_the_host_starts_without_numpy_and_each_diagnostic_says_why(tmp_path):
     # with the stdlib alone (stock.agreement needs no numpy)
     by_name = {row["name"]: row for row in found}
     assert by_name["CAN 1: command / telemetry rate"]["code"] == sd.NOT_STREAMING
-    assert by_name["CAN 1: CAN reply loss"]["code"] == sd.NO_SOURCE and "queries and replies" in by_name["CAN 1: CAN reply loss"]["message"]
+    assert by_name["CAN 1: CAN reply loss"]["code"] == sd.NOT_WIRED and "queries and replies" in by_name["CAN 1: CAN reply loss"]["message"]
     assert by_name["CAN 1: config matches expected"]["level"] == "warn" and "differ" in by_name["CAN 1: config matches expected"]["message"]

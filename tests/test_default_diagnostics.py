@@ -178,7 +178,7 @@ def test_an_unwatched_camera_waits_for_its_frames_quietly_and_names_the_sources_
     assert all(status.level == "unknown" for status in mine.values())  # nobody watches it: no frames, and the rest has no source
     # its frames feed the latency and the blur once a page watches it: until then not run, and no row (tests/test_stock_inputs.py runs them)
     assert {entry_id for entry_id, status in mine.items() if status.code == sd.NOT_STREAMING} == {"camera.latency", "camera.blur"}
-    no_source = {entry_id for entry_id, status in mine.items() if status.code == sd.NO_SOURCE}
+    no_source = {entry_id for entry_id, status in mine.items() if status.code in sd.NO_SOURCE_CODES}
     assert no_source == set(mine) - {"camera.latency", "camera.blur"}
     # the camera reports State, so each binding with no source is a row of its own (unknown, never OK) that says what would provide it
     posted = {check["name"] for check in served.node(camera)["checks"]}
@@ -222,7 +222,7 @@ def test_a_watched_board_runs_what_its_state_feeds_and_a_proposed_limit_only_war
         # status reports no reply counts, so the reply loss says it has no source
         assert mine["driver.loop_rate"].level in ("ok", "warn", "error") and mine["driver.loop_rate"].measurements[0].value > 0
         assert mine["driver.config"].level in ("ok", "warn", "error") and "differ" in mine["driver.config"].message
-        assert (mine["driver.link_loss"].level, mine["driver.link_loss"].code) == ("unknown", sd.NO_SOURCE)
+        assert (mine["driver.link_loss"].level, mine["driver.link_loss"].code) == ("unknown", sd.NOT_WIRED)
         for entry_id, status in mine.items():  # each row carries its entry's data-ui view, as the library's record writes it
             assert dict(status.values)["dx.hint"] == catalog.entry(entry_id).the_hint in HINTS, entry_id
         posted = {check["name"].split(": ", 1)[-1] for check in rig.host.node(rig.board)["checks"]}
