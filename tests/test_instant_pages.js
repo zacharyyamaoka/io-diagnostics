@@ -204,6 +204,41 @@ async function scenario(browser, name, body) {
       check('Retry clears it', Boolean(await waitFor(async () => !(await page.locator('[data-d6-log] .al-late:visible').count()), 3000, 100)));
     });
 
+    // Seen on Preview, 2026-11-04: an entity's Log tab opened on a blank band with its newest row cut in half, no number, no time, no severity.
+    // Measured, not by the DOM: the row is in the DOM either way. The band is sticky, so it sits at its `top` with nothing scrolled.
+    const dayBand = (selector) => page => page.evaluate((list_selector) => {
+      const list = document.querySelector(list_selector);
+      const day = list.querySelector('.al-day').getBoundingClientRect();
+      const row = list.querySelector('.ev').getBoundingClientRect();
+      const time = list.querySelector('.ev .t').getBoundingClientRect();
+      const head = list.querySelector('.al-head').getBoundingClientRect();
+      const shown = document.elementFromPoint(time.left + time.width / 2, time.top + time.height / 2);
+      return { scrollTop: list.scrollTop, gap: Math.round(day.top - list.getBoundingClientRect().top), under: Math.round(day.bottom - row.top),
+        timeShown: Boolean(shown && shown.closest('.ev')), headBottom: Math.round(head.bottom - list.getBoundingClientRect().top) };
+    }, selector);
+
+    await scenario(browser, 'log newest row', async (page) => {
+      await H.open(page, server.base, ADAPTER, 'log');
+      await page.waitForSelector('[data-d6-log] .ev', { timeout: 20000 });
+      const read = dayBand('[data-d6-log] .al-list');
+      const seen = await read(page);
+      check('an entity\'s log starts at the top of its list: no blank band over the date', seen.gap === 0, JSON.stringify(seen));
+      check('the date does not sit on the newest row', seen.under <= 0, JSON.stringify(seen));
+      check('the newest row shows its time', seen.timeShown, JSON.stringify(seen));
+      await page.evaluate(() => { const list = document.querySelector('[data-d6-log] .al-list'); list.style.height = '120px'; list.scrollTop = 60; });
+      await wait(100);
+      const scrolled = await read(page);
+      check('scrolled, the date stays at the top of the list', scrolled.scrollTop > 0 && scrolled.gap === 0, JSON.stringify(scrolled));
+    });
+
+    await scenario(browser, 'log header stays', async (page) => {
+      await page.goto(`${server.base}/?view=activity`);
+      await page.waitForSelector('.al-list .ev', { timeout: 20000 });
+      const seen = await dayBand('.al-list')(page);
+      check('the Activity page keeps its column header, the date under it', seen.headBottom > 0 && seen.gap >= seen.headBottom - 1, JSON.stringify(seen));
+      check('and its newest row shows its time', seen.under <= 0 && seen.timeShown, JSON.stringify(seen));
+    });
+
     // ----- the poll does not pile up either --------------------------------------------------------------------------------------
     await scenario(browser, 'state poll', async (page) => {
       await page.route('**/api/v1/live*', (route) => route.abort());
