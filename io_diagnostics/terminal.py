@@ -153,6 +153,7 @@ class Run:
         self.master: int | None = None
         self.exited = threading.Event()
         self.finished = threading.Event()
+        self._as_it_ran: dict | None = None  # what clients are told while this run's ending goes on record (_conclude)
         self.timed_out = False
         self._attempt_offset = 0
         self.from_disk = False
@@ -201,7 +202,7 @@ class Run:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             temporary = path.with_suffix(".json.tmp")
-            temporary.write_text(json.dumps(self.to_json(detail=True), ensure_ascii=False, default=str))
+            temporary.write_text(json.dumps(self.to_json(detail=True, truth=True), ensure_ascii=False, default=str))
             os.replace(temporary, path)
         except OSError:
             pass
@@ -274,13 +275,19 @@ class Run:
     def active(self) -> bool:
         return self.state in ACTIVE
 
+    @property
+    def over(self) -> bool:
+        """What a client is told: over only once its ending is on record (``_conclude``). ``active`` is the run itself, which the host's gates and the disk go by."""
+
+        return not self.active and self._as_it_ran is None
+
     def read_from(self, offset: int, timeout: float = KEEPALIVE_S) -> tuple[list[tuple[int, float, bytes]], bool]:
         """``(chunks at or after offset, ended)``, waiting up to ``timeout`` for something new. Each chunk is
         ``(offset, seconds since start, bytes)`` and at most ``STREAM_EVENT_BYTES`` (replays are merged into that)."""
 
         with self.cond:
             self._load_buffer()
-            self.cond.wait_for(lambda: self.end_offset > offset or not self.active, timeout)
+            self.cond.wait_for(lambda: self.end_offset > offset or self.over, timeout)
             out: list[tuple[int, float, bytes]] = []
             offset = max(offset, self.first_offset)
             for start, t, data in self.chunks:
@@ -295,7 +302,7 @@ class Run:
                 else:
                     out.append((at, t, piece))
                 offset = end
-            return out, not self.active and not out
+            return out, self.over and not out
 
     def output_bytes(self) -> bytes:
         with self.cond:
@@ -303,16 +310,19 @@ class Run:
             return b"".join(data for _o, _t, data in self.chunks)
 
     # --- views ----------------------------------------------------------------------------------------------------
-    def to_json(self, detail: bool = False) -> dict:
+    def to_json(self, detail: bool = False, *, truth: bool = False) -> dict:
+        """The run as a client is told it; ``truth``: as it is, for the disk."""
+
         iso = self.registry.iso
         with self.cond:
+            if self._as_it_ran is not None and not truth:
+                return dict(self._as_it_ran)
             out = {"id": self.id, "path": self.spec.path, "device_id": self.spec.device_id,
                    "device_path": self.spec.device_path, "plugin": self.spec.plugin, "action": self.spec.action,
                    "title": self.spec.title, "label": self.spec.label, "danger": self.spec.danger, "node": self.spec.node,
                    "new_id": self.spec.new_id, "argv": redact(self.spec.argv), "started": self.started,
                    "started_iso": iso(self.started), "ended": self.ended, "ended_iso": iso(self.ended),
-                   # WHY finished too: a run is over once its ending is on record, so a client told it is over finds RunEnded in the next read (Host._run_ended publishes it)
-                   "elapsed_s": round(self.elapsed(), 3), "state": self.state, "active": self.active or not self.finished.is_set(),
+                   "elapsed_s": round(self.elapsed(), 3), "state": self.state, "active": self.active,
                    "stopping": self.stopping, "exit_code": self.exit_code,
                    "interactive": bool(self.interactive_start and self.active and not self.from_disk),
                    "cols": self.cols, "rows": self.rows, "output_bytes": self.end_offset, "dropped_bytes": self.dropped,
@@ -585,7 +595,7 @@ class Run:
 
     def _after_exit(self, returncode: int | None, blocked: dict | None = None, waited: float = 0.0) -> None:
         spec = self.spec
-        duration = self.elapsed()
+        duration = round(self.elapsed(), 3)  # WHY once, here: the message and duration_s are the same number, and rounded apart "%.2g" told them apart one run in twenty
         if self.timed_out:
             state, outcome = "timed_out", "timeout"
         elif blocked is not None and self.stop_requested:
@@ -671,6 +681,11 @@ class Run:
             self.stop_info["signals"] = self._signals_sent()
         self._close_cast()
         with self.cond:
+            # WHY held: a run's end is one moment for everyone outside. A read answers from a published view, so a client told it is over must find RunEnded in its next read, and
+            # the ending has to wait for that publish; a client reading in that wait got `state: done` with `active: true`, and the page keeps a stream's `end` as its last word, so
+            # a finished run stayed a running one. Until the ending is on record clients are told the run as it was, then all of it at once. The run itself, the host's gates and the
+            # disk are told now: a next run must not be refused by this one, and a host that dies in here must not read it back as "the host stopped while it ran".
+            self._as_it_ran = self.to_json(truth=True)
             self.state = state
             self.stopping = False
             self.exit_code = returncode
@@ -679,10 +694,15 @@ class Run:
             self.tail = tail
             self.result = {"outcome": outcome, "returncode": returncode, "duration_s": round(duration, 3), "records": records,
                            "action_result": action_result, "rejected": rejected, "stderr_tail": tail, "message": message}
-            self.cond.notify_all()
-        self.persist()
-        self.registry.ended(self)
-        self.finished.set()
+        try:
+            self.persist()
+            self.registry.ended(self)
+        finally:
+            with self.cond:
+                self._as_it_ran = None
+                self.finished.set()
+                self.cond.notify_all()
+            self.registry.notify("run")  # WHY again: ended() said so while clients were still told the run as it was, and a page re-reads on this and nothing comes after it
 
 
 def _plain_env(env: dict[str, str]) -> dict[str, str]:
@@ -751,7 +771,7 @@ class RunRegistry:
     def json(self, limit: int | None = None) -> dict:
         runs = self.list()
         items = [run.to_json() for run in (runs[:limit] if limit else runs)]
-        return {"active": sum(1 for run in runs if run.active), "total": len(runs), "items": items}
+        return {"active": sum(1 for run in runs if not run.over), "total": len(runs), "items": items}
 
     def limits(self) -> dict:
         return {"ring_bytes": self.ring_bytes, "input_max": INPUT_MAX, "cast_budget_bytes": self.budget_bytes,
