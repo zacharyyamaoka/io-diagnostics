@@ -133,7 +133,11 @@ ul {{ margin: 6px 0; padding-left: 20px; }} li {{ margin: 3px 0; }} code {{ font
 
 <h2>Preview, the real rack, right now</h2>
 {image(os.path.join(FOLDER, 'preview-home.png'), 1000, 66, 'Preview home')}
-<p class="s">Headless Chrome on Preview (:8821), read-only. {facts.get('timings', {}).get('meshes', '?')} meshes, {len(facts.get('parts', []))} parts, the live feed open. All eight boards read unknown, and that is the host's truth, not the view's: their rows say "config discarded: conf get id.id did not answer", a driver read that needs its own look.</p>
+<p class="s">Headless Chrome on Preview (:8821), read-only. {facts.get('timings', {}).get('meshes', '?')} meshes, {len(facts.get('parts', []))} parts, the live feed open. Every board shows its real status. An orange part is a real warning: CAN 1 and CAN 15 have config warnings (ProposedAboveErrorLimit, ConfigMismatch), and CAN 4 has a firmware update available.</p>
+<h2>Why all eight boards were purple, and what fixed it</h2>
+<p>Two separate causes, and the first hid the second.</p>
+<ul><li><b>Boards stuck mid-read.</b> A whole config read takes 32.5 s on a real board and was cut off at 12 s. The board cannot cancel, so it stayed paused mid-dump for about 30 minutes, answering every later reader with the wrong line. Fixed in <code>d0e40bb9</code> (driver) and <code>15b278e</code> (timeout): the driver reads a console to its end before asking anything and gives a whole read 45 s. Over 32 minutes of watching on Preview (18 samples), the misaligned error did not come back.</li>
+<li><b>Checks that never ran.</b> A stock check with no input posts a grey row at level unknown, and unknown outranks warn, so those rows set the board's colour. Fixed in <code>bf3cfe9</code>: a check that did not run no longer sets any level. It stays grey in the drill-in, folded under one "N checks did not run" line, and is never shown as OK.</li></ul>
 {image(os.path.join(FOLDER, 'preview-chip.png'), 1000, 66, 'Preview chip') if os.path.exists(os.path.join(FOLDER, 'preview-chip.png')) else ''}
 <p class="s">Hovering fdcanusb 0607623A: {facts.get('leaders', '?')} leader lines, one to each of its boards' parts.</p>
 <table><tr><th>Part</th><th>Resolved on this PC</th><th>Status</th></tr>{live}</table>
