@@ -38,6 +38,7 @@ from io_diagnostics import expected as expected_module
 from io_diagnostics import history as history_module
 from io_diagnostics import host_utilities, usb_reset
 from io_diagnostics import logview as logview_module
+from io_diagnostics import not_run as not_run_module
 from io_diagnostics import probe as probe_module
 from io_diagnostics import roster as roster_module
 from io_diagnostics import settings as settings_module
@@ -1910,7 +1911,9 @@ class Host:
             events += self.runs.events()  # RunStarted / RunEnded (docs/runs-v1.md section 5)
             events += self.config_editor.events  # every configuration write, accepted or not (config_edit.py)
             events += self.plugin_events  # PluginReloaded: a driver's code changed and describe was read again
-            events += activity_module.level_events(self.history.transitions(now))
+            # WHY not a check that did not run: "<check>: ok → unknown" about a row that was never judged is not a change in the entity
+            idle = {key for key, status in self.stock_results.items() if not_run_module.is_not_run(status)}
+            events += activity_module.level_events([item for item in self.history.transitions(now) if (item[1], item[2]) not in idle])
             for job in self.jobs.values():
                 device_path = self.layer.device_paths.get(str(job.device.get("id")))
                 if device_path:
@@ -2547,7 +2550,9 @@ class Host:
     def check_json(self, status: DiagnosticStatus, now: float) -> dict:
         level = effective_level(status, now)
         seen = status.received if status.received is not None else status.stamp
+        # `not_run`: a stock check that did not run (io_diagnostics/not_run.py): listed, grey, never OK, and no part of any level
         return {"name": status.name, "level": status.level, "effective_level": level, "stale": level == STALE,
+                "not_run": not_run_module.is_not_run(status),
                 "message": status.message, "code": status.code, "mode": status.mode, "source": status.source,
                 "hardware_id": status.hardware_id, "stamp": status.stamp, "received": status.received,
                 "received_iso": activity_module.iso(status.received, self.utc_offset_s),
@@ -2578,7 +2583,8 @@ class Host:
     def evaluate(self, check: str, path: str, view: View) -> tuple[bool | None, str]:
         entity = view.merged.entities[path]
         if check == "board_answers":
-            own = view.rows.own.get(path, [])
+            # WHY not the checks that did not run: the host's own beat posts them whether or not the board answers
+            own = [status for status in view.rows.own.get(path, []) if not not_run_module.is_not_run(status)]
             if not own:
                 return None, f"no report from {entity.name}"
             fresh = [status for status in own if effective_level(status, view.now) != STALE and status.source != RUNNER_SOURCE]
@@ -3926,21 +3932,27 @@ class Host:
         seconds = self._window(window)
         bins = max(1, min(int(bins), history_module.MAX_BINS))
         start, end = view.now - seconds, view.now
-        rows = [self._bar_row(view, row, depth, start, end, bins, self.history.timeline)
+        rows = [self._bar_row(view, row, depth, start, end, bins, self.history.timeline, self._not_run_keys(view))
                 for depth, row in [(0, path), *((1, child) for child in view.merged.children.get(path, []))]]
         return {"path": path, "window_s": seconds, "from": start, "to": end, "bins": bins, "bin_s": seconds / bins,
                 "rows": rows}
 
-    def _bar_row(self, view: View, row: str, depth: int, start: float, end: float, bins: int, timeline_of) -> dict:
+    @staticmethod
+    def _not_run_keys(view: View) -> frozenset:
+        """``(path, name)`` of every check that did not run now (io_diagnostics/not_run.py): the health bars leave them out, as the levels do."""
+
+        return frozenset((status.path, status.name) for own in view.rows.own.values() for status in own if not_run_module.is_not_run(status))
+
+    def _bar_row(self, view: View, row: str, depth: int, start: float, end: float, bins: int, timeline_of, idle: frozenset = frozenset()) -> dict:
         """One row of a health bar: the worst level any of the row's statuses held per bin. The one place a row's bar is made, for
-        ``/history/bar`` (an entity and its children) and ``/history/tree`` (every row)."""
+        ``/history/bar`` (an entity and its children) and ``/history/tree`` (every row). ``idle``: the checks that did not run, left out."""
 
         # WHY the row's own statuses when it has any: the bar says what THIS black box reported (its row's level);
         # a pure grouping row, like its level, shows what everything below reported
-        keys = self.history.keys(row)
+        keys = [key for key in self.history.keys(row) if key not in idle]
         basis = "own" if keys else "below"
         if not keys:
-            keys = self.history.keys(row, below=True)
+            keys = [key for key in self.history.keys(row, below=True) if key not in idle]
         if not keys:
             basis = "none"
         timelines = [timeline_of(key, start, end) for key in keys]
@@ -3959,6 +3971,7 @@ class Host:
         bins = max(1, min(int(bins), history_module.MAX_BINS))
         start, end = view.now - seconds, view.now
         made: dict[tuple[str, str], list[dict]] = {}
+        idle = self._not_run_keys(view)
 
         def timeline_of(key: tuple[str, str], low: float, high: float) -> list[dict]:
             if key not in made:
@@ -3969,7 +3982,7 @@ class Host:
         stack = [tree.HOST_PATH]
         while stack:
             row = stack.pop()
-            rows.append(self._bar_row(view, row, view.rows.depth.get(row, 0), start, end, bins, timeline_of))
+            rows.append(self._bar_row(view, row, view.rows.depth.get(row, 0), start, end, bins, timeline_of, idle))
             stack.extend(reversed(view.merged.children.get(row, [])))
         return {"path": tree.HOST_PATH, "window_s": seconds, "from": start, "to": end, "bins": bins, "bin_s": seconds / bins,
                 "rows": rows}

@@ -35,6 +35,7 @@ from typing import Callable
 
 from contract.record import (ERROR, OK, RANK, STALE, STALE_FACTOR, STALE_FLOOR_S, WARN, DiagnosticStatus, Entity,
                              KeyValue, Measurement, Summary, effective_level, summarize)
+from io_diagnostics.not_run import is_not_run
 
 HOST_PATH = "host"
 RECENT_PATH = f"{HOST_PATH}/recently-seen"  # devices only seen, not expected (host.py): drawn collapsed
@@ -597,8 +598,11 @@ HOST_SELF = f"{HOST_PATH}/:self"
 
 def _summaries(merged: Merged, now: float) -> dict[str, Summary]:
     entities = list(merged.entities.values())
-    if not any(status.path == HOST_PATH for status in merged.statuses):
-        return summarize(entities, merged.statuses, now)
+    # WHY not the checks that did not run (io_diagnostics/not_run.py): they say nothing about an entity, yet "unknown" outranks "warn", so
+    # one NoSource row turned a board of OK checks purple. They stay in ``Rows.own`` (the drill-in lists them) and nowhere else.
+    ran = [status for status in merged.statuses if not is_not_run(status)]
+    if not any(status.path == HOST_PATH for status in ran):
+        return summarize(entities, ran, now)
     host = merged.entities[HOST_PATH]
 
     def to_self(path: str) -> str:
@@ -609,7 +613,7 @@ def _summaries(merged: Merged, now: float) -> dict[str, Summary]:
 
     # a caused_by naming the host names its own records, which now live on the leaf
     statuses = [dataclasses.replace(status, path=to_self(status.path), caused_by=tuple(map(to_self, status.caused_by)))
-                for status in merged.statuses]
+                for status in ran]
     summaries = summarize([*entities, Entity(HOST_SELF, host.name, host.kind, via=HOST_PATH)], statuses, now)
     own, root = summaries.pop(HOST_SELF), summaries[HOST_PATH]
     rollup = dataclasses.replace(root.rollup, origin=from_self(root.rollup.origin),
@@ -737,7 +741,10 @@ def node_json(path: str, rows: Rows, layer: OsLayer, faults_by_path: dict[str, i
               expected_paths: frozenset | set = frozenset(), rates: dict[str, dict] | None = None) -> dict:
     merged, summary = rows.merged, rows.summaries[path]
     entity = merged.entities[path]
-    own = rows.own.get(path, [])
+    listed = rows.own.get(path, [])
+    # WHY the checks that ran: a check that did not run is the host's own row, re-posted every beat; it says nothing of when the entity
+    # was last heard from, how often it reports or whether it is offline (io_diagnostics/not_run.py). ``checks`` still counts every row.
+    own = [status for status in listed if not is_not_run(status)]
     hint = None
     if worse(summary.rollup.level, summary.level):
         hint = {"level": summary.rollup.level, "origin": summary.rollup.origin, "message": summary.rollup.message}
@@ -764,7 +771,7 @@ def node_json(path: str, rows: Rows, layer: OsLayer, faults_by_path: dict[str, i
         "age_s": round(rows.now - seen, 3) if seen is not None else None,
         "expected_period_s": min(periods) if periods else None,
         "stale_after_s": max(STALE_FACTOR * min(periods), STALE_FLOOR_S) if periods else None,
-        "checks": len(own), "actions": len(entity.actions), "faults": faults_by_path.get(path, 0),
+        "checks": len(listed), "not_run": len(listed) - len(own), "actions": len(entity.actions), "faults": faults_by_path.get(path, 0),
         "collapsed": path in COLLAPSED,
         "presence": presence_of(path, entity, summary, own, seen, rows.now, memory or {}, live),
         "claimed": is_claimed(path, entity, merged, layer) or path in expected_paths,

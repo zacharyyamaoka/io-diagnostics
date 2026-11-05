@@ -223,7 +223,7 @@ Besides `IO_DIAGNOSTICS_DEVICE`, `_DEVICE_PATH`, `_NOW` and `_SCHEMA`, every plu
   "owner": "moteus_servo",
   "id_text": "272813EF",
   "last_received": 1761095510.0, "age_s": 0.0, "expected_period_s": null, "stale_after_s": null,
-  "checks": 2, "actions": 1, "faults": 0, "collapsed": false,
+  "checks": 2, "not_run": 0, "actions": 1, "faults": 0, "collapsed": false,
   "presence": {"state": "heard", "age_s": 0.0, "restored": false, "text": ""}, "claimed": true,
   "usb": {"version": "2.10", "speed_mbps": 480},
   "rate": {"received_per_s": 0.4967, "expected_per_s": 0.5, "window_s": 30.0},
@@ -250,7 +250,8 @@ Besides `IO_DIAGNOSTICS_DEVICE`, `_DEVICE_PATH`, `_NOW` and `_SCHEMA`, every plu
 | `id_text` | Short text for the id column: a device's serial (a plugin may replace it, e.g. the RealSense SDK serial), a port's link speed or `empty`, a bus's / group's / the host's physical device count. |
 | `last_received`, `age_s` | When the row was last heard from: the newest `received` among its PERIODIC own records (the ones STALE is judged on), else among all its own records (`null` = no records); age on the host clock. |
 | `expected_period_s`, `stale_after_s` | Shortest declared period among the row's own periodic records and its STALE threshold (`null` = event-driven: never stale). |
-| `checks`, `actions`, `faults` | Counts of own status records, registered actions, and the host's open faults (pending or confirmed) on this row; details via `/api/v1/node`. |
+| `checks`, `actions`, `faults` | Counts of own status records, registered actions, and the host's open faults (pending or confirmed) on this row; details via `/api/v1/node`. `checks` counts every row the entity lists, the ones that did not run included. |
+| `not_run` | Additive (2026-11-04). How many of those `checks` are a stock check that did NOT RUN (the check's `not_run: true`, below). They are listed but say nothing about the entity: none sets `level`, `own`, `rollup` or `hint`, none is in `summary.counts` or `summary.attention`, and none counts toward `last_received`, `expected_period_s`, `presence` or `connected`. A row whose only checks did not run therefore has `own.level` `null`, like a pure grouping node (it used to read `unknown`). |
 | `collapsed` | `true` for a group a page starts closed. Always `false` today (the `host/recently-seen` group is gone: those devices are a check on the Computer). |
 | `presence` | The Claude-sidebar dot (2026-10-24), neutral, never a level: `{state, age_s, restored, text}` with `state` `"heard"` (filled: heard within its expected period), `"stale"` (hollow ring: known, not heard lately; `text` "last heard 6 min ago", `restored` true while it is only the last session's row) or `"live"` (pulsing: a follower is streaming its data). `null` for structure with nothing to hear from (ports, groups, rig rows) and for a row with no records. |
 | `usb` | A USB device row's own `version` (its bcdUSB as sysfs shows it, `"2.10"`) and the `speed_mbps` of the link it runs at, so a page can say "USB 2.1" instead of "480 Mb/s" (`web/usb.js`; the raw speed stays in the tooltip). `null` for any other row. |
@@ -268,7 +269,7 @@ specified in `docs/state-config-v1.md`; `history`'s `state: true` marks a series
   "node": {"...": "the node as in /state, with children replaced by a list of child paths"},
   "ancestors": [{"path": "host", "name": "bam-GPU", "edge": null}, {"path": "host/usb1", "name": "USB bus 1 · 480 Mb/s", "edge": "via"}],
   "checks": [
-    {"name": "CAN 15: comms", "level": "ok", "effective_level": "stale", "stale": true,
+    {"name": "CAN 15: comms", "level": "ok", "effective_level": "stale", "stale": true, "not_run": false,
      "message": "answers · 36.5 V · stopped", "code": "", "mode": null, "source": "moteus_servo (rack_inventory, real)",
      "hardware_id": "moteus 22fb62f0 · ABoAQVQwUBUgOTNO", "stamp": 1761096101.0, "received": 1761096101.0,
      "received_iso": "2026-10-21T18:21:41-07:00", "age_s": 199.0, "expected_period_s": 180.0, "stale_after_s": 540.0,
@@ -320,6 +321,13 @@ specified in `docs/state-config-v1.md`; `history`'s `state: true` marks a series
   `batch = "having"`, enough) of its leaves offer, one `all:<action>` (`scope` `"composite"`, a title that says the count, `batch`:
   `{"action", "n", "groups", "skipped"}`); `POST /api/v1/act` takes it like any action ("Composites" below).
 
+- `checks[].not_run` (additive, 2026-11-04): `true` for a stock check that did NOT RUN (source `robotdx.diagnostics`, level `unknown`:
+  codes `NoSource`, `NoState`, `NotStreaming`, `NoDecoder`, `NotEnoughHistory`, `NumpyMissing`, `DiagnosticRaised`, or the library's own
+  not_run verdict). It says nothing about the entity: the host leaves it out of the row's `level`, every `rollup`, `summary` and the
+  health bars, and a page lists it apart from the checks that ran, grey, with its own reason, never as OK. Its `level` /
+  `effective_level` still read `unknown` (or `stale` once the beat stops) so a viewer that ignores the flag still never sees it as OK.
+  A driver's own unknown (`BrsNotTested`, a config that could not be read) is not one: it keeps `not_run: false` and rolls up.
+  Before this field a not-run row set its entity's level to `unknown`.
 - `checks`: the row's own `DiagnosticStatus` records, latest per check name, worst first. `level` is what the
   producer said; `effective_level` is what to act on now (`"stale"` once overdue). Values and measurements are
   the producer's; `measurements[].level` comes from its limits (contract `Measurement.level`), `text` is the stock
@@ -938,7 +946,7 @@ The latest checks (diagnostic statuses) of every entity in one answer (2026-10-2
             "rank": ["ok", "warn", "unknown", "stale", "error"], "stale_factor": 3.0, "stale_floor_s": 5.0},
   "checks": {
     "host/usb1/port-1-3/usb-1-3": [
-      {"name": "v6_scenario: plugin run", "level": "ok", "effective_level": "stale", "stale": true, "message": "ran in 0.043 s · 31 records",
+      {"name": "v6_scenario: plugin run", "level": "ok", "effective_level": "stale", "stale": true, "not_run": false, "message": "ran in 0.043 s · 31 records",
        "code": "", "mode": null, "source": "io_diagnostics.runner", "hardware_id": "usb:0483:5740:272813EF", "stamp": 1792631510.0, "received": 1792631510.0,
        "received_iso": "2026-10-21T18:11:50-07:00", "age_s": 40.0, "expected_period_s": 2.0, "stale_after_s": 6.0, "uptime_s": null,
        "caused_by": [], "values": [{"key": "outcome", "value": "ok"}],

@@ -27,6 +27,7 @@ from typing import Callable
 from io_facts import journal, kernel_log
 
 from contract.record import ERROR, OK, RANK, STALE, UNKNOWN, WARN, Event, effective_level
+from io_diagnostics import not_run as not_run_module
 from io_diagnostics.tree import PortHistory, Rows, speed_text
 
 BOOT_WINDOW_S = 15.0  # enumerations this soon after boot are the boot, not a (re-)plug (V6, io_facts)
@@ -611,6 +612,8 @@ def link_health(rows: Rows, layer, utc_offset_s: int | None = None) -> list[dict
         device_path = layer.device_paths.get(device_id) if device_id else None
         device_name = merged.entities[device_path].name if device_path else "empty"
         for status in rows.own.get(path, []):
+            if not_run_module.is_not_run(status):
+                continue
             count = next((measurement.value for measurement in status.measurements if measurement.key == "enumerations / hour"), None)
             if count is None:
                 continue
@@ -625,7 +628,7 @@ def link_health(rows: Rows, layer, utc_offset_s: int | None = None) -> list[dict
         if entity.kind != "bus":
             continue
         label = "CAN" if re.search(r"\bcan\b", f"{entity.name} {path.rsplit('/', 1)[-1]}", re.I) else "bus"
-        own = rows.own.get(path, [])
+        own = [status for status in rows.own.get(path, []) if not not_run_module.is_not_run(status)]  # a check that did not run is no link metric
         for status in own:
             metric = status.name.split(": ", 1)[-1]
             out.append({"edge": entity.name, "path": path, "kind": label, "metric": metric, "value": status.message,

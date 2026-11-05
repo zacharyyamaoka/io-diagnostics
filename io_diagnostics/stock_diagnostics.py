@@ -61,6 +61,9 @@ from typing import Any, Callable, Mapping, Sequence
 
 from contract.record import from_dict
 from io_diagnostics.composite import toml_value
+# WHY the not-run codes live in not_run.py: tree.py rolls levels up without them and host.py marks their rows, and neither may import this module
+from io_diagnostics.not_run import (DIAGNOSTIC_RAISED, NO_DECODER, NO_STATE, NOT_ENOUGH_HISTORY, NOT_MEASURED, NOT_STREAMING, NOT_WIRED,
+                                    NUMPY_MISSING_CODE, is_not_run)
 from robotdx.diagnostics import catalog as dx_catalog
 from robotdx.diagnostics import core as dx_core
 from robotdx.diagnostics import record as dx_record
@@ -74,16 +77,11 @@ DEFAULT_DIR = Path(__file__).with_name("diagnostics_default.d")
 SOURCE = dx_record.SOURCE  # "robotdx.diagnostics": the status's source, which the page keys its drill-in on
 BEAT_S = 5.0
 DEFAULT_WINDOW_S = 60.0
-NO_STATE = "NoState"  # the entity has no State history: not run, and the host posts no row for it
 # WHY two codes, not one NoSource (Codex audit 2026-11-04 r3, gap 2): "no source" hid two different next steps. NotMeasured needs an
 # instrument (a sensor, a log, a tag: hardware or a person); NotWired is software, the data exists or an existing producer could publish it
-NOT_WIRED = "NotWired"  # an existing producer has the input or could publish it, and nothing maps it here yet: not run, says what would
-NOT_MEASURED = "NotMeasured"  # no instrument on this entity can produce the input (no IMU, no pick log, no tag): not run, says what would
 NO_SOURCE_CODES = (NOT_WIRED, NOT_MEASURED)
 GAP_KEY = "dx.gap"  # not_wired | not_measured on a status of either code
-NOT_STREAMING = "NotStreaming"  # its stream feeds it, but nothing arrived in the window (it streams while a page watches): not run, no row
-NO_DECODER = "NoDecoder"  # a frame in a format nothing here decodes (a JPEG without Pillow, the diagnostics extra)
-QUIET = (NO_STATE, NOT_STREAMING)  # not run until the entity streams: listed by the drill-in, never a grey row
+QUIET =(NO_STATE, NOT_STREAMING)  # not run until the entity streams: listed by the drill-in, never a grey row
 QUIET_KEY = "dx.quiet"  # a value on a NotWired / NotMeasured status of an entity that reports no State: listed by the drill-in, no row (``quiet``)
 MIN_WINDOW_S, MAX_WINDOW_S = 2.0, 86400.0
 LIMIT_PARTS = ("warn_low", "warn_high", "error_low", "error_high")
@@ -1295,9 +1293,9 @@ class StockDiagnostics:
                     window = fed[2] if len(fed) > 2 else {"from": start, "to": now, "window_s": binding.window_s, "state": binding.state,
                                                           "samples": samples, "source": source.kind}
         except ModuleNotFoundError as error:
-            result = self._not_run(binding, spec, "NumpyMissing", NUMPY_MISSING if error.name == "numpy" else f"{error}")
+            result = self._not_run(binding, spec, NUMPY_MISSING_CODE, NUMPY_MISSING if error.name == "numpy" else f"{error}")
         except Exception as error:  # noqa: BLE001 - a diagnostic that raises is a not_run with its reason, never a crashed host
-            result = self._not_run(binding, spec, "DiagnosticRaised", f"{binding.diagnostic} raised {type(error).__name__}: {error}")
+            result = self._not_run(binding, spec, DIAGNOSTIC_RAISED, f"{binding.diagnostic} raised {type(error).__name__}: {error}")
         entry = catalog_entry(binding.id)
         if entry is not None:  # the entry's own view: its data-ui hint, role and family (rack.uptime draws as a level_history)
             result = dataclasses.replace(result, hint=entry.the_hint, role=entry.role, family=entry.the_family,
@@ -1392,7 +1390,7 @@ class StockDiagnostics:
                                   wall_start=first)
         if not pairs:
             held, samples = float(run.t[-1] - run.t[0]), int(len(run.t))
-            return self._not_run(binding, spec, "NotEnoughHistory",
+            return self._not_run(binding, spec, NOT_ENOUGH_HISTORY,
                                  f"the State history holds {held:.0f} s ({samples} samples); this diagnostic looks at a {binding.window_s:g} s window"
                                  " with at least 2 samples"), None
         result = self._gated(binding, config, pairs[-1][0])  # the newest window: stamped with its end, on the host's clock
@@ -1573,6 +1571,6 @@ def binding_of(status) -> str:
 
 
 __all__ = ["StockDiagnostics", "Binding", "PartRule", "parse_parts", "state_inputs_missing", "NOT_WIRED", "NOT_MEASURED", "NO_SOURCE_CODES",
-           "GAP_KEY", "RackArchive", "cpu_temperature", "NOT_STREAMING", "NO_DECODER", "QUIET",
+           "GAP_KEY", "RackArchive", "cpu_temperature", "NO_STATE", "NOT_STREAMING", "NO_DECODER", "QUIET", "is_not_run",
            "Inputs", "Source", "SOURCES", "source_of", "quiet", "decode_image", "DEFAULT_DIR", "DiagnosticsError", "parse", "dump", "schema", "field_docs", "trajectory", "SOURCE",
            "DIAGNOSTICS_FILE", "BEAT_S", "registry_json", "config_doc", "kind_of", "catalog_parts", "catalog_entry", "window_of", "binding_of"]

@@ -382,6 +382,14 @@ function renderClock() {
   $('clock').textContent = `${shown.slice(5, 10)}  ${shown.slice(11, 19)}`;
 }
 
+// A stock check that did not run (the API's `not_run: true`) says nothing about the entity (io_diagnostics/not_run.py): the host leaves it out
+// of every level, so the page leaves it out of every "worst of its checks" too. `checks` keeps the ones that ran, whatever layout reads them;
+// `notRun` holds the rest for the one quiet line that lists them (detail/d1x.js), grey and never OK.
+function notRunSplit(detail) {
+  if (!detail || !Array.isArray(detail.checks) || !detail.checks.some((check) => check.not_run)) return detail && { notRun: [], ...detail };
+  return { ...detail, checks: detail.checks.filter((check) => !check.not_run), notRun: detail.checks.filter((check) => check.not_run) };
+}
+
 // One /node at a time, and its answer counts. WHY (measured 2026-11-04, tests/test_instant_pages.js): while a page had no answer every 1 Hz tick and
 // every live event asked again, about 20 a second, and an answer counted only if it was the newest asked for. A /node slower than that gap could never
 // land: with 3 s the page sent 645 requests in 30 s and drew nothing. Preview's took 4 to 22 s, so "loading…" was for ever. Chrome holds identical GETs back
@@ -575,7 +583,7 @@ function flushRender() {
   if (document.hidden) return;
   if (pendingNode) {
     // WHY: publishing a loaded selection and its DOM in the same frame keeps navigation atomic.
-    if (pendingNode.path === S.sel) S.node = pendingNode.node;
+    if (pendingNode.path === S.sel) S.node = notRunSplit(pendingNode.node);
     pendingNode = null;
   }
   const full = fullRenderPending, detail = detailRenderPending;
@@ -1383,7 +1391,7 @@ function detailContext(byPath) {
   const node = group ? null : (byPath.get(S.sel) || (nodeCache.get(S.sel) || {}).row || S.data.tree);
   // WHY the kept answer only here: S.node stays "the host's answer for the selection" (the Utilities menu, the 3D drawer and the runs act on it); a page
   // already visited draws from what it last said, at once, until that answer lands
-  const detail = node && (S.node && S.node.node.path === node.path ? S.node : (nodeCache.get(node.path) || {}).node || null);
+  const detail = node && (S.node && S.node.node.path === node.path ? S.node : notRunSplit((nodeCache.get(node.path) || {}).node) || null);
   // the row that stands for exactly this entity (not its owner, when the selection is a folded part)
   const rowKey = node && S.built ? S.built.byEntity.get(node.path) : null;
   const row = rowKey && S.built.byKey.get(rowKey).entity === node.path ? S.built.byKey.get(rowKey) : null;
@@ -2175,7 +2183,7 @@ async function saveSetup() {
 // entity's "What to check" and the Activity screen; the page's first selection is the worst cause, so its checklist
 // is still the first thing on screen.
 function whyOf(detail) {
-  return ((detail && detail.checks) || []).filter((check) => PROBLEM.has(check.effective_level)).map((check) => {
+  return ((detail && detail.checks) || []).filter((check) => !check.not_run && PROBLEM.has(check.effective_level)).map((check) => {
     const values = Object.fromEntries((check.values || []).map((value) => [value.key, value.value]));
     if (!values.what_to_check) return null;
     return { name: check.name, level: check.effective_level, message: check.message || '', code: check.code || '',

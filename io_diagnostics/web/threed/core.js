@@ -402,7 +402,8 @@ reason = "no mount for it in the model"`;
   // the info a card or a drawer shows for an entity: its row, its worst checks (/api/v1/checks) and its State (/api/v1/values)
   function checksOf(path) {
     const entry = T.api.cached('/api/v1/checks', 2000);
-    return ((entry.data && entry.data.checks && entry.data.checks[path]) || []).slice()
+    // WHY not the checks that did not run: they say nothing about the part (io_diagnostics/not_run.py), and "unknown" would sort first
+    return ((entry.data && entry.data.checks && entry.data.checks[path]) || []).filter((check) => !check.not_run)
       .sort((a, b) => (RANK[b.effective_level] ?? -1) - (RANK[a.effective_level] ?? -1));
   }
   function valuesOf(path) {
@@ -545,6 +546,7 @@ reason = "no mount for it in the model"`;
         + (mapped ? `<div class="td-links" title="${esc(parts()[index].note || '')}">On the model: ${esc(whereOf(parts()[index]))}</div>` : '<div class="td-links muted">Not mapped to a part of the model.</div>')
         + `<div class="td-sec-h">Diagnostics <span>${node.checks.length}</span></div>`
         + (node.checks.length ? checkRows(node.checks.slice().sort((a, b) => (RANK[b.effective_level] ?? -1) - (RANK[a.effective_level] ?? -1)), 40) : '<div class="muted">No checks of its own.</div>')
+        + (node.notRun && node.notRun.length ? `<div class="muted">${node.notRun.length} check${node.notRun.length === 1 ? '' : 's'} did not run</div>` : '')
         + `<div class="td-dr-foot"><button type="button" class="td-open" data-td-open="${esc(row.path)}">Open the device page<svg viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg></button></div></div>`;
     }
     if (T.el.drawer.dataset.html !== html) { T.el.drawer.dataset.html = html; T.el.drawer.innerHTML = html; }

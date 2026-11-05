@@ -46,7 +46,12 @@
       return { key: `${node.path}|${check.name}`, id: check.name, rank: rankOf(level), name: check.name, level, bad: PROBLEM.has(level), message: check.message || '', code: check.code || '',
         check, todo: list(values.what_to_check), evidence: values.kernel_evidence || '' };
     }).sort((a, b) => (rankOf(b.level) - rankOf(a.level)) || a.name.localeCompare(b.name));
-    return { rows, problems: rows.filter((row) => row.bad), ok: rows.filter((row) => !row.bad) };
+    // WHY a list of its own: a check that did not run says nothing about the entity, so it is no part of the rows,
+    // the problems, the folders' worst level or the status line; the shell (app.js, notRunSplit) keeps it apart in `detail.notRun`.
+    // It is shown as one quiet line that opens to its rows, grey, with its own reason, never as OK.
+    const notRun = ((detail && detail.notRun) || []).map((check) => ({ key: `${node.path}|${check.name}`, id: check.name, rank: -1, name: check.name, level: check.effective_level, bad: false,
+      notRun: true, message: check.message || '', code: check.code || '', check, todo: [], evidence: '' })).sort((a, b) => a.name.localeCompare(b.name));
+    return { rows, problems: rows.filter((row) => row.bad), ok: rows.filter((row) => !row.bad), notRun };
   }
   const windowOf = (ctx) => (ctx.settings && Number(ctx.settings.history_window_s)) || 900;
   // The entity's histories (one fetch of /api/v1/history, the page's shared cache): {data, byName}
@@ -94,6 +99,8 @@
 
   // ---------------------------------------------------------------------------------------- marks ----
   const pill = (ctx, level) => ctx.h.pill(level);
+  // a check that did not run: grey and quiet (the plain `none` pill, no warning colour, no data-diagnostic), never an OK, never a problem
+  const notRunTag = () => '<span class="pill none dx-nrt" title="This check did not run: it says nothing about the entity">not run</span>';
   const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
   const placeholder = (w, text) => `<span class="ioh-none" style="display:inline-block;width:${w}px">${esc(text)}</span>`;
 
@@ -185,7 +192,7 @@
     return `<div class="dx-r${row.bad ? ' bad' : ''}${open ? ' open' : ''}${hooks ? hooks.rowClass(row) : ''}" style="--depth:${r.depth}"${r.drag}${row.bad ? ' data-diagnostic' : ''}${hooks ? ` data-code="${esc(row.code)}"` : ''}>`
       + `<div class="dx-line" data-dx-toggle="row:${esc(row.key)}" role="button" tabindex="0" aria-expanded="${open}" title="${esc(row.name)} — ${esc(row.message)}${row.code ? ` · ${esc(row.code)}` : ''}">`
       + `<span class="dx-n">${r.grip}${r.star}${hooks && hooks.lead ? hooks.lead(row, open) : ''}<span class="dx-nt">${shown}</span></span><span class="dx-m"><span class="dx-mt">${esc(usbText(row.message || '—'))}</span>${hooks ? hooks.extra(row) : ''}</span>`
-      + `<span class="dx-s">${pill(ctx, row.level)}</span>${opts.spark === false ? '' : `<span class="dx-h">${cellsOf(row, hist, opts.sparkW || 96, 'spark', ctx)}</span>`}</div>`
+      + `<span class="dx-s">${row.notRun ? notRunTag() : pill(ctx, row.level)}</span>${opts.spark === false ? '' : `<span class="dx-h">${cellsOf(row, hist, opts.sparkW || 96, 'spark', ctx)}</span>`}</div>`
       + `${open ? body(row, ctx) + (hooks && hooks.body ? hooks.body(row) : '') : ''}</div>`;
   }
   const lineStyle = (W, opts = {}) => `--dx-name:${opts.nameW || Math.min(240, Math.round(W * 0.32))}px;--dx-spark:${opts.sparkW || 96}px`;
@@ -207,8 +214,20 @@
   function section(node, detail, ctx, inner, right) {
     const m = model(node, detail);
     const hist = history(node, ctx);
-    const content = m.rows.length ? inner(m, hist) : '<div class="muted">No diagnostics of its own.</div>';
+    const content = (m.rows.length ? inner(m, hist) : `<div class="muted">${m.notRun.length ? 'No diagnostics of its own ran.' : 'No diagnostics of its own.'}</div>`) + notRunLine(m, ctx, hist);
     return D1().plain('dx-diag', `Diagnostics · ${m.rows.length}`, content, right(m));
+  }
+
+  // "N checks did not run": one quiet line under the table, opening to the rows (each with its own reason). WHY a line and not a grey row
+  // each: a board that cannot feed twenty bindings would otherwise list twenty rows that say nothing about it.
+  function notRunLine(m, ctx, hist) {
+    const n = m.notRun.length;
+    if (!n) return '';
+    const open = isOpen('notrun');
+    const W = last ? last.width : 600;
+    return `<div class="dx-nr" style="${lineStyle(W)}" data-dx-notrun><button class="dx-nr-h" data-dx-toggle="notrun" aria-expanded="${open}" title="${open ? 'Fold these checks' : 'Show each check that did not run, with its reason'}">`
+      + `<svg class="ic dx-chev${open ? ' open' : ''}"><use href="#i-chev"/></svg><span>${n} check${n === 1 ? '' : 's'} did not run</span></button>`
+      + (open ? `<div class="dx-nr-rows">${m.notRun.map((row) => line(row, ctx, hist, { spark: false })).join('')}</div>` : '') + '</div>';
   }
 
   // the host's arrangements (GET /api/v1/arrangements), once; the page redraws when they arrive
@@ -323,6 +342,12 @@ button.dx-sumline:focus-visible, .dx-line:focus-visible, .dx-lane:focus-visible,
 .dx-meta { color: var(--io-faint); font-size: 11px; overflow-wrap: anywhere; }
 .dx-more { font-size: 12px; }
 .sec.dx-diag .sec-b { padding-top: 0; }
+.dx-nr { margin-top: 10px; }
+.dx-nr-h { display: inline-flex; align-items: center; gap: 6px; padding: 2px 4px; border: 0; background: none; color: var(--io-faint); font: inherit; font-size: 12px; cursor: pointer; border-radius: var(--io-radius-sm); }
+.dx-nr-h:hover { background: var(--io-hover); color: var(--io-muted); }
+.dx-nr-h:focus-visible { outline: var(--io-focus-width) solid var(--io-focus); outline-offset: 1px; }
+.dx-nr-rows { margin-top: 4px; }
+.dx-nr-rows .dx-n, .dx-nr-rows .dx-m { color: var(--io-faint); font-weight: 400; }
 `;
 
   // ---------------------------------------------------------------------------------------- clicks ----
@@ -368,5 +393,5 @@ button.dx-sumline:focus-visible, .dx-line:focus-visible, .dx-lane:focus-visible,
     });
   }
 
-  root.IODiagX = { RANK, PROBLEM, rankOf, esc, num, ui, isOpen, toggle, model, history, windowOf, pill, plural, placeholder, cellsOf, summary, lanes, body, line, lineStyle, section, page, planOf, pinnedOnly, walk, toolbar, kindOf, embed, injectCss, last: () => last };
+  root.IODiagX = { RANK, PROBLEM, rankOf, esc, num, ui, isOpen, toggle, model, notRunLine, history, windowOf, pill, plural, placeholder, cellsOf, summary, lanes, body, line, lineStyle, section, page, planOf, pinnedOnly, walk, toolbar, kindOf, embed, injectCss, last: () => last };
 })(typeof window !== 'undefined' ? window : globalThis);
