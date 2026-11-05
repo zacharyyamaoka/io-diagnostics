@@ -33,9 +33,11 @@ the code and the fixture, not a restart watched on Preview.
 | `/node` under CPU load, p50 / p95 (26,867 events, 300 boards a bus) | 852 / 2,021 ms | 4 / 9 ms |
 | first useful paint, its `/node` 2.5 s away | never | 13 ms |
 | `/node` requests while one 3 s `/node` is answered | 209 in 6 s | 2 |
-| a restart: first answer / the log on disk readable | 3.6 s / 3.7 s | 0.24 s / 0.60 s |
+| a restart: first answer / the log on disk readable | 3.6 s / 3.7 s | 0.2-0.7 s / 0.6-1.7 s, by load |
+| `serve` on Preview, a core | 88-93% | 21% with a page, 12-14% with nobody connected |
 
-On Preview with a load of only 14, a `/node` of 0.7 s: the Computer's page sent 280 requests in 20 s, 38 were answered, and nothing was drawn. The rest of the numbers are in
+On Preview with a load of only 14, a `/node` of 0.7 s: the Computer's page sent 280 requests in 20 s, 38 were answered, and nothing was drawn. After: `/node` 2-18 ms, every page
+painted in 1-3 ms and answered in 33-234 ms. The rest of the numbers are in
 `bench/classic/` (`tools/bench_instant.py`, `tools/bench_classic.js`).
 
 ## Alternatives weighed

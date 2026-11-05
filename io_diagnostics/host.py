@@ -1663,7 +1663,8 @@ class Host:
 
     def read_view(self) -> View:
         """What a read answers from: on a thread that ``reads_published``, the view last published, at once. WHY (measured 2026-11-04): every GET built the whole
-        view for itself, behind the host's lock, and a page makes several a second; "never blocked behind a recompute or a slow beat". A published view is a
+        view for itself, behind the host's lock, and a page makes several a second; "never blocked behind a recompute or a slow beat" (the decision and its
+        rules: docs/peps/0003-reads-answer-from-a-published-view.md). A published view is a
         moment old (``VIEW_GAP_S`` behind a change) and a write answers only once its effect is published (``after_write``). Any other caller, a host built by
         hand or a script asking in-process, builds what it reads, exact to the moment."""
 
