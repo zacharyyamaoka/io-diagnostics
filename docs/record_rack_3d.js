@@ -48,12 +48,15 @@ const seconds = (file) => Number(spawnSync('ffprobe', ['-v', 'error', '-show_ent
   const videos = fs.mkdtempSync(path.join(os.tmpdir(), 'rack-3d-video-'));
   const context = await browser.newContext({ viewport: SIZE, colorScheme: 'light', recordVideo: { dir: videos, size: SIZE } });
   const page = await context.newPage();
+  const filmed = Date.now();
+  let opening = 0;
   const shot = (name) => page.screenshot({ path: path.join(OUT, `shot-${name}.png`) });
   const started = Date.now();
   const mark = (text) => console.log(`${((Date.now() - started) / 1000).toFixed(1)} s  ${text}`);
   try {
     await page.goto(`${host.base}/?view=threed`);
     await ready(page);
+    opening = (Date.now() - filmed) / 1000; // the film starts on the loaded rack
     await page.waitForTimeout(600);
     // the rack, a problem colour on a real part
     fs.writeFileSync(host.levels, JSON.stringify({ '28B3A25D/can/4': 'warn', '272813EF/can/1': 'error', '28B3A25D/can/13': 'unknown' }));
@@ -133,8 +136,8 @@ const seconds = (file) => Number(spawnSync('ffprobe', ['-v', 'error', '-show_ent
     H.stopServer(host.server.child);
     const mp4 = path.join(OUT, 'hero.mp4');
     // WHY sped up: software WebGL draws the rack's 1.4 M triangles at a few frames a second; a person on a GPU sees it at full speed
-    const speed = (HERO_SECONDS / seconds(video)).toFixed(4);
-    const encode = spawnSync('ffmpeg', ['-y', '-loglevel', 'error', '-i', video, '-an', '-vf', `setpts=${speed}*PTS,fps=15,scale=1100:-2`, '-c:v', 'libx264', '-preset', 'slow', '-crf', '30', '-pix_fmt', 'yuv420p', '-g', '30', '-movflags', '+faststart', mp4]);
+    const speed = (HERO_SECONDS / (seconds(video) - opening)).toFixed(4);
+    const encode = spawnSync('ffmpeg', ['-y', '-loglevel', 'error', '-ss', opening.toFixed(2), '-i', video, '-an', '-vf', `setpts=${speed}*PTS,fps=15,scale=1100:-2`, '-c:v', 'libx264', '-preset', 'slow', '-crf', '30', '-pix_fmt', 'yuv420p', '-g', '30', '-movflags', '+faststart', mp4]);
     if (encode.status !== 0) console.error(String(encode.stderr));
     const gif = path.join(OUT, 'hero.gif');
     const palette = spawnSync('ffmpeg', ['-y', '-loglevel', 'error', '-i', mp4, '-vf', 'fps=4,scale=560:-2:flags=lanczos,split[a][b];[a]palettegen=max_colors=48[p];[b][p]paletteuse=dither=bayer:bayer_scale=4', gif]);

@@ -10,6 +10,7 @@ import base64
 import html
 import json
 import os
+import subprocess
 import sys
 
 import cv2
@@ -45,6 +46,11 @@ def data_uri(path: str, kind: str) -> str:
         return f'data:{kind};base64,{base64.b64encode(handle.read()).decode()}'
 
 
+# WHY a second, small GIF inline: the desktop preview stops near 1.9 MB, and the full hero.gif beside this page is 800 KB by itself
+small_gif = os.path.join(FOLDER, 'hero-small.gif')
+subprocess.run(['ffmpeg', '-y', '-loglevel', 'error', '-i', os.path.join(FOLDER, 'hero.mp4'), '-vf',
+                'fps=2.5,scale=420:-2:flags=lanczos,split[a][b];[a]palettegen=max_colors=32[p];[b][p]paletteuse=dither=bayer:bayer_scale=5', small_gif], check=True)
+
 moved = read_json(EVIDENCE, 'who_moved.json', default={})
 cameras = read_json(EVIDENCE, 'cameras.json', default={'cameras': {}, 'plates': {}, 'tags_seen': {}})
 facts = read_json(FOLDER, 'preview-facts.json', default={})
@@ -68,10 +74,10 @@ ROWS = [
     ('CAN 21', '0607623A', 'JMC 60ASM200:2, pole_mount', 'plate B, right', turn(21, 'rack_2026-10-24/session_26', 5) or 'tag 5', 'rack_2026-10-24/session_26', 'can21.jpg'),
     ('CAN 13', '0607623A', 'AD60-G10-D14:1, jmc60_hardstop_plate', 'plate C, upper', turn(13, 'rack_2026-10-23/session_11', 6) or 'tag 6', 'rack_2026-10-23/session_11', 'can13.jpg'),
     ('CAN 12', '0607623A', 'AD60-G10-D14:2, JMC 60ASM200:3, jmc60_gearbox_aruco_mount', 'plate C, lower', 'tag 7 turned +28.6°, nothing else (a still, rest vs held; no recording sees tag 7)', 'identify-can12, 2026-10-23', 'identify-can12.png'),
-    ('CAN 11', '0607623A', 'the rig\'s JMC Servo:1, one_dof_arm', 'plate D, the long link', turn(11, 'rack_2026-10-23/session_12', 8) or 'tag 8', 'rack_2026-10-23/session_12', 'can11.jpg'),
+    ('CAN 11', '0607623A', 'the rig\'s JMC Servo:1, one_dof_arm', 'plate D, the long link', turn(11, 'rack_2026-10-23/session_12', 8) or 'tag 8', 'rack_2026-10-23/session_12', 'identify-can11.png'),
 ]
-rows = ''.join(f'<tr><td class="b">{name}</td><td class="m">{adapter}</td><td>{part}</td><td>{where}</td><td>{proof}<div class="s">{session}</div></td></tr>' for name, adapter, part, where, proof, session, _ in ROWS)
-gallery = ''.join(f'<figure>{image(os.path.join(EVIDENCE, file), 760, 70, name)}<figcaption><b>{name}</b> · {session}</figcaption></figure>' for name, _, _, _, _, session, file in ROWS)
+rows = ''.join(f'<tr><td class="b">{name}</td><td class="m n">{adapter}</td><td>{part}</td><td>{where}</td><td>{proof}<div class="s">{session}</div></td></tr>' for name, adapter, part, where, proof, session, _ in ROWS)
+gallery = ''.join(f'<figure>{image(os.path.join(EVIDENCE, file), 620, 62, name)}<figcaption><b>{name}</b></figcaption></figure>' for name, _, _, _, _, session, file in ROWS)
 plates = ''.join(f"<tr><td>{plate}</td><td>{' / '.join(str(v) for v in data['spacing_rack_mm'])} mm</td><td>{' / '.join(str(v) for v in data['spacing_cad_mm'])} mm</td></tr>" for plate, data in cameras['plates'].items())
 solved = ''.join(f"<tr><td class=\"m\">{serial}</td><td>{item['rms_px']} px RMS on {len(item['header_tags'])} header tags</td><td>rack ({', '.join(str(v) for v in item['rack_mm'])}) mm</td><td>was ({', '.join(str(v) for v in item['pose_2026_10_21_mm'])}) mm on 10-21</td></tr>" for serial, item in cameras['cameras'].items())
 live = ''.join(f"<tr><td>{html.escape(part['name'])}</td><td class=\"m\">{html.escape(part['path'] or 'not detected')}</td><td>{'not detected' if part['ghost'] else part['level']}</td></tr>" for part in facts.get('parts', []))
@@ -90,18 +96,18 @@ p {{ margin: 8px 0; }} .lead {{ font-size: 16px; }} .muted, .s {{ color: var(--m
 video, img {{ max-width: 100%; display: block; border: 1px solid var(--line); border-radius: 6px; }}
 table {{ width: 100%; border-collapse: collapse; font-size: 13.5px; margin: 8px 0; }}
 th, td {{ text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }} th {{ font-weight: 600; color: var(--muted); }}
-.m {{ font-family: ui-monospace, Menlo, monospace; font-size: 12px; overflow-wrap: anywhere; }} .b {{ font-weight: 600; white-space: nowrap; }}
+.m {{ font-family: ui-monospace, Menlo, monospace; font-size: 12px; overflow-wrap: anywhere; }} .b {{ font-weight: 600; white-space: nowrap; }} .n {{ white-space: nowrap; overflow-wrap: normal; }}
 .grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; }} figure {{ margin: 0; }} figcaption {{ font-size: 12.5px; color: var(--muted); margin-top: 4px; }}
 .two {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 12px; }}
 .call {{ border-left: 3px solid var(--blue); background: var(--soft); padding: 8px 12px; margin: 12px 0; }}
 ul {{ margin: 6px 0; padding-left: 20px; }} li {{ margin: 3px 0; }} code {{ font-family: ui-monospace, Menlo, monospace; font-size: 13px; }}
-@media (max-width: 640px) {{ .grid, .two {{ grid-template-columns: 1fr; }} table {{ font-size: 12.5px; }} }}
+@media (max-width: 640px) {{ .grid, .two {{ grid-template-columns: 1fr; }} table {{ font-size: 12.5px; display: block; overflow-x: auto; }} }}
 </style></head><body><main>
 <h1>RobotDx's 3D view shows the rack live, with every motor where it really is</h1>
 <p class="lead">All eight boards and both D405s are placed on the model, each on proof from the cameras, and no motor moved to get there. A person can also drop in any URDF and map a device with one click. {landed}</p>
 
-<video controls muted loop autoplay playsinline poster="{data_uri(os.path.join(FOLDER, 'hero.gif'), 'image/gif')}" src="{data_uri(os.path.join(FOLDER, 'hero.mp4'), 'video/mp4')}"></video>
-<p class="s">From the running page: the real URDF and the real description on a fixture host, so boards can go bad on cue. Sped up about five times: software WebGL draws 1.4 M triangles slowly, a GPU does not. The upload and the click are real; the status colours here are made up. Preview's real statuses are below.</p>
+<video controls muted loop autoplay playsinline src="{data_uri(os.path.join(FOLDER, 'hero.mp4'), 'video/mp4')}"><img alt="The 3D view, from the running page" src="{data_uri(small_gif, 'image/gif')}"></video>
+<p class="s">From the running page: the real URDF and the real description on a fixture host, so boards can go bad on cue. Sped up about twice, to fit. The upload and the click are real; the status colours here are made up. Preview's real statuses are below.</p>
 
 <h2>Which device is on which part, and why that is true</h2>
 <table><tr><th>Device</th><th>Adapter</th><th>On the model</th><th>On the rack</th><th>Proof: only this board moved</th></tr>{rows}
@@ -119,25 +125,25 @@ ul {{ margin: 6px 0; padding-left: 20px; }} li {{ margin: 3px 0; }} code {{ font
 
 <h2>Today's frames</h2>
 <p>One read-only colour frame per camera, under the rack bus lock taken shared, each camera held under 3 seconds. No option written.</p>
-<div class="two"><figure>{image(os.path.join(EVIDENCE, pick), 800, 72, 'D405 218622274411')}<figcaption>D405 218622274411: tags {', '.join(str(t) for t in cameras['tags_seen'].get('218622274411', []))}</figcaption></figure>
-<figure>{image(os.path.join(EVIDENCE, pick2), 800, 72, 'D405 218622276036')}<figcaption>D405 218622276036: tags {', '.join(str(t) for t in cameras['tags_seen'].get('218622276036', []))}. Aimed above the plates, so tag 7 and most of the strip are out of its view</figcaption></figure>
-<figure>{image(os.path.join(EVIDENCE, pick3), 800, 72, 'D435')}<figcaption>D435 044322072026: the ceiling and a light, no tag</figcaption></figure></div>
+<div class="two"><figure>{image(os.path.join(EVIDENCE, pick), 700, 64, 'D405 218622274411')}<figcaption>D405 218622274411: tags {', '.join(str(t) for t in cameras['tags_seen'].get('218622274411', []))}</figcaption></figure>
+<figure>{image(os.path.join(EVIDENCE, pick2), 700, 64, 'D405 218622276036')}<figcaption>D405 218622276036: tags {', '.join(str(t) for t in cameras['tags_seen'].get('218622276036', []))}. Aimed above the plates, so tag 7 and most of the strip are out of its view</figcaption></figure>
+<figure>{image(os.path.join(EVIDENCE, pick3), 700, 64, 'D435')}<figcaption>D435 044322072026: the ceiling and a light, no tag</figcaption></figure></div>
 <table><tr><th>Camera</th><th>solvePnP</th><th>Today</th><th>Before</th></tr>{solved}</table>
 <p class="muted">The glyphs are placed through the plates' header strips: where each camera stands relative to the plates, not a CAD position.</p>
 
 <h2>Preview, the real rack, right now</h2>
-{image(os.path.join(FOLDER, 'preview-home.png'), 1100, 76, 'Preview home')}
-<p class="s">Headless Chrome on Preview (:8821), read-only. {facts.get('timings', {}).get('meshes', '?')} meshes, {len(facts.get('parts', []))} parts, the live feed open. Statuses are the boards' own at that moment.</p>
-{image(os.path.join(FOLDER, 'preview-chip.png'), 1100, 76, 'Preview chip') if os.path.exists(os.path.join(FOLDER, 'preview-chip.png')) else ''}
+{image(os.path.join(FOLDER, 'preview-home.png'), 1000, 66, 'Preview home')}
+<p class="s">Headless Chrome on Preview (:8821), read-only. {facts.get('timings', {}).get('meshes', '?')} meshes, {len(facts.get('parts', []))} parts, the live feed open. All eight boards read unknown, and that is the host's truth, not the view's: their rows say "config discarded: conf get id.id did not answer", a driver read that needs its own look.</p>
+{image(os.path.join(FOLDER, 'preview-chip.png'), 1000, 66, 'Preview chip') if os.path.exists(os.path.join(FOLDER, 'preview-chip.png')) else ''}
 <p class="s">Hovering fdcanusb 0607623A: {facts.get('leaders', '?')} leader lines, one to each of its boards' parts.</p>
 <table><tr><th>Part</th><th>Resolved on this PC</th><th>Status</th></tr>{live}</table>
 
 <h2>What's new on the page</h2>
-<div class="two"><figure>{image(os.path.join(FOLDER, 'shot-rack-status.png'), 800, 72, 'status')}<figcaption>A bad board colours its own motor, not the base_link all the JMC motors are exported into</figcaption></figure>
-<figure>{image(os.path.join(FOLDER, 'shot-rack-chip.png'), 800, 72, 'chip')}<figcaption>An adapter is a chip: hover or select it, its boards light up with leader lines</figcaption></figure>
-<figure>{image(os.path.join(FOLDER, 'shot-map-hover.png'), 800, 72, 'map')}<figcaption>Map devices: the tip names the piece before the click. A second click undoes</figcaption></figure>
-<figure>{image(os.path.join(FOLDER, 'shot-robot-menu.png'), 800, 72, 'menu')}<figcaption>Robot: bring one in, or go back to a kept one</figcaption></figure>
-<figure>{image(os.path.join(FOLDER, 'shot-uploaded.png'), 800, 72, 'uploaded')}<figcaption>A URDF zip, shown at once</figcaption></figure></div>
+<div class="two"><figure>{image(os.path.join(FOLDER, 'shot-rack-status.png'), 700, 64, 'status')}<figcaption>A bad board colours its own motor, not the base_link all the JMC motors are exported into</figcaption></figure>
+<figure>{image(os.path.join(FOLDER, 'shot-rack-chip.png'), 700, 64, 'chip')}<figcaption>An adapter is a chip: hover or select it, its boards light up with leader lines</figcaption></figure>
+<figure>{image(os.path.join(FOLDER, 'shot-map-hover.png'), 700, 64, 'map')}<figcaption>Map devices: the tip names the piece before the click. A second click undoes</figcaption></figure>
+<figure>{image(os.path.join(FOLDER, 'shot-robot-menu.png'), 700, 64, 'menu')}<figcaption>Robot: bring one in, or go back to a kept one</figcaption></figure>
+<figure>{image(os.path.join(FOLDER, 'shot-uploaded.png'), 700, 64, 'uploaded')}<figcaption>A URDF zip, shown at once</figcaption></figure></div>
 <p>The rack's export lumps 196 meshes into <code>base_link</code>, so a part can now name bodies inside a link (<code>meshes = ["JMC60_Plate_1___JMC_60ASM200-5-17BCZ_2__*"]</code>), and a click in Map devices takes the motor under the pointer rather than the whole rack. <code>[</code> and <code>]</code>, Shift+wheel, or Narrower and Wider change the size of the piece.</p>
 
 <h2>Proof</h2>
