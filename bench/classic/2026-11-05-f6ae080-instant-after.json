@@ -1,0 +1,26 @@
+{
+  "t": "2026-11-04T19:43:57-0700",
+  "sha": "f6ae080",
+  "label": "after",
+  "checkout": "/home/bam/io-diagnostics-lanes/instant-pages",
+  "machine_load": 10.0283203125,
+  "load": {
+    "events": 26867,
+    "boards_per_adapter": 300,
+    "describe_s": 3.0,
+    "busy_processes": 24
+  },
+  "cold_start": {
+    "to_first_answer_s": 0.73,
+    "to_state_s": 1.57,
+    "to_log_s": 1.65
+  },
+  "idle_cpu_pct": 4.8,
+  "node_ms": {
+    "p50": 3.7,
+    "p95": 9.2,
+    "max": 235.0,
+    "n": 3264
+  },
+  "status": "measured"
+}
