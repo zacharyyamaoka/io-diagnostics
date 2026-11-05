@@ -68,8 +68,12 @@ NOT_MEASURED = {
     "rack.throughput": "material",
     # round 4 (Codex audit 2026-11-04 r4, gap 1) reclassified these four with their reasons: the instrument is a physical setup that
     # does not exist yet (hard stops for homing; a flat target at a measured distance for Intel's depth-quality metrics)
-    "encoder.homing": "hard stop", "depth.plane_rms": "flat target", "depth.fill_rate": "flat target", "depth.temporal_noise": "flat target",
+    "encoder.homing": "hard stop",
+    # round 5 (Codex audit 2026-11-04 r5, gap 2): the raw-depth capture is wired; plane RMS stays unmeasured only while the newest capture is
+    # not tagged as a flat target at a known distance (the physical gap), and runs once it is (test_plane_rms_runs_on_a_flat_target_capture)
+    "depth.plane_rms": "flat target",
 }
+CONDITIONAL = {"depth.plane_rms"}  # wired (gap not_wired when no capture), NotMeasured on an untagged capture
 NOT_WIRED: dict[str, str] = {}  # round 4 wired or reclassified all fourteen
 # wired in round 3 (gap 2) and round 4 (gap 1), each from an existing producer; they must now run on the fixture
 WIRED = {"encoder.standstill_noise": "the board's State", "encoder.validity": "the board's State", "servo.tracking_rms": "a recorded run",
@@ -79,7 +83,8 @@ WIRED = {"encoder.standstill_noise": "the board's State", "encoder.validity": "t
          "servo.torque_truth_kt": "a moteus_tool calibration log vs the board's motor.Kv", "servo.live_reid": "the calibration follow-up",
          "gearbox.wear": "the calibration round vs the model card", "arm.tool_error_at_stop": "the UR5e sim cell",
          "arm.path_tracking": "the UR5e sim cell", "arm.completion_time": "the UR5e sim cell", "arm.overshoot": "the UR5e sim cell",
-         "arm.hold_effort": "the UR5e sim cell"}
+         "arm.hold_effort": "the UR5e sim cell", "depth.fill_rate": "intel_rgbd's raw-depth capture",
+         "depth.temporal_noise": "intel_rgbd's raw-depth capture"}
 NO_SOURCE = {**NOT_MEASURED, **NOT_WIRED}
 CODE_OF = {**{entry_id: "NotMeasured" for entry_id in NOT_MEASURED}, **{entry_id: "NotWired" for entry_id in NOT_WIRED}}
 FED = sorted(set(LIVE) - set(NO_SOURCE))
@@ -203,15 +208,15 @@ def status_of(host, entry_id: str):
 def test_the_list_covers_every_live_binding():
     assert set(NO_SOURCE) <= set(LIVE) and len(LIVE) == 61 and not set(NOT_MEASURED) & set(NOT_WIRED)
     assert set(WIRED) <= set(FED)
-    # runnable / not_wired / not_measured out of 61: round 2 14 / 22 / 25, round 3 22 / 14 / 25, round 4 32 / 0 / 29
-    assert (len(FED), len(NOT_WIRED), len(NOT_MEASURED)) == (32, 0, 29), (len(FED), len(NOT_WIRED), len(NOT_MEASURED))
+    # runnable / not_wired / not_measured out of 61: round 2 14 / 22 / 25, round 3 22 / 14 / 25, round 4 32 / 0 / 29, round 5 34 / 0 / 27
+    assert (len(FED), len(NOT_WIRED), len(NOT_MEASURED)) == (34, 0, 27), (len(FED), len(NOT_WIRED), len(NOT_MEASURED))
 
 
 def test_every_source_says_which_gap_its_absence_is():
     for entry_id in LIVE:
         source = sd.SOURCES[entry_id]
         assert source.gap in ("not_wired", "not_measured"), entry_id
-        if entry_id in NO_SOURCE:
+        if entry_id in NO_SOURCE and entry_id not in CONDITIONAL:
             assert source.gap == ("not_measured" if entry_id in NOT_MEASURED else "not_wired"), entry_id
 
 
@@ -253,7 +258,7 @@ def test_the_drill_in_says_what_feeds_each_binding(fed, part):
         source = item["source"]
         assert source["input"] and source["kind"], item["id"]
         if source["kind"] == "none":
-            assert item["id"] in NO_SOURCE and source["missing"], item["id"]
+            assert item["id"] in NO_SOURCE and item["id"] not in CONDITIONAL and source["missing"], item["id"]
         assert source["gap"] in ("not_wired", "not_measured"), item["id"]
         assert item["status"] is not None, item["id"]  # the source state, even where no row is posted
         if item["id"] in NO_SOURCE:
@@ -494,7 +499,31 @@ def rack_archive(root: Path) -> Path:
     hw_ms = 1000.0 + np.arange(90) * (1000.0 / 30.0)
     np.savez(cameras / f"cam_{REALSENSE}.npz", frames=np.zeros((90, 2, 2), np.uint8), wall=1_793_000_000.0 + hw_ms / 1000.0, hw_ms=hw_ms,
              fps=np.int64(30), serial=np.str_(REALSENSE), recorder=np.str_("bam_rack_twin.hardware.record 0.1.0"))
+    depth_capture(day / "depth", REALSENSE, stamp="20261101T090000Z")  # any scene: untagged
     return root
+
+
+DEPTH_SCHEMA = "intel_rgbd.depth_capture/1"  # bam_ws intel_rgbd.depth_capture.SCHEMA
+
+
+def depth_capture(folder: Path, serial: str, *, stamp: str, flat_target_mm: float | None = None, frames: int = 6, z_m: float = 0.6,
+                  holes: float = 0.02, noise_m: float = 0.0004, seed: int = 0) -> Path:
+    """A raw-depth capture as bam_ws intel_rgbd.depth_capture writes it: N metric depth frames (metres, 0 = no data), the depth grid's
+    intrinsics, the depth scale and an optional flat-target distance. The scene is a plane at ``z_m`` with ``holes`` of it missing."""
+
+    import numpy as np
+
+    rng = np.random.default_rng(seed)
+    height, width = 48, 64
+    depth = np.full((frames, height, width), z_m, np.float32) + rng.normal(0, noise_m, (frames, height, width)).astype(np.float32)
+    depth[:, rng.random((height, width)) < holes] = 0.0
+    meta = {"schema": DEPTH_SCHEMA, "serial": serial, "kind": "realsense", "depth_scale_m": 0.0001, "flat_target_mm": flat_target_mm,
+            "note": "", "recorded_at": stamp, "intrinsics": {"width": width, "height": height, "fx": 60.0, "fy": 60.0, "ppx": 32.0, "ppy": 24.0,
+                                                           "model": "none", "coeffs": [0.0] * 5}}
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"depth_{serial}_{stamp}.npz"
+    np.savez_compressed(path, depth_m=depth, timestamp_s=np.arange(frames) / 30.0, frame_number=np.arange(frames), meta=np.str_(json.dumps(meta)))
+    return path
 
 
 def moteus_calibrations(root: Path) -> Path:
@@ -775,12 +804,50 @@ def test_an_arm_is_judged_on_the_newest_ur5e_sim_cell_and_says_so(tmp_path, entr
         assert status.measurements[0].value == pytest.approx(expected, rel=1e-3), status.measurements
 
 
+@pytest.mark.parametrize("entry_id", ["depth.fill_rate", "depth.temporal_noise"])
+def test_fill_rate_and_temporal_noise_run_on_the_newest_raw_depth_capture_of_any_scene(tmp_path, entry_id):
+    archive = r4_archive(tmp_path)
+    status = evaluate_one(entry_id, "cam", sd.Inputs(has_state=True, realsense_serials=(REALSENSE,), archive=archive))
+    assert status.level in RAN and status.code not in sd.NO_SOURCE_CODES, (entry_id, status.code, status.message)
+    window = sd.window_of(status)
+    assert window["source"] == "depth_capture" and window["file"].endswith(f"depth_{REALSENSE}_20261101T090000Z.npz") and window["frames"] == 6
+    value = status.measurements[0].value
+    if entry_id == "depth.fill_rate":  # 2 % holes in the ROI, every frame the same holes
+        assert 95.0 < value < 99.9, value
+    else:  # 0.4 mm of noise at 600 mm: about 0.067 % of Z
+        assert value == pytest.approx(0.0667, rel=0.15), value
+
+
+def test_plane_rms_is_not_measured_on_a_capture_not_tagged_as_a_flat_target(tmp_path):
+    status = evaluate_one("depth.plane_rms", "cam", sd.Inputs(has_state=True, realsense_serials=(REALSENSE,), archive=r4_archive(tmp_path)))
+    assert (status.level, status.code) == ("unknown", "NotMeasured") and "flat target" in status.message, status.message
+    assert dict(status.values)["dx.gap"] == "not_measured"
+
+
+def test_plane_rms_runs_on_a_flat_target_capture(tmp_path):
+    archive = r4_archive(tmp_path)
+    depth_capture(tmp_path / "bam_rig" / "rack_2026-11-01" / "depth", REALSENSE, stamp="20261102T090000Z", flat_target_mm=600.0)
+    status = evaluate_one("depth.plane_rms", "cam", sd.Inputs(has_state=True, realsense_serials=(REALSENSE,), archive=archive))
+    assert status.level in RAN and status.code not in sd.NO_SOURCE_CODES, (status.code, status.message)
+    assert status.measurements[0].value < 0.4, status.measurements  # a plane with 0.4 mm noise: well under 0.4 % of Z
+    z_accuracy = next(m.value for m in status.measurements if m.key == "z_accuracy")
+    assert abs(z_accuracy) < 0.1, z_accuracy  # the tagged distance is the ground truth
+    assert sd.window_of(status)["flat_target_mm"] == 600.0
+
+
+def test_a_camera_with_no_raw_depth_capture_is_not_wired(tmp_path):
+    archive = r4_archive(tmp_path)
+    for entry_id in ("depth.fill_rate", "depth.temporal_noise", "depth.plane_rms"):
+        status = evaluate_one(entry_id, "cam", sd.Inputs(has_state=True, realsense_serials=("000000000000",), archive=archive))
+        assert status.code == "NotWired" and "depth_capture" in status.message, (entry_id, status.message)
+
+
 def test_an_arm_without_a_sim_cell_is_not_wired():
     status = evaluate_one("arm.overshoot", "fixture/arm", sd.Inputs(composite=True, plugin=True, has_state=True))
     assert status.code == "NotWired" and "sim cell" in status.message, status.message
 
 
-@pytest.mark.parametrize("entry_id", ["encoder.homing", "depth.plane_rms", "depth.fill_rate", "depth.temporal_noise"])
+@pytest.mark.parametrize("entry_id", ["encoder.homing"])
 def test_the_reclassified_bindings_say_which_instrument_is_missing(entry_id):
     status = evaluate_one(entry_id, "x", sd.Inputs(has_state=True))
     assert (status.level, status.code) == ("unknown", "NotMeasured") and NOT_MEASURED[entry_id] in status.message, status.message
