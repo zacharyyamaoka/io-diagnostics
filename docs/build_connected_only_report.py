@@ -14,7 +14,8 @@ import sys
 import cv2
 
 FOLDER = sys.argv[1]
-SHA = os.environ.get("REPORT_SHA", "7294594")
+SHA = os.environ.get("REPORT_SHA", "2324eea")
+COMMITS = "7294594, 32253d4, e1113e4, 2324eea"
 PLUGIN = "1c95d926, 6b467192, b656adea"
 
 
@@ -76,7 +77,7 @@ DONE = [
     "<b>The host</b> (<code>POST /api/v1/presence</code>, docs/api-v1.md \"Presence\"): one query-only <code>presence</code> process per adapter while "
     "the view beats, stopped 10 s after; a pass that looked marks what it heard live and, after two misses, what it did not as not heard (with the true "
     "last-heard time); a blocked pass judges nothing; a pass never overwrites a full read's identity of the same board; a different board on an id "
-    "replaces the row and the readings of the one before. <code>tests/test_presence.py</code> 13/13 with real follower processes.",
+    "replaces the row and the readings of the one before. <code>tests/test_presence.py</code> 14/14 with real follower processes.",
     "<b>The plugin</b> (bam_ws <code>moteus_servo presence</code>): discovery broadcast + addressed UUID reads + serial registers, inside "
     "<code>bus_gate</code> (port lock + rack lock <code>LOCK_SH</code>), transport opened and closed inside the gate each pass, nothing held between "
     "passes, passes on the wall clock's 2 s marks. 27 tests + the 151 existing plugin tests green.",
@@ -85,12 +86,23 @@ DONE = [
     "<b>Found and fixed on the way</b>: a not-heard line outlived the board's return, so a board that answered again read \"stale · last heard 0 s ago\" "
     "until someone removed its row (now gone the moment it is heard; red first). And the first live run read \"last heard 20767 days ago\" for a "
     "restored row (now the ledger's time).",
-    "<b>Suites</b>: Python 1501 passed, 1 failed (<code>test_host_plugins</code> asserts the repo path ends in <code>io-diagnostics</code>, which a "
-    "worktree's does not; environmental), the page suites (tree variants 1164/1164, layouts 200/200, dx page 101/101, view core 132/132).",
+    "<b>While the view is on, a plugged adapter is looked at by presence first</b>: its probe (~40 s with config reads) waits for the first "
+    "pass, at most 8 s. Without that, the probe and the pass raced for the port lock (seen on Preview after its restart: 28 s). "
+    "<code>tests/test_presence.py</code>, red first.",
+    "<b>An adapter it cannot look at says so</b> under the toolbar, one line per cause (seen live on Stable mid-flash: \"Not looking at fdcanusb "
+    "272813EF: the port is held: held by moteus_tool\"), so an adapter with no boards never just reads \"nothing answers\".",
+    "<b>Suites</b>: Python 1506 passed, 5 skipped, 1 failed (<code>test_host_plugins</code> asserts the repo path ends in <code>io-diagnostics</code>, "
+    "which a worktree's does not; environmental). Pages: connected page 14/14, connected view model 18/18, layouts 200/200, tree variants "
+    "1164/1164, dx page 101/101, dx tree past 7/7, view core 132/132.",
 ]
 
 DECIDED = [
-    f"<b>Landed on <code>main</code> @ <code>{SHA}</code></b> (Preview runs it live). Undo: <code>git -C /home/bam/io-diagnostics revert {SHA}</code>.",
+    f"<b>Landed on <code>main</code> @ <code>{SHA}</code></b> ({COMMITS}; Preview runs it live). Undo: "
+    "<code>git -C /home/bam/io-diagnostics revert --no-edit 005e180..2324eea</code>.",
+    "<b>Promoted to Stable</b> (it was 218 commits behind, built 2026-10-23), so the dock icon opens it; the runtime's previous release points back "
+    "at that Oct 23 build, so one <b>Roll Stable Back</b> (the dock icon's right-click) undoes it, or "
+    "<code>sps --root /home/bam/io-diagnostics rollback</code>.",
+    "<b>A device's first look is the presence pass while the view is on</b>; the full read follows (at most 8 s later).",
     f"<b>The plugin commits ride on the bam_ws lane branch the apps run from</b> (<code>claude/traj-tracking-sim-to-real-a3da60</code>, worktree "
     f"<code>traj-sim2real-rack</code>): {PLUGIN}. Not pushed, not merged to bam_ws main (that whole lane is unmerged). Undo: revert them there.",
     "<b>Polling runs only while the view is on and the page is in view</b>, not always: each pass holds the rack bus lock, and an experiment takes it "
@@ -108,8 +120,12 @@ LEFT = [
     "faulthandler watchdog ends a pass after 6 s (and dumps its stack to the host's stderr tail), and the host kills a presence process silent for 10 s.",
     "<b>Lock cost while the view is on</b>: 0.32 s per 2 s on a bus whose boards all answer, 0.55 s on 272813EF (it asks its remembered, silent CAN 1 "
     "and 15 every pass). An experiment started while the view is open is refused about 1 time in 4 to 6. Next lever: ask silent ids every third pass.",
+    "<b>Two RobotDx pages in Connected only at once</b> (Stable and Preview): their passes on one adapter need its port lock in the same 2 s window, "
+    "so one host's passes are blocked and that page updates only as fast as the full read. One page at a time is the full speed.",
+    "<b>Right after a host restart</b>, the adapter whose probe runs first (~40 s) is not looked at until it ends; the note says so. A plug "
+    "while the view is on is not affected (presence goes first).",
     "<b>Stale text elsewhere</b>: a stale board's tree line said \"last heard 2 s ago\" on Preview because host-derived stock checks count as heard "
-    "(CAN 1 at 08:23). Not this change; worth its own fix.",
+    "(CAN 1, 07:47). Not this change; worth its own fix.",
 ]
 
 
@@ -121,7 +137,7 @@ def diagram() -> str:
 <rect x="250" y="20" width="190" height="70" rx="8" fill="var(--card)"/><text x="345" y="48" text-anchor="middle" stroke="none" font-weight="600">Host</text><text x="345" y="68" text-anchor="middle" stroke="none">one presence per adapter</text>
 <rect x="510" y="20" width="170" height="70" rx="8" fill="var(--card)"/><text x="595" y="44" text-anchor="middle" stroke="none" font-weight="600">moteus presence</text><text x="595" y="62" text-anchor="middle" stroke="none">every 2 s, on the mark</text><text x="595" y="80" text-anchor="middle" stroke="none">nothing held between</text>
 <rect x="740" y="20" width="150" height="70" rx="8" fill="var(--card)"/><text x="815" y="44" text-anchor="middle" stroke="none" font-weight="600">bus_gate</text><text x="815" y="62" text-anchor="middle" stroke="none">port lock (EX)</text><text x="815" y="80" text-anchor="middle" stroke="none">rack lock (SH)</text>
-<path d="M180 45H248" marker-end="url(#a)"/><text x="214" y="38" text-anchor="middle" stroke="none" font-size="11">POST /presence 3 s</text>
+<path d="M180 45H248" marker-end="url(#a)"/><text x="214" y="38" text-anchor="middle" stroke="none" font-size="11">beat 3 s</text>
 <path d="M440 45H508" marker-end="url(#a)"/><text x="474" y="38" text-anchor="middle" stroke="none" font-size="11">spawn</text>
 <path d="M680 45H738" marker-end="url(#a)"/>
 <rect x="740" y="140" width="150" height="70" rx="8" fill="var(--card)"/><text x="815" y="166" text-anchor="middle" stroke="none" font-weight="600">CAN bus</text><text x="815" y="186" text-anchor="middle" stroke="none">discovery 0.1 s</text><text x="815" y="202" text-anchor="middle" stroke="none">+ addressed UUID</text>
@@ -153,7 +169,7 @@ ul{{padding-left:20px}} li{{margin:6px 0}} svg{{width:100%;height:auto}}
 </style></head><body><main>
 <h1>Connected only</h1>
 <p class="verdict"><b>Plug in an fdcanusb and its boards show in about 3 s; a board that goes dark is hidden in about 4 s.</b> Click the plug in the Devices
-header. On <code>main</code> @ <code>{SHA}</code> (Preview) and promoted to Stable; while the view is on, an experiment started at that moment can be refused (1 in 4 to 6).</p>
+header. On <code>main</code> @ <code>{SHA}</code> and promoted to Stable; while the view is on, an experiment started at that moment can be refused (1 in 4 to 6).</p>
 
 <h2>The real rack, final code</h2>
 <video autoplay muted loop playsinline controls src="{hero}"></video>
@@ -163,7 +179,7 @@ heard this session goes at once, and 0607623A's five boards come back live withi
 <details><summary class="muted">GIF fallback (the Devices pane)</summary><img alt="Connected only, the Devices pane" src="{gif}"></details>
 
 <h2>Earlier the same morning: all eight live boards</h2>
-<video muted loop playsinline controls src="{eight}"></video>
+<video autoplay muted loop playsinline controls src="{eight}"></video>
 <p class="muted">Before 272813EF's boards lost power: all eight boards that answer were in the tree {run2['seenAll']:.1f} s after the click. (The button sat one place to
 the right then; it now sits before the eye.)</p>
 <div class="pair">
@@ -172,6 +188,14 @@ the right then; it now sits before the eye.)</p>
 {still("live-on.png", "On, now: 272813EF's boards are dark, so it has none", 420, TREE)}
 </div>
 <div class="wide">{still("new-board.png", "A board the model does not expect (CAN 13 on 272813EF): CAN id, serial, UUID from the pass; model and firmware the host remembered for that UUID")}</div>
+
+<h2>In the real app, as the rack is now</h2>
+<p class="muted">A firmware session (update_moteus_firmware) was flashing and re-numbering 272813EF's boards while this was verified, which is the
+case the brief expected to show the bus as held.</p>
+<div class="pair">
+{still("preview-on.png", "Preview (main), 08:28: 272813EF's boards re-numbered to CAN 11, 16, 17 by the flash, read by the full read; the old 12, 13, 14 gone", 420, TREE)}
+{still("stable-on.png", "Stable (promoted), 08:33: 0607623A's five live; 272813EF not looked at, and the note says moteus_tool has its port", 420, (50, 60, 280, 640))}
+</div>
 
 <h2>How fast</h2>
 <table><tr><th>What</th><th>Time</th><th>Evidence</th></tr>{rows(SPEED)}</table>
