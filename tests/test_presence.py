@@ -50,7 +50,7 @@ if verb == "describe":
 uuids = json.loads(os.environ["BUS_UUIDS"])
 if verb == "diagnose":
     spec = json.load(open(bus_file))
-    log({"verb": "diagnose"})
+    log({"verb": "diagnose", "t": time.time()})
     emit({"record": "entity", "path": "", "name": "fdcanusb X", "kind": "device"})
     emit({"record": "entity", "path": "can", "name": "CAN bus", "kind": "bus", "part_of": ""})
     if spec.get("diagnose_blocked"):  # an experiment holds the bus at the restart: the full read looks at nothing
@@ -100,6 +100,9 @@ while True:
                   "message": "answers discovery · UUID " + answer[can_id][:8], "stamp": now})
         emit({"record": "event", "code": "PresencePass", "path": "can", "severity": "debug", "stamp": now,
               "message": f"{len(answer)} boards answer", "args": {"outcome": "looked", "answering": sorted(answer)}})
+        if not globals().get("first_said"):
+            first_said = True
+            log({"verb": "first_pass", "t": time.time()})
     time.sleep(period)
 '''
 
@@ -118,7 +121,8 @@ class Bench:
     """A host over one fdcanusb whose stand-in plugin's boards come from ``bus.json``: ``diagnose`` the full read's
     answer, ``presence`` each pass's (CAN id -> UUID)."""
 
-    def __init__(self, tmp_path: Path, *, diagnose=(1, 14), presence=None, grace_s: float = 1.0, ledger=None, diagnose_blocked=False):
+    def __init__(self, tmp_path: Path, *, diagnose=(1, 14), presence=None, grace_s: float = 1.0, ledger=None, diagnose_blocked=False,
+                 plugged=True):
         tmp_path.mkdir(parents=True, exist_ok=True)
         self.tmp = tmp_path
         self.file = tmp_path / "bus.json"
@@ -133,8 +137,17 @@ class Bench:
         (plugins / "bus.toml").write_text(
             f'name = "bus"\ncommand = ["{sys.executable}", "{script}"]\ntimeout_s = 10\nperiod_s = 300\nmatches = ["usb:0483:5740"]\n'
             f'env = {{ {", ".join(f"{key} = {json.dumps(value)}" for key, value in env.items())} }}\n')
-        self.host = Host(plugins_dir=plugins, clock=Clock(), os_source=FakeOs(standard_skeleton(usb_device("9-3", "0483", "5740", SERIAL, label="fdcanusb"))),
+        self.adapter = usb_device("9-3", "0483", "5740", SERIAL, label="fdcanusb")
+        self.os = FakeOs(standard_skeleton(self.adapter) if plugged else standard_skeleton())
+        self.host = Host(plugins_dir=plugins, clock=Clock(), os_source=self.os,
                          watch_grace_s=grace_s, watch_tick_s=0.1, follow_backoff_s=(0.2, 0.4), frames_dir=tmp_path / "frames", ledger_file=ledger)
+        self.host.run_all_once()
+        self.device = self.host.layer.device_paths.get("usb:9-3")
+
+    def plug(self) -> None:
+        """The adapter is plugged in: the next refresh makes its job, whose first run is what a plug runs."""
+
+        self.os.devices[:] = standard_skeleton(self.adapter)
         self.host.run_all_once()
         self.device = self.host.layer.device_paths["usb:9-3"]
 
@@ -327,6 +340,37 @@ def test_a_hung_presence_process_is_killed_within_seconds_and_its_bus_lock_relea
         with open(lock, "a") as probe:
             fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)  # free: an experiment could start
         rig.keep_beating(lambda: len(rig.verbs("presence")) >= 2 and rig.presence(14) == "live", what="a fresh presence process")
+    finally:
+        rig.stop()
+
+
+def test_with_the_view_on_a_plugged_adapter_is_first_looked_at_by_presence_not_the_full_read(tmp_path):
+    """Seen on Preview 2026-11-09: after a restart its probe held 0607623A's port for ~40 s, so the Connected view showed that adapter's
+    boards only after it ended. On a plug the probe and the first presence pass race for the port lock: 3 s or 40 s by chance. While
+    the view beats, the presence pass goes first (the full read waits for it, at most PRESENCE_FIRST_S)."""
+
+    from io_diagnostics import host as host_module
+
+    rig = Bench(tmp_path, plugged=False)
+    try:
+        rig.beat()  # the page shows Connected only; nothing is plugged in yet
+        assert rig.beat()["presence"]["adapters"] == []
+        rig.plug()
+        [first] = rig.verbs("first_pass")
+        [full] = rig.verbs("diagnose")
+        assert first["t"] < full["t"], (first, full)
+        assert full["t"] - first["t"] < host_module.PRESENCE_FIRST_S
+        assert rig.presence(14) == "live" and rig.presence(1) == "live"
+    finally:
+        rig.stop()
+
+
+def test_without_the_view_the_full_read_does_not_wait(tmp_path):
+    rig = Bench(tmp_path, plugged=False)
+    try:
+        started = time.monotonic()
+        rig.plug()
+        assert time.monotonic() - started < 3.0 and rig.verbs("presence") == [] and len(rig.verbs("diagnose")) == 1
     finally:
         rig.stop()
 

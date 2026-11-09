@@ -95,6 +95,10 @@ PRESENCE_REL = "#presence"  # the key of a device's presence process among the w
 PRESENCE_PASS = "PresencePass"  # the plugin's one line per pass: what it looked at and what answered; the host's, never the log's
 # WHY two: one lost reply is not an unplug; two passes that looked and did not hear a board are (about 4 s at the plugin's 2 s)
 PRESENCE_MISSES = 2
+# WHY a device's first look is the presence pass while the view beats (seen on Preview 2026-11-09: after a restart its probe held
+# 0607623A's port for ~40 s, and on a plug the probe and the first pass race for the port lock, so the boards showed in 3 s or 40 s by
+# chance): its full read waits for that first pass, at most this long (a first pass is ~2.5 s: the whole id range once)
+PRESENCE_FIRST_S = 8.0
 STATE_HISTORY_GAP_S = 1.0  # the history keeps a state series at 1 Hz at most
 FRAME_FPS_WINDOW_S = 3.0
 RECENT = 6
@@ -1267,6 +1271,7 @@ class Host:
 
         if job.spec.kind == "check":
             return self._run_check(job)
+        self._presence_first(job)
         with self.lock:
             entity = self.layer.entities.get(job.device_path)
         timeout_s = self._probe_timeout(job)
@@ -3364,6 +3369,28 @@ class Host:
         period = declared.get("period_s", 2.0)
         period = float(period) if isinstance(period, (int, float)) and not isinstance(period, bool) and period > 0 else 2.0
         return {"period_s": period, "gates": [str(check) for check in declared.get("gates") or []]}
+
+    def _presence_first(self, job: Job) -> None:
+        """While the Connected view beats, wait (at most ``PRESENCE_FIRST_S``) for this device's first presence pass that looked, so it
+        shows what answers in seconds and the full read follows. Without a beat, or once a pass has looked, nothing waits."""
+
+        if not self._presence_fresh():
+            return
+        declared = self._presence_declared(job)
+        if declared is None or "refused" in declared:
+            return
+        self._presence_sync()  # a device plugged in a moment ago gets its presence process now, not at the next tick
+        watch = self.watches.get((job.key, PRESENCE_REL))
+        if watch is None or watch.passes:
+            return
+        self._watch_thread_start()
+        self._watch_step(watch)
+        deadline = time.monotonic() + PRESENCE_FIRST_S
+        while not watch.passes and not watch.stopped and time.monotonic() < deadline and not self._stop.is_set():
+            # a blocked first pass (a person's tool has the port) is no reason to keep the full read waiting
+            if watch.last_pass is not None and watch.last_pass["outcome"] != "looked":
+                return
+            time.sleep(0.05)
 
     def _presence_fresh(self) -> bool:
         beat = self._presence_beat
