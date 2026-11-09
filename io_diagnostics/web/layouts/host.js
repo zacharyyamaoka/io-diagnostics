@@ -185,13 +185,24 @@ body.lx-dragging.lx-y { cursor: row-resize; }
         setConnected(on) { if (api.setConnected) api.setConnected(on); },
         // while on: one quiet line per adapter it cannot look at now ("fdcanusb 272813EF: moteus_tool has the port"), else none. WHY on
         // the page and not only in the title: an adapter with no boards under it reads "nothing answers" unless it says it did not look
+        // Adapters with the same reason share one line, and a path reads as its file name ("python3 update_moteus_firmware.py --port has
+        // the rack bus lock (pid 1457477)"): calm, one line for one cause.
         connectedNotes() {
           if (!S.connected || !S.presence) return [];
-          return (S.presence.adapters || []).map((adapter) => {
+          const byReason = new Map();
+          for (const adapter of S.presence.adapters || []) {
             const last = adapter.last || {};
             const why = adapter.state === 'paused' ? adapter.reason : last.outcome && last.outcome !== 'looked' ? last.message : '';
-            return why ? `${adapter.name}: not looking (${why})` : '';
-          }).filter(Boolean);
+            if (!why) continue;
+            const reason = String(why).replace(/(?:[\w.~-]*\/)+([\w.-]+)/g, '$1');
+            byReason.set(reason, [...(byReason.get(reason) || []), String(adapter.name || adapter.path)]);
+          }
+          return [...byReason].map(([reason, names]) => {
+            const [model] = names[0].split(' ');
+            const same = names.length > 1 && names.every((name) => name.split(' ')[0] === model);
+            const who = same ? `${model} ${names.map((name) => name.split(' ').slice(1).join(' ')).join(', ')}` : names.join(', ');
+            return `Not looking at ${who}: ${reason}`;
+          });
         },
         // the toggle's words: what it does, and while on, how often it looks and any adapter it cannot look at now (in plain words)
         connectedTitle() {

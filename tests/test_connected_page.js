@@ -95,13 +95,18 @@ async function main() {
 
     // ---- an adapter it cannot look at says so under the toolbar (an empty adapter must not read "nothing answers")
     await page.evaluate(() => {
-      S.presence = { supported: true, period_s: 2, grace_s: 10, adapters: [{ path: 'x', name: 'fdcanusb 272813EF', state: 'paused',
-        reason: 'update_moteus_firmware.py has the rack bus lock (pid 1457477)', holders: [], last: null }] };
+      const reason = 'python3 Settings/Skills/update-moteus-firmware/scripts/update_moteus_firmware.py --port has the rack bus lock (pid 1457477)';
+      S.presence = { supported: true, period_s: 2, grace_s: 10, adapters: [
+        { path: 'a', name: 'fdcanusb FDA81D29', state: 'paused', reason, holders: [], last: null },
+        { path: 'b', name: 'fdcanusb 272813EF', state: 'paused', reason: 'the port is held: held by moteus_tool (pid 1478952)', holders: [], last: null },
+        { path: 'c', name: 'fdcanusb 0607623A', state: 'paused', reason, holders: [], last: null },
+        { path: 'd', name: 'fdcanusb 11112222', state: 'running', reason: '', holders: [], last: { outcome: 'looked', message: '3 boards answer' } }] };
       window.IOLayoutHost.update();
     });
     const note = await page.$eval('#connected-note', (element) => ({ hidden: element.hidden, text: element.textContent }));
-    check('on: an adapter it cannot look at is named under the toolbar, with who holds the bus', !note.hidden
-      && note.text === 'fdcanusb 272813EF: not looking (update_moteus_firmware.py has the rack bus lock (pid 1457477))', note);
+    check('on: adapters it cannot look at are named under the toolbar, one line per cause, paths as file names', !note.hidden
+      && note.text === 'Not looking at fdcanusb FDA81D29, 0607623A: python3 update_moteus_firmware.py --port has the rack bus lock (pid 1457477)\n'
+        + 'Not looking at fdcanusb 272813EF: the port is held: held by moteus_tool (pid 1478952)', note);
 
     // ---- off again: everything back, and the beats stop
     await page.click('#connected-only');
