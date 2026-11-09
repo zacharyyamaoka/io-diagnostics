@@ -225,7 +225,11 @@
       s.collapse = ctx.iconButton({ icon: 'collapse', title: 'Collapse all', click: () => ctx.tree.collapseAll() });
       s.expand = ctx.iconButton({ icon: 'expand', title: 'Expand all', click: () => ctx.tree.expandAll() });
       s.visible = ctx.iconButton({ icon: 'eye', title: 'Show what is hidden', pressed: false, click: () => ctx.tree.setHidden(!ctx.tree.hiddenToggle().on) });
-      tools.append(s.collapse, s.expand, ctx.take('vo'), s.visible);
+      // Connected only (Zach, 2026-11-09: "a little button there at the top that I toggle to be like, just show connected things")
+      s.connected = ctx.iconButton({ icon: 'plug', title: ctx.tree.connectedTitle(), pressed: ctx.tree.connected(), id: 'connected-only',
+        click: () => ctx.tree.setConnected(!ctx.tree.connected()) });
+      // WHY before the eye: the eye stays the row's last control (tests/test_layouts.js finds it there); both narrow the tree
+      tools.append(s.collapse, s.expand, ctx.take('vo'), s.connected, s.visible);
       ctx.take('voPop');
       root.appendChild(ctx.take('voPop'));
       const side = ctx.treePane({ cls: 'l1-side', head, tools: [tools] });
@@ -286,6 +290,11 @@
       s.visible.setAttribute('aria-pressed', String(Boolean(hidden && hidden.on)));
       s.visible.title = hidden ? `${hidden.on ? 'Hide' : 'Show'} ${hidden.label.toLowerCase()}` : 'Nothing is hidden in this grouping';
       s.visible.innerHTML = ctx.ico(hidden && hidden.on ? 'eye' : 'eye-off');
+      const connected = ctx.tree.connected();
+      s.connected.classList.toggle('on', connected);
+      s.connected.setAttribute('aria-pressed', String(connected));
+      const connectedTitle = ctx.tree.connectedTitle();
+      if (s.connected.title !== connectedTitle) { s.connected.title = connectedTitle; s.connected.setAttribute('aria-label', connectedTitle.split('\n')[0]); }
       ctx.$('search').closest('.search').classList.toggle('has-query', Boolean(S.query));
       // the view header: the breadcrumb of the selection (Tree), or the view's own name
       const crumbs = S.view === 'tree' || S.view === 'threed' || LAYER_VIEWS[S.view] ? ctx.crumbs(S.sel) : [];

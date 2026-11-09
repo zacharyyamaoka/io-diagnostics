@@ -89,6 +89,15 @@ board, Revert all; safety keys ask twice and are written only to a stopped board
 uv run --project /home/bam/io-diagnostics python /home/bam/io-diagnostics/io_diagnostics/cli.py serve --fixture F1 --plugins /home/bam/io-diagnostics/tests/fixtures/plugins-state --port 5412 --no-udev
 ```
 
+## Connected only: what answers now (docs/api-v1.md "Presence")
+
+The plug button in the Devices header (beside the eye) keeps only what answers now: adapters on USB, boards a presence pass just
+heard, cameras that report; a board the model remembers but nobody hears is hidden, not padded in. While it is on and the page is
+in view, the host keeps one query-only `presence` process per fdcanusb (a discovery broadcast plus addressed asks every 2 s, behind
+the port lock and the rack bus lock taken shared), so a board plugged in shows within about 3 s and one pulled goes within about
+4 s, instead of at the next 300 s read. It stops about 10 s after the page stops asking: an experiment refuses to start while a pass
+holds the lock, so nothing polls when nobody looks.
+
 ## Composites: an arm, a robot, a rack (docs/composition-v1.md)
 
 The same expected-setup file can say what a thing is made of: `[[composite]]` tables (an id, a kind word, the boards or other composites it
@@ -212,6 +221,14 @@ uv run --project /home/bam/io-diagnostics --group dev --group interop pytest /ho
 
 ```bash
 /usr/bin/node /home/bam/io-diagnostics/tests/test_instant_pages.js
+```
+
+```bash
+/usr/bin/node /home/bam/io-diagnostics/tests/test_connected_only.js
+```
+
+```bash
+/usr/bin/node /home/bam/io-diagnostics/tests/test_connected_page.js
 ```
 
 ```bash

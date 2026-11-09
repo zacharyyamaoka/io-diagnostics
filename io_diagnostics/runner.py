@@ -659,6 +659,25 @@ class Watcher(Follower):
         return ["--path", self.path]
 
 
+class Presencer(Watcher):
+    """``<command> presence --device <id>``: a Follower of one DEVICE's bus, run only while a page shows the Connected view
+    (docs/api-v1.md "Presence"). Same process rules as ``watch``; its passes are read by ``Host._absorb_presence``."""
+
+    verb = "presence"
+    # WHY a short silence (not a follower's max(10 x period, timeout_s), 100 s for moteus): every pass prints its PresencePass line,
+    # and a pass holds the rack bus lock, so a quiet presence is a hung one holding it (seen on the rack 2026-11-09). Killed, the
+    # kernel drops its locks; the backoff starts a fresh one.
+    silence_factor = 5.0
+    silence_floor_s = 10.0
+
+    @property
+    def silence_s(self) -> float:
+        return max(self.silence_factor * self.period_s, self.silence_floor_s)
+
+    def extra_args(self) -> list[str]:
+        return []
+
+
 def follow_status(spec: PluginSpec, follower: Follower, hardware_id: str, now: float) -> DiagnosticStatus:
     """The device row's ``<plugin>: plugin run`` check for a follower: OK while it runs, ERROR while it is down."""
 

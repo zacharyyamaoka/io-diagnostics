@@ -119,7 +119,9 @@
       title.append(ctx.iconButton({ icon: 'collapse', title: 'Collapse all', click: () => ctx.tree.collapseAll() }),
         ctx.iconButton({ icon: 'expand', title: 'Expand all', click: () => ctx.tree.expandAll() }), ctx.take('vo'));
       s.visible = ctx.iconButton({ icon: 'eye', title: 'Show what is hidden', pressed: false, click: () => ctx.tree.setHidden(!ctx.tree.hiddenToggle().on) });
-      title.appendChild(s.visible);
+      s.connected = ctx.iconButton({ icon: 'plug', title: ctx.tree.connectedTitle(), pressed: ctx.tree.connected(), id: 'connected-only',
+        click: () => ctx.tree.setConnected(!ctx.tree.connected()) });
+      title.append(s.connected, s.visible);
       root.appendChild(ctx.take('voPop'));
       s.side = ctx.treePane({ cls: 'l2-side', head: title });
       s.side.addEventListener('dblclick', (event) => { if (event.target.closest('[role=treeitem]') && ctx.S.sel) this.pin(ctx.S.sel); });
@@ -296,6 +298,9 @@
       s.visible.setAttribute('aria-pressed', String(Boolean(hidden && hidden.on)));
       s.visible.title = hidden ? `${hidden.on ? 'Hide' : 'Show'} ${hidden.label.toLowerCase()}` : 'Nothing is hidden in this grouping';
       s.visible.innerHTML = ctx.ico(hidden && hidden.on ? 'eye' : 'eye-off');
+      s.connected.classList.toggle('on', ctx.tree.connected());
+      s.connected.setAttribute('aria-pressed', String(ctx.tree.connected()));
+      s.connected.title = ctx.tree.connectedTitle();
     },
   };
   window.IOLayouts = window.IOLayouts || {};

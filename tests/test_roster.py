@@ -87,6 +87,25 @@ def test_the_first_good_run_after_a_restart_marks_what_it_did_not_report_with_it
     assert node(fresh.host, f"{fresh.path_of(A)}/can/14")["presence"]["state"] == "heard"
 
 
+def test_a_board_marked_not_heard_is_heard_again_the_moment_it_answers(tmp_path):
+    """Found 2026-11-09 building Connected only: the NotHeard line outlived the board's return, so a board that answered
+    again read "stale · last heard 0 s ago" until a person removed its row, and the Connected view hid a board on the bus."""
+
+    ledger = ledger_in(tmp_path)
+    Rack(tmp_path / "before", rack=ALL_ANSWER, ledger_file=ledger)
+    quiet = {**ALL_ANSWER, A: {**ALL_ANSWER[A], "answer": [1, 14], "silent": [15]}}
+    fresh = Rack(tmp_path / "after", rack=quiet, ledger_file=ledger, at=NOW + 3600)
+    can15 = f"{fresh.path_of(A)}/can/15"
+    assert node(fresh.host, can15)["presence"]["state"] == "stale"
+    fresh.set_rack(ALL_ANSWER)  # CAN 15 is back
+    fresh.host.clock.at = NOW + 3700
+    fresh.host.run_all_once()
+    state = node(fresh.host, can15)
+    assert (state["presence"]["state"], state["own"]["level"]) == ("heard", "ok"), state
+    assert not [check for check in fresh.host.node(can15)["checks"] if check["code"] == "NotHeard"]
+    assert not fresh.state()["summary"]["counts"].get("stale")
+
+
 def test_a_board_that_never_answered_has_no_row_and_its_bus_says_so(tmp_path):
     rack = Rack(tmp_path)  # CAN 15 is expected and silent from the start
     assert f"{rack.path_of(A)}/can/15" not in rack.host.view().merged.entities

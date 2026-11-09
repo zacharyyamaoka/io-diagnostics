@@ -397,6 +397,24 @@
     return keep(rows);
   }
 
+  // Connected only (Zach, 2026-11-09: "maybe it's simply just about adding a little button there at the top that I toggle to be like,
+  // just show connected things"): a row stays when it answers now, or holds a row that does. "Answers now" is the API's presence:
+  // heard or live (a presence pass heard it within seconds, docs/api-v1.md "Presence"), never stale or restored, never an empty port.
+  // A grouping row (a rig, a USB bus, a structure's folder) has no presence of its own and stays only around what stays.
+  // WHY roll-ups again for the rows that lost children: a hidden stale board must not leave its adapter pointing at a row nobody sees.
+  const answersNow = (row) => Boolean(row.entity && row.presence && row.presence.state !== 'stale' && row.connected !== false);
+  function keepConnected(rows) {
+    return rows.reduce((out, row) => {
+      const before = row.children || [];
+      const children = keepConnected(before);
+      if (!answersNow(row) && !children.length) return out;
+      // the same row only when every child came back as itself: a child that lost rows of its own is a new object
+      const same = children.length === before.length && children.every((child, at) => child === before[at]);
+      out.push(same ? row : setRollup({ ...row, children }));
+      return out;
+    }, []);
+  }
+
   // The worst level among a row's children, as the row's own roll-up hint: the same shape the API sends (level, origin, origin_name,
   // message). WHY recomputed by a structure that moves rows (p6 takes a rig's devices out from under the computer): the API's hint
   // counts what is physically below, the tree must say what it draws below.
@@ -465,7 +483,8 @@
     }
     const inside = (opts.inside || []).map((ref) => { const found = findRow(whole, ref); return { ref, label: found ? found.row.label : ref, missing: !found, icon: found ? found.row.icon : null }; });
     if (inside.length) rows = keepInside(rows, inside.map((chip) => chip.ref));
-    if (opts.into || inside.length) rows = finalize(rows);
+    if (opts.connected) rows = keepConnected(rows);
+    if (opts.into || inside.length || opts.connected) rows = finalize(rows);
     if (opts.query && !(structure && structure.handlesQuery)) rows = applyQuery(rows, opts.query);
     if (structure && structure.hintScope === 'children') dropLeafHints(rows);
     if (opts.sort) rows = sortRows(rows, opts.sort, opts);
@@ -489,7 +508,7 @@
     RANK, PROBLEM, DEFAULT_OPTIONS, SORTS,
     isGrouping, ownProblem, hintOf, labelOf, partLabel, partsOf, worstPart, childrenOf, isEmpty, topLevel,
     entityRow, groupRow, finalize, applyQuery, searchText, indexRows, defaultOptions, structureIds, build, toggleShown,
-    sortRows, findRow, reroot, keepInside, rollupFrom, setRollup,
+    sortRows, findRow, reroot, keepInside, keepConnected, answersNow, rollupFrom, setRollup,
   };
   root.IOView = IOView;
   if (typeof module !== 'undefined' && module.exports) module.exports = IOView;

@@ -67,6 +67,8 @@ const S = {
   lastError: '',
   variant: null,       // the tree proposal drawing the Tree view (set by setupSwitcher)
   sort: 'status',      // View options' Sort by: status | name | change (view/core.js sortRows)
+  connected: false,    // Connected only: the tree keeps what answers now (view/core.js keepConnected); the page beats /api/v1/presence
+  presence: null,      // the host's answer to the latest beat: its presence process per adapter (docs/api-v1.md "Presence")
   pickable: [],        // the structure ids View options' Group by lists (manifest `group`, in `pick` order)
   vo: false,           // the View options popover is open
   inspOpen: false,     // the Table's inspector, opened by a row click (folds away again)
@@ -123,6 +125,7 @@ const PREFS = {
   chartView: 'io-diagnostics.chart-view',
   sections: 'io-diagnostics.detail-sections',
   sectionsOpen: 'io-diagnostics.detail-sections-open',
+  connected: 'io-diagnostics.connected-only',
 };
 function readPref(key) {
   try { return localStorage.getItem(key); } catch (_) { return null; }
@@ -979,6 +982,31 @@ function renderToggles() {
   $('structure-toggles').innerHTML = (structure.toggles || []).filter((toggle) => IOView.toggleShown(toggle, options)).map((toggle) => `<label class="vo-row vo-switch" title="${esc(toggle.title || toggle.label)}">`
     + `<span class="vo-label">${esc(toggle.label)}</span><input type="checkbox" role="switch" data-opt="${esc(toggle.key)}"${options[toggle.key] ? ' checked' : ''}></label>`).join('');
 }
+// ---- Connected only (Zach, 2026-11-09: "just show connected things"; docs/api-v1.md "Presence") ----
+// While it is on and the page is in view, the page beats POST /api/v1/presence every few seconds: the host then keeps one query-only
+// presence process per adapter, so a board plugged in or pulled shows within seconds instead of at the next full read (300 s).
+// WHY only while it is on and visible: each pass holds the rack bus lock for a moment, and an experiment refuses to start while it is
+// held; the host stops the processes about 10 s after the last beat.
+const PRESENCE_BEAT_MS = 3000;
+async function presenceBeat() {
+  if (!S.connected || document.visibilityState !== 'visible') return;
+  try {
+    const response = await fetch('/api/v1/presence', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-IO-Diagnostics': 'ui' },
+      body: '{}', signal: AbortSignal.timeout(LOAD_TIMEOUT_MS) });
+    if (!response.ok) return;
+    S.presence = (await response.json()).presence || null;
+    if (window.IOLayoutHost) window.IOLayoutHost.update();
+  } catch (_) { /* the next beat asks again; the tree keeps showing what /state says */ }
+}
+function setConnected(on) {
+  S.connected = Boolean(on);
+  writePref(PREFS.connected, S.connected ? '1' : '0');
+  if (S.connected) presenceBeat();
+  render();
+}
+setInterval(presenceBeat, PRESENCE_BEAT_MS);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') presenceBeat(); });
+
 function setToggle(key, value) {
   S.toggles[S.structure] = { ...(S.toggles[S.structure] || {}), [key]: value };
   writePref(PREFS.toggles, JSON.stringify(S.toggles));
@@ -2261,9 +2289,9 @@ function renderNow() {
   materializeTree();
   const byPath = index(S.data.tree);
   S.byPath = byPath;
-  S.built = IOView.build(S.data, S.structure, { ...structureOptions(), query: S.query, sort: S.sort, changes: changesOf(S.act), into: S.into, inside: S.inside });
+  S.built = IOView.build(S.data, S.structure, { ...structureOptions(), query: S.query, sort: S.sort, changes: changesOf(S.act), into: S.into, inside: S.inside, connected: S.connected });
   // the row stepped into is gone (unplugged, or this grouping does not have it): back to the whole tree, quietly
-  if (S.into && S.built.intoMissing) { S.into = null; replaceNav(); S.built = IOView.build(S.data, S.structure, { ...structureOptions(), query: S.query, sort: S.sort, changes: changesOf(S.act), inside: S.inside }); }
+  if (S.into && S.built.intoMissing) { S.into = null; replaceNav(); S.built = IOView.build(S.data, S.structure, { ...structureOptions(), query: S.query, sort: S.sort, changes: changesOf(S.act), inside: S.inside, connected: S.connected }); }
   renderTreeNav();
   renderClock();
   const fixture = S.data.fixture;
@@ -2485,9 +2513,11 @@ async function boot() {
   setupSwitcher();
   setupPrototype(detailLayouts.default, utilityMenus.default, runEntries.default, chartEntries.default);
   S.inspPinned = readPref(PREFS.inspectorPinned) === '1';
+  S.connected = readPref(PREFS.connected) === '1';
+  if (S.connected) presenceBeat();
   // the page layout (layouts/host.js): moves the page's parts into one of five arrangements; everything it draws is ours
   if (window.IOLayoutHost) {
-    await window.IOLayoutHost.start({ S, $, esc, usb, render, entityLabel, renderActivity: typeof renderActivity === 'function' ? renderActivity : null, eventRow, setViewOptions, setToggle, structureOptions,
+    await window.IOLayoutHost.start({ S, $, esc, usb, render, entityLabel, renderActivity: typeof renderActivity === 'function' ? renderActivity : null, eventRow, setViewOptions, setToggle, structureOptions, setConnected,
       toggleShown: (toggle) => IOView.toggleShown(toggle, structureOptions()), startDryRun, select: onSelectEntity, stepInto, stepUp, addInside, canEnter,
       setView(view) { S.view = view; pushNav(); render(); } });
   }

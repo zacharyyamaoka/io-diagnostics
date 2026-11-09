@@ -1294,6 +1294,44 @@ same-origin `Sec-Fetch-Site` and no token, because they write the person's files
   active. `POST /api/v1/robot-description/remove`, `{"name": <kept name>}`: removes it and its kept folder, nothing outside that folder;
   the active one goes back to `present: false`. **404** `NoSuchDescription`.
 
+## Presence: `POST /api/v1/presence` (Connected only, 2026-11-09)
+
+Zach, 2026-11-09: "I wanted to quickly just plug in the can FD and be able to kinda see what is live connected ... maybe it's simply
+just about adding a little button there at the top that I toggle to be like, just show connected things". The Devices header's plug
+button (`#connected-only`, remembered in `localStorage` `io-diagnostics.connected-only`, shared by `/` and `/dx/`) keeps the rows
+that answer now (`view/core.js` `keepConnected`): a row whose `presence.state` is `heard` or `live` and that is not an empty port,
+plus every row on the way to one. A stale or restored row goes, and so does a grouping row (a rig, a USB bus, a folder) left with
+nothing in it; a row that lost children rolls up only what it still draws. Group by, Sort, search and "Show N hidden" apply after.
+
+While the button is on and the page is in view, it beats `POST /api/v1/presence` (body `{}`, the page-only rule of `/act`) every
+3 s. The host keeps one query-only `presence` process per device whose plugin declares one (plugins.d/README.md "presence"), and
+stops each about `grace_s` (10 s) after the last beat. WHY only while a person looks: each pass holds the rack bus lock for a moment
+(moteus: ~0.3-0.5 s per 2 s, on the wall clock's 2 s marks so every adapter's pass shares one window), and an experiment takes that
+lock with `LOCK_NB` and refuses rather than waits.
+
+What the passes change in `/state`:
+
+- a row a pass heard within `max(3 x period, 5 s)` is `presence` `{"state": "live", "text": "answers now"}`, whatever its older
+  checks say (its `level` still says what the last full read found);
+- a sub-device no row knew gets one at once, with what the pass read (moteus: CAN id, UUID, serial) and what the host remembers of
+  the same `hardware_id` from a full read (its model, firmware); a full read later fills in the rest;
+- a row that two passes in a row that looked did not hear gets the roster's `<name>: last heard` (`NotHeard`, `io_diagnostics.roster`),
+  stamped with when it was really last heard (the ledger's time for a restored row): stale, hidden by Connected only, until it answers.
+  A row heard again, by a pass or a full read, loses that line at once.
+
+The answer (also what the page shows in the button's title):
+
+```json
+{"presence": {"supported": true, "period_s": 2.0, "grace_s": 10.0, "beat_age_s": 0.0,
+  "adapters": [{"path": "host/usb1/port-1-3/usb-1-3", "name": "fdcanusb 272813EF", "plugin": "moteus_servo",
+                "state": "running", "reason": "", "holders": [],
+                "last": {"outcome": "looked", "answering": ["12", "13", "14"], "message": "3 boards answer: CAN 12, 13, 14 · 0.41 s",
+                         "pass_s": 0.41, "lock_s": 0.33, "holders": [], "at": 1794260000.0, "stamp": 1794260000.0, "age_s": 0.8}}]}}
+```
+
+`state`: `idle` (no beat), `starting`, `running`, `paused` (`reason`: a run uses the bus, or a person's tool holds it), `restarting`.
+`last.outcome` other than `looked` (`BusLockHeld`, `PortBusy`, ...) says why that pass did not look, with its `holders`.
+
 ## What a page must NOT assume
 
 - That `level` is the worst below: it is the row's self-report. Use `hint` / `rollup` for "something below is worse".

@@ -95,6 +95,8 @@
       if (opts.actions) actions.push(...opts.actions());
       const hidden = ctx.tree.hiddenToggle();
       if (hidden) actions.splice(3, 0, { icon: 'lx-eye', label: `${hidden.on ? 'Hide' : 'Show'} ${hidden.label.toLowerCase()}`, sub: 'The tree', run: () => ctx.tree.setHidden(!hidden.on) });
+      actions.splice(3, 0, { icon: 'lx-plug', label: ctx.tree.connected() ? 'Show everything' : 'Connected only', sub: 'The tree: just what answers now',
+        run: () => ctx.tree.setConnected(!ctx.tree.connected()) });
       // step into the selected device (VS Code's Enter Folder) and back out; narrow the tree to what is inside it
       if (S.sel && ctx.api.stepInto && ctx.api.canEnter(S.sel)) {
         const name = ctx.api.entityLabel(S.sel);

@@ -690,12 +690,17 @@ def heard_text(seconds: float) -> str:
 
 
 def presence_of(path: str, entity: Entity, summary: Summary, own: list[DiagnosticStatus], seen: float | None, now: float,
-                memory: dict[str, float], live: frozenset | set) -> dict | None:
+                memory: dict[str, float], live: frozenset | set, answering: dict[str, float] | None = None) -> dict | None:
     """One row's presence, the Claude-sidebar dot (Zach, 2026-10-24): ``heard`` (filled: heard within its expected
     period), ``stale`` (hollow ring: known but not heard lately, with when) or ``live`` (pulsing: data arriving now).
     None for structure with nothing to hear from. WHY never a level: presence is neutral; warning colours are
-    reserved for real WARN / ERROR / UNKNOWN."""
+    reserved for real WARN / ERROR / UNKNOWN.
 
+    ``answering``: path -> seconds since a presence pass heard it (docs/api-v1.md "Presence"). Such a row is ``live`` first,
+    whatever its older checks say: it answers now (Connected only shows it); its level still says what the last full read found."""
+
+    if answering and path in answering and entity.kind not in NO_PRESENCE_KINDS:
+        return {"state": "live", "age_s": answering[path], "restored": False, "text": "answers now"}
     if entity.kind in NO_PRESENCE_KINDS or (not own and path not in memory):
         return None
     if path in memory and not own:  # restored from the last run, no fresh report yet
@@ -738,7 +743,8 @@ def is_claimed(path: str, entity: Entity, merged: Merged, layer: OsLayer) -> boo
 
 def node_json(path: str, rows: Rows, layer: OsLayer, faults_by_path: dict[str, int], *, nested: bool,
               memory: dict[str, float] | None = None, live: frozenset | set = frozenset(),
-              expected_paths: frozenset | set = frozenset(), rates: dict[str, dict] | None = None) -> dict:
+              expected_paths: frozenset | set = frozenset(), rates: dict[str, dict] | None = None,
+              answering: dict[str, float] | None = None) -> dict:
     merged, summary = rows.merged, rows.summaries[path]
     entity = merged.entities[path]
     listed = rows.own.get(path, [])
@@ -773,14 +779,14 @@ def node_json(path: str, rows: Rows, layer: OsLayer, faults_by_path: dict[str, i
         "stale_after_s": max(STALE_FACTOR * min(periods), STALE_FLOOR_S) if periods else None,
         "checks": len(listed), "not_run": len(listed) - len(own), "actions": len(entity.actions), "faults": faults_by_path.get(path, 0),
         "collapsed": path in COLLAPSED,
-        "presence": presence_of(path, entity, summary, own, seen, rows.now, memory or {}, live),
+        "presence": presence_of(path, entity, summary, own, seen, rows.now, memory or {}, live, answering),
         "claimed": is_claimed(path, entity, merged, layer) or path in expected_paths,
         "usb": usb_json(path, layer),
         "rate": (rates or {}).get(path),
     }
     children = merged.children.get(path, [])
     node["children"] = ([node_json(child, rows, layer, faults_by_path, nested=True, memory=memory, live=live,
-                                   expected_paths=expected_paths, rates=rates) for child in children]
+                                   expected_paths=expected_paths, rates=rates, answering=answering) for child in children]
                         if nested else list(children))
     return node
 

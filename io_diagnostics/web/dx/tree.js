@@ -12,7 +12,12 @@
    here and are blocked if reached; the classic page has them. Group by, Sort by and "show what is hidden" are the classic
    page's own preferences (the same keys), so a choice made on either page holds on both. */
 
-const PREFS = { structure: 'io-diagnostics.structure', sort: 'io-diagnostics.sort', toggles: 'io-diagnostics.structure-toggles' };
+const PREFS = { structure: 'io-diagnostics.structure', sort: 'io-diagnostics.sort', toggles: 'io-diagnostics.structure-toggles',
+  connected: 'io-diagnostics.connected-only' };
+// Connected only (docs/api-v1.md "Presence"): the classic page's toggle, the same key; while it is on and the page is in view, the
+// page beats POST /api/v1/presence like the State tab beats /watch (a query-only verb kept running while a person looks; no write)
+const PRESENCE_BEAT_MS = 3000;
+const PLUG = '<path d="M9 2v5M15 2v5M6 7h12v4a6 6 0 0 1-12 0V7ZM12 17v5"/>';
 const DEFAULTS = { structure: 'p6', sort: 'status' };
 // the structures this page loads (index.html): the classic Group by's first three
 const GROUPS = [['p6', 'Nested'], ['p1', 'Physical'], ['p7', 'Type']];
@@ -68,6 +73,7 @@ export function mountTree(pane, { feed, clock, table, onSelect }) {
       <button type="button" class="dx-ic-btn" id="dx-tree-collapse" title="Collapse all" aria-label="Collapse all"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 20 5-5 5 5M7 4l5 5 5-5"/></svg></button>
       <button type="button" class="dx-ic-btn" id="dx-tree-expand" title="Expand all" aria-label="Expand all"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 15 5 5 5-5M7 9l5-5 5 5"/></svg></button>
       <button type="button" class="dx-ic-btn" id="dx-tree-options" title="View options: group, sort" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg></button>
+      <button type="button" class="dx-ic-btn" id="dx-tree-connected" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true">${PLUG}</svg></button>
       <button type="button" class="dx-ic-btn" id="dx-tree-hidden" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"></svg></button>
       <div class="dx-tree-pop" id="dx-tree-pop" role="dialog" aria-label="View options" hidden>
         <label>Group by <select id="dx-tree-group" aria-label="Group by">${GROUPS.map(([id, name]) => `<option value="${id}">${name}</option>`).join('')}</select></label>
@@ -82,6 +88,7 @@ export function mountTree(pane, { feed, clock, table, onSelect }) {
   const pop = pane.querySelector('#dx-tree-pop');
   const optionsBtn = pane.querySelector('#dx-tree-options');
   const hiddenBtn = pane.querySelector('#dx-tree-hidden');
+  const connectedBtn = pane.querySelector('#dx-tree-connected');
   pane.append(table);
   const MODE_KEY = 'robotdx.dx.tree-mode';
   const st = { query: '', selected: null, mode: read(MODE_KEY) === 'table' ? 'table' : 'tree', sig: null, raf: 0, built: null, destroyed: false };
@@ -128,6 +135,24 @@ export function mountTree(pane, { feed, clock, table, onSelect }) {
     hiddenBtn.querySelector('svg').innerHTML = t && t.on ? EYE : EYE_OFF;
   }
 
+  const connected = () => read(PREFS.connected) === '1';
+  function drawConnected() {
+    const on = connected();
+    connectedBtn.setAttribute('aria-pressed', String(on));
+    connectedBtn.classList.toggle('on', on);
+    connectedBtn.title = on ? 'Connected only is on: what answers now. Click to show everything.' : 'Connected only: show just what answers now';
+    connectedBtn.setAttribute('aria-label', connectedBtn.title);
+  }
+  async function presenceBeat() {
+    if (st.destroyed || !connected() || document.visibilityState !== 'visible') return;
+    try {
+      await fetch('/api/v1/presence', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-IO-Diagnostics': 'ui' }, body: '{}',
+        signal: AbortSignal.timeout(8000) });
+    } catch (_) { /* the next beat asks again */ }
+  }
+  const beat = setInterval(presenceBeat, PRESENCE_BEAT_MS);
+  presenceBeat();
+
   // ---- drawing at t
   const tNow = () => (clock.liveEnd !== null && Number.isFinite(clock.t) && clock.datasets.includes(feed.dataset('entities')) ? clock.t : feed.dataset('entities').end ?? Infinity);
   function repaint(force = false) {
@@ -140,10 +165,10 @@ export function mountTree(pane, { feed, clock, table, onSelect }) {
     if (st.destroyed || st.mode !== 'tree') return;
     const t = tNow();
     const state = stateAt(feed, t);
-    const sig = `${state.sig}|${structure()}|${sort()}|${JSON.stringify(toggles())}|${st.query}|${st.selected}`;
+    const sig = `${state.sig}|${structure()}|${sort()}|${JSON.stringify(toggles())}|${st.query}|${st.selected}|${connected()}`;
     if (sig !== st.sig) {
       st.sig = sig;
-      const built = state.tree ? classic.view.build(state, structure(), { ...toggles(), query: st.query, sort: sort() }) : null;
+      const built = state.tree ? classic.view.build(state, structure(), { ...toggles(), query: st.query, sort: sort(), connected: connected() }) : null;
       st.built = built;
       classic.renderer.render(host, built ? built.rows : [], {
         onSelect: (key) => { const row = built && built.byKey && built.byKey.get(key); if (row && row.entity) onSelect(row.entity); },
@@ -152,6 +177,7 @@ export function mountTree(pane, { feed, clock, table, onSelect }) {
         query: st.query, summary: state.summary, host: built ? built.host : null, structure: built ? built.structure : structure(),
       });
       drawHidden();
+      drawConnected();
     }
     host.dataset.t = String(t);
     host.dispatchEvent(new CustomEvent('dx-tree-draw', { detail: { t, following: clock.following, rows: host.querySelectorAll('[role=treeitem][data-t6-path]').length } }));
@@ -170,7 +196,7 @@ export function mountTree(pane, { feed, clock, table, onSelect }) {
     for (const b of pane.querySelectorAll('#dx-tree-mode [data-mode]')) b.setAttribute('aria-selected', String(b.dataset.mode === mode));
     host.hidden = mode !== 'tree';
     table.hidden = mode !== 'table';
-    for (const id of ['#dx-tree-collapse', '#dx-tree-expand', '#dx-tree-hidden']) pane.querySelector(id).hidden = mode !== 'tree';
+    for (const id of ['#dx-tree-collapse', '#dx-tree-expand', '#dx-tree-hidden', '#dx-tree-connected']) pane.querySelector(id).hidden = mode !== 'tree';
     if (mode === 'tree') repaint(true);
   }
   pane.querySelector('#dx-tree-mode').addEventListener('click', (e) => { const b = e.target.closest('[data-mode]'); if (b) setMode(b.dataset.mode); });
@@ -193,6 +219,12 @@ export function mountTree(pane, { feed, clock, table, onSelect }) {
     const all = readJson(PREFS.toggles);
     all[structure()] = { ...(all[structure()] || {}), [t.key]: !t.on };
     write(PREFS.toggles, JSON.stringify(all));
+    repaint(true);
+  });
+  connectedBtn.addEventListener('click', () => {
+    write(PREFS.connected, connected() ? '0' : '1');
+    drawConnected();
+    presenceBeat();
     repaint(true);
   });
   optionsBtn.addEventListener('click', () => {
@@ -219,6 +251,7 @@ export function mountTree(pane, { feed, clock, table, onSelect }) {
     get built() { return st.built; },
     destroy() {
       st.destroyed = true;
+      clearInterval(beat);
       cancelAnimationFrame(st.raf);
       clock.removeEventListener('time', onClock);
       clock.removeEventListener('state', onClock);

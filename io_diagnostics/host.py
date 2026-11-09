@@ -48,7 +48,7 @@ from io_diagnostics.faults import Faults
 from io_diagnostics import terminal as terminal_module
 from io_diagnostics.plugins import load_plugins, match_devices, source_stamp
 from io_facts import open_files
-from io_diagnostics.runner import (RUNNER_SOURCE, RUNNING, Follower, Gates, Job, RunOutcome, Scheduler, Watcher, absolute,
+from io_diagnostics.runner import (HOST_SOURCES, RUNNER_SOURCE, RUNNING, Follower, Gates, Job, Presencer, RunOutcome, Scheduler, Watcher, absolute,
                                    _outcome, _records, act_argv, describe, follow_period, follow_status, host_status, plugin_env, rebase,
                                    relative, run_act, run_check, run_plugin)
 
@@ -89,6 +89,12 @@ WATCH_TICK_S = 0.5  # how often the host re-checks every watch's gates and heart
 DESCRIBE_CHECK_S = 10.0
 MAX_PLUGIN_EVENTS = 200
 WATCH_NOTIFY_S = 1.0  # a 10 Hz watch tells a page's event stream at most this often
+# Connected only (docs/api-v1.md "Presence"; Zach, 2026-11-09: "plug in the can FD and ... see what is live connected"): while a page
+# shows it, it beats POST /api/v1/presence and the host keeps one query-only ``presence`` process per device whose plugin declares one
+PRESENCE_REL = "#presence"  # the key of a device's presence process among the watches (never an entity path: "#" is in none)
+PRESENCE_PASS = "PresencePass"  # the plugin's one line per pass: what it looked at and what answered; the host's, never the log's
+# WHY two: one lost reply is not an unplug; two passes that looked and did not hear a board are (about 4 s at the plugin's 2 s)
+PRESENCE_MISSES = 2
 STATE_HISTORY_GAP_S = 1.0  # the history keeps a state series at 1 Hz at most
 FRAME_FPS_WINDOW_S = 3.0
 RECENT = 6
@@ -688,6 +694,7 @@ class View:
     # WHY in the view: the log's rows pair a run's events with whether it still runs, and a run that ended just after the build would otherwise read "the host stopped while it ran"
     active_runs: frozenset = frozenset()
     revision: int = -1  # Host.revision when this build began
+    answering: dict = dataclasses.field(default_factory=dict)  # path -> seconds since a presence pass heard it (Connected only)
 
 
 def _frozen(job: Job) -> Job:
@@ -721,6 +728,11 @@ class Watch:
     notified: float = 0.0
     stopped: bool = False
     paused: int = 0  # >0 while a run (a config write, a utility) uses the same board: the watch yields the port, then resumes
+    # a device's presence process (rel == PRESENCE_REL) only: what its passes said
+    answered: dict = dataclasses.field(default_factory=dict)  # rel -> host clock time a pass last heard it
+    misses: dict = dataclasses.field(default_factory=dict)  # rel -> passes in a row that looked and did not hear it
+    passes: int = 0  # passes that looked
+    last_pass: dict | None = None  # the newest pass: {"outcome", "at", "answering", "message", "holders", "pass_s"}
 
 
 class _NoOwner:
@@ -816,6 +828,7 @@ class Host:
         self.watch_grace_s = watch_grace_s if watch_grace_s is not None else WATCH_GRACE_S
         self.watch_tick_s = watch_tick_s if watch_tick_s is not None else WATCH_TICK_S
         self.watches: dict[tuple, Watch] = {}
+        self._presence_beat: float | None = None  # time.monotonic() of the latest POST /api/v1/presence (docs/api-v1.md "Presence")
         self._watch_lock = threading.RLock()
         self._watch_thread: threading.Thread | None = None
         self._frames_dir = Path(frames_dir) if frames_dir else None
@@ -1519,7 +1532,7 @@ class Host:
             for key in [key for key in self.followers if key[0] == spec.name]:
                 self.followers.pop(key).stop()
             self._sync_followers()
-        if old.get("watch") != new.get("watch"):
+        if old.get("watch") != new.get("watch") or old.get("presence") != new.get("presence"):
             self._redeclare_watches(spec)
         if probe_module.probe_timeout(old, spec.timeout_s) != probe_module.probe_timeout(new, spec.timeout_s) and new.get("probe"):
             with self.lock:
@@ -1534,7 +1547,7 @@ class Host:
         with self._watch_lock:
             current = [watch for watch in self.watches.values() if watch.job.spec.name == spec.name and not watch.stopped]
             for watch in current:
-                declared = self._watch_declared(watch.job)
+                declared = self._presence_declared(watch.job) if watch.rel == PRESENCE_REL else self._watch_declared(watch.job)
                 if declared is None or "refused" in declared:
                     self._watch_stop(watch)
                 elif declared != watch.declared:
@@ -1968,7 +1981,7 @@ class Host:
         self.eventlog.record(events, now)
         events = [event for event in self.eventlog.overlay(events, now) if event.stamp is None or event.stamp <= now]
         return View(now, layer, merged, rows, events, self.faults.open_by_path(), setup, checks, memory, streaming, claimed, composed,
-                    self.history.rates(now), frozen, active_runs=active_runs)
+                    self.history.rates(now), frozen, active_runs=active_runs, answering=self._presence_answering(now))
 
     def _device_hardware_id(self, job: Job) -> str:
         entity = self.layer.entities.get(self.layer.device_paths.get(str(job.device.get("id")), job.device_path))
@@ -2210,7 +2223,7 @@ class Host:
                 "composition": self.composition_json(view),
                 "tree": tree.node_json(tree.HOST_PATH, view.rows, view.layer, view.faults_by_path, nested=True,
                                        memory=view.memory, live=view.live, expected_paths=view.expected_paths,
-                                       rates=view.rates)}
+                                       rates=view.rates, answering=view.answering)}
         # WHY the clock is now and not the view's: the page's clock and every age it works out run from it
         return {"api": API, "schema": SCHEMA, "record_version": RECORD_VERSION, "clock": self.clock_json(self.clock.now() if self._serving else view.now),
                 "fixture": self.fixture, "host": {"name": self.os.hostname, "sources": list(self.sources)}, **made,
@@ -2246,7 +2259,8 @@ class Host:
         # again for it: 26,867 x 93 entities, the host page's 3.8 s (2026-11-04)
         events = itertools.islice((event for event in view.events if event.path == path or event.path.startswith(below)), NODE_EVENTS)
         return {"node": tree.node_json(path, rows, view.layer, view.faults_by_path, nested=False, memory=view.memory,
-                                       live=view.live, expected_paths=view.expected_paths, rates=view.rates), "ancestors": ancestors,
+                                       live=view.live, expected_paths=view.expected_paths, rates=view.rates,
+                                       answering=view.answering), "ancestors": ancestors,
                 "checks": [self.check_json(status, view.now) for status in rows.own.get(path, [])],
                 "actions": self.actions_json(path, view), **extra,
                 "faults": [self.fault_json(fault, view) for fault in self.faults.all() if fault.path == path],
@@ -3200,6 +3214,7 @@ class Host:
 
     def _watch_loop(self) -> None:
         while not self._stop.wait(self.watch_tick_s):
+            self._presence_sync()
             for watch in list(self.watches.values()):
                 self._watch_step(watch)
 
@@ -3230,6 +3245,14 @@ class Host:
                     device_path = self.layer.device_paths.get(str(job.device.get("id")), job.device_path)
                     entity = self.layer.entities.get(device_path)
                 watch.plugin_blocked, watch.started = None, self.clock.now()
+                if watch.rel == PRESENCE_REL:
+                    # WHY the rows it knows, read at each (re)start: a board on firmware without discovery answers only when asked by id
+                    watch.follower = Presencer(job.spec, job.device, device_path, watch.declared["period_s"], self.clock.now,
+                                               lambda job=job: {**self._job_env(job), "IO_DIAGNOSTICS_KNOWN_NODES": self._known_nodes(job)},
+                                               lambda outcome, watch=watch: self._absorb_presence(watch, outcome),
+                                               hardware_id=entity.hardware_id if entity else "", backoff_s=self.follow_backoff_s)
+                    watch.follower.start()
+                    return
                 frame_env = {"IO_DIAGNOSTICS_FRAME_DIR": str(watch.frame_dir)}
                 watch.follower = Watcher(job.spec, job.device, device_path, watch.declared["period_s"], self.clock.now,
                                          lambda job=job, env=frame_env: {**self._job_env(job), **env, **self._watch_env()},
@@ -3326,6 +3349,234 @@ class Host:
             watch.notified = time.monotonic()
             self.notify("watch")
 
+    # --- Connected only: the presence processes (docs/api-v1.md "Presence") ------------------------------------------------
+    def _presence_declared(self, job: Job) -> dict | None:
+        """The plugin's describe ``presence``: ``{"period_s", "gates"}``, ``{"refused": why}`` or None (it declares none)."""
+
+        declared = (self.describes.get(job.spec.name) or {}).get("presence")
+        if not declared:
+            return None
+        declared = {} if declared is True else declared
+        if not isinstance(declared, dict):
+            return {"refused": "presence must be true or an object"}
+        if declared.get("danger", "query") != "query":
+            return {"refused": f"presence is query-only; this plugin declares danger {declared.get('danger')!r}"}
+        period = declared.get("period_s", 2.0)
+        period = float(period) if isinstance(period, (int, float)) and not isinstance(period, bool) and period > 0 else 2.0
+        return {"period_s": period, "gates": [str(check) for check in declared.get("gates") or []]}
+
+    def _presence_fresh(self) -> bool:
+        beat = self._presence_beat
+        return beat is not None and time.monotonic() - beat <= self.watch_grace_s
+
+    def presence_heartbeat(self) -> dict:
+        """The Connected view's heartbeat (``POST /api/v1/presence``): every device whose plugin declares ``presence`` gets its
+        process, kept for ``watch_grace_s`` more. A device plugged in while the view shows gets one at the next tick."""
+
+        self._presence_beat = time.monotonic()
+        self._watch_thread_start()
+        self._presence_sync()
+        with self._watch_lock:
+            current = [watch for watch in self.watches.values() if watch.rel == PRESENCE_REL and not watch.stopped]
+        for watch in current:
+            self._watch_step(watch)
+        return {"presence": self.presence_json()}
+
+    def _presence_sync(self) -> None:
+        """While the view beats: a presence watch per device that declares one, its beat the view's; a device that is gone, or
+        whose job was made again (replugged), has its watch stopped. Without a beat the watches run out their grace in ``_watch_step``."""
+
+        with self.lock:
+            jobs = {key: job for key, job in self.jobs.items() if job.spec.kind != "check"}
+        with self._watch_lock:
+            for key, watch in list(self.watches.items()):
+                if watch.rel == PRESENCE_REL and not watch.stopped and jobs.get(watch.job.key) is not watch.job:
+                    self._watch_stop(watch)
+            if not self._presence_fresh():
+                return
+            for job in jobs.values():
+                declared = self._presence_declared(job)
+                if declared is None or "refused" in declared:
+                    continue
+                watch = self.watches.get((job.key, PRESENCE_REL))
+                if watch is None:
+                    watch = self.watches[(job.key, PRESENCE_REL)] = Watch(job, PRESENCE_REL, declared, Path(os.devnull), self._presence_beat)
+                watch.last_beat = self._presence_beat
+                watch.declared = declared
+
+    def _known_nodes(self, job: Job) -> str:
+        """The CAN ids (the last path step) of the boards this job has rows for: "1,4,11"."""
+
+        with self.lock:
+            rels = [rel for rel, entity in job.cache.entities.items() if entity.kind == "node"]
+        ids = sorted({rel.rsplit("/", 1)[-1] for rel in rels if rel.rsplit("/", 1)[-1].isdigit()}, key=int)
+        return ",".join(ids)
+
+    def _presence_entity(self, job: Job, entity: Entity) -> Entity | None:
+        """What a pass's entity becomes in the cache, or None to keep the row as it is.
+
+        WHY: a pass reads a board's UUID and serial, never its model or firmware, so it must not overwrite what a full read said
+        about the SAME board; a DIFFERENT board on that id (fresh moteus boards all ship as CAN 1) replaces the row, borrowing what
+        the host remembers of that board from another id or adapter."""
+
+        cached = job.cache.entities.get(entity.path)
+        if cached is not None:
+            same = (not entity.hardware_id or entity.hardware_id == cached.hardware_id
+                    or bool((entity.identity or {}).get("serial_number"))
+                    and (entity.identity or {}).get("serial_number") == (cached.identity or {}).get("serial_number"))
+            if same:
+                return None
+        known = next((other for other in job.cache.entities.values()
+                      if entity.hardware_id and other.hardware_id == entity.hardware_id and other.path != entity.path), None)
+        known = known or self.roster.remembered(entity.hardware_id)
+        if known is not None and len(known.identity or {}) > len(entity.identity or {}):
+            return dataclasses.replace(entity, identity={**dict(known.identity or {}), **dict(entity.identity or {})})
+        return entity
+
+    @staticmethod
+    def _forget_readings(cache, rel: str) -> None:
+        """Another board answers on ``rel``'s id: what the plugin read from the one before (its statuses, State, settings, images)
+        is about that board, not this one, and goes. The host's own lines stay."""
+
+        def mine(path: str) -> bool:
+            return path == rel or path.startswith(rel + "/")
+
+        for key in [key for key, status in cache.statuses.items() if mine(key[0]) and not status.source.startswith(HOST_SOURCES)]:
+            cache.statuses.pop(key)
+        for table in (cache.states, cache.configs, cache.frames):
+            for key in [key for key in table if mine(key[0])]:
+                table.pop(key)
+
+    def _absorb_presence(self, watch: Watch, outcome: RunOutcome) -> None:
+        """One line of a presence process. Entities and statuses go into the job's cache (an entity only when it is new or another
+        board, see ``_presence_entity``); the PresencePass line closes a pass: a board it heard is answering, and one that
+        ``PRESENCE_MISSES`` passes that looked did not hear gets the roster's NotHeard (a blocked pass judges nothing)."""
+
+        if watch.stopped or not outcome.records:
+            return
+        job, now = watch.job, self.clock.now()
+        passes = [record for record in outcome.records if isinstance(record, Event) and record.code == PRESENCE_PASS]
+        changed = False
+        with self.lock:
+            kept, received, icons = [], {}, {}
+            for index, record in enumerate(outcome.records):
+                if isinstance(record, Event) and record.code == PRESENCE_PASS:
+                    continue
+                if isinstance(record, Entity):
+                    replaced = self._presence_entity(job, record)
+                    if replaced is None:
+                        continue
+                    previous = job.cache.entities.get(record.path)
+                    if previous is not None and previous.hardware_id != replaced.hardware_id:
+                        self._forget_readings(job.cache, record.path)
+                    changed = True
+                    record = replaced
+                if index in outcome.received:
+                    received[len(kept)] = outcome.received[index]
+                if index in outcome.icons:
+                    icons[len(kept)] = outcome.icons[index]
+                kept.append(record)
+            fresh_statuses, fresh_events = (job.cache.apply(dataclasses.replace(outcome, records=kept, received=received, icons=icons), received=now)
+                                            if kept else ([], []))
+            device_path = self.layer.device_paths.get(str(job.device.get("id")), job.device_path)
+            hardware_id = self.layer.entities.get(device_path).hardware_id if device_path in self.layer.entities else ""
+            for record in passes:
+                changed |= self._presence_pass(watch, record, hardware_id, now)
+            if kept:
+                # WHY a touch: a board a pass heard is remembered (tree.json) and leaves "restored" like any heard row
+                changed |= self.roster.observe(job, hardware_id, None, now)
+        observed = [rebase(status, device_path) for status in fresh_statuses]
+        if observed:
+            self.faults.observe(observed, now)
+            self.history.observe(observed, now, source=("job", *job.key))
+        if changed or fresh_events or any(status.level != OK for status in fresh_statuses):
+            self.notify("plugin")
+        elif passes and time.monotonic() - watch.notified >= WATCH_NOTIFY_S:
+            watch.notified = time.monotonic()
+            self.notify("watch")
+
+    def _presence_pass(self, watch: Watch, record: Event, hardware_id: str, now: float) -> bool:
+        """Judge one PresencePass (the caller holds ``self.lock``). Returns True when a row changed (answering, or not heard)."""
+
+        args = dict(record.args or {})
+        outcome = str(args.get("outcome") or "looked")
+        answering = [str(item) for item in args.get("answering") or []]
+        watch.last_pass = {"outcome": outcome, "at": now, "stamp": record.stamp, "answering": answering, "message": record.message,
+                           "holders": [str(item) for item in args.get("holders") or []], "pass_s": args.get("pass_s"),
+                           "lock_s": args.get("lock_s")}
+        if outcome != "looked":
+            return False  # blocked, failed or timed out: what it did not hear says nothing about what is there
+        watch.passes += 1
+        cache, bus = watch.job.cache, record.path
+        heard = {f"{bus}/{item}" if bus else item for item in answering}
+        changed = False
+        for rel, entity in list(cache.entities.items()):
+            if entity.kind != "node" or rel.rpartition("/")[0] != bus:
+                continue
+            if rel in heard:
+                changed |= rel not in watch.answered or watch.misses.get(rel, 0) >= PRESENCE_MISSES
+                watch.answered[rel], watch.misses[rel] = now, 0
+                changed |= self.roster.heard_again(cache, rel)
+                continue
+            watch.misses[rel] = watch.misses.get(rel, 0) + 1
+            if watch.misses[rel] >= PRESENCE_MISSES:
+                last = max([stamp for stamp in (watch.answered.pop(rel, None), cache.heard(rel)) if stamp is not None], default=0.0)
+                changed |= self.roster.mark_silent(watch.job, hardware_id, rel, last, now)
+        return changed
+
+    def _presence_answering(self, now: float) -> dict[str, float]:
+        """Tree path -> seconds since a running presence pass last heard it, for the rows heard within ``max(3 x period, 5 s)``."""
+
+        out: dict[str, float] = {}
+        # WHY no _watch_lock: the view is built under self.lock, and _watch_step takes the two the other way round
+        watches = [watch for watch in list(self.watches.values()) if watch.rel == PRESENCE_REL and not watch.stopped and watch.follower]
+        for watch in watches:
+            window = max(STALE_FACTOR * watch.declared.get("period_s", 2.0), STALE_FLOOR_S)
+            base = self.layer.device_paths.get(str(watch.job.device.get("id")), watch.job.device_path)
+            for rel, at in list(watch.answered.items()):
+                if now - at <= window:
+                    out[absolute(rel, base)] = round(max(0.0, now - at), 3)
+        return out
+
+    def presence_json(self) -> dict:
+        """The Connected view's answer: ``supported`` (some device's plugin declares presence), the period and grace, and one entry
+        per such device: ``state`` (idle · starting · running · paused · restarting) and its newest pass in plain words."""
+
+        with self.lock:
+            jobs = [job for job in self.jobs.values() if job.spec.kind != "check"]
+            # WHY the plugin's own name first: it renames its device's OS row ("fdcanusb" -> "fdcanusb 272813EF"), as the tree shows it
+            names = {job.key: ((job.cache.entities.get("") or Entity("")).name
+                               or (self.layer.entities.get(self.layer.device_paths.get(str(job.device.get("id")), job.device_path)) or Entity("")).name)
+                     for job in jobs}
+        now, adapters, periods = self.clock.now(), [], []
+        for job in sorted(jobs, key=lambda job: job.device_path):
+            declared = self._presence_declared(job)
+            if declared is None or "refused" in declared:
+                continue
+            periods.append(declared["period_s"])
+            path = self.layer.device_paths.get(str(job.device.get("id")), job.device_path)
+            entry = {"path": path, "name": names.get(job.key) or path, "plugin": job.spec.name, "state": "idle", "reason": "", "holders": [],
+                     "last": None}
+            watch = self.watches.get((job.key, PRESENCE_REL))
+            if watch is not None and not watch.stopped:
+                if watch.gate is not None:
+                    entry.update(state="paused", reason=watch.gate.get("reason", ""), holders=watch.gate.get("holders", []))
+                elif watch.paused:
+                    entry.update(state="paused", reason="paused while a run uses this bus")
+                elif watch.follower is None:
+                    entry["state"] = "starting"
+                else:
+                    state = watch.follower.state()
+                    entry["state"] = {"running": "running", "restarting": "restarting"}.get(state["state"], "starting")
+                    if entry["state"] == "restarting":
+                        entry["reason"] = state["exit"] or ""
+                if watch.last_pass is not None:
+                    entry["last"] = {**watch.last_pass, "age_s": round(max(0.0, now - watch.last_pass["at"]), 3)}
+            adapters.append(entry)
+        return {"supported": bool(adapters), "period_s": min(periods) if periods else None, "grace_s": self.watch_grace_s,
+                "beat_age_s": round(time.monotonic() - self._presence_beat, 2) if self._presence_beat is not None else None,
+                "adapters": adapters}
+
     def _fps(self, job: Job, rel: str, stream: str) -> float | None:
         times = self._frame_times.get((job.key, rel, stream))
         if not times or time.monotonic() - times[-1] > FRAME_FPS_WINDOW_S:
@@ -3392,7 +3643,7 @@ class Host:
         watch's rate instead of on the 1 Hz tick."""
 
         with self._watch_lock:
-            watches = [watch for watch in self.watches.values() if not watch.stopped]
+            watches = [watch for watch in self.watches.values() if not watch.stopped and watch.rel != PRESENCE_REL]
         with self.lock:
             return {f"{device_path}/{watch.rel}" if watch.rel else device_path
                     for watch in watches

@@ -154,13 +154,15 @@ class Roster:
         pending = self.restored.setdefault(key, {})
         entry = self.devices.setdefault(key, {"plugin": job.spec.name, "device": hardware_id, "name": "", "entities": {}, "order": []})
         forgotten = self.forgotten.setdefault(key, {})
-        # a board that answers again is no longer removed
+        # a board that answers again is no longer removed, nor silent
         for rel in heard:
             entity = cache.entities.get(rel)
             for item in (rel, entity.hardware_id if entity else ""):
                 if item and forgotten.pop(item, None) is not None:
                     changed = True
             pending.pop(rel, None)
+            if outcome is not None:  # WHY only a whole run: a touch reads "a status in the last 15 s", which a board that just went quiet still has
+                changed |= self.heard_again(cache, rel)
         # a good run that did not report a restored entity: it is silent, with its true last-heard time
         if outcome is not None and not self.blocked(outcome):
             for rel in [rel for rel in pending if rel not in heard]:
@@ -208,16 +210,63 @@ class Roster:
 
         out = set()
         for (path, _name), status in cache.statuses.items():
-            if status.code not in SILENT_CODES and status.received is not None and now - status.received < FOLLOW_TOUCH_S * 3:
+            # WHY not NotHeard: it is stamped with the board's last-heard time, which can be seconds ago; it says silence
+            if status.code not in SILENT_CODES and status.code != NOT_HEARD_CODE and status.received is not None \
+                    and now - status.received < FOLLOW_TOUCH_S * 3:
                 if path in cache.entities:
                     out.add(path)
         return out
 
     @staticmethod
+    def heard_again(cache, rel: str) -> bool:
+        """Drop ``rel``'s NotHeard line: it answered. True when there was one.
+
+        WHY (found 2026-11-09 building Connected only): the line outlived the board's return, so a board that answered again read
+        "stale · last heard 0 s ago" until a person removed its row."""
+
+        gone = [key for key, status in cache.statuses.items()
+                if key[0] == rel and status.code == NOT_HEARD_CODE and status.source == ROSTER_SOURCE]
+        for key in gone:
+            cache.statuses.pop(key)
+        return bool(gone)
+
+    def mark_silent(self, job, hardware_id: str, rel: str, stamp: float, now: float) -> bool:
+        """A look that really looked (a presence pass) did not hear ``rel``: one NotHeard line with its true last-heard time, as
+        a good run gives a restored entity it did not report. False when it already has one."""
+
+        cache = job.cache
+        entity = cache.entities.get(rel)
+        if entity is None or any(key[0] == rel and status.code == NOT_HEARD_CODE for key, status in cache.statuses.items()):
+            return False
+        # WHY the ledger's time for a restored row: this session never heard it, the last session did (seen live 2026-11-09: a
+        # restored row read "last heard 20767 days ago", the epoch, when the caller had no time of its own)
+        remembered = self.restored.get(memory_key(job.spec.name, hardware_id), {}).pop(rel, None)
+        cache.statuses[(rel, f"{entity.name or rel}: last heard")] = self._not_heard(entity, rel, stamp or remembered or 0.0, now, job)
+        return True
+
+    def remembered(self, hardware_id: str) -> Entity | None:
+        """The last-known entity of any (plugin, device) with this ``hardware_id`` (a board seen on another id or adapter): what a
+        presence pass, which reads no model or firmware, borrows for a board the full read has described before."""
+
+        if not hardware_id:
+            return None
+        for entry in self.devices.values():
+            for item in (entry.get("entities") or {}).values():
+                found = (item.get("entity") or {}).get("hardware_id")
+                if found == hardware_id:
+                    try:
+                        return from_dict(item["entity"])
+                    except (KeyError, TypeError, ValueError):
+                        return None
+        return None
+
+    @staticmethod
     def _not_heard(entity: Entity, rel: str, stamp: float, now: float, job) -> DiagnosticStatus:
+        # WHY no time at all when it was never heard: a periodic status with no time is stale (contract.effective_level), and an age
+        # counted from the epoch would read "last heard 20767 days ago"
         return DiagnosticStatus(
             level=UNKNOWN, name=f"{entity.name or rel}: last heard", code=NOT_HEARD_CODE, path=rel,
-            hardware_id=entity.hardware_id, stamp=stamp, received=stamp, expected_period_s=NOT_HEARD_PERIOD_S,
+            hardware_id=entity.hardware_id, stamp=stamp or None, received=stamp or None, expected_period_s=NOT_HEARD_PERIOD_S,
             source=ROSTER_SOURCE,
             message=f"not heard from this session; last heard {_heard_text(stamp, now)}" if stamp else "not heard from this session",
             values=(KeyValue("what_to_check", "1. Is it powered and connected? Its cable and connectors\n"

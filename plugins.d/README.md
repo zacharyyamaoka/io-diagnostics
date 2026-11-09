@@ -111,10 +111,24 @@ exits (and on a 10/20/40 s backoff capped at `period_s`), inside the `exclusive`
 `query`) and bounded by its `timeout_s`. A plugin without `probe` keeps diagnose-on-connect. Contract:
 `docs/probe-on-connect.md`.
 
+**`presence` (optional; Connected only, 2026-11-09).** A driver that declares `"presence": {"period_s": 2, "gates": [...], "danger":
+"query"}` in `describe` gets ONE long-running `<command> presence --device <id> [diagnose_args]` per device, but only while a page
+shows the tree's Connected only view (it beats `POST /api/v1/presence`; the host stops the process about 10 s after the last beat).
+Each pass prints the entity of every sub-device that answered, an event-driven status per sub-device (no `expected_period_s`, so
+nothing goes stale when the process stops), and LAST one `PresencePass` event on the parent (the bus): `args.outcome` is
+`"looked"` with `args.answering` (the children's last path step, e.g. CAN ids), or why it did not look (`PortBusy`, `BusLockHeld`,
+`CheckTimedOut`, `CheckFailed`, `AdapterNotFound`, with `holders`). The host consumes that line (it never reaches the log): a child
+it heard is `live`, one that two passes that looked did not hear gets the roster's `NotHeard`, and a blocked pass judges nothing.
+An entity from a pass never overwrites the one a full read gave the same `hardware_id` (a pass reads less); another board on that
+id replaces the row and the readings of the one before. The env names the children the host has rows for in
+`IO_DIAGNOSTICS_KNOWN_NODES` ("1,4,11"), for a sub-device that only answers when asked by id. Query-only, behind the same gates as
+`diagnose`, holding nothing between passes. moteus_servo: a discovery broadcast plus addressed UUID reads, on the wall clock's
+2 s marks (bam_ws `moteus_servo/diagnostics.py`, `presence`). Contract: `docs/api-v1.md` "Presence"; tests: `tests/test_presence.py`.
+
 **A driver updated in place is described again.** The bam_ws drivers run live from their path, so the host looks at each driver's
 Python source about every 10 s (the newest modification time and the file count under its `cwd` project's `src/`, or the whole
 `cwd` when it has none, plus any `.py` file its `command` names; tests and hidden folders are skipped). When it changed, the host
-runs `describe` again, applies what it now declares (the actions, `watch`, `streams`, `tabs`, `follow`, `probe`, `expected`, and
+runs `describe` again, applies what it now declares (the actions, `watch`, `presence`, `streams`, `tabs`, `follow`, `probe`, `expected`, and
 `matches` when they came from describe) and logs a `PluginReloaded` event on the Computer, listing the declaration keys that
 changed. A running follow or watch is restarted only when its own declaration changed; a changed `probe` makes a job that is not
 followed probe again. If the new `describe` fails, the old declaration keeps running and the Computer shows an UNKNOWN
