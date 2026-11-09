@@ -183,6 +183,16 @@ body.lx-dragging.lx-y { cursor: row-resize; }
         // Connected only (docs/api-v1.md "Presence"): the tree keeps what answers now; while on, the page keeps the presence checks running
         connected: () => Boolean(S.connected),
         setConnected(on) { if (api.setConnected) api.setConnected(on); },
+        // while on: one quiet line per adapter it cannot look at now ("fdcanusb 272813EF: moteus_tool has the port"), else none. WHY on
+        // the page and not only in the title: an adapter with no boards under it reads "nothing answers" unless it says it did not look
+        connectedNotes() {
+          if (!S.connected || !S.presence) return [];
+          return (S.presence.adapters || []).map((adapter) => {
+            const last = adapter.last || {};
+            const why = adapter.state === 'paused' ? adapter.reason : last.outcome && last.outcome !== 'looked' ? last.message : '';
+            return why ? `${adapter.name}: not looking (${why})` : '';
+          }).filter(Boolean);
+        },
         // the toggle's words: what it does, and while on, how often it looks and any adapter it cannot look at now (in plain words)
         connectedTitle() {
           if (!S.connected) return 'Connected only: show just what answers now';

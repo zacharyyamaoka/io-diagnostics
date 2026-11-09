@@ -93,10 +93,21 @@ async function main() {
     check('reload: still on, under Group by Physical, and still filtered', await page.$eval('#connected-only', (button) => button.getAttribute('aria-pressed')) === 'true'
       && !(await row(page, H.BOARD2)) && Boolean(await row(page, H.BOARD)), await rows(page));
 
+    // ---- an adapter it cannot look at says so under the toolbar (an empty adapter must not read "nothing answers")
+    await page.evaluate(() => {
+      S.presence = { supported: true, period_s: 2, grace_s: 10, adapters: [{ path: 'x', name: 'fdcanusb 272813EF', state: 'paused',
+        reason: 'update_moteus_firmware.py has the rack bus lock (pid 1457477)', holders: [], last: null }] };
+      window.IOLayoutHost.update();
+    });
+    const note = await page.$eval('#connected-note', (element) => ({ hidden: element.hidden, text: element.textContent }));
+    check('on: an adapter it cannot look at is named under the toolbar, with who holds the bus', !note.hidden
+      && note.text === 'fdcanusb 272813EF: not looking (update_moteus_firmware.py has the rack bus lock (pid 1457477))', note);
+
     // ---- off again: everything back, and the beats stop
     await page.click('#connected-only');
     await settle(page);
-    check('off again: the stale board is back', Boolean(await row(page, H.BOARD2)), await rows(page));
+    check('off again: the stale board is back, and the note is gone', Boolean(await row(page, H.BOARD2))
+      && await page.$eval('#connected-note', (element) => element.hidden), await rows(page));
     const count = beats.length;
     await page.waitForTimeout(4000);
     check('off again: no more beats', beats.length === count, { before: count, after: beats.length });

@@ -47,6 +47,8 @@
 .l1-tab { display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; margin-top: 4px; border-radius: var(--io-radius-sm) var(--io-radius-sm) 0 0; color: var(--io-text-strong); background: var(--io-surface); border: 1px solid var(--io-border-soft); border-bottom-color: var(--io-surface); margin-bottom: -1px; font-size: 12px; }
 .l1-tab .ic { width: 15px; height: 15px; color: var(--io-icon); }
 .l1-tools { flex: none; display: flex; justify-content: center; align-items: center; gap: 2px; padding: 5px 8px 4px; }
+.l1-presence-note { flex: none; margin: 0 10px 6px; font-size: 11.5px; line-height: 1.35; color: var(--io-faint, var(--io-muted)); overflow-wrap: anywhere; }
+.l1-presence-note[hidden] { display: none; }
 .l1-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--io-surface-alt); }
 .l1-title { flex: none; display: flex; align-items: center; gap: 4px; height: 34px; padding: 0 10px 0 6px; background: var(--io-surface-2); border-bottom: 1px solid var(--io-border-soft); min-width: 0; }
 .l1-crumbs { flex: 1; min-width: 0; display: flex; align-items: center; gap: 2px; overflow: hidden; white-space: nowrap; font-size: 12.5px; color: var(--io-muted); padding-left: 6px; }
@@ -232,7 +234,11 @@
       tools.append(s.collapse, s.expand, ctx.take('vo'), s.connected, s.visible);
       ctx.take('voPop');
       root.appendChild(ctx.take('voPop'));
-      const side = ctx.treePane({ cls: 'l1-side', head, tools: [tools] });
+      s.presenceNote = document.createElement('div');
+      s.presenceNote.className = 'l1-presence-note';
+      s.presenceNote.id = 'connected-note';
+      s.presenceNote.hidden = true;
+      const side = ctx.treePane({ cls: 'l1-side', head, tools: [tools, s.presenceNote] });
       body.appendChild(side);
       const sash = ctx.sash({ key: 'l1side', axis: 'x', anchor: 'start', def: 280, min: 200, max: (total) => total - 480, varName: '--l1-side-w', root, within: body, label: 'Resize the left pane' });
       body.appendChild(sash.el);
@@ -295,6 +301,9 @@
       s.connected.setAttribute('aria-pressed', String(connected));
       const connectedTitle = ctx.tree.connectedTitle();
       if (s.connected.title !== connectedTitle) { s.connected.title = connectedTitle; s.connected.setAttribute('aria-label', connectedTitle.split('\n')[0]); }
+      const notes = ctx.tree.connectedNotes().join('\n');
+      if (s.presenceNote.textContent !== notes) { s.presenceNote.textContent = notes; s.presenceNote.style.whiteSpace = 'pre-line'; }
+      s.presenceNote.hidden = !notes;
       ctx.$('search').closest('.search').classList.toggle('has-query', Boolean(S.query));
       // the view header: the breadcrumb of the selection (Tree), or the view's own name
       const crumbs = S.view === 'tree' || S.view === 'threed' || LAYER_VIEWS[S.view] ? ctx.crumbs(S.sel) : [];
