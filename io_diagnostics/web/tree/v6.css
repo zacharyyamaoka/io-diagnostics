@@ -50,15 +50,23 @@
 .t6-row:hover .t6-chev, .t6-row.t6-sel .t6-chev { opacity: 1; }
 .t6-chev:not(.t6-leaf):hover { background: var(--io-control-hover); color: var(--io-text-strong); }
 
-/* ---- presence: the neutral dot before the icon (Claude's sidebar). Filled = heard within its expected period; hollow
-   ring = known, not heard lately; pulsing = data arriving now. Never a warning colour: a slot of its own, so icons line up. */
+/* ---- presence: the neutral dot before the icon (Claude's sidebar), drawn from web/status-dot.js for every row. Solid = connected and live;
+   hollow ring = known, not heard lately; pulsing (either shape) = the host says it is doing something now. Never a warning colour: a slot
+   of its own, so icons line up.
+   WHY (Zach, 2026-11-10): "like a plugged-in port versus an empty one": the ring is the empty port, the dot the plugged-in one, and only
+   activity moves, so a calm idle tree is a still one. The pulse is a slow breathe of opacity, never a scale. */
 .t6-pres { width: 7px; height: 7px; flex: none; border-radius: 50%; box-sizing: border-box; margin: 0 1px 0 -1px; }
 .t6-pres-none { visibility: hidden; }
-.t6-pres-heard { background: var(--io-muted); }
-.t6-pres-live { background: var(--io-muted); animation: t6-pulse 1.6s ease-in-out infinite; }
-.t6-pres-stale { background: transparent; box-shadow: inset 0 0 0 1.4px var(--io-faint); }
-@keyframes t6-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.8); } }
-@media (prefers-reduced-motion: reduce) { .t6-pres-live { animation: none; } }
+.t6-pres-solid { background: var(--io-muted); }
+.t6-pres-hollow { background: transparent; box-shadow: inset 0 0 0 1.4px var(--io-faint); }
+.t6-pres-pulse { animation: t6-breathe 2.8s ease-in-out infinite; }
+@keyframes t6-breathe { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
+/* reduced motion: the same "busy" as a steady ring around the dot (a ring plus a dot), nothing moves */
+@media (prefers-reduced-motion: reduce) {
+  .t6-pres-pulse { animation: none; }
+  .t6-pres-solid.t6-pres-pulse { box-shadow: 0 0 0 2px color-mix(in srgb, var(--io-muted) 38%, transparent); }
+  .t6-pres-hollow.t6-pres-pulse { background: radial-gradient(circle, var(--io-faint) 0 1.3px, transparent 1.6px); }
+}
 /* a row not heard from lately: its name stays readable, its age is a muted word beside it */
 .t6-heard { min-width: 0; flex: 0 20 auto; overflow: hidden; text-overflow: ellipsis; color: var(--io-faint); font-size: 11.5px; margin-left: 4px; }
 

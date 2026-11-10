@@ -11,9 +11,10 @@
 //   - Notion: no indent guides, rounded rows, affordances revealed on hover (the chevron brightens, the row's ⋮ appears)
 //
 // Two marks, never mixed (Zach, 2026-10-24: "I am a bit confused right now with the icons and colors"):
-//   - PRESENCE, a small neutral dot before the icon, like the Claude app's sidebar: filled = heard within its expected
-//     period, hollow ring = known but not heard lately ("last heard 6 min ago"), gently pulsing = data arriving now. It is
-//     never amber or red: warning colours are for real WARN / ERROR only.
+//   - PRESENCE, a small neutral dot before the icon, like the Claude app's sidebar, ONE mapping for every level (web/status-dot.js):
+//     solid = connected and live, hollow ring = known but not heard lately ("last heard 6 min ago"), and a slow pulse on either
+//     = the host says something is running on it now (a utility, a console, a flash, its first look). It is never amber or red:
+//     warning colours are for real WARN / ERROR only.
 //   - HEALTH, a shape at the far right, ONLY for the diagnostics levels (contract/record.py): ▲ amber warn, ✖ red error,
 //     ? unknown. Stale is the hollow dot, not a second mark. A collapsed row rolls up the worst level below it with the
 //     SAME shape (never a smaller dot). A row explained by a failed cause above (knock-on) shows no mark: its words
@@ -207,14 +208,8 @@
   }
 
   // ------------------------------------------------------------------------------ drawing ----
-  // The presence dot: neutral by construction (docs/api-v1.md "presence").
-  function presenceHtml(row) {
-    const presence = row.presence;
-    if (!presence) return '<span class="t6-pres t6-pres-none" aria-hidden="true"></span>';
-    const title = presence.state === 'stale' ? presence.text || 'Not heard from lately'
-      : presence.state === 'live' ? 'Data arriving now' : 'Heard from within its expected period';
-    return `<span class="t6-pres t6-pres-${presence.state}" role="img" aria-label="${esc(title)}" title="${esc(title)}"></span>`;
-  }
+  // The presence dot: neutral by construction (docs/api-v1.md "presence"); what it draws is web/status-dot.js's, the same for every row.
+  const presenceHtml = (row) => window.IOStatusDot.html(row);
 
   function statusHtml(row, open) {
     const status = row.status || {};

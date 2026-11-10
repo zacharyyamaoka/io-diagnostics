@@ -50,7 +50,7 @@ const STARTERS_MIN = 2;
 
 // ---- the request allow-list (PEP 0001 §12.2, §14) -------------------------------------------------------------------------------
 // the classic page's own tree, reused (PEP 0001 §16): its scripts and styles are GETs of the same web root
-const GET_OK = [/^\/dx\//, /^\/vendor\/data-ui\//, /^\/usb\.js$/, /^\/(tokens\.css|summary\.js|visibility\.js|skins\/[a-z0-9-]+\.css|tree\/v6\.(js|css)|view\/(core|composites)\.js|view\/structure\/p[0-9]+\.js)$/, /^\/api\/v1\/(state|node|values|history|history\/tree|activity|events|settings|health|live|checks)(\?|$)/,
+const GET_OK = [/^\/dx\//, /^\/vendor\/data-ui\//, /^\/usb\.js$/, /^\/(tokens\.css|summary\.js|status-dot\.js|visibility\.js|skins\/[a-z0-9-]+\.css|tree\/v6\.(js|css)|view\/(core|composites)\.js|view\/structure\/p[0-9]+\.js)$/, /^\/api\/v1\/(state|node|values|history|history\/tree|activity|events|settings|health|live|checks)(\?|$)/,
   /^\/api\/v1\/dashboards(\/[^/?]+\.base)?$/];
 const DASHBOARD_FILE = /^\/api\/v1\/dashboards\/[^/?]+\.base$/;
 // the dashboard writes (PUT, DELETE) are allowed only while the saving checks run, against this fixture host's own config dir

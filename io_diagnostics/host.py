@@ -699,6 +699,7 @@ class View:
     active_runs: frozenset = frozenset()
     revision: int = -1  # Host.revision when this build began
     answering: dict = dataclasses.field(default_factory=dict)  # path -> seconds since a presence pass heard it (Connected only)
+    activity: dict = dataclasses.field(default_factory=dict)  # path -> {"kind", "text"}: what is running on the row now (the status dot pulses)
 
 
 def _frozen(job: Job) -> Job:
@@ -1266,20 +1267,33 @@ class Host:
         with self.gates.hold(job.spec.exclusive):
             self._run_job(job)
 
+    def _bringing_up(self, job: Job, value: bool) -> None:
+        """Say a connection's first look begins or ends: its adapter row pulses meanwhile (``_activity``), and a page hears it at once."""
+
+        if job.bringing_up != value:
+            job.bringing_up = value
+            self.notify("activity")
+
     def _run_job(self, job: Job) -> None:
         """Run one job; the caller holds its group (the scheduler takes it before submitting)."""
 
         if job.spec.kind == "check":
             return self._run_check(job)
-        self._presence_first(job)
-        with self.lock:
-            entity = self.layer.entities.get(job.device_path)
         timeout_s = self._probe_timeout(job)
         probing = timeout_s is not None and not job.probed  # the connection's first run is its probe, in place of a diagnose
-        outcome = run_plugin(job.spec, job.device, job.device_path, self.clock.now, self._job_env(job),
-                             hardware_id=entity.hardware_id if entity else "", verb="probe" if probing else "diagnose",
-                             timeout_s=timeout_s if probing else None)
-        self._absorb(job, outcome)
+        # WHY a plugin's first read counts as well: it is the same "a thing was just plugged in, and the host is bringing it up" (Zach, 2026-11-10:
+        # it took a while after he plugged in the CAN bus before anything showed it was happening); the periodic reads after it are not
+        self._bringing_up(job, probing or job.last is None)
+        try:
+            self._presence_first(job)
+            with self.lock:
+                entity = self.layer.entities.get(job.device_path)
+            outcome = run_plugin(job.spec, job.device, job.device_path, self.clock.now, self._job_env(job),
+                                 hardware_id=entity.hardware_id if entity else "", verb="probe" if probing else "diagnose",
+                                 timeout_s=timeout_s if probing else None)
+            self._absorb(job, outcome)
+        finally:
+            self._bringing_up(job, False)
 
     def _absorb(self, job: Job, outcome: RunOutcome, follower: Follower | None = None) -> None:
         """One diagnose run, or one follow line, into the job's cache, the fault memory and the history."""
@@ -1961,6 +1975,7 @@ class Host:
             memory = self.roster.pending([(roster_module.memory_key(job.spec.name, self._device_hardware_id(job)),
                                            self.layer.device_paths.get(str(job.device.get("id")), job.device_path)) for job in jobs])
             streaming = self._live_paths(jobs)
+            activity = self._activity()
             claimed = frozenset(setup.by_path) | frozenset(setup.retired)
             active_runs = frozenset(run.id for run in self.runs.active())  # before the events: a run that ends now has its ending in them
             live = [self._placed(event, self.layer) for event in self.live.events()]
@@ -1986,7 +2001,8 @@ class Host:
         self.eventlog.record(events, now)
         events = [event for event in self.eventlog.overlay(events, now) if event.stamp is None or event.stamp <= now]
         return View(now, layer, merged, rows, events, self.faults.open_by_path(), setup, checks, memory, streaming, claimed, composed,
-                    self.history.rates(now), frozen, active_runs=active_runs, answering=self._presence_answering(now))
+                    self.history.rates(now), frozen, active_runs=active_runs, answering=self._presence_answering(now),
+                    activity=activity)
 
     def _device_hardware_id(self, job: Job) -> str:
         entity = self.layer.entities.get(self.layer.device_paths.get(str(job.device.get("id")), job.device_path))
@@ -2012,6 +2028,47 @@ class Host:
         return frozenset(out)
  
  
+
+    def _activity(self) -> dict[str, dict]:
+        """Row path -> ``{"kind", "text"}`` for the rows something is running on NOW: the status dot pulses for exactly these (docs/api-v1.md
+        "activity"). Only real signals, in this order of who names the row:
+
+        - ``run``: an active run (queued, waiting or going, docs/runs-v1.md) on a row, and the rows from its adapter down to it;
+        - ``console``: a console RobotDx launched (tview, realsense-viewer) whose process lives, on its adapter;
+        - ``held``: the adapter's latest probe found its port or bus held and a holder it watches is still there (a flash, an experiment);
+        - ``probe``: the connection's first look is in flight (``Job.bringing_up``).
+
+        WHY nothing else: the periodic diagnose, a follower's lines, a watch and a presence pass are the host looking, all of the time; "alive" is
+        what the solid dot says, and the pulse must keep meaning "something is happening" (Zach, 2026-11-10: routine polling does not count)."""
+
+        found: dict[str, dict] = {}
+
+        def mark(kind: str, text: str, path: str, device_path: str) -> None:
+            # the row and every row on the way down from its adapter: "on it or on its bus"; never the USB bus, the port or the host above
+            chain, current = [device_path], device_path
+            if path.startswith(device_path + "/"):
+                for part in path[len(device_path) + 1:].split("/"):
+                    current = f"{current}/{part}"
+                    chain.append(current)
+            for item in chain:
+                found.setdefault(item, {"kind": kind, "text": text})
+
+        for run in self.runs.active():
+            spec = run.spec
+            mark("run", spec.label if run.state == "running" else f"{spec.label} · {run.state}", spec.path, spec.device_path)
+        for device_id, info in list(self.consoles.items()):
+            if _pid_alive(info["pid"]):
+                path = self.layer.device_paths.get(device_id, info["device_path"])
+                mark("console", f"{info['program']} is open on it", path, path)
+        for job in self.jobs.values():
+            path = self.layer.device_paths.get(str(job.device.get("id")), job.device_path)
+            blocked = job.blocked
+            if blocked is not None and any(probe_module.holder_alive(holder) for holder in blocked.holders):
+                names = ", ".join(sorted({holder.program for holder in blocked.holders if probe_module.holder_alive(holder)}))
+                mark("held", f"{names} has the {'rack bus lock' if blocked.code == 'BusLockHeld' else 'port'}", path, path)
+            if job.bringing_up:
+                mark("probe", "looking at what is plugged in", path, path)
+        return found
 
     def _layer_with(self, extra: list[tuple[Entity, str]]) -> tree.OsLayer:
         """The OS layer plus the expected setup's rows: rig rows first under the host (the at-a-glance answer), the
@@ -2228,7 +2285,7 @@ class Host:
                 "composition": self.composition_json(view),
                 "tree": tree.node_json(tree.HOST_PATH, view.rows, view.layer, view.faults_by_path, nested=True,
                                        memory=view.memory, live=view.live, expected_paths=view.expected_paths,
-                                       rates=view.rates, answering=view.answering)}
+                                       rates=view.rates, answering=view.answering, activity=view.activity)}
         # WHY the clock is now and not the view's: the page's clock and every age it works out run from it
         return {"api": API, "schema": SCHEMA, "record_version": RECORD_VERSION, "clock": self.clock_json(self.clock.now() if self._serving else view.now),
                 "fixture": self.fixture, "host": {"name": self.os.hostname, "sources": list(self.sources)}, **made,
@@ -2265,7 +2322,7 @@ class Host:
         events = itertools.islice((event for event in view.events if event.path == path or event.path.startswith(below)), NODE_EVENTS)
         return {"node": tree.node_json(path, rows, view.layer, view.faults_by_path, nested=False, memory=view.memory,
                                        live=view.live, expected_paths=view.expected_paths, rates=view.rates,
-                                       answering=view.answering), "ancestors": ancestors,
+                                       answering=view.answering, activity=view.activity), "ancestors": ancestors,
                 "checks": [self.check_json(status, view.now) for status in rows.own.get(path, [])],
                 "actions": self.actions_json(path, view), **extra,
                 "faults": [self.fault_json(fault, view) for fault in self.faults.all() if fault.path == path],

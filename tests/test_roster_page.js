@@ -125,7 +125,7 @@ async function main() {
     page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
     page.on('response', (response) => { if (response.status() >= 400) errors.push(`${response.status()} ${response.url()}`); });
     await load(page, aged.base);
-    if (MUTATE === 'dot-amber') await page.addStyleTag({ content: '.t6-pres-heard, .t6-pres-stale, .t6-pres-live { background: #f59e0b !important; box-shadow: 0 0 0 2px #f59e0b !important; }' });
+    if (MUTATE === 'dot-amber') await page.addStyleTag({ content: '.t6-pres-solid, .t6-pres-hollow { background: #f59e0b !important; box-shadow: 0 0 0 2px #f59e0b !important; }' });
     if (MUTATE === 'header-reversed') await page.addStyleTag({ content: '.t6-sum { flex-direction: row-reverse !important; }' });
     if (MUTATE === 'stale-mark') await page.evaluate(() => { for (const slot of document.querySelectorAll('.t6-row')) if (/CAN 21/.test(slot.textContent)) slot.querySelector('.t6-st').innerHTML = IOSummary.shape('stale', 'stale'); });
     if (MUTATE === 'unhide') await page.evaluate(() => { IOVisibility.arrange = (rows) => rows; IOVisibility.toggleMode(false); });
@@ -141,7 +141,7 @@ async function main() {
       !labels.some((label) => /CAN 15|0607623A/.test(label)), labels);
     const can1 = list.find((row) => /CAN 1$/.test(row.name));
     const can21 = list.find((row) => /CAN 21$/.test(row.name));
-    check('dots: heard = filled, not heard lately = hollow ring', can1 && can1.pres === 'heard' && can21 && can21.pres === 'stale', { can1: can1 && can1.pres, can21: can21 && can21.pres });
+    check('dots: heard = solid, not heard lately = hollow ring', can1 && can1.pres === 'solid' && can21 && can21.pres === 'hollow', { can1: can1 && can1.pres, can21: can21 && can21.pres });
     check('dots: the hollow row says when, in words', /last heard 10 min ago/.test(can21.text), can21.text);
     const dotColours = await page.evaluate(() => [...document.querySelectorAll('.t6-pres:not(.t6-pres-none)')].map((dot) => {
       const style = getComputedStyle(dot);

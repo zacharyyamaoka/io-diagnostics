@@ -160,10 +160,11 @@
   }
 
   // ------------------------------------------------------------------------------- rows ----
-  // The API fields a row carries unchanged (so a renderer can read the same names it read from the API node).
+  // The API fields a row carries unchanged (so a renderer can read the same names it read from the API node). `activity`: what is running on the
+  // row now, which the status dot pulses for (web/status-dot.js).
   const API_FIELDS = ['kind', 'icon', 'edge', 'level', 'message', 'own', 'rollup', 'knock_on_of', 'stale', 'connected',
     'hardware_id', 'identity', 'owner', 'id_text', 'last_received', 'age_s', 'expected_period_s', 'stale_after_s',
-    'checks', 'actions', 'faults', 'presence', 'claimed', 'usb', 'rate'];
+    'checks', 'actions', 'faults', 'presence', 'activity', 'claimed', 'usb', 'rate'];
 
   // A row for one API entity. `extra` may set key, children, defaultOpen, columns (and anything a structure adds).
   function entityRow(node, options = {}, extra = {}) {

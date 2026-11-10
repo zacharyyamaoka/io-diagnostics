@@ -833,6 +833,7 @@ class Job:
     probed: bool = False  # this connection's probe has run and was not blocked (docs/probe-on-connect.md)
     blocked: Blocked | None = None  # the latest probe found its port or bus held: who, and when it is probed again
     connection: Any = None  # the device's kernel device number when the probe last ran: a new one is a re-enumeration
+    bringing_up: bool = False  # the connection's first look is in flight (its probe, or a plugin's first read): the adapter row pulses (tree.py ``activity``)
 
     @property
     def key(self) -> tuple[str, str]:
