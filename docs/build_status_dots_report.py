@@ -105,7 +105,7 @@ h1{{font-size:26px;margin:0 0 6px}} h2{{font-size:18px;margin:36px 0 10px;paddin
 img,video{{border:1px solid var(--line);border-radius:6px;display:block;max-width:100%}} figure{{margin:0 0 10px}} figcaption{{color:var(--muted);font-size:12.5px;margin:3px 2px 0}}
 .pair{{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:18px}}
 table{{border-collapse:collapse;width:100%;font-size:14px}} td,th{{border-bottom:1px solid var(--line);padding:7px 8px;text-align:left;vertical-align:top}} th{{color:var(--muted);font-weight:600;font-size:13px}}
-ul{{padding-left:20px}} li{{margin:6px 0}} pre{{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:10px;overflow:auto;font-size:12.5px}}
+ul{{padding-left:20px}} li{{margin:6px 0}} pre{{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:10px;overflow:auto;font-size:12.5px;white-space:pre-wrap}}
 </style></head><body><main>
 <h1>Status dots: ring, dot, breathe</h1>
 <p class="verdict"><b>One mapping now draws every row of the tree: a hollow ring is stale, a solid dot is connected, and a slow breathe means something is running on it.</b>
@@ -121,21 +121,21 @@ The pulse is a 2.8 s opacity breathe (1 to 0.4), no scale. With prefers-reduced-
 <p class="muted">The entity page's fixture host (stand-in drivers, no hardware), the same story on the commit before and on the change: the adapter's presence is <code>live</code> (a follower
 streaming), the other adapter's board is stale, then Run calibration on CAN 1 and Identify on the camera start (real runs of a stand-in process that sleeps and refuses). Close-ups are native
 pixels (captured at 2x, drawn at half size).</p>
-{pair("idle", "Connected and idle", "Before, the alive adapter breathed (the left, mid-breath) while its boards sat still: that was the confusion. After, every connected row is the same solid dot and nothing moves; the stale board is the ring.")}
-{pair("running", "Something running", "Before, a running utility changed nothing on screen. After, CAN 1, its CAN bus and its adapter, and the camera breathe (caught at the dimmest of the breathe); the stale board stays a still ring.")}
+{pair("idle", "Connected and idle", "Before, the alive adapter breathed (a still catches it at its dimmest) while its boards sat still: that was the confusion. After, every connected row is the same solid dot and nothing moves; the stale board is the ring.")}
+{pair("running", "Something running", "Before, a running utility changed nothing on screen. After, CAN 1, its CAN bus and its adapter, and the camera breathe (each still caught at the dimmest of its breathe); the stale board stays a still ring.")}
 <h3>prefers-reduced-motion</h3>
 <p class="muted">No animation: a busy dot is the dot with a steady halo.</p>
 <div class="pair">{close_up("after-reduced-adapter.png", "adapter")}{close_up("after-reduced-board.png", "board")}{close_up("after-reduced-camera.png", "camera")}</div>
 
 <h2>The pulse, 7 s of the real page</h2>
-<video controls muted loop autoplay playsinline src="{data_uri('after-pulse.mp4', 'video/mp4')}"><img alt="the pulsing rows" src="{data_uri('after-pulse.gif', 'image/gif')}"></video>
+<video controls muted loop autoplay playsinline style="width:{after['clip']['region']['width']}px" src="{data_uri('after-pulse.mp4', 'video/mp4')}"><img alt="the pulsing rows" src="{data_uri('after-pulse.gif', 'image/gif')}"></video>
 <p class="muted">Frames taken from the page at native resolution while the two utilities ran: the adapter, CAN 1 and the camera breathe together; the stale ring and the idle adapter below do not.
 {after['clip']['frames']} frames over 7 s. If the clip does not play, the GIF inside it does.</p>
 {style_table()}
 
 <h2>The real app, idle</h2>
 <p>Preview (this checkout, on the rack's real adapters), read only, nothing sent to any bus: the computer and the adapters are solid dots, every stale board is a hollow ring, and no dot has an
-animation (computed <code>animation-name</code> <code>none</code> on all 20 rows). Before, the computer's dot breathed all day.</p>
+animation (computed <code>animation-name</code> <code>none</code> on every row). Before, the computer's dot (its presence is <code>live</code>) breathed.</p>
 <img alt="Preview's tree" width="440" src="{tree_jpeg()}">
 
 <h2>Where "active" comes from</h2>

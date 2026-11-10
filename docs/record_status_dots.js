@@ -47,7 +47,15 @@ const dotStyle = (page, target) => page.evaluate((entity) => {
     background: style.backgroundColor, boxShadow: style.boxShadow, title: dot.title };
 }, target);
 
+// a breathing dot is caught at its dimmest, so a still shows the breathe; a still dot is shot at once
+async function dimmest(page, key) {
+  const first = await dotStyle(page, ROWS[key]);
+  if (!first || first.animationName === 'none') return;
+  for (let i = 0; i < 80; i += 1) { const dot = await dotStyle(page, ROWS[key]); if (dot && dot.opacity < 0.55) return; await page.waitForTimeout(100); }
+}
+
 async function rowShot(page, key, name) {
+  await dimmest(page, key);
   const box = await (await page.$(`#tree-host [role=treeitem][data-t6-path="${ROWS[key]}"]`)).boundingBox();
   await page.screenshot({ path: path.join(OUT, `${LABEL}-${name}-${key}.png`), clip: { x: box.x, y: box.y, width: Math.min(box.width, 340), height: box.height } });
 }
@@ -83,8 +91,6 @@ async function main() {
     const runs = [await start(H.BOARD, 'calibrate', 1), await start(H.CAMERA, 'identify', null)];
     facts.runs = runs.map((run) => run.status);
     await page.waitForTimeout(3500);
-    // a pulse caught at its dimmest, so a still shows the breathe: wait for the board's dot to be below 0.55
-    for (let i = 0; i < 80; i += 1) { const dot = await dotStyle(page, ROWS.board); if (dot && dot.opacity < 0.55) break; await page.waitForTimeout(100); }
     for (const key of keys) await rowShot(page, key, 'running');
     facts.states.running = Object.fromEntries(await Promise.all(keys.map(async (key) => [key, await dotStyle(page, ROWS[key])])));
     await page.screenshot({ path: path.join(OUT, `${LABEL}-running-tree.png`), clip: { x: 0, y: 0, width: 420, height: 620 } });
@@ -100,7 +106,7 @@ async function main() {
       const boxes = await Promise.all(keys.map(async (key) => (await page.$(`#tree-host [role=treeitem][data-t6-path="${ROWS[key]}"]`)).boundingBox()));
       const top = Math.min(...boxes.map((box) => box.y)) - 4;
       const bottom = Math.max(...boxes.map((box) => box.y + box.height)) + 4;
-      const region = { x: 0, y: Math.max(0, top), width: 380, height: Math.min(bottom, 900) - Math.max(0, top) };
+      const region = { x: 92, y: Math.max(0, top), width: 330, height: Math.min(bottom, 900) - Math.max(0, top) };
       const frames = path.join(OUT, `${LABEL}-frames`);
       fs.rmSync(frames, { recursive: true, force: true });
       fs.mkdirSync(frames, { recursive: true });
