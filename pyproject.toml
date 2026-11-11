@@ -13,7 +13,10 @@ dependencies = []
 # which neither the stdlib nor numpy decodes; Pillow is the stock decoder (the driver encodes with it, and the Stable channel's
 # /usr/bin/python3 has it as python3-pil). Without it a JPEG frame is not_run with NoDecoder, as without numpy.
 [project.optional-dependencies]
-diagnostics = ["numpy>=1.26", "Pillow>=10"]
+# WHY sim2real in the same extra (2026-11-10, Zach, "Sim2Real as a Pure Library on robot_msgs" step 4): the stock checks that are also the
+# servo gates (floor, tracking and stop error, model error, fidelity ratio, T2's split) and the coverage check's binning call sim2real.metrics,
+# so the formula is written once; robotdx/diagnostics/_sim2real.py imports it on first use, so without the extra the host still starts
+diagnostics = ["numpy>=1.26", "Pillow>=10", "sim2real"]
 
 [project.scripts]
 # The one command (serve | tray | once --json): uv run --project /home/bam/io-diagnostics io-diagnostics serve
@@ -31,7 +34,7 @@ packages = ["io_diagnostics", "contract", "io_facts", "robotdx"]
 [dependency-groups]
 # WHY numpy in dev too: the tests (tests/diagnostics) and the page suites run the stock diagnostics; the wheel's runtime stays
 # stdlib-only, and the no-numpy path is proven with uv run --isolated --no-dev (tests/diagnostics/test_without_numpy.py)
-dev = ["pytest>=8", "numpy>=1.26", "Pillow>=10"]
+dev = ["pytest>=8", "numpy>=1.26", "Pillow>=10", "sim2real"]
 # Lane C interop (io_diagnostics/interop): foxglove-sdk serves /diagnostics to Lichtblick/Foxglove, rosbags writes
 # ROS 2 CDR + the ros2msg schema, websockets is the stock client in tests. A group, so the record contract stays
 # stdlib-only: uv run --project /home/bam/io-diagnostics --group dev --group interop pytest ...
@@ -42,6 +45,11 @@ interop = [
 ]
 # V4 (registry contract) uses pytest's own plugin manager, pluggy, as its stock plugin system.
 v4 = ["pluggy>=1.5"]
+
+[tool.uv.sources]
+# WHY an absolute path, editable (sim2real's own pattern for robot_msgs): the same from the main checkout and every lane under
+# io-diagnostics-lanes/, and sim2real's main checkout IS the code that runs
+sim2real = { path = "/home/bam/sim2real", editable = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
