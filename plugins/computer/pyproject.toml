@@ -1,12 +1,16 @@
 [project]
 name = "io-diagnostics-computer"
 version = "0.1.0"
-description = "IO diagnostics plugin: the Computer's own health (CPU, memory, disks, temperatures, GPU, clock, uptime, network, USB bandwidth)"
+description = "IO diagnostics plugin: the Computer's own health, grouped by device (CPU, RAM, disks, GPU, board temperatures and fans, network, clock, uptime, USB bandwidth)"
 requires-python = ">=3.12"
 # WHY psutil: the stock cross-platform reader ROS's diagnostic_common_diagnostics monitors use, so no /proc is
-# hand-parsed. The GPU is read through nvidia-smi (a subprocess), so this env needs no NVML binding and the plugin
-# process itself opens no /dev node. The record contract comes from the io-diagnostics checkout two levels up.
-dependencies = ["psutil>=5.9"]
+# hand-parsed. The record contract comes from the io-diagnostics checkout two levels up.
+# WHY nvidia-ml-py (2026-11-10): NVIDIA's own Python binding for NVML, the library nvidia-smi itself is built on: the GPU's own
+# thresholds, each fan, power against its limit, clocks and clock-event reasons as a versioned API instead of parsing
+# nvidia-smi's text. Pure Python (ctypes over the driver's libnvidia-ml.so.1), so it works with any installed driver; without
+# it the plugin falls back to nvidia-smi. NVML opens the GPU's shared control nodes (/dev/nvidiactl, /dev/nvidia0), the ones
+# nvidia-smi opened before, never a rack port (tests/test_computer_nvml.py traces it).
+dependencies = ["psutil>=5.9", "nvidia-ml-py>=12.535"]
 
 [tool.uv]
 package = false

@@ -115,15 +115,18 @@
     }
     if (tidy) {
       const only = (folder) => (folder.children[0].type === 'leaf' ? folder.children[0] : only(folder.children[0]));
-      const tidyTree = (folder) => {
+      // WHY a top-level group of one row keeps its folder when another top-level group is a folder (Zach, 2026-11-10: the Computer's checks
+      // "grouped by device ... RAM, CPU, GPU, etc."): otherwise GPU 0 and RAM, one check each, sat loose below the CPU / Board / Disks folders
+      const tidyTree = (folder, top) => {
+        const grouped = top && folder.children.some((child) => child.type === 'folder' && countLeaves(child) > 1);
         folder.children = folder.children.map((child) => {
           if (child.type === 'leaf') return child;
-          if (countLeaves(child) === 1) { const one = only(child); return { type: 'leaf', name: nameOf(one.item), item: one.item }; }
-          return tidyTree(child);
+          if (countLeaves(child) === 1 && !grouped) { const one = only(child); return { type: 'leaf', name: nameOf(one.item), item: one.item }; }
+          return tidyTree(child, false);
         });
         return folder;
       };
-      tidyTree(root);
+      tidyTree(root, true);
       if (root.children.length === 1 && root.children[0].type === 'folder' && countLeaves(root.children[0]) === rest.length) root.children = root.children[0].children;
     }
     const severity = (node) => (node.type === 'leaf' ? (severityOf ? severityOf(node.item) : 0) : Math.max(0, ...node.children.map(severity)));

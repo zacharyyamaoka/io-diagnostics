@@ -331,6 +331,25 @@
     const values = Object.fromEntries((check.values || []).map((v) => [v.key, v.value]));
     return values.fault_code ? { code: values.fault_code, meaning: values.fault_meaning || '' } : null;
   }
+  // An opened row says where its numbers come from (Zach, 2026-11-10: "I want to be able to click this expand it ... go to the source
+  // for that threshold value as to why it was set at that value ... Ideally it should link to like a datasheet"). A plugin that knows
+  // says so in the values threshold_source / threshold_url (labels_source / labels_url for a sensor's name; plugins/computer). The URL is
+  // drawn as written (never shortened) and is a link only when it is http(s): a value is a plugin's text, and javascript: stays text.
+  const SOURCES = [['threshold', 'Limits'], ['labels', 'Sensor names']];
+  const webUrl = (text) => /^https?:\/\/[^\s"'<>]+$/i.test(String(text || '').trim());
+  function sourceLines(check, h) {
+    const values = Object.fromEntries((check.values || []).map((v) => [v.key, v.value]));
+    const lines = SOURCES.map(([prefix, title]) => {
+      const text = values[`${prefix}_source`];
+      const url = values[`${prefix}_url`];
+      if (!text && !url) return '';
+      const link = !url ? '' : webUrl(url) ? `<a class="link d6-lim-a" href="${h.esc(String(url).trim())}" target="_blank" rel="noopener">${h.esc(String(url).trim())}</a>`
+        : `<span class="d6-lim-u">${h.esc(url)}</span>`;
+      return `<div class="d6-lim-l" data-d6-lim="${prefix}"><span class="d6-lim-k">${title}</span><span class="d6-lim-v">${h.esc(text || '')}${text && link ? '<br>' : ''}${link}</span></div>`;
+    }).join('');
+    // WHY d6-lim, not d6-src: .d6-src (nowrap) and data-d6-src are the State tab's source link and image tiles; sharing them clipped this text
+    return lines ? `<div class="dx-x d6-lim">${lines}</div>` : '';
+  }
   function rollsUp(node, checks, ctx) {
     const h = ctx.h;
     if (isGrouping(node)) {
@@ -389,7 +408,7 @@
     // a stock diagnostic's row (source robotdx.diagnostics) also gets a chevron and its drill-in (d6-rows.js), drawn under the row's own detail
     const dx = ER() && ER().dx;
     const hooks = { rowClass: (row) => marks(row.check).flash, extra: (row) => marks(row.check).extra,
-      lead: (row, open) => (dx ? dx.lead(row, open) : ''), body: (row) => (dx ? dx.body(row, ctx) : '') };
+      lead: (row, open) => (dx ? dx.lead(row, open) : ''), body: (row) => sourceLines(row.check, ctx.h) + (dx ? dx.body(row, ctx) : '') };
     const section = d1a && d1a.embed ? d1a.embed(document.getElementById('detail'), node, detail, ctx, hooks)
       : '<div class="muted">The Diagnostics section (detail/d1a.js) did not load.</div>';
     return rollsUp(node, [...checks].sort((a, b) => rankOf(b.effective_level) - rankOf(a.effective_level)), ctx) + section
@@ -829,6 +848,11 @@
 .sec.d6-diag .sec-b { padding-top: 0; }
 .d6-fx { display: inline-block; margin-left: 4px; padding: 0 6px; border-radius: var(--io-radius-sm); background: var(--io-control); color: var(--io-text-strong); font-size: 12px; }
 .d6-lg { font-size: 11.5px; margin-left: 6px; white-space: nowrap; }
+.d6-lim { padding-top: 0; gap: 4px; white-space: normal; }
+.d6-lim-l { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 8px; font-size: 12px; }
+.d6-lim-k { color: var(--io-faint); font-size: 11px; text-transform: uppercase; letter-spacing: .4px; padding-top: 1px; }
+.d6-lim-v { color: var(--io-muted); overflow-wrap: anywhere; min-width: 0; }
+.d6-lim-a, .d6-lim-u { overflow-wrap: anywhere; }
 .d6-ch { display: flex; align-items: center; gap: 8px; height: var(--io-row-h); padding: 0 6px; margin: 0 -6px; border-radius: var(--io-radius-sm); cursor: pointer; white-space: nowrap; }
 .d6-ch:hover { background: var(--io-hover); }
 .d6-ch .ic { color: var(--io-icon); flex: none; }

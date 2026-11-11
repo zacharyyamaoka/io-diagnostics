@@ -28,6 +28,28 @@ import computer_diagnostics as computer  # noqa: E402
 
 
 # ----- a fake computer ---------------------------------------------------------------------------------------------
+def chip(name: str, temps=(), *, fans=(), pwms=(), device: str = "", model: str = "", hwmon: str = "hwmon0") -> dict:
+    """One hwmon chip as LiveProbe.hwmon() returns it. ``temps``: (channel, label, current, max, crit) tuples, °C."""
+
+    return {"name": name, "hwmon": hwmon, "device": device, "model": model,
+            "temps": [{"channel": channel, "label": label, "current": current, "max": high, "crit": critical, "emergency": None}
+                      for channel, label, current, high, critical in temps],
+            "fans": [dict(fan) for fan in fans], "pwms": [dict(pwm) for pwm in pwms]}
+
+
+def gigabyte(temp5: float = 93.0, *, skip: tuple[str, ...] = ()) -> dict:
+    """gigabyte_wmi as this machine's A620M S2H shows it (2026-11-10): six unlabelled channels, no limits."""
+
+    readings = {"temp1": 44.0, "temp2": 57.0, "temp3": 79.0, "temp4": 49.0, "temp5": temp5, "temp6": 70.0}
+    return chip("gigabyte_wmi", [(channel, "", value, None, None) for channel, value in readings.items() if channel not in skip],
+                device="/sys/devices/platform/PNP0C14:00/wmi_bus/wmi_bus-PNP0C14:00/DEADBEEF-2001-0000-00A0-C90629100000",
+                hwmon="hwmon3")
+
+
+A620M_S2H = {"vendor": "Gigabyte Technology Co., Ltd.", "name": "A620M S2H"}
+RYZEN_7900X = "AMD Ryzen 9 7900X 12-Core Processor"
+
+
 class FakeProbe:
     """Every reading the plugin takes, as plain data a test overrides."""
 
@@ -43,12 +65,20 @@ class FakeProbe:
                            {"device": "archive/datasets", "mountpoint": "/archive/datasets", "fstype": "zfs"},
                            {"device": "archive/datasets", "mountpoint": "/mnt/archive-datasets", "fstype": "zfs"}]
         self.usage = {"/": (1000, 500), "/archive/datasets": (4000, 3000)}  # mountpoint -> (total, free)
-        self.temps = {"k10temp": [{"label": "Tctl", "current": 60.0, "high": None, "critical": None}],
-                      "nvme": [{"label": "Composite", "current": 40.0, "high": 81.85, "critical": 84.85},
-                               {"label": "Sensor 1", "current": 41.0, "high": 65261.85, "critical": 65261.85}]}
+        self.chips = [chip("k10temp", [("temp1", "Tctl", 60.0, None, None)], device="/sys/devices/pci0000:00/0000:00:18.3"),
+                      chip("nvme", [("temp1", "Composite", 40.0, 81.85, 84.85), ("temp2", "Sensor 1", 41.0, 65261.85, None)],
+                           device="/sys/devices/pci0000:00/0000:00:01.2/0000:02:00.0/nvme/nvme0", model="Samsung SSD 980 PRO 1TB",
+                           hwmon="hwmon1")]
+        self.board_info = A620M_S2H
+        self.cpu = RYZEN_7900X
+        # NVML's reading (LiveProbe.gpus): what this machine's RTX 4080 SUPER answered on 2026-11-10, fans stopped
         self.gpu = {"gpus": [{"index": "0", "name": "NVIDIA GeForce RTX 4080 SUPER", "uuid": "GPU-1", "bus_id": "00000000:01:00.0",
                               "utilization": 30.0, "memory_used_mib": 2000.0, "memory_total_mib": 16376.0, "temperature": 45.0,
-                              "max_operating": 90.0, "slowdown": 96.0, "shutdown": 101.0}]}
+                              "max_operating": 90.0, "slowdown": 96.0, "shutdown": 101.0, "acoustic_target": 84.0,
+                              "fans": [{"fan": 0, "percent": 0, "target_percent": 30}, {"fan": 1, "percent": 0, "target_percent": 30}],
+                              "fan_min_percent": 30, "fan_max_percent": 100, "power_w": 37.6, "power_limit_w": 320.0,
+                              "clock_sm_mhz": 420, "clock_sm_max_mhz": 3105, "clock_mem_mhz": 5001, "clock_mem_max_mhz": 11501,
+                              "reasons": 0x1, "source": "nvml"}]}
         self.clock_reading = {"source": "systemd-timesyncd", "synced": True, "ntp_enabled": True, "offset_s": 0.0015,
                               "server": "ntp.ubuntu.com"}
         self.boot = 1000.0
@@ -88,8 +118,14 @@ class FakeProbe:
         total, free = self.usage[mountpoint]
         return {"total": total, "used": total - free, "free": free}
 
-    def temperatures(self):
-        return self.temps
+    def hwmon(self):
+        return self.chips
+
+    def board(self):
+        return self.board_info
+
+    def cpu_model(self):
+        return self.cpu
 
     def gpus(self):
         return self.gpu
@@ -111,11 +147,15 @@ class FakeProbe:
 
 
 def run(**override) -> dict[str, object]:
+    """Every status of one diagnose, keyed by name: "<device>: <check>" for a device's check ("CPU: CPU Information"), the bare
+    check for the machine's own ("NTP offset", from "rig: NTP offset")."""
+
     statuses = computer.diagnose(FakeProbe(**override), computer.Options(), host="rig")
     for status in statuses:
         rooted = dataclasses.replace(status, path=HOST_PATH)  # the host validates after rooting "" at the device row
         assert validate(rooted) == [], (status.name, validate(rooted))
         assert status.path == "" and status.expected_period_s == computer.PERIOD_S and status.source == "computer"
+        assert status.hardware_id == "rig"  # every check is the Computer's, whichever device it is about
     return {status.name.removeprefix("rig: "): status for status in statuses}
 
 
@@ -126,17 +166,18 @@ def measure(status, key):
 # ----- OK / WARN / ERROR per status --------------------------------------------------------------------------------
 def test_a_healthy_computer_is_quiet_and_every_number_is_a_measurement():
     found = run()
-    assert set(found) == {"CPU Information", "RAM Information", "HD Usage", "Temperature CPU (k10temp)", "Temperature NVMe (nvme)",
-                          "GPU 0 NVIDIA GeForce RTX 4080 SUPER", "NTP offset", "Uptime", "Network Usage", "USB Bandwidth"}
+    assert set(found) == {"CPU: CPU Information", "RAM: RAM Information", "Disks: HD Usage", "CPU: Temperature CPU (k10temp)",
+                          "Disks: Temperature NVMe (nvme)", "GPU 0: NVIDIA GeForce RTX 4080 SUPER", "Board: Fans", "NTP offset",
+                          "Uptime", "Network: Network Usage", "USB Bandwidth"}
     assert {status.level for status in found.values()} == {OK}
-    cpu = found["CPU Information"]
+    cpu = found["CPU: CPU Information"]
     assert cpu.message.startswith("CPU Average 25.0 percent") and measure(cpu, "CPU 3 Load").value == 40.0
     assert measure(cpu, "CPU Load Average").warn_high == 90 and measure(cpu, "load 15 min").value == 0.5
-    ram = found["RAM Information"]
+    ram = found["RAM: RAM Information"]
     assert {"RAM used", "RAM total", "buffers", "cached", "swap used", "swap total"} <= {m.key for m in ram.measurements}
     assert measure(ram, "RAM used").value == 24.0 and measure(ram, "RAM used").unit == "GiBy"
     assert found["Uptime"].uptime_s == 90061 and found["Uptime"].message.startswith("up 1 d 01:01")
-    net = found["Network Usage"]  # 12.5 MB in 1 s = 100 Mbit/s; lo, a down Wi-Fi and a veth are not listed
+    net = found["Network: Network Usage"]  # 12.5 MB in 1 s = 100 Mbit/s; lo, a down Wi-Fi and a veth are not listed
     assert measure(net, "enp6s0 rx").value == 100.0 and measure(net, "enp6s0 tx").value == 20.0
     assert measure(net, "enp6s0 rx").warn_high == 900.0 and measure(net, "enp6s0 link speed").unit == "Mbit/s"
     assert not any(m.key.startswith(("lo ", "veth")) for m in net.measurements) and dict(net.values)["down"] == "wlp5s0"
@@ -146,52 +187,58 @@ def test_a_healthy_computer_is_quiet_and_every_number_is_a_measurement():
 
 
 def test_cpu_warns_on_the_average_not_one_pegged_core():
-    assert run(cores=[100.0, 5.0, 5.0, 5.0])["CPU Information"].level == OK
-    hot = run(cores=[95.0, 92.0, 96.0, 91.0])["CPU Information"]
+    assert run(cores=[100.0, 5.0, 5.0, 5.0])["CPU: CPU Information"].level == OK
+    hot = run(cores=[95.0, 92.0, 96.0, 91.0])["CPU: CPU Information"]
     assert hot.level == WARN and hot.code == "CpuAverageHigh" and "exceeds 90 percent" in hot.message
 
 
 def test_ram_warns_above_ros_90_percent():
     memory = {"total": 100 * computer.GIB, "available": 5 * computer.GIB, "percent": 95.0, "used": 95 * computer.GIB,
               "buffers": 0, "cached": 0}
-    found = run(memory=memory)["RAM Information"]
+    found = run(memory=memory)["RAM: RAM Information"]
     assert found.level == WARN and found.code == "RamAverageHigh" and measure(found, "RAM Load Average").level == WARN
 
 
 def test_disks_skip_snaps_tmpfs_and_second_mounts_and_use_ros_free_percent_limits():
-    found = run()["HD Usage"]
+    found = run()["Disks: HD Usage"]
     assert dict(found.values)["mounts"] == "/ (ext4), /archive/datasets (zfs)"
     assert measure(found, "/ available").warn_low == 5 and measure(found, "/ available").error_low == 1
-    low = run(usage={"/": (1000, 30), "/archive/datasets": (4000, 3000)})["HD Usage"]
+    low = run(usage={"/": (1000, 30), "/archive/datasets": (4000, 3000)})["Disks: HD Usage"]
     assert low.level == WARN and low.code == "LowDiskSpace" and low.message.startswith("Low Disk Space: / 3.0 % free")
-    full = run(usage={"/": (1000, 5), "/archive/datasets": (4000, 3000)})["HD Usage"]
+    full = run(usage={"/": (1000, 5), "/archive/datasets": (4000, 3000)})["Disks: HD Usage"]
     assert full.level == ERROR and full.code == "VeryLowDiskSpace"
 
 
-def test_temperatures_use_the_sensors_own_limits_and_defaults_only_without_them():
+def test_temperatures_use_the_sensors_own_limits_the_parts_published_limit_or_none():
     found = run()
-    nvme = found["Temperature NVMe (nvme)"]
+    nvme = found["Disks: Temperature NVMe (nvme)"]
     assert (measure(nvme, "Composite").warn_high, measure(nvme, "Composite").error_high) == (81.85, 84.85)
-    assert (measure(nvme, "Sensor 1").warn_high, measure(nvme, "Sensor 1").error_high) == (85.0, 95.0)  # 65261 °C is a sentinel
-    cpu_hot = run(temps={"k10temp": [{"label": "Tctl", "current": 92.0, "high": None, "critical": None}]})["Temperature CPU (k10temp)"]
+    # 65261.85 °C is the drive's "no threshold set" (0xFFFF K): no limit, and no CPU default borrowed for it (it used to get 85 / 95)
+    assert (measure(nvme, "Sensor 1").warn_high, measure(nvme, "Sensor 1").error_high) == (None, None)
+    cpu = found["CPU: Temperature CPU (k10temp)"]  # the Ryzen 9 7900X: AMD's Tjmax 95 °C is the error, RobotDx warns 10 °C under it
+    assert (measure(cpu, "Tctl").warn_high, measure(cpu, "Tctl").error_high) == (85.0, 95.0)
+    cpu_hot = run(chips=[chip("k10temp", [("temp1", "Tctl", 92.0, None, None)])])["CPU: Temperature CPU (k10temp)"]
     assert cpu_hot.level == WARN and cpu_hot.code == "HighTemperature" and cpu_hot.message.startswith("CPU Tctl 92 °C: High Temperature")
-    assert "default" in cpu_hot.message
-    nvme_hot = run(temps={"nvme": [{"label": "Composite", "current": 83.0, "high": 81.85, "critical": 84.85}]})["Temperature NVMe (nvme)"]
+    assert "RobotDx" in cpu_hot.message
+    cpu_over = run(chips=[chip("k10temp", [("temp1", "Tctl", 96.0, None, None)])])["CPU: Temperature CPU (k10temp)"]
+    assert cpu_over.level == ERROR and "Tjmax" in cpu_over.message
+    nvme_hot = run(chips=[chip("nvme", [("temp1", "Composite", 83.0, 81.85, 84.85)])])["Disks: Temperature NVMe (nvme)"]
     assert nvme_hot.level == WARN and "its own limit" in nvme_hot.message
-    critical = run(temps={"nvme": [{"label": "Composite", "current": 86.0, "high": 81.85, "critical": 84.85}]})["Temperature NVMe (nvme)"]
+    critical = run(chips=[chip("nvme", [("temp1", "Composite", 86.0, 81.85, 84.85)])])["Disks: Temperature NVMe (nvme)"]
     assert critical.level == ERROR and critical.code == "CriticalTemperature"
-    mixed = run(temps={"k10temp": [{"label": "Tctl", "current": None, "high": None, "critical": None},
-                                   {"label": "Tccd1", "current": 90.0, "high": None, "critical": None}]})["Temperature CPU (k10temp)"]
+    mixed = run(chips=[chip("k10temp", [("temp1", "Tctl", None, None, None),
+                                        ("temp3", "Tccd1", 90.0, None, None)])])["CPU: Temperature CPU (k10temp)"]
     assert mixed.level == WARN and "Tccd1" in mixed.message  # a sensor with no reading never hides a hot one
 
 
-def test_gpu_uses_its_own_limits_from_nvidia_smi():
+def test_gpu_uses_its_own_limits_from_nvml():
     def gpu(temperature):
         return {"gpus": [{**FakeProbe().gpu["gpus"][0], "temperature": temperature}]}
 
-    name = "GPU 0 NVIDIA GeForce RTX 4080 SUPER"
+    name = "GPU 0: NVIDIA GeForce RTX 4080 SUPER"
     ok = run()[name]
-    assert ok.message == "30 % · 2000 of 16376 MiB · 45 °C" and (measure(ok, "temperature").warn_high, measure(ok, "temperature").error_high) == (90.0, 96.0)
+    assert ok.message == "30 % · 2000 of 16376 MiB · 45 °C · fans 0 % (stopped) · 38 of 320 W"
+    assert (measure(ok, "temperature").warn_high, measure(ok, "temperature").error_high) == (90.0, 96.0)
     assert run(gpu=gpu(92.0))[name].level == WARN and run(gpu=gpu(97.0))[name].level == ERROR
     driver_gone = run(gpu={"error": "NVIDIA-SMI has failed because it couldn't communicate with the NVIDIA driver."})["GPU"]
     assert driver_gone.level == WARN and driver_gone.code == "GpuDriverNotAnswering"
@@ -206,17 +253,17 @@ def test_clock_follows_the_daemon_and_ros_5_s_error_offset():
 
 
 def test_network_and_usb_warn_against_their_own_capacity():
-    saturated = run(counters=[{"enp6s0": (0, 0)}, {"enp6s0": (125_000_000, 0)}])["Network Usage"]  # 1000 Mbit/s on a 1 GbE
+    saturated = run(counters=[{"enp6s0": (0, 0)}, {"enp6s0": (125_000_000, 0)}])["Network: Network Usage"]  # 1000 Mbit/s on a 1 GbE
     assert saturated.level == WARN and saturated.code == "HighNetworkUsage"
     busy = run(buses=[{"bus": 3, "speed_mbps": 480.0, "claimed_bps": 400e6, "endpoints": 9}])["USB Bandwidth"]
     assert busy.level == WARN and busy.code == "UsbBandwidthHigh" and "usb3 83 % of 480 Mbit/s" in busy.message
 
 
 def test_missing_sensors_read_not_available_never_an_error():
-    found = run(temps={}, gpu={"missing": "no nvidia-smi on PATH"}, clock_reading=None, partitions=[], buses=[],
+    found = run(chips=[], gpu={"missing": "no NVIDIA driver"}, clock_reading=None, partitions=[], buses=[],
                 stats={"lo": (True, 0.0)})
     assert {status.level for status in found.values()} == {OK}
-    for name in ("Temperatures", "GPU", "NTP offset", "HD Usage", "USB Bandwidth", "Network Usage"):
+    for name in ("Temperatures", "Board: Fans", "GPU", "NTP offset", "Disks: HD Usage", "USB Bandwidth", "Network: Network Usage"):
         assert "not available" in found[name].message, name
 
 
@@ -226,8 +273,8 @@ def test_a_reading_that_throws_is_unknown_for_that_check_only():
             raise OSError("no /proc/loadavg")
 
     statuses = {status.name: status for status in computer.diagnose(Broken(), computer.Options(), host="rig")}
-    assert statuses["rig: CPU Information"].level == UNKNOWN and statuses["rig: CPU Information"].code == "ReadFailed"
-    assert statuses["rig: RAM Information"].level == OK
+    assert statuses["CPU: CPU Information"].level == UNKNOWN and statuses["CPU: CPU Information"].code == "ReadFailed"
+    assert statuses["RAM: RAM Information"].level == OK
 
 
 # ----- parsers of the tools' text ----------------------------------------------------------------------------------
@@ -278,16 +325,35 @@ def test_with_fake_readings_the_plugin_opens_nothing_under_dev():
     assert not [path for path in opened if path.startswith("/dev/")]
 
 
+# tests/fixtures/computer_audit.py's audit, with one more harmless node. WHY /dev/urandom (2026-11-10): nvidia-ml-py imports
+# ctypes.util, which imports tempfile, whose random module seeds itself from the kernel's random-number device when imported
+# (Python 3.14 raises the "open" audit event for it). No hardware sits behind it, and nothing can hold it.
+AUDIT = r"""
+import json, os, sys
+opened = []
+def hook(event, args):
+    if event == "open" and args and isinstance(args[0], (str, bytes, os.PathLike)):
+        opened.append(os.fsdecode(args[0]))
+sys.path.insert(0, sys.argv[1])
+sys.addaudithook(hook)
+import computer_diagnostics
+code = computer_diagnostics.main(["diagnose", "--device", "host"])
+print(json.dumps({"dev_opens": sorted({path for path in opened if path.startswith("/dev/")}), "opens": len(opened)}), file=sys.stderr)
+sys.exit(code)
+"""
+HARMLESS_DEV = {"/dev/null", "/dev/urandom"}  # /dev/null: subprocess.DEVNULL for timedatectl / chronyc's stdin
+
+
 @pytest.mark.skipif(shutil.which("uv") is None, reason="uv not installed: the plugin's own env cannot run")
 def test_the_real_plugin_in_its_env_opens_no_device_node():
-    """The one real run in the suite: read-only system stats (psutil, sysfs, nvidia-smi / timedatectl subprocesses)."""
+    """The one real run in the suite: read-only system stats (psutil, sysfs, NVML, timedatectl subprocesses). This Python audit
+    hook sees every Python-level open; NVML's own opens (in C) are tests/test_computer_nvml.py's strace run."""
 
-    completed = subprocess.run(["uv", "run", "--quiet", "--project", str(PLUGIN_DIR), "python",
-                                str(ROOT / "tests" / "fixtures" / "computer_audit.py")],
+    completed = subprocess.run(["uv", "run", "--quiet", "--project", str(PLUGIN_DIR), "python", "-c", AUDIT, str(PLUGIN_DIR)],
                                capture_output=True, text=True, timeout=120,
                                env={key: value for key, value in os.environ.items() if key != "VIRTUAL_ENV"})
     audit = json.loads(completed.stderr.strip().splitlines()[-1])
-    assert completed.returncode == 0 and audit["dev_opens"] == [], (completed.returncode, audit, completed.stderr[-400:])
+    assert completed.returncode == 0 and set(audit["dev_opens"]) <= HARMLESS_DEV, (completed.returncode, audit, completed.stderr[-400:])
     lines = [json.loads(line) for line in completed.stdout.splitlines() if line.strip()]
     assert lines and all(line["record"] == "status" and line.get("path", "") == "" for line in lines)  # "" = the host row
     assert {line["name"].split(": ", 1)[1] for line in lines} >= {"CPU Information", "RAM Information", "HD Usage", "Uptime"}
