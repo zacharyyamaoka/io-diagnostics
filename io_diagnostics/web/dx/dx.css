@@ -109,7 +109,7 @@ body.dx-resizing { cursor: row-resize; user-select: none; }
 #dx-tree-table { flex: 1 1 auto; min-height: 0; --dv-height: 100%; }
 /* WHY hidden (and blocked in tree.js): this page only reads (PEP 0001 §12.2); hiding a row, Expect and Remove from bus are the
    classic page's */
-#dx-tree .t6-eye, #dx-tree [data-t6-mi="vis"], #dx-tree [data-t6-mi^="setup:"] { display: none !important; }
+#dx-tree .t6-eye, #dx-tree [data-t6-mi="vis"], #dx-tree [data-t6-mi="remove"], #dx-tree [data-t6-mi^="setup:"] { display: none !important; }
 .dx-detail-wrap { flex: 1 1 auto; min-width: 0; overflow: auto; padding: 0 0 12px; position: relative; }
 .dx-note-box { margin: 12px; padding: 10px 12px; border: 1px dashed var(--dv-border); border-radius: var(--dv-radius); color: var(--dv-muted); font-size: 13px; }
 #dx-tree-fold svg { width: 16px; height: 16px; }
