@@ -101,7 +101,8 @@ while True:
                   "hardware_id": "moteus:" + uuid, "identity": {"manufacturer": "mjbots", "serial_number": f"P{can_id}"}})
         for can_id in sorted(answer):
             emit({"record": "status", "level": "ok", "name": f"fdcanusb X CAN {can_id}: answers", "path": f"can/{can_id}",
-                  "message": "answers discovery · UUID " + answer[can_id][:8], "stamp": now})
+                  "message": "answers discovery · UUID " + answer[can_id][:8], "stamp": now,
+                  "values": [{"key": "found_by", "value": "discovery"}, {"key": "uuid", "value": answer[can_id]}]})
         emit({"record": "event", "code": "PresencePass", "path": "can", "severity": "debug", "stamp": now,
               "message": f"{len(answer)} boards answer", "args": {"outcome": "looked", "answering": sorted(answer)}})
         if not globals().get("first_said"):
@@ -244,6 +245,8 @@ def test_a_board_that_answers_is_live_and_one_that_stops_is_not_heard_within_two
     assert bench.node(14)["presence"]["text"] == "answers now"
     bench.set(presence={1: UUID[1]})  # CAN 14 unplugged
     bench.keep_beating(lambda: bench.presence(14) == "stale", what="CAN 14 not heard")
+    # the ring comes at once; the level follows when the not-heard line itself goes stale (the contract's 5 s floor after the last answer)
+    bench.keep_beating(lambda: bench.node(14)["own"]["level"] == "stale", what="its level stale")
     node = bench.node(14)
     assert node["own"]["level"] == "stale" and node["presence"]["text"].startswith("last heard")
     check = next(check for check in bench.host.node(bench.board(14))["checks"] if check["name"].endswith(": last heard"))
@@ -438,6 +441,46 @@ def test_an_adapter_that_drops_off_usb_during_a_read_is_not_a_plugin_crash(tmp_p
         rig.set(diagnose_crash_s=0.2)
         rig.host.run_job(job)
         assert job.cache.host_status.code == "PluginCrashed"
+    finally:
+        rig.stop()
+
+
+def test_a_board_heard_a_moment_ago_is_heard_though_its_full_read_is_old_and_so_is_its_bus(tmp_path):
+    """Zach, 2026-11-10: boards "last heard 1 s ago" drawn as an empty ring, and "The can bus says no update for 1638 s but the can
+    children were heard x seconds ago?". An experiment held the bus, so the 300 s full read was 27 min old, while presence passes heard
+    the boards. The dot is the driver's newest evidence; a check the host re-derives every beat is not evidence of anything."""
+
+    import dataclasses as dc
+
+    from io_diagnostics.runner import RUNNER_SOURCE
+
+    rig = Bench(tmp_path)
+    try:
+        rig.keep_beating(lambda: rig.presence(14) == "live", what="CAN 14 live")
+        job = next(iter(rig.host.jobs.values()))
+        with rig.host.lock:
+            for key, status in list(job.cache.statuses.items()):
+                if status.expected_period_s:  # the full read, 30 min ago (an experiment held the rack)
+                    job.cache.statuses[key] = dc.replace(status, received=status.received - 1800)
+                elif status.name.endswith(": answers"):  # the last presence answer, 20 s ago (the view is closed now)
+                    job.cache.statuses[key] = dc.replace(status, received=status.received - 20)
+            # a host-derived check re-posted a second ago, as the stock checks are
+            job.cache.statuses[("can/1", "CAN 1: config matches expected")] = dc.replace(
+                job.cache.statuses[("can/1", "CAN 1: servo")], name="CAN 1: config matches expected", source=RUNNER_SOURCE,
+                received=job.cache.statuses[("can/1", "CAN 1: servo")].received + 1799)
+        for watch in list(rig.host.watches.values()):
+            rig.host._watch_stop(watch)  # no presence process: no "answers now"
+        board, bus = rig.node(14), rig.host.node(f"{rig.device}/can")["node"]
+        assert board["presence"]["state"] == "heard", board["presence"]
+        assert 15 <= board["presence"]["age_s"] <= 40, board["presence"]  # from the answer, not the old read
+        assert board["own"]["level"] == "stale"  # the read itself is still old, and says so
+        assert (bus["presence"]["state"], bus["presence"]["text"]) == ("heard", "its boards answer"), bus["presence"]
+        # with only the old read and the host's own fresh check, a board is NOT heard (the stock check is no evidence)
+        with rig.host.lock:
+            for key in [key for key, status in job.cache.statuses.items() if status.name.endswith(": answers")]:
+                job.cache.statuses.pop(key)
+        one = rig.node(1)["presence"]
+        assert one["state"] == "stale" and one["age_s"] >= 1700, one
     finally:
         rig.stop()
 

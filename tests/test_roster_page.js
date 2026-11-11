@@ -213,10 +213,12 @@ async function main() {
     await hover(page, can21.key);
     await page.click(`.t6-row[data-t6-path="${can21.key}"] .t6-more`);
     await page.waitForSelector('.t6-menu:not([hidden]) .t6-mi', { timeout: 10000 });
-    await page.waitForFunction(() => /Remove from bus/.test(document.querySelector('.t6-menu').textContent), null, { timeout: 10000 });
+    await page.waitForFunction(() => document.querySelector('.t6-menu [data-t6-mi="remove"]'), null, { timeout: 10000 });
     const menu = await page.evaluate(() => [...document.querySelectorAll('.t6-menu .t6-mi')].map((item) => item.textContent.replace(/\s+/g, ' ').trim()));
-    check('menu: Copy id, Remove from bus (it comes back if it answers), Expect / Don\'t expect, the row\'s utilities, Hide',
-      menu.some((text) => text.startsWith('Copy id')) && menu.some((text) => /^Remove from bus.*comes back/.test(text)) && menu.some((text) => /^Don't expect/.test(text))
+    // Zach, 2026-11-10: "beside Hide also give the option to Remove": Remove sits right after Hide (it was "Remove from bus", up top)
+    const hideAt = menu.findIndex((text) => /^Hide/.test(text));
+    check('menu: Copy id, Expect / Don\'t expect, the row\'s utilities, Hide, then Remove (it comes back if it answers)',
+      menu.some((text) => text.startsWith('Copy id')) && hideAt >= 0 && /^Remove.*comes back/.test(menu[hideAt + 1] || '') && menu.some((text) => /^Don't expect/.test(text))
       && menu.some((text) => /^Identify/.test(text)) && menu.some((text) => /^Open console \(tview\)/.test(text)) && menu.some((text) => /^Hide/.test(text)), menu);
     await shot(page, 'light', 'menu-{mode}.png');
     // a utility shortcut starts that row's dry run (needs app.js's onRowAction hook; without it the row is only selected)
@@ -224,18 +226,17 @@ async function main() {
       await page.click('.t6-menu [data-t6-mi="util:identify"]');
       await page.waitForFunction(() => typeof S !== 'undefined' && S.util && S.util.name === 'identify', null, { timeout: 8000 });
       check('menu: Identify (a utility shortcut) opens that row\'s dry run', await page.evaluate(() => S.util.path.endsWith('/can/21')), await page.evaluate(() => S.util && S.util.path));
-      await page.evaluate(() => { S.util = null; });
+      await page.evaluate(() => { S.util = null; render(); }); // WHY render: the dry run's dialog stays over the tree until the page redraws
       await hover(page, can21.key);
       await page.click(`.t6-row[data-t6-path="${can21.key}"] .t6-more`);
-      await page.waitForFunction(() => /Remove from bus/.test(document.querySelector('.t6-menu').textContent), null, { timeout: 10000 });
+      await page.waitForFunction(() => document.querySelector('.t6-menu [data-t6-mi="remove"]'), null, { timeout: 10000 });
     } else console.log('SKIP  menu: utility shortcut (app.js has no onRowAction hook yet)');
-    await page.click('.t6-menu [data-t6-mi="setup:forget"]');
-    const confirmText = await page.textContent('.t6-menu .t6-mi-confirm');
-    check('menu: the confirm is the host\'s own sentence', /^Remove CAN 21 from the bus\? RobotDx forgets the row; if CAN 21 answers again, it comes back\.$/.test(confirmText), confirmText);
-    await page.click('.t6-menu [data-t6-mi="confirm"]');
+    // one click, no confirm (Zach: "I can just remove it there quickly"): it is undone by the board's next answer
+    await page.click('.t6-menu [data-t6-mi="remove"]');
+    check('menu: Remove asks no confirm', !(await page.$('.t6-menu .t6-mi-confirm')));
     await page.waitForFunction((key) => !document.querySelector(`.t6-row[data-t6-path="${key}"]`), can21.key, { timeout: 10000 });
     list = await rows(page);
-    check('menu: Remove from bus makes the stale board\'s row disappear', !names(list).some((label) => /CAN 21/.test(label)), names(list));
+    check('menu: Remove makes the stale board\'s row disappear', !names(list).some((label) => /CAN 21/.test(label)), names(list));
     const counts = await page.evaluate(() => S.data.summary.counts);
     check('menu: and the header no longer counts it as stale', !counts.stale, counts);
     // it comes back when it answers again
@@ -311,7 +312,7 @@ async function main() {
     await page2.waitForTimeout(300);
     const reopened = (await rows(page2)).filter((row) => /CAN (1|14|21)$/.test(row.name));
     check('restart: the boards are all there, hollow (not heard yet), and none counted as dead',
-      reopened.length === 3 && reopened.every((row) => row.pres === 'stale' && row.shapes.length === 0), reopened.map((row) => [row.name, row.pres, row.shapes]));
+      reopened.length === 3 && reopened.every((row) => row.pres === 'hollow' && row.shapes.length === 0), reopened.map((row) => [row.name, row.pres, row.shapes]));
     const countsAfter = await page2.evaluate(() => S.data.summary.counts);
     check('restart: a blocked run marks nothing dead (no stale count from it)', !countsAfter.stale && !countsAfter.error, countsAfter);
     await context2.close();

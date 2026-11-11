@@ -708,12 +708,84 @@ def presence_of(path: str, entity: Entity, summary: Summary, own: list[Diagnosti
         age = round(now - stamp, 3) if stamp else None
         return {"state": "stale", "age_s": age, "restored": True,
                 "text": f"last heard {heard_text(age)} (before this session)" if age is not None else "not heard yet this session"}
+    silent = [status for status in own if status.code == NOT_HEARD and status.source.startswith(HOST_SOURCE_PREFIX)]
+    evidence = heard_evidence(own)
+    if silent and not any((until := heard_until(status, own)) is not None and until >= now
+                          and status.received is not None and status.received > max(s.received or 0 for s in silent) for status in evidence):
+        stamp = silent[0].received
+        age = round(now - stamp, 3) if stamp else None
+        return {"state": "stale", "age_s": age, "restored": False,
+                "text": f"last heard {heard_text(age)}" if age is not None else "not heard lately"}
+    if evidence:
+        # WHY the driver's own newest evidence and not "any check stale" (Zach, 2026-11-10: boards "last heard 1 s ago" drawn as an
+        # empty ring, a camera "last heard 0 s ago" too): a board the presence pass heard a second ago is heard, even while its 300 s
+        # full read is old (blocked by an experiment); the shape beside it still says the read is stale
+        newest = max(status.received for status in evidence if status.received is not None) if any(
+            status.received is not None for status in evidence) else None
+        fresh = any((until := heard_until(status, own)) is not None and until >= now for status in evidence)
+        age = round(now - newest, 3) if newest is not None else None
+        if not fresh:
+            return {"state": "stale", "age_s": age, "restored": False,
+                    "text": f"last heard {heard_text(age)}" if age is not None else "not heard lately"}
+        return {"state": "live" if path in live else "heard", "age_s": age, "restored": False,
+                "text": "data arriving now" if path in live else ""}
     if summary.own == STALE:
         age = round(now - seen, 3) if seen is not None else None
         return {"state": "stale", "age_s": age, "restored": False,
                 "text": f"last heard {heard_text(age)}" if age is not None else "not heard lately"}
     return {"state": "live" if path in live else "heard", "age_s": round(now - seen, 3) if seen is not None else None,
             "restored": False, "text": "data arriving now" if path in live else ""}
+
+
+HOST_SOURCE_PREFIX = "io_diagnostics."  # a status the host derives itself (stock checks, the roster, its run checks): not hearing the device
+NOT_HEARD = "NotHeard"  # roster.NOT_HEARD_CODE (not imported: roster imports this module's neighbours)
+ANSWER_KEY = "found_by"  # a presence pass's "<board>: answers" carries it: an observation that the board answered
+ANSWER_PERIOD_DEFAULT_S = 60.0
+
+
+def heard_evidence(own: list[DiagnosticStatus]) -> list[DiagnosticStatus]:
+    """The statuses that say the device itself was heard: its driver's or the OS's, never one the host re-derives every beat (a stock
+    check of a cached config, the roster's NotHeard, a run's own check). An event-driven check counts only when it is a presence pass's
+    answer (firmware or config re-sent on change would make a silent board look heard)."""
+
+    return [status for status in own if not status.source.startswith(HOST_SOURCE_PREFIX) and status.received is not None
+            and (status.expected_period_s or any(pair.key == ANSWER_KEY for pair in status.values))]
+
+
+def heard_until(status: DiagnosticStatus, own: list[DiagnosticStatus]) -> float | None:
+    """Until when ``status`` counts as hearing the device: its own period's stale window, or for a presence answer (no period) the
+    row's shortest periodic promise, as long as the full read itself would have counted."""
+
+    if status.received is None:
+        return None
+    period = status.expected_period_s
+    if not period:
+        periods = [other.expected_period_s for other in own if other.expected_period_s and not other.source.startswith(HOST_SOURCE_PREFIX)]
+        period = min(periods) if periods else ANSWER_PERIOD_DEFAULT_S
+    return status.received + max(STALE_FACTOR * period, STALE_FLOOR_S)
+
+
+def bus_presence(path: str, rows: Rows, own_presence: dict | None, memory: dict[str, float], live, answering) -> dict | None:
+    """A bus is heard when a board on it is (Zach, 2026-11-10: "The can bus says no update for 1638 s but the can children were heard x
+    seconds ago?"): its own check is the full read's, which an experiment can hold off for half an hour; its boards answering is the bus
+    working. Anything else keeps its own presence."""
+
+    merged = rows.merged
+    entity = merged.entities.get(path)
+    if entity is None or entity.kind != "bus" or (own_presence and own_presence["state"] != "stale"):
+        return own_presence
+    heard = []
+    for child in merged.children.get(path, []):
+        child_entity = merged.entities.get(child)
+        if child_entity is None or child_entity.kind in NO_PRESENCE_KINDS:
+            continue
+        child_own = [status for status in rows.own.get(child, []) if not is_not_run(status)]
+        found = presence_of(child, child_entity, rows.summaries[child], child_own, last_seen(child_own), rows.now, memory, live, answering)
+        if found and found["state"] in ("heard", "live") and found["age_s"] is not None:
+            heard.append(found["age_s"])
+    if not heard:
+        return own_presence
+    return {"state": "heard", "age_s": min(heard), "restored": False, "text": "its boards answer"}
 
 
 def usb_json(path: str, layer: OsLayer) -> dict | None:
@@ -779,7 +851,8 @@ def node_json(path: str, rows: Rows, layer: OsLayer, faults_by_path: dict[str, i
         "stale_after_s": max(STALE_FACTOR * min(periods), STALE_FLOOR_S) if periods else None,
         "checks": len(listed), "not_run": len(listed) - len(own), "actions": len(entity.actions), "faults": faults_by_path.get(path, 0),
         "collapsed": path in COLLAPSED,
-        "presence": presence_of(path, entity, summary, own, seen, rows.now, memory or {}, live, answering),
+        "presence": bus_presence(path, rows, presence_of(path, entity, summary, own, seen, rows.now, memory or {}, live, answering),
+                                 memory or {}, live, answering),
         # WHY separate from presence: presence is "alive", and a merely-connected idle row must not pulse; activity is only what the host knows is running
         "activity": (activity or {}).get(path),
         "claimed": is_claimed(path, entity, merged, layer) or path in expected_paths,

@@ -517,6 +517,8 @@
     let body;
     if (menu.result) {
       body = `<div class="t6-mi-note">${esc(menu.result.ok ? menu.result.message || 'Done' : `Not done: ${menu.result.message || menu.result.error || menu.result.refused || 'refused'}`)}</div>`;
+    } else if (menu.confirm && menu.confirm.direct) {
+      body = '<div class="t6-mi-note">Removing…</div>'; // Remove: one click, no confirm panel
     } else if (menu.confirm) {
       body = `<div class="t6-mi-confirm">${esc(menu.confirm.text)}</div><div class="t6-mi-foot">`
         + `<button type="button" class="t6-btn" data-t6-mi="cancel">Cancel</button>`
@@ -549,7 +551,7 @@
       return;
     }
     if (id === 'vis') { visibility().toggleRow(menu.row); closeMenu(st); return; }
-    if (id === 'remove') { menu.confirm = { op: 'forget', text: '', verb: '' }; id = 'confirm'; }
+    if (id === 'remove') { menu.confirm = { op: 'forget', text: '', verb: '', direct: true }; id = 'confirm'; }
     if (id.startsWith('util:')) {
       const name = id.slice(5);
       closeMenu(st);
