@@ -30,15 +30,16 @@ def test_a_plugin_composite_names_its_leg_relative_to_its_device(tmp_path):
     assert host.node(f"{spider}/leg3")["node"]["knock_on_of"] is None  # no longer swallowed by the spider's ERROR
 
 
-def test_a_rig_missing_an_adapter_names_the_computer(tmp_path):
+def test_a_rig_missing_an_adapter_is_its_own_cause(tmp_path):
     rack = Rack(tmp_path, devices=tuple(device for device in PRESENT if device["serial"] != A))
     rig = rack.rig_row()
-    check = rack.check(rig["path"])
-    # WHY the Computer: a missing device is its status, not a row (Zach, 2026-10-24)
-    assert (check["code"], check["caused_by"]) == ("ExpectedMissing", [HOST_PATH])
-    assert rack.check(HOST_PATH, f"fdcanusb {A}: presence")["code"] == "ExpectedAbsent"
+    check = rack.check(rig["path"], "expected setup")
+    # WHY the rig: a missing device is a status on its rig, not a row (Zach, 2026-10-24) and not on the Computer, where it
+    # read as the PC's own problem (Zach, 2026-11-11)
+    assert (check["code"], check["caused_by"]) == ("ExpectedMissing", [])
+    assert rack.check(rig["path"], f"fdcanusb {A}: presence")["code"] == "ExpectedAbsent"
     attention = [item["path"] for item in rack.state()["summary"]["attention"]]
-    assert HOST_PATH in attention and rig["path"] not in attention and rig["knock_on_of"] == HOST_PATH
+    assert rig["path"] in attention and HOST_PATH not in attention and rig["knock_on_of"] is None
 
 
 def test_a_rig_whose_problem_no_row_reports_stays_its_own_cause(tmp_path):

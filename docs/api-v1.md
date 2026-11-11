@@ -136,8 +136,8 @@ Besides `IO_DIAGNOSTICS_DEVICE`, `_DEVICE_PATH`, `_NOW` and `_SCHEMA`, every plu
 - **Expected, not connected** (record v0.1; Zach, 2026-10-24: a missing thing is a diagnostic on its parent, never a
   ghost row): a device a plugin's `describe` lists in `expected` (`[{hardware_id, name, last_seen, source}]`), or one
   the expected setup lists (retired ones excepted), that is not on USB now. Each one is a `warn` check
-  `<name>: presence` with `code` `"ExpectedAbsent"` **on the Computer** (the `host` row), which makes the Computer's own
-  level `warn`. Its `message` says what the kernel saw this boot:
+  `<name>: presence` with `code` `"ExpectedAbsent"` **on the rig that expects it** (`host/rig-<name>`), or on the Computer
+  (`host`) for a device only a driver's `describe` lists (Zach, 2026-11-11: not the Computer's own problem). Its `message` says what the kernel saw this boot:
   `"fdcanusb 28B3A25D expected (rack_inventory), not on USB · last seen 2026-10-21 18:24 · the kernel saw no plug
   event since boot (2026-10-22 07:00): try a data cable or another port"`, or `"… plugged in at 09:00:01 on 1-5,
   gone at 09:30:00"`, or that the kernel log could not be read. Its values are `what_to_check`, `kernel_evidence`
@@ -187,7 +187,7 @@ Besides `IO_DIAGNOSTICS_DEVICE`, `_DEVICE_PATH`, `_NOW` and `_SCHEMA`, every plu
   model that differs and "its boards answer on fdcanusb 0607623A now" (an absent adapter's boards on another one)
   are notes in its message and values, never a level. A retired device that is plugged in again carries a `warn`
   check `<name>: retired` (`RetiredDevice`, "retired 2026-10-23: <reason>"). An expected device matched only by a
-  driver's serial (the RealSense SDK serial) that is not here gets a Computer check `<name>: presence` (`ExpectedAbsent`,
+  driver's serial (the RealSense SDK serial) that is not here gets a check on its rig `<name>: presence` (`ExpectedAbsent`,
   "no connected device reports serial …"); one with a USB `hardware_id` gets the kernel-evidence check above. A node
   the file gives a `rotor_to_output_ratio` whose fresh config reading differs carries one `warn` check
   `<node>: expected ratio` (`RatioMismatch`, "config ratio 0.1667, expected 0.1 (10:1 gearbox)").

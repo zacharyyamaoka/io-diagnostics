@@ -12,9 +12,10 @@ What the host does with it (docs/api-v1.md "Expected setup"):
 - each expected device's node paths go to its plugin on diagnose as ``IO_DIAGNOSTICS_EXPECTED``
   (``{"nodes": ["can/1", ...], "rig": "<name>"}``), so the driver's own plain-words reasons cover an expected board
   that does not answer;
-- an expected device that is not here is a WARN ``ExpectedAbsent`` status on the Computer (the host entity), never a
-  row (Zach, 2026-10-24: a missing thing is a diagnostic on its parent, not a ghost row), with the kernel's evidence
-  when it has a USB id;
+- an expected device that is not here is a WARN ``ExpectedAbsent`` status on its rig's row, never a row of its own
+  (Zach, 2026-10-24: a missing thing is a diagnostic on its parent, not a ghost row), with the kernel's evidence when
+  it has a USB id. WHY the rig, not the Computer (Zach, 2026-11-11): on the Computer two unplugged cameras read as the
+  PC's own problems ("I am not sure why realsense metrics randomly appear on this page") and set its level;
 - a retired device that is plugged in again gets a WARN on its own row: "retired <date>: <reason>".
 
 Edits (Expect what's here / Forget / Retire...) rewrite the file whole, atomically; they never touch a device.
@@ -538,9 +539,10 @@ def evaluate(setup: ExpectedSetup, merged: tree.Merged, layer: tree.OsLayer, now
     for found in view.found:
         if found.path or found.pending or found.device.hardware_id or not found.device.serial:
             continue  # a USB id's absence is judged by the host with the kernel's evidence (host.py)
-        # WHY a status on the Computer, not a row: a missing thing is a diagnostic on its parent (Zach, 2026-10-24)
+        # WHY a status on the rig, not a row: a missing thing is a diagnostic on its parent (Zach, 2026-10-24); the rig, not the
+        # Computer, since 2026-11-11 (module docstring)
         view.statuses.append(DiagnosticStatus(
-            level=WARN, name=f"{found.device.label()}: presence", code="ExpectedAbsent", path=tree.HOST_PATH,
+            level=WARN, name=f"{found.device.label()}: presence", code="ExpectedAbsent", path=rig_path(found.rig),
             message=f"{found.device.label()} expected ({found.rig.name}), no connected device reports serial {found.device.serial}",
             stamp=now, received=now, source=SOURCE,
             values=(KeyValue("what_to_check", _numbered([
@@ -653,7 +655,7 @@ def _rig_row(rig: Rig, path: str, members: list[Found], merged: tree.Merged, own
                               f"if {target} replaced it, use Expect what's here on {target}, then Retire… on "
                               f"{found.device.label()}")
             else:
-                checks.append(f"{found.device.label()}: not on this PC: see the Computer's status "
+                checks.append(f"{found.device.label()}: not on this PC: see its presence check on this rig "
                               "(Don't expect or Retire… it if it is gone for good)")
         base = found.path or found.moved_to
         for node in found.device.nodes:
@@ -733,10 +735,10 @@ def _node_label(base: str | None, node_path: str, merged: tree.Merged) -> str:
 
 
 def _absent_row(device: ExpectedDevice, merged: tree.Merged) -> str | None:
-    """The row that reports an absent device: the Computer, whose ``ExpectedAbsent`` status says it (host.py for a USB
-    id, ``evaluate`` for a serial). None when nothing will say it (a device with neither id)."""
+    """The row that reports an absent device besides the rig: none since 2026-11-11. Its ``ExpectedAbsent`` status sits on
+    the rig itself (host.py for a USB id, ``evaluate`` for a serial), so the rig is its own cause."""
 
-    return tree.HOST_PATH if (device.hardware_id or device.serial) else None
+    return None
 
 
 def _reporting_row(base: str | None, node_path: str, merged: tree.Merged, own: dict) -> str | None:

@@ -118,7 +118,8 @@ Computer's `<name>: presence` check says "no connected device reports serial …
   it is reported, and the rig row reads as its knock-on while keeping its own warn and words. A knock-on row draws no
   health mark; its words stay in its tooltip and its detail.
 - **Expected, not connected** (Zach, 2026-10-24: a missing thing is a diagnostic on its parent, never a ghost row): an
-  expected device that is not on USB is a `warn` `ExpectedAbsent` check **on the Computer**, with the kernel's evidence
+  expected device that is not on USB is a `warn` `ExpectedAbsent` check **on its rig's row** (the Computer for a device only a
+  driver lists; Zach, 2026-11-11: on the Computer two unplugged cameras read as the PC's own problems), with the kernel's evidence
   (its USB id), beside an `ok` "Recently seen" check for the devices this host remembers seeing (`seen.json`) and those
   a driver lists (moteus: the rack inventory). There is no group and no row.
 - **Retired**: plugged in again, a retired device's own row is a warning, "retired 2026-10-23: frames never reached

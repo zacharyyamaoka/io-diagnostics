@@ -1195,7 +1195,7 @@ class Host:
             remembered = out.pop(known, {})
             out[device.hardware_id] = {"name": device.label(), "last_seen": remembered.get("last_seen"),
                                        "source": f"expected setup: {rig.name}", "owner": remembered.get("owner", "io_diagnostics"),
-                                       "expected": True}
+                                       "expected": True, "rig_path": expected_module.rig_path(rig)}
         forgotten = set(self.seen.forgotten)
         return {hardware_id: entry for hardware_id, entry in out.items()
                 if hardware_id not in forgotten and self.setup.retired_entry(hardware_id, self._usb_serial(hardware_id)) is None}
@@ -1206,9 +1206,11 @@ class Host:
         return (ids[2],) if ids else ()
 
     def _absent_rows(self, layer: tree.OsLayer, boots: list, now: float) -> list[DiagnosticStatus]:
-        """One WARN status on the Computer per expected USB device that is not on USB now, saying in plain words what the
-        kernel saw (Zach, 2026-10-24: a missing thing is a diagnostic on its parent, not a ghost row). WHY warn, not
-        error: absent is not broken. Devices that were only seen are one OK status, "Recently seen", for ``RECENTLY_SEEN_S``."""
+        """One WARN status per expected USB device that is not on USB now, saying in plain words what the kernel saw (Zach,
+        2026-10-24: a missing thing is a diagnostic on its parent, not a ghost row). Its parent is the rig that expects it,
+        else the Computer. WHY the rig (Zach, 2026-11-11, of two unplugged D405s on bam-GPU's Diagnostics: "I am not sure
+        why realsense metrics randomly appear on this page"): on the Computer they read as its own problems and set its
+        level, though nothing on the PC is wrong. WHY warn, not error: absent is not broken. Devices that were only seen are one OK status, "Recently seen", for ``RECENTLY_SEEN_S``."""
 
         present = {ids for entity in layer.entities.values() if (ids := activity_module.usb_id(entity.hardware_id))}
         note = str(getattr(getattr(self.os, "kernel_log", None), "note", "") or "")
@@ -1233,7 +1235,8 @@ class Host:
                       KeyValue("kernel_evidence", evidence["kind"]), KeyValue("expected_by", expected["source"]),
                       KeyValue("last_seen", seen or "unknown"), KeyValue("hardware_id", hardware_id))
             statuses.append(DiagnosticStatus(level=WARN, name=f"{expected['name']}: presence", message=message,
-                                             hardware_id=hardware_id, values=values, path=tree.HOST_PATH, code="ExpectedAbsent",
+                                             hardware_id=hardware_id, values=values, path=expected.get("rig_path") or tree.HOST_PATH,
+                                             code="ExpectedAbsent",
                                              stamp=now, received=now, source=EXPECTED_SOURCE))
         if recent:
             lines = [f"{seen['name']} (seen {_seen_text(seen['last_seen'], self.utc_offset_s)}) · {evidence['text']}" for _id, seen, evidence in recent]
