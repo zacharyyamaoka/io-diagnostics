@@ -191,6 +191,7 @@ source = { editable = "." }
 diagnostics = [
     { name = "numpy" },
     { name = "pillow" },
+    { name = "sim2real" },
 ]
 
 [package.dev-dependencies]
@@ -198,6 +199,7 @@ dev = [
     { name = "numpy" },
     { name = "pillow" },
     { name = "pytest" },
+    { name = "sim2real" },
 ]
 interop = [
     { name = "foxglove-sdk" },
@@ -212,6 +214,7 @@ v4 = [
 requires-dist = [
     { name = "numpy", marker = "extra == 'diagnostics'", specifier = ">=1.26" },
     { name = "pillow", marker = "extra == 'diagnostics'", specifier = ">=10" },
+    { name = "sim2real", marker = "extra == 'diagnostics'", editable = "/home/bam/sim2real" },
 ]
 provides-extras = ["diagnostics"]
 
@@ -220,6 +223,7 @@ dev = [
     { name = "numpy", specifier = ">=1.26" },
     { name = "pillow", specifier = ">=10" },
     { name = "pytest", specifier = ">=8" },
+    { name = "sim2real", editable = "/home/bam/sim2real" },
 ]
 interop = [
     { name = "foxglove-sdk", specifier = ">=0.30" },
@@ -461,6 +465,26 @@ wheels = [
 ]
 
 [[package]]
+name = "robot-msgs"
+version = "0.1.0"
+source = { editable = "/home/bam/robot_msgs" }
+dependencies = [
+    { name = "numpy" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "matplotlib", marker = "extra == 'test'", specifier = ">=3.8" },
+    { name = "matplotlib", marker = "extra == 'viz'", specifier = ">=3.8" },
+    { name = "numpy", specifier = ">=1.26" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8" },
+    { name = "rosbags", marker = "extra == 'ros'", specifier = ">=0.10" },
+    { name = "rosbags", marker = "extra == 'test'", specifier = ">=0.10" },
+    { name = "scipy", marker = "extra == 'test'", specifier = ">=1.11" },
+]
+provides-extras = ["viz", "ros", "test"]
+
+[[package]]
 name = "rosbags"
 version = "0.11.9"
 source = { registry = "https://pypi.org/simple" }
@@ -484,6 +508,22 @@ sdist = { url = "https://files.pythonhosted.org/packages/c7/3b/ebda527b56beb90cb
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b8/0c/51f6841f1d84f404f92463fc2b1ba0da357ca1e3db6b7fbda26956c3b82a/ruamel_yaml-0.19.1-py3-none-any.whl", hash = "sha256:27592957fedf6e0b62f281e96effd28043345e0e66001f97683aa9a40c667c93", size = 118102, upload-time = "2026-01-02T16:50:29.201Z" },
 ]
+
+[[package]]
+name = "sim2real"
+version = "0.1.0"
+source = { editable = "/home/bam/sim2real" }
+dependencies = [
+    { name = "robot-msgs" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "mujoco", marker = "extra == 'sim'", specifier = "==3.11.0" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8" },
+    { name = "robot-msgs", editable = "/home/bam/robot_msgs" },
+]
+provides-extras = ["sim", "test"]
 
 [[package]]
 name = "websockets"
