@@ -99,6 +99,10 @@ PRESENCE_MISSES = 2
 # 0607623A's port for ~40 s, and on a plug the probe and the first pass race for the port lock, so the boards showed in 3 s or 40 s by
 # chance): its full read waits for that first pass, at most this long (a first pass is ~2.5 s: the whole id range once)
 PRESENCE_FIRST_S = 8.0
+# WHY on every connection, page or not (Zach, 2026-11-10: boards "like 1 second after the port shows up"; the probe alone took 40-90 s,
+# and longer behind another host's): a plugged adapter gets its presence process for this long, so the boards show at the first pass
+# (0.5-0.8 s after it starts) and a board powered on just after the adapter shows too; then it lapses unless a page beats
+CONNECT_PRESENCE_S = 20.0
 STATE_HISTORY_GAP_S = 1.0  # the history keeps a state series at 1 Hz at most
 FRAME_FPS_WINDOW_S = 3.0
 RECENT = 6
@@ -737,6 +741,7 @@ class Watch:
     answered: dict = dataclasses.field(default_factory=dict)  # rel -> host clock time a pass last heard it
     misses: dict = dataclasses.field(default_factory=dict)  # rel -> passes in a row that looked and did not hear it
     passes: int = 0  # passes that looked
+    hold_until: float = 0.0  # time.monotonic() until which it runs without a page's beat (a new connection, CONNECT_PRESENCE_S)
     last_pass: dict | None = None  # the newest pass: {"outcome", "at", "answering", "message", "holders", "pass_s"}
 
 
@@ -1285,18 +1290,22 @@ class Host:
         # it took a while after he plugged in the CAN bus before anything showed it was happening); the periodic reads after it are not
         self._bringing_up(job, probing or job.last is None)
         try:
-            self._presence_first(job)
+            self._presence_first(job, connecting=probing or job.last is None)
             with self.lock:
                 entity = self.layer.entities.get(job.device_path)
+                connection = job.connection
             outcome = run_plugin(job.spec, job.device, job.device_path, self.clock.now, self._job_env(job),
                                  hardware_id=entity.hardware_id if entity else "", verb="probe" if probing else "diagnose",
                                  timeout_s=timeout_s if probing else None)
-            self._absorb(job, outcome)
+            with self.lock:
+                left = self.jobs.get(job.key) is not job or (connection is not None and job.connection != connection)
+            self._absorb(job, outcome, left=left)
         finally:
             self._bringing_up(job, False)
 
-    def _absorb(self, job: Job, outcome: RunOutcome, follower: Follower | None = None) -> None:
-        """One diagnose run, or one follow line, into the job's cache, the fault memory and the history."""
+    def _absorb(self, job: Job, outcome: RunOutcome, follower: Follower | None = None, left: bool = False) -> None:
+        """One diagnose run, or one follow line, into the job's cache, the fault memory and the history. ``left``: the device dropped off
+        USB (or came back as a new connection) while the run went, so a run that failed says that, not that the plugin crashed."""
 
         now = self.clock.now()
         blocked = self._probed(job, outcome) if follower is None and outcome.verb == "probe" else None
@@ -1310,6 +1319,14 @@ class Host:
             if follower is None:
                 job.cache.host_status = self._probe_status(job, outcome, blocked, hardware_id, now) if outcome.verb == "probe" \
                     else host_status(job.spec, outcome, hardware_id, now)
+                if left and outcome.outcome != "ok":
+                    # WHY (seen 2026-11-10: the wrist fdcanusb dropped off USB twice in 30 s, and the probe reading it then was confirmed
+                    # as an ERROR fault "PluginCrashed: SerialException ... device disconnected"): the device left under the run; that is
+                    # the unplug the log already shows, not a broken plugin. Unknown, no fault; the new connection is probed again.
+                    job.cache.host_status = dataclasses.replace(
+                        job.cache.host_status, level=UNKNOWN, code="DeviceLeftDuringRun",
+                        message=f"it dropped off USB during this {outcome.verb}, which then ended ({outcome.message or outcome.outcome}); "
+                                "the new connection is read again")
                 job.last = outcome
             else:
                 status = follow_status(job.spec, follower, hardware_id, now)
@@ -3287,7 +3304,7 @@ class Host:
         with self._watch_lock:
             if watch.stopped:
                 return
-            if time.monotonic() - watch.last_beat > self.watch_grace_s:
+            if time.monotonic() - watch.last_beat > self.watch_grace_s and time.monotonic() > watch.hold_until:
                 self._watch_stop(watch)
                 return
             if str(watch.job.device.get("bus")) == "composite":
@@ -3427,17 +3444,23 @@ class Host:
         period = float(period) if isinstance(period, (int, float)) and not isinstance(period, bool) and period > 0 else 2.0
         return {"period_s": period, "gates": [str(check) for check in declared.get("gates") or []]}
 
-    def _presence_first(self, job: Job) -> None:
-        """While the Connected view beats, wait (at most ``PRESENCE_FIRST_S``) for this device's first presence pass that looked, so it
-        shows what answers in seconds and the full read follows. Without a beat, or once a pass has looked, nothing waits."""
+    def _presence_first(self, job: Job, connecting: bool = False) -> None:
+        """On a new connection, and on every run while the Connected view beats, wait (at most ``PRESENCE_FIRST_S``) for this device's
+        first presence pass that looked, so it shows what answers in about a second and the full read follows. A connection's presence
+        process runs ``CONNECT_PRESENCE_S`` with no page at all. Once a pass has looked, nothing waits."""
 
-        if not self._presence_fresh():
+        if not (connecting or self._presence_fresh()):
             return
         declared = self._presence_declared(job)
         if declared is None or "refused" in declared:
             return
         self._presence_sync()  # a device plugged in a moment ago gets its presence process now, not at the next tick
-        watch = self.watches.get((job.key, PRESENCE_REL))
+        with self._watch_lock:
+            watch = self.watches.get((job.key, PRESENCE_REL))
+            if watch is None and connecting:
+                watch = self.watches[(job.key, PRESENCE_REL)] = Watch(job, PRESENCE_REL, declared, Path(os.devnull), time.monotonic())
+            if watch is not None and connecting:
+                watch.hold_until = max(watch.hold_until, time.monotonic() + CONNECT_PRESENCE_S)
         if watch is None or watch.passes:
             return
         self._watch_thread_start()

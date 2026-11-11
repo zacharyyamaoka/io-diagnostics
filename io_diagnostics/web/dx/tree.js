@@ -23,7 +23,7 @@ const DEFAULTS = { structure: 'p6', sort: 'status' };
 const GROUPS = [['p6', 'Nested'], ['p1', 'Physical'], ['p7', 'Type']];
 const SORTS = [['status', 'Status'], ['name', 'Name']];
 // the renderer's own controls that write (web/tree/v6.js): the eye per row, its menu's Hide / Expect / Remove from bus
-const WRITES = '[data-t6-eye], [data-t6-mi="vis"], [data-t6-mi^="setup:"], [data-t6-mi="confirm"]';
+const WRITES = '[data-t6-eye], [data-t6-mi="vis"], [data-t6-mi="remove"], [data-t6-mi^="setup:"], [data-t6-mi="confirm"]';
 
 const read = (key) => { try { return localStorage.getItem(key); } catch (_) { return null; } };
 const write = (key, value) => { try { localStorage.setItem(key, value); } catch (_) { /* private window: this visit only */ } };

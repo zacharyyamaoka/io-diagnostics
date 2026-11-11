@@ -112,6 +112,14 @@
       // WHY data-t6-* attributes: the host page delegates [data-path] / [data-toggle] clicks at the document level
       st.list.addEventListener('click', (event) => onClick(st, event));
       st.list.addEventListener('dblclick', (event) => onDoubleClick(st, event));
+      // Right-click a row: the same menu as its ⋮, at the mouse (Zach, 2026-11-10: "support right clicking on the entity tree")
+      st.list.addEventListener('contextmenu', (event) => {
+        const rowEl = event.target.closest('[role=treeitem][data-t6-path]');
+        if (!rowEl) return;
+        event.preventDefault();
+        if (st.menu) closeMenu(st);
+        openMenu(st, rowEl.getAttribute('data-t6-path'), null, { x: event.clientX, y: event.clientY });
+      });
       st.list.addEventListener('keydown', (event) => onKey(st, event));
       st.menuEl.addEventListener('click', (event) => onMenuClick(st, event));
       st.title.addEventListener('click', (event) => {
@@ -208,6 +216,16 @@
   }
 
   // ------------------------------------------------------------------------------ drawing ----
+  // A camera's USB generation as a small badge right after its name (Zach, 2026-11-10: "at a glance I want to be able to quickly see if
+  // its usb 2.1 or 3.1"): web/usb.js's own words ("USB 2.1", "USB 3.2", or "USB 3.2 · on a USB 2.0 link"), the raw speed in its tooltip.
+  // WHY cameras only: their generation decides which streams they can give; every fdcanusb is the same full-speed device.
+  const USB_BADGE_ICONS = new Set(['camera', 'webcam']);
+  function usbBadge(row) {
+    if (!row.usb || !USB_BADGE_ICONS.has(row.icon) || !window.IOUsb) return '';
+    const { text, tip } = window.IOUsb.describe(row.usb);
+    return text ? `<span class="t6-usb" data-t6-usb title="${esc(tip || text)}">${esc(text)}</span>` : '';
+  }
+
   // The presence dot: neutral by construction (docs/api-v1.md "presence"); what it draws is web/status-dot.js's, the same for every row.
   const presenceHtml = (row) => window.IOStatusDot.html(row);
 
@@ -292,7 +310,7 @@
     const more = row.entity || hasKids ? `<button type="button" class="t6-more" data-t6-more="${esc(row.key)}" aria-label="Row menu" aria-haspopup="menu" title="Row menu">${small(DOTS)}</button>` : '';
     const html = `<div class="${classes.join(' ')}" role="treeitem" aria-level="${row.depth + 1}"${hasKids ? ` aria-expanded="${open}"` : ''}`
       + ` aria-selected="${selected}" data-t6-path="${esc(row.key)}" style="--t6-d:${row.depth}" title="${esc(row.title || row.label)}">`
-      + `${guide}${chevron}${presenceHtml(row)}${typeIcon(row.icon)}<span class="t6-name">${highlight(row.label, row.hit ? q : '')}</span>${heard}${lead}${note}${attrs}${suffix}`
+      + `${guide}${chevron}${presenceHtml(row)}${typeIcon(row.icon)}<span class="t6-name">${highlight(row.label, row.hit ? q : '')}</span>${usbBadge(row)}${heard}${lead}${note}${attrs}${suffix}`
       + `<span class="t6-fill"></span>${id}${statusHtml(row, open)}<span class="t6-act">${eye}${more}</span>${sub}</div>`;
     return selected && row.subtitle
       ? `${html}<div class="t6-subline" style="--t6-d:${row.depth}" title="${esc(row.subtitle)}">${esc(row.subtitle)}</div>` : html;
@@ -435,12 +453,12 @@
   const POST = (path, body) => fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-IO-Diagnostics': 'ui' }, body: JSON.stringify(body) })
     .then((response) => response.json());
 
-  function openMenu(st, key, anchor) {
+  function openMenu(st, key, anchor, point = null) {
     if (st.menu && st.menu.key === key) { closeMenu(st); return; }
     const row = st.byKey.get(key);
     if (!row || !(row.entity || row.children.length)) return;
-    const rect = anchor.getBoundingClientRect();
-    st.menu = { key, row, entity: row.entity, nav: typeof st.opts.onRowNav === 'function' ? st.opts.onRowNav : null, info: row.entity ? null : {}, confirm: null, result: null, busy: false, x: rect.right, y: rect.bottom };
+    const rect = point ? { right: point.x, bottom: point.y } : anchor.getBoundingClientRect();
+    st.menu = { key, row, entity: row.entity, nav: typeof st.opts.onRowNav === 'function' ? st.opts.onRowNav : null, info: row.entity ? null : {}, confirm: null, result: null, busy: false, x: rect.right, y: rect.bottom, atPoint: Boolean(point) };
     paintMenu(st);
     if (!row.entity) return;
     fetch(`/api/v1/node?path=${encodeURIComponent(row.entity)}`, { signal: AbortSignal.timeout(8000) }).then((response) => response.json()).then((info) => {
@@ -470,7 +488,6 @@
       items.push(item('nav:into', 'Step into', 'Ctrl+Shift+Enter · make this the top of the tree'));
     }
     if (setup && setup.role === 'board') {
-      items.push(item('setup:forget', 'Remove from bus', 'A removed board that answers again comes back.', !setup.can.forget));
       items.push(item('setup:expect', setup.expected ? "Don't expect" : 'Expect', setup.rig ? `in ${setup.rig}` : "its adapter isn't in the expected setup", !setup.can.expect));
     } else if (setup && setup.role === 'device') {
       items.push(item('setup:expect', "Expect what's here", setup.rig ? `updates ${setup.rig}` : 'adds it to the expected setup', !setup.can.expect));
@@ -481,11 +498,16 @@
     for (const action of actions) items.push(item(`util:${action.name}`, action.title, action.state === 'ready' ? '' : action.reason || action.state, false));
     if (!menu.info) items.push('<div class="t6-mi-note">Loading…</div>');
     else if (menu.info.error) items.push('<div class="t6-mi-note">The host did not answer.</div>');
+    const removable = setup && setup.role === 'board' && setup.can.forget;
+    if (visibility() || removable) items.push('<div class="t6-mi-sep"></div>');
     if (visibility()) {
       const verdict = visibility().isHidden(row);
-      items.push('<div class="t6-mi-sep"></div>');
       items.push(item('vis', verdict.hidden || row.dimmed ? 'Show' : verdict.surfaced ? 'Acknowledge and hide' : 'Hide', 'Visibility, kept with the app settings'));
     }
+    // WHY Remove beside Hide, one click (Zach, 2026-11-10: "if I unplug a can id or change the id etc. than I can just remove it there
+    // quickly"): Hide keeps the row out of sight for good; Remove forgets it, and it comes back the moment it reports again, so it needs no
+    // confirm. Boards only: a device on USB would be back at once.
+    if (removable) items.push(item('remove', 'Remove', 'Forgets the row · it comes back as soon as it reports again'));
     return items.join('');
   }
 
@@ -506,7 +528,8 @@
     st.menuEl.hidden = false;
     const rootRect = st.root.getBoundingClientRect();
     const width = st.menuEl.offsetWidth || 260;
-    st.menuEl.style.left = `${Math.max(4, Math.min(menu.x - rootRect.left - width, rootRect.width - width - 4))}px`;
+    // a ⋮ opens it leftwards from the button; a right-click opens it rightwards from the mouse, as menus do
+    st.menuEl.style.left = `${Math.max(4, Math.min(menu.x - rootRect.left - (menu.atPoint ? 0 : width), rootRect.width - width - 4))}px`;
     st.menuEl.style.top = `${Math.max(4, menu.y - rootRect.top + 2)}px`;
   }
 
@@ -516,7 +539,7 @@
     const target = event.target.closest('[data-t6-mi]');
     const menu = st.menu;
     if (!target || !menu) return;
-    const id = target.getAttribute('data-t6-mi');
+    let id = target.getAttribute('data-t6-mi');
     if (id === 'cancel') { menu.confirm = null; paintMenu(st); return; }
     if (id.startsWith('nav:')) { closeMenu(st); menu.nav(id.slice(4), menu.row); return; }
     if (id === 'copy') {
@@ -526,6 +549,7 @@
       return;
     }
     if (id === 'vis') { visibility().toggleRow(menu.row); closeMenu(st); return; }
+    if (id === 'remove') { menu.confirm = { op: 'forget', text: '', verb: '' }; id = 'confirm'; }
     if (id.startsWith('util:')) {
       const name = id.slice(5);
       closeMenu(st);

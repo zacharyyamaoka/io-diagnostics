@@ -412,18 +412,26 @@
       default: return { cls: 'plain', text: 'waiting for the live stream…' };
     }
   }
+  // The newest frame as one short request (it ends, so it holds no connection); the sequence number makes each new frame a new URL.
+  const stillUrl = (path, stream) => `/api/v1/frames?path=${enc(path)}&stream=${enc(stream.name)}&seq=${enc(String(stream.seq ?? ''))}`;
   function tile(stream, path, h) {
     const key = `${path}\u0001${stream.name}`;
     const on = !U.off.has(key);
     const size = stream.width ? `${stream.width}×${stream.height}` : '—';
     const stale = stream.age_s !== null && stream.age_s > 3;
     const rate = stream.fps ? `${stream.fps} fps` : stale ? `last frame ${h.ago(stream.age_s)} ago` : 'no frames';
-    const src = `/api/v1/frames/stream?path=${enc(path)}&stream=${enc(stream.name)}&fps=10`;
-    const picture = !on ? '<div class="d6-ph">off</div>' : stream.seq === null ? '<div class="d6-ph">waiting for the first frame</div>'
+    // WHY a single frame while the lightbox is open (Zach, 2026-11-10: "opening the pictures is a bit buggy. sometimes it seems to work
+    // sometimes not"): every live tile holds one of the browser's 6 connections to this host (shared by every tab of it), and the
+    // lightbox's own stream queued behind them and drew nothing; the tiles are under the overlay anyway
+    const src = U.lightbox ? stillUrl(path, stream) : `/api/v1/frames/stream?path=${enc(path)}&stream=${enc(stream.name)}&fps=10`;
+    // WHY `stream.off` (the driver's own `watch streams` status, entity_state.stream_rows): the page declares every stream the model can
+    // have, but only the running watch knows which the link accepted, and a tile for one that never starts waited for ever
+    const notStreaming = stream.off ? `not streaming · ${stream.off}` : null;
+    const picture = !on ? '<div class="d6-ph">off</div>' : notStreaming ? `<div class="d6-ph">${h.esc(notStreaming)}</div>` : stream.seq === null ? '<div class="d6-ph">waiting for the first frame</div>'
       : `<img data-d6-image="${enc(key)}" data-d6-src="${src}"${StateWindow.visible.has(`image:${enc(key)}`) ? ` src="${src}"` : ''} alt="${h.esc(stream.title)}" draggable="false">`;
     return `<figure class="d6-tile${on ? '' : ' off'}"><figcaption><label class="d6-sw"><input type="checkbox" role="switch" data-d6-stream="${h.esc(stream.name)}"${on ? ' checked' : ''} aria-label="${h.esc(stream.title)} stream"><span class="d6-sw-t">${h.esc(stream.title)}</span></label>`
       + `<span class="d6-dim" title="${stream.colormap ? `colormap ${h.esc(stream.colormap)}` : ''}">${h.esc(size)} · ${h.esc(rate)}</span></figcaption>`
-      + `<button class="d6-pic" data-d6-enlarge="${h.esc(stream.name)}" aria-label="Enlarge ${h.esc(stream.title)}"${on && stream.seq !== null ? '' : ' disabled'}>${picture}</button></figure>`;
+      + `<button class="d6-pic" data-d6-enlarge="${h.esc(stream.name)}" aria-label="Enlarge ${h.esc(stream.title)}"${on && !notStreaming && stream.seq !== null ? '' : ' disabled'}>${picture}</button></figure>`;
   }
   // a composite's value that is a child's (docs/composition-v1.md section 5): "↳ CAN 13" after it, a click selects that child through the page's own
   // data-go selection. The name is the tree's own; a path the tree does not know is plain text, never a dead link.
@@ -737,7 +745,7 @@
 .d6-pic { display: block; width: 100%; padding: 0; border: 0; background: var(--io-field); cursor: zoom-in; aspect-ratio: 4 / 3; }
 .d6-pic[disabled] { cursor: default; }
 .d6-pic img { display: block; width: 100%; height: 100%; object-fit: contain; image-rendering: auto; }
-.d6-ph { display: grid; place-items: center; height: 100%; min-height: 90px; color: var(--io-faint); font-size: 12px; }
+.d6-ph { display: grid; place-items: center; height: 100%; min-height: 90px; padding: 6px 10px; box-sizing: border-box; text-align: center; color: var(--io-faint); font-size: 12px; }
 .d6-dim { color: var(--io-faint); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .d6-sw { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; font-size: 12px; color: var(--io-text); }
 .d6-sw input { appearance: none; position: relative; width: 28px; height: 16px; margin: 0; border-radius: 999px; background: var(--io-border); cursor: pointer; transition: background .12s; flex: none; }
@@ -913,7 +921,12 @@
     const stream = (Live.streams || []).find((s) => s.name === U.lightbox.stream);
     const title = stream ? stream.title : U.lightbox.stream;
     const src = `/api/v1/frames/stream?path=${enc(node.path)}&stream=${enc(U.lightbox.stream)}&fps=15`;
-    return `<div class="d6-lb" data-d6-lb role="dialog" aria-label="${h.esc(title)}"><figure><img src="${src}" alt="${h.esc(title)}">`
+    // WHY the newest frame under the live one, and a box of the stream's shape: the picture is there the moment it opens, even before the
+    // stream's first frame, or while the watch is paused (an experiment holds the rack) and no new frame comes at all
+    const still = stream && stream.seq !== null && stream.seq !== undefined ? stillUrl(node.path, stream) : '';
+    const shape = stream && stream.width && stream.height ? `aspect-ratio:${stream.width}/${stream.height};width:min(88vw, calc(82vh * ${stream.width} / ${stream.height}));` : '';
+    const back = still ? `background:url('${still}') center/contain no-repeat;` : '';
+    return `<div class="d6-lb" data-d6-lb role="dialog" aria-label="${h.esc(title)}"><figure><img data-d6-lb-img src="${src}" alt="${h.esc(title)}" style="${shape}${back}">`
       + `<figcaption>${h.esc(title)}${stream && stream.width ? ` · ${stream.width}×${stream.height}` : ''}${stream && stream.fps ? ` · ${stream.fps} fps` : ''} · click or Esc to close</figcaption></figure></div>`;
   }
 

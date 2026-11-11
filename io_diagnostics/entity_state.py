@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import math
 import re
+from pathlib import Path
 from typing import Any
 
 from contract.record import STALE_FACTOR, STALE_FLOOR_S, Measurement
@@ -91,17 +92,44 @@ def declared_streams(describe: dict | None, rel: str) -> list[dict]:
     return out
 
 
+STREAMS_STATUS = ": watch streams"
+
+
+def streams_not_streamed(cache: JobCache, rel: str) -> tuple[dict[str, str], float | None]:
+    """``({stream: why it is not streamed}, when that was said)`` from the newest ``<camera>: watch streams`` status at ``rel``
+    (a driver's own record: ``values`` ``not_streaming`` is a comma list, ``why_not`` the plain sentence). ``({}, None)`` when
+    the driver never said.
+
+    WHY: a driver declares every stream its camera model can have, and only the running watch knows which ones the link
+    accepted; without this a tile for a stream that never starts waits for its first frame for ever."""
+
+    newest = None
+    for (path, name), status in cache.statuses.items():
+        if path == rel and name.endswith(STREAMS_STATUS) and (newest is None or (status.received or 0.0) >= (newest.received or 0.0)):
+            newest = status
+    if newest is None:
+        return {}, None
+    values = {pair[0]: pair[1] for pair in newest.values}
+    why = values.get("why_not") or "not streamed by this camera on this link"
+    return {name.strip(): why for name in values.get("not_streaming", "").split(",") if name.strip()}, newest.received
+
+
 def stream_rows(describe: dict | None, cache: JobCache, rel: str, now: float, fps_of) -> list[dict]:
     rows = []
+    unstreamed, said_at = streams_not_streamed(cache, rel)
     for stream in declared_streams(describe, rel):
         frame = cache.frames.get((rel, stream["name"]))
+        # a frame that arrived after the status wins: the picture is there, whatever was said before it
+        off = unstreamed.get(stream["name"])
+        if off is not None and frame is not None and frame.received is not None and said_at is not None and frame.received > said_at:
+            off = None
         rows.append({"name": stream["name"], "kind": stream.get("kind", "image"), "title": stream.get("title") or stream["name"],
                      "colormap": stream.get("colormap"), "bands": stream.get("bands"), "preview_band": stream.get("preview_band"),
                      "width": frame.width if frame else None, "height": frame.height if frame else None,
                      "seq": frame.seq if frame else None, "stamp": frame.stamp if frame else None,
                      "band": frame.band if frame else None,
                      "age_s": round(now - frame.received, 3) if frame and frame.received is not None else None,
-                     "fps": fps_of(rel, stream["name"])})
+                     "fps": fps_of(rel, stream["name"]), "off": off})
     return rows
 
 
@@ -109,6 +137,34 @@ def stream_rows(describe: dict | None, cache: JobCache, rel: str, now: float, fp
 _HELD = (re.compile(r"held by (\S+) pid (\d+)"), re.compile(r"open by (\d+) (\S+)"), re.compile(r"blocked by pid (\d+) \(([^)]*)\)"),
          re.compile(r"pid (\d+) \(([^)]*)\)"))
 _WHAT = {"port_free": "the port", "camera_free": "the camera", "bus_lock_free": "the rack bus lock"}
+
+
+def program_in(command: str) -> str:
+    """A holder's command line as a person names it: ``/venv/bin/python3 -m pkg.mod.fivebar_run`` -> ``fivebar_run``,
+    ``python3 scripts/update_moteus_firmware.py --port x`` -> ``update_moteus_firmware.py``, ``/abs/bin/tview`` -> ``tview``;
+    a bare name stays. The same naming as bam_ws moteus_servo.diagnostics.program_of.
+
+    WHY: the pause line read "/home/bam/.../.venv/bin/python3 -m bam_rack_twin.hardware.fivebar_run has the rack bus lock"."""
+
+    words = command.split()
+    if len(words) <= 1 and "/" not in command:
+        return command
+    if not words:
+        return command
+    first = Path(words[0]).name
+    if not probe_module.GENERIC_COMMANDS.match(first):
+        return first
+    rest = words[1:]
+    index = 0
+    while index < len(rest):
+        word = rest[index]
+        if word == "-m" and index + 1 < len(rest):
+            return rest[index + 1].rsplit(".", 1)[-1]
+        if word.startswith("-"):
+            index += 1
+            continue
+        return Path(word).name or command
+    return first
 
 
 def holder_reason(check: str, detail: str) -> dict:
@@ -122,7 +178,7 @@ def holder_reason(check: str, detail: str) -> dict:
             continue
         first, second = found.groups()
         pid, command = (int(first), second) if first.isdigit() else (int(second), first)
-        program = probe_module.program_name(pid, command)
+        program = program_in(probe_module.program_name(pid, command))
         return {"reason": f"{program} has {what} (pid {pid})", "holders": [{"pid": pid, "program": program}]}
     return {"reason": f"{what} is held: {detail}" if detail else f"{what} is held", "holders": []}
 

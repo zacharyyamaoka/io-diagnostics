@@ -68,6 +68,10 @@
   .t6-pres-hollow.t6-pres-pulse { background: radial-gradient(circle, var(--io-faint) 0 1.3px, transparent 1.6px); }
 }
 /* a row not heard from lately: its name stays readable, its age is a muted word beside it */
+/* WHY the name gives way and never the badge: in a narrow pane the 72% name pushed it off the row's edge (seen 2026-11-10) */
+.t6-row:has(.t6-usb) .t6-name { flex: 0 1 auto; max-width: none; min-width: min(9.5em, 45%); }
+.t6-usb { flex: none; margin-left: 6px; padding: 0 6px; border-radius: 999px; border: 1px solid var(--io-border);
+  background: var(--io-hover); color: var(--io-text); font-size: 11px; line-height: 17px; font-weight: 600; white-space: nowrap; }
 .t6-heard { min-width: 0; flex: 0 20 auto; overflow: hidden; text-overflow: ellipsis; color: var(--io-faint); font-size: 11.5px; margin-left: 4px; }
 
 /* type icon + name together */

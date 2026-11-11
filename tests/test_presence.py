@@ -53,6 +53,10 @@ if verb == "diagnose":
     log({"verb": "diagnose", "t": time.time()})
     emit({"record": "entity", "path": "", "name": "fdcanusb X", "kind": "device"})
     emit({"record": "entity", "path": "can", "name": "CAN bus", "kind": "bus", "part_of": ""})
+    if spec.get("diagnose_crash_s"):  # the adapter is pulled while it is read: the read fails as pyserial does
+        time.sleep(spec["diagnose_crash_s"])
+        sys.stderr.write("serial.serialutil.SerialException: device reports readiness to read but returned no data\n")
+        raise SystemExit(1)
     if spec.get("diagnose_blocked"):  # an experiment holds the bus at the restart: the full read looks at nothing
         emit({"record": "status", "level": "unknown", "name": "CAN bus", "path": "can", "code": "BusLockHeld",
               "message": "blocked: rack bus lock held by 4242 run_experiment"})
@@ -197,21 +201,41 @@ def processes(host: Host) -> list:
 
 
 # ----- running only while a page asks ---------------------------------------------------------------------------------------
-def test_nothing_runs_until_a_page_asks_and_it_stops_after_the_grace(bench):
+def connected_and_lapsed(tmp_path, monkeypatch) -> "Bench":
+    """A bench whose adapter's connect window (CONNECT_PRESENCE_S, shortened here) has run out: one presence process ran and ended."""
+
+    from io_diagnostics import host as host_module
+
+    monkeypatch.setattr(host_module, "CONNECT_PRESENCE_S", 0.3)
+    rig = Bench(tmp_path)
+    wait_for(lambda: not processes(rig.host), timeout=8.0, what="the connection's presence process lapsing")
+    assert len(rig.verbs("presence")) == 1, "the connection was looked at by presence first"
+    return rig
+
+
+def test_after_the_connect_window_nothing_runs_until_a_page_asks_and_it_stops_after_the_grace(tmp_path, monkeypatch):
+    bench = connected_and_lapsed(tmp_path, monkeypatch)
+    try:
+        nothing_runs_until_asked(bench)
+    finally:
+        bench.stop()
+
+
+def nothing_runs_until_asked(bench):
     time.sleep(0.4)
-    assert bench.verbs("presence") == [] and processes(bench.host) == []  # the full read alone, as before
+    assert len(bench.verbs("presence")) == 1 and processes(bench.host) == []  # the full read alone, as before
     answer = bench.beat()["presence"]
     assert answer["supported"] and answer["period_s"] == pytest.approx(0.15)
     [adapter] = answer["adapters"]
     assert adapter["path"] == bench.device and adapter["state"] in ("starting", "running")
-    started = wait_for(lambda: bench.verbs("presence"), what="the presence process")
+    started = wait_for(lambda: len(bench.verbs("presence")) == 2 and bench.verbs("presence"), what="the presence process")
     # WHY the rows it knows: a board on firmware without discovery is asked by id, so the plugin is told which ids have rows
-    assert started[0]["known"] == "1,14"
+    assert started[1]["known"] == "1,14"
     [process] = wait_for(lambda: processes(bench.host), what="its process")
     # the page stops asking: gone about a grace later, and nothing starts again
     wait_for(lambda: process.poll() is not None, timeout=6.0, what="the presence process to stop")
     time.sleep(0.5)
-    assert processes(bench.host) == [] and len(bench.verbs("presence")) == 1
+    assert processes(bench.host) == [] and len(bench.verbs("presence")) == 2
     assert bench.host.presence_json()["adapters"][0]["state"] == "idle"
 
 
@@ -365,12 +389,55 @@ def test_with_the_view_on_a_plugged_adapter_is_first_looked_at_by_presence_not_t
         rig.stop()
 
 
-def test_without_the_view_the_full_read_does_not_wait(tmp_path):
+def test_a_plug_is_first_looked_at_by_presence_with_no_page_open_and_it_lapses_after_the_connect_window(tmp_path, monkeypatch):
+    """Zach, 2026-11-10: boards "like 1 second after the port shows up". Seen: the probe alone took 40-90 s (whole-config reads), and
+    longer behind the other host's probe. A connection now gets its presence process whether or not a page shows Connected only."""
+
+    from io_diagnostics import host as host_module
+
+    monkeypatch.setattr(host_module, "CONNECT_PRESENCE_S", 1.5)
     rig = Bench(tmp_path, plugged=False)
     try:
-        started = time.monotonic()
-        rig.plug()
-        assert time.monotonic() - started < 3.0 and rig.verbs("presence") == [] and len(rig.verbs("diagnose")) == 1
+        rig.plug()  # no beat at all
+        [first] = rig.verbs("first_pass")
+        [full] = rig.verbs("diagnose")
+        assert first["t"] < full["t"], (first, full)
+        assert rig.presence(14) == "live" and rig.presence(1) == "live"
+        [process] = wait_for(lambda: processes(rig.host), what="the connection's presence process")
+        wait_for(lambda: process.poll() is not None, timeout=8.0, what="it lapsing with no page")
+        assert not processes(rig.host)
+    finally:
+        rig.stop()
+
+
+def test_an_adapter_that_drops_off_usb_during_a_read_is_not_a_plugin_crash(tmp_path):
+    """Seen 2026-11-10: the wrist fdcanusb dropped off USB twice in 30 s; the probe reading it died with "SerialException ... device
+    disconnected" and was confirmed as an ERROR fault, PluginCrashed. The host knows the device re-enumerated under the run."""
+
+    import threading
+
+    rig = Bench(tmp_path)
+    try:
+        rig.adapter["attrs"]["devnum"] = 7
+        rig.os.devices[:] = standard_skeleton(rig.adapter)
+        rig.host.refresh()
+        job = next(iter(rig.host.jobs.values()))
+        rig.set(diagnose_crash_s=1.0)
+        runner = threading.Thread(target=rig.host.run_job, args=(job,))
+        runner.start()
+        time.sleep(0.3)
+        rig.adapter["attrs"]["devnum"] = 9  # unplugged and back under the read
+        rig.os.devices[:] = standard_skeleton(rig.adapter)
+        rig.host.refresh()
+        runner.join(10)
+        status = job.cache.host_status
+        assert (status.level, status.code) == ("unknown", "DeviceLeftDuringRun"), status
+        assert "dropped off USB" in status.message
+        assert not [fault for fault in rig.host.faults.all() if fault.code == "PluginCrashed"]
+        # the same failure with the adapter left alone is still a crash
+        rig.set(diagnose_crash_s=0.2)
+        rig.host.run_job(job)
+        assert job.cache.host_status.code == "PluginCrashed"
     finally:
         rig.stop()
 
@@ -382,14 +449,14 @@ def test_presence_passes_stay_out_of_the_activity_log(bench):
     assert "PresencePass" not in codes
 
 
-def test_a_device_whose_plugin_declares_no_presence_is_not_asked(tmp_path):
-    rig = Bench(tmp_path)
+def test_a_device_whose_plugin_declares_no_presence_is_not_asked(tmp_path, monkeypatch):
+    rig = connected_and_lapsed(tmp_path, monkeypatch)
     try:
         rig.host.describes["bus"] = {k: v for k, v in rig.host.describes["bus"].items() if k != "presence"}
         answer = rig.beat()["presence"]
         assert answer["supported"] is False and answer["adapters"] == []
         time.sleep(0.4)
-        assert rig.verbs("presence") == []
+        assert len(rig.verbs("presence")) == 1
     finally:
         rig.stop()
 

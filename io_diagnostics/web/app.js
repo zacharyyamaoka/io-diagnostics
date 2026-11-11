@@ -980,7 +980,10 @@ function renderToggles() {
   const options = structureOptions();
   // a toggle with `when` shows only while it means something (P2's Empty ports: Connections only)
   $('structure-toggles').innerHTML = (structure.toggles || []).filter((toggle) => IOView.toggleShown(toggle, options)).map((toggle) => `<label class="vo-row vo-switch" title="${esc(toggle.title || toggle.label)}">`
-    + `<span class="vo-label">${esc(toggle.label)}</span><input type="checkbox" role="switch" data-opt="${esc(toggle.key)}"${options[toggle.key] ? ' checked' : ''}></label>`).join('');
+    + `<span class="vo-label">${esc(toggle.label)}</span><input type="checkbox" role="switch" data-opt="${esc(toggle.key)}"${options[toggle.key] ? ' checked' : ''}></label>`).join('')
+    // the plug button's own setting, in every grouping (Zach, 2026-11-10: "give me the option to hide the expected ones")
+    + `<label class="vo-row vo-switch" title="Hide what the model remembers but nothing hears now: stale boards, a rig's absent parts. The same as the plug button.">`
+    + `<span class="vo-label">Only what's connected</span><input type="checkbox" role="switch" data-connected${S.connected ? ' checked' : ''}></label>`;
 }
 // ---- Connected only (Zach, 2026-11-09: "just show connected things"; docs/api-v1.md "Presence") ----
 // While it is on and the page is in view, the page beats POST /api/v1/presence every few seconds: the host then keeps one query-only
@@ -1002,6 +1005,7 @@ function setConnected(on) {
   S.connected = Boolean(on);
   writePref(PREFS.connected, S.connected ? '1' : '0');
   if (S.connected) presenceBeat();
+  renderToggles();
   render();
 }
 setInterval(presenceBeat, PRESENCE_BEAT_MS);
@@ -2449,6 +2453,7 @@ $('history-window').addEventListener('change', (event) => { const seconds = Numb
 // step is still loading belongs to no step
 $('detail').addEventListener('scroll', () => { if (S.drawnAt && S.drawnAt === drillAt()) S.scrolls.set(S.drawnAt, $('detail').scrollTop); }, { passive: true });
 $('structure-toggles').addEventListener('change', (event) => {
+  if (event.target.closest('[data-connected]')) { setConnected(event.target.checked); return; }
   const box = event.target.closest('[data-opt]');
   if (box) setToggle(box.dataset.opt, box.checked);
 });
@@ -2515,6 +2520,7 @@ async function boot() {
   S.inspPinned = readPref(PREFS.inspectorPinned) === '1';
   S.connected = readPref(PREFS.connected) === '1';
   if (S.connected) presenceBeat();
+  if (S.structure) renderToggles();
   // the page layout (layouts/host.js): moves the page's parts into one of five arrangements; everything it draws is ours
   if (window.IOLayoutHost) {
     await window.IOLayoutHost.start({ S, $, esc, usb, render, entityLabel, renderActivity: typeof renderActivity === 'function' ? renderActivity : null, eventRow, setViewOptions, setToggle, structureOptions, setConnected,
