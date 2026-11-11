@@ -1549,6 +1549,11 @@ class Host:
             self.describes[spec.name] = answer
         changed = sorted(key for key in set(old) | set(answer) if old.get(key) != answer.get(key))
         self._apply_describe(spec, old, answer)
+        # WHY every follower of it starts again, whatever its declaration (seen on Preview 2026-11-11: the Computer's follower ran its 05:02
+        # code for 4.4 h after a new computer plugin landed): a follower is the driver's code running, and this is called because it changed
+        for key in [key for key in self.followers if key[0] == spec.name]:
+            self.followers.pop(key).stop()
+        self._sync_followers()
         self._plugin_event(spec, "PluginReloaded", f"{spec.name}: its code changed; describe was read again"
                            + (f" (changed: {', '.join(changed)})" if changed else " (nothing it declares changed)"), changed=changed)
 

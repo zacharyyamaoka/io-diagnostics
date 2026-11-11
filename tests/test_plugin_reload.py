@@ -32,6 +32,10 @@ elif verb == "watch":
     while True:
         print(flush=True)
         time.sleep(0.1)
+elif verb == "follow":
+    while True:
+        print(json.dumps({{"schema": "diagnostics-record/0", "record": "status", "level": "ok", "name": "alive", "path": ""}}), flush=True)
+        time.sleep(0.1)
 '''
 
 
@@ -205,3 +209,21 @@ def test_the_source_stamp_sees_an_edit_an_addition_and_a_removal_and_skips_tests
     assert source_stamp(spec)[1] == 1
     os.utime(project / "src" / "pkg" / "mod.py", ns=(base[0] + 5_000_000_000, base[0] + 5_000_000_000))
     assert source_stamp(spec)[0] == base[0] + 5_000_000_000
+
+
+def test_a_followed_driver_whose_code_changed_is_followed_by_the_new_code(tmp_path):
+    """Seen on Preview 2026-11-11: the Computer's follower ran its 05:02 code for 4.4 h after a new computer plugin landed (the old one
+    still called gigabyte_wmi temp5 an ERROR), because a follower was restarted only when its follow declaration changed. A follower IS
+    the driver's code running: when the code changes, the follower starts again on it."""
+
+    declared = {**declaration("first"), "follow": {"period_s": 0.2}}
+    made = Reloadable(tmp_path, declared)
+    try:
+        made.host.start(udev=False)
+        [first] = wait_for(lambda: made.verbs("follow"), timeout=15, what="the first follower")
+        made.rewrite(declared)  # new code, the same declaration
+        follows = wait_for(lambda: len(made.verbs("follow")) >= 2 and made.verbs("follow"), timeout=15, what="a follower on the new code")
+        assert follows[-1]["pid"] != first["pid"]
+        wait_for(lambda: not alive(first["pid"]), timeout=8, what="the old follower gone")
+    finally:
+        made.host.stop()
