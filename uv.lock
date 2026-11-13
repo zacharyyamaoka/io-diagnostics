@@ -154,6 +154,15 @@ wheels = [
 ]
 
 [[package]]
+name = "dataclass-values"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/6c/ca/387a299f05bcd7f76b26e0951f95527e9e68e29c02676c8d5186113ce7df/dataclass_values-0.1.0.tar.gz", hash = "sha256:e95bafd4b96ef74bdb99d475ede4bac76115b1f8562407e42e0eabd7e9cbe3bc", size = 12336, upload-time = "2026-11-11T15:39:20.928Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/32/d5/0269abcf68c59a3a9a032f52e84b5c88b3d50fb76b9aaf73783b7eb4fca8/dataclass_values-0.1.0-py3-none-any.whl", hash = "sha256:98faeb88a13c555d5e10ce5e17a9e5d6821483d1088d69ae72490269393e3ec7", size = 9415, upload-time = "2026-11-11T15:39:19.887Z" },
+]
+
+[[package]]
 name = "foxglove-sdk"
 version = "0.30.2"
 source = { registry = "https://pypi.org/simple" }
@@ -466,23 +475,32 @@ wheels = [
 
 [[package]]
 name = "robot-msgs"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "/home/bam/robot_msgs" }
 dependencies = [
+    { name = "dataclass-values" },
     { name = "numpy" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "dataclass-values", specifier = ">=0.1.0" },
+    { name = "imageio-ffmpeg", marker = "extra == 'test'", specifier = ">=0.5" },
+    { name = "imageio-ffmpeg", marker = "extra == 'viz'", specifier = ">=0.5" },
     { name = "matplotlib", marker = "extra == 'test'", specifier = ">=3.8" },
     { name = "matplotlib", marker = "extra == 'viz'", specifier = ">=3.8" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8" },
+    { name = "rerun-sdk", marker = "extra == 'rerun'", specifier = "==0.40.0" },
+    { name = "rerun-sdk", marker = "extra == 'test'", specifier = "==0.40.0" },
+    { name = "robot-msgs", extras = ["viz"], marker = "extra == 'rerun'" },
     { name = "rosbags", marker = "extra == 'ros'", specifier = ">=0.10" },
     { name = "rosbags", marker = "extra == 'test'", specifier = ">=0.10" },
     { name = "scipy", marker = "extra == 'test'", specifier = ">=1.11" },
+    { name = "viser", marker = "extra == 'test'", specifier = "==1.1.1" },
+    { name = "viser", marker = "extra == 'viser'", specifier = "==1.1.1" },
 ]
-provides-extras = ["viz", "ros", "test"]
+provides-extras = ["viz", "ros", "rerun", "viser", "test"]
 
 [[package]]
 name = "rosbags"
@@ -520,10 +538,18 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "mujoco", marker = "extra == 'sim'", specifier = "==3.11.0" },
+    { name = "opencv-python-headless", marker = "extra == 'vision'", specifier = "==4.11.0.86" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8" },
+    { name = "robot-models", extras = ["contact"], marker = "extra == 'homing'", editable = "/home/bam/robot_models" },
+    { name = "robot-models", extras = ["contact"], marker = "extra == 'test'", editable = "/home/bam/robot_models" },
     { name = "robot-msgs", editable = "/home/bam/robot_msgs" },
+    { name = "scipy", marker = "extra == 'homing'", specifier = ">=1.11" },
+    { name = "scipy", marker = "extra == 'test'", specifier = ">=1.11" },
+    { name = "wandb", marker = "extra == 'tracking'", specifier = "==0.31.0" },
+    { name = "wandb-workspaces", marker = "extra == 'tracking'", specifier = "==0.4.13" },
+    { name = "weave", marker = "extra == 'tracking'", specifier = "==0.54.1" },
 ]
-provides-extras = ["sim", "test"]
+provides-extras = ["sim", "vision", "tracking", "homing", "test"]
 
 [[package]]
 name = "websockets"
