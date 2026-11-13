@@ -1,0 +1,41 @@
+# IO diagnostics plugin: the obsbot_ptz_camera driver's own diagnostics (OBSBOT PTZ webcams, USB 3564:*).
+# Boundary: docs/build-plan-v1.md "Plugin boundary". The host appends one verb to `command`:
+#   describe | diagnose --device <id> | act --device <id> --action <name> [--confirm <token>] [--dry-run]
+# and reads diagnostics-record/0 JSON lines (contract/record.py) from stdout.
+# Run by hand (sysfs, /proc and the V4L2 control plane's read ioctls; never the stream, never the gimbal):
+#   uv run --project /home/bam/bam_ws/src/core/mdp/agent/sensors/obsbot_ptz_camera python -m obsbot_ptz_camera.diagnostics diagnose
+
+name = "obsbot_ptz_camera"
+description = "OBSBOT PTZ cameras: identity, USB link, image controls, pan/tilt/zoom in degrees, who holds the stream"
+
+# WHY enabled: plug the camera in and see it, and open its viewer from its row (Zach, 2026-11-12), as RealSense
+# and moteus already do. A diagnose reads sysfs, /proc and the control plane's QUERYCTRL / G_CTRL / QUERYMENU
+# only: control ioctls are shared with whatever streams (verified on a Tiny 4K at 1080p), so a running
+# obsbot-viewer keeps its stream. open_console is an `act` the host runs only for a person, with --confirm.
+enabled = true
+
+# WHY no `exclusive` group: the camera is not on the rack bus and takes no bus lock, and the kernel arbitrates its
+# control ioctls; nothing else shares a resource with it that the OS cannot arbitrate.
+# WHY uv run in the driver's own project: the plugin imports only the package's stdlib core, so no extra is asked
+# for; uv run's sync is inexact, so it never removes the [viewer] extra an obsbot-viewer in the same .venv runs on.
+# open_console starts the viewer through the package's own `--extra viewer`.
+# WHY the main checkout's path: the plugin lands on bam_ws main (no worktree path to retire).
+command = [
+  "uv", "run", "--quiet",
+  "--project", "/home/bam/bam_ws/src/core/mdp/agent/sensors/obsbot_ptz_camera",
+  "python", "-m", "obsbot_ptz_camera.diagnostics",
+]
+cwd = "/home/bam/bam_ws/src/core/mdp/agent/sensors/obsbot_ptz_camera"
+
+# Seconds per diagnose call. A live diagnose is uv start + sysfs + about 50 control reads + one /proc walk:
+# 0.8 s measured on 2026-11-13 with the camera streaming in obsbot-viewer.
+timeout_s = 20
+# Seconds per act call, never used by diagnose. open_console only spawns the viewer detached and returns (under a
+# second plus uv's start); the viewer's own uv sync happens in the detached process, not inside this limit.
+act_timeout_s = 60
+# Seconds between diagnose calls. Must equal obsbot_ptz_camera.diagnostics.DIAGNOSE_PERIOD_S: every status promises
+# it as expected_period_s, and the host marks a record stale after max(3 x period, 5 s).
+period_s = 30
+
+# No `matches` here on purpose: the host takes them from the plugin's own `describe` (usb:3564:*), the build plan's
+# route, so the driver alone decides which cameras it claims.
