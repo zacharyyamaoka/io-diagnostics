@@ -74,15 +74,18 @@ def _video_nodes_under(device_dir: Path) -> list[str]:
     return nodes
 
 
-def list_usb_devices(sysfs_root: Path = SYSFS_USB) -> list[UsbDevice]:
-    """Every enumerated USB device (root hubs excluded), sorted by port."""
+def list_usb_devices(sysfs_root: Path = SYSFS_USB, *, nodes: bool = True) -> list[UsbDevice]:
+    """Every enumerated USB device (root hubs excluded), sorted by port. ``nodes=False`` leaves ``ttys`` / ``by_id`` / ``video_nodes`` empty.
 
-    by_id = _by_id_links()
+    WHY ``nodes=False`` (2026-11-13): ``io_facts.skeleton`` never uses them (its tty and v4l sources own those nodes), and looking them up was
+    43 % of every host refresh on Stable's tray: two realpath calls per USB device per video node, every 2 s."""
+
+    by_id = _by_id_links() if nodes else {}
     devices = []
     for device_dir in sorted(sysfs_root.iterdir()):
         if not PORT_NAME.match(device_dir.name) or not (device_dir / "idVendor").is_file():
             continue
-        ttys = sorted(f"/dev/{Path(tty).name}" for tty in glob.glob(str(device_dir / "*" / "tty" / "*")))
+        ttys = sorted(f"/dev/{Path(tty).name}" for tty in glob.glob(str(device_dir / "*" / "tty" / "*"))) if nodes else []
         plugged_at = dt.datetime.fromtimestamp(device_dir.lstat().st_mtime if device_dir.is_symlink() else device_dir.stat().st_mtime)
         devices.append(
             UsbDevice(
@@ -97,7 +100,7 @@ def list_usb_devices(sysfs_root: Path = SYSFS_USB) -> list[UsbDevice]:
                 plugged_at=plugged_at.isoformat(timespec="seconds"),
                 ttys=tuple(ttys),
                 by_id=tuple(link for tty in ttys for link in by_id.get(tty, [])),
-                video_nodes=tuple(_video_nodes_under(device_dir)),
+                video_nodes=tuple(_video_nodes_under(device_dir)) if nodes else (),
             )
         )
     return devices

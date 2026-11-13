@@ -65,6 +65,11 @@ FIXTURE_FILE = FIXTURE_PLUGINS_DIR / "v6_frames.json"
 FIXTURE_ALIASES = {"plug": "F1", "bus-busy": "F2", "after-restart": "F3", "f1": "F1", "f2": "F2", "f3": "F3",
                    "v6-f1": "F1", "v6-f2": "F2", "v6-f3": "F3"}
 REFRESH_S = 2.0
+# WHY slower while nobody looks (2026-11-13, Stable's tray): each refresh reads the whole skeleton (sysfs, /proc for EtherCAT masters), ~0.2 s of CPU
+# at a load of 45 and far more under the agents' load and memory pressure, and only a page needs it every 2 s. A plug, an unplug, a driver's node
+# (udev) and a kernel USB or AER line still refresh at once, and the first look ends the quiet at once; what only this timer sees (a NIC's carrier,
+# an AER counter, an EtherCAT master process) is at most this late on the tray.
+REFRESH_QUIET_S = 10.0
 # WHY faster while a plug is provisional: the kernel log settles it 3 s (plug) or 10 s (unplug) after the uevent, and
 # the confirmation must replace the provisional row as soon as it is due, not up to 2 s later
 FAST_REFRESH_S = 0.5
@@ -1695,7 +1700,7 @@ class Host:
 
         seen = self._published_revision
         while not self._stop.is_set():
-            if time.monotonic() - self._read_at > VIEW_QUIET_S:
+            if not self._someone_looking():
                 self._view_wanted.wait(VIEW_MAX_AGE_S)  # WHY: nobody is looking, so a change can wait; a service with no window spends no more than it has to
             else:
                 with self.changes:
@@ -1713,10 +1718,30 @@ class Host:
             # WHY a stream may cut the rest short: a plug shows within a second (docs/activity-log-v1.md), and streams only ask on a change
             self._view_wanted.wait(max(0.0, VIEW_REST * took - VIEW_GAP_S))
 
-    def reads_published(self) -> None:
-        """This thread answers people (a request, the live feed, the tray, the beat): from here on its reads never build."""
+    def reads_published(self, *, looking: bool = True) -> None:
+        """This thread answers people (a request, the live feed, the tray, the beat): from here on its reads never build. ``looking=False`` for a
+        thread that reads on a timer of its own (the tray's chip, the stock diagnostics' beat): its reads are no sign that anyone looks.
+
+        WHY (measured on Stable's tray, 2026-11-13, 37 h up, no window open): the tray's 2 s chip read and the beat's 5 s read each counted as
+        someone looking, so the host never went quiet, and each of the Computer follower's ~15 changes a second set off a whole build, about three
+        a second at the rate cap: ~20 % of a core around the clock, and with the refresh ~1 core under the agents' load. A page, a stream or a
+        script over HTTP still looks."""
 
         self._readers.published = True
+        self._readers.looking = looking
+
+    def _someone_looking(self) -> bool:
+        """A person has read or streamed within ``VIEW_QUIET_S``: a page, a stream, a script over HTTP. The tray and the beat never count."""
+
+        return time.monotonic() - self._read_at <= VIEW_QUIET_S
+
+    def _looked_at(self) -> None:
+        """A person's read or stream. The first after a quiet spell ends it: the builder and the refresher wake now, or they sleep on past what it came to see."""
+
+        if not self._someone_looking():
+            self._view_wanted.set()
+            self._wake.set()  # WHY the refresher too: while quiet it reads the skeleton every REFRESH_QUIET_S, and the page should find it fresh
+        self._read_at = time.monotonic()
 
     def read_view(self) -> View:
         """What a read answers from: on a thread that ``reads_published``, the view last published, at once. WHY (measured 2026-11-04): every GET built the whole
@@ -1727,9 +1752,8 @@ class Host:
 
         if not self._serving or not getattr(self._readers, "published", False):
             return self.view()
-        if time.monotonic() - self._read_at > VIEW_QUIET_S:
-            self._view_wanted.set()  # WHY: the first reader after a quiet spell ends it, or the builder sleeps on past what it came to see
-        self._read_at = time.monotonic()
+        if getattr(self._readers, "looking", True):
+            self._looked_at()
         view = self._published
         if view is None:  # the host is still reading what it knows from disk
             with self.published:
@@ -1742,7 +1766,7 @@ class Host:
         from before it, and say nothing until the next one."""
 
         if self._serving:
-            self._read_at = time.monotonic()  # WHY: an open stream is someone looking, though it reads nothing until a change comes
+            self._looked_at()  # WHY: an open stream is someone looking, though it reads nothing until a change comes
             self._view_wanted.set()
             with self.published:
                 self.published.wait_for(lambda: self._published_revision >= revision or self._stop.is_set(), timeout=timeout_s)
@@ -1755,7 +1779,8 @@ class Host:
 
     def _refresh_loop(self) -> None:
         while not self._stop.is_set():
-            self._wake.wait(FAST_REFRESH_S if self.pending else REFRESH_S)
+            # WHY the timer only: a udev event, a kernel USB line or the first look set _wake and refresh at once, quiet or not (REFRESH_QUIET_S)
+            self._wake.wait(FAST_REFRESH_S if self.pending else REFRESH_S if self._someone_looking() else REFRESH_QUIET_S)
             self._wake.clear()
             if self._stop.is_set():
                 return
@@ -1768,7 +1793,8 @@ class Host:
     # --- robotdx.diagnostics: the stock diagnostics, on a slow beat over the State history ----------------------------------
     def _stock_diagnostics_loop(self) -> None:
         # WHY a thread of its own on a slow beat (5 s): the library evaluates windows of history, never the 10 Hz watch path
-        self.reads_published()  # WHY: a beat reads the view; it is no reason to build one (Zach's brief, 2026-11-04: "a slow beat")
+        # WHY: a beat reads the view; it is no reason to build one (Zach's brief, 2026-11-04: "a slow beat"), nor a sign that anyone looks (2026-11-13)
+        self.reads_published(looking=False)
         while not self._stop.wait(self.stock_diagnostics.beat_s):
             try:
                 self.run_stock_diagnostics()
