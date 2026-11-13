@@ -111,7 +111,10 @@ def test_every_tree_node_has_exactly_the_documented_fields(server):
     while stack:
         node = stack.pop()
         seen += 1
-        same_keys(node, documented, node["path"])
+        # `rerun` is on the nodes a recorder could show only (docs/api-v1.md "The rerun field"): optional, and its own shape is checked below
+        same_keys({key: value for key, value in node.items() if key != "rerun"}, documented, node["path"])
+        if "rerun" in node:
+            assert set(node["rerun"]) in ({"url", "label", "live"}, {"absent"}, {"absent", "start_cmd"}), (node["path"], node["rerun"])
         same_keys(node["rollup"], documented["rollup"], f"{node['path']}.rollup")
         same_keys(node["own"], documented["own"], f"{node['path']}.own")
         if node["hint"]:

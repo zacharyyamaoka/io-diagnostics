@@ -258,6 +258,7 @@ Besides `IO_DIAGNOSTICS_DEVICE`, `_DEVICE_PATH`, `_NOW` and `_SCHEMA`, every plu
 | `usb` | A USB device row's own `version` (its bcdUSB as sysfs shows it, `"2.10"`) and the `speed_mbps` of the link it runs at, so a page can say "USB 2.1" instead of "480 Mb/s" (`web/usb.js`; the raw speed stays in the tooltip). `null` for any other row. |
 | `rate` | How fast the row's own PERIODIC records actually arrive, against what they promised (the Table's Rate column: "0.20 /s · expected 0.20"). `received_per_s` and `expected_per_s` are sums over the row's periodic records: arrivals per second over the last `max(30 s, 6 × period)` (at most the history window), and `1 / expected_period_s` each, so a board with three 2 s checks reads 1.5 against 1.5. A record is judged once the host has watched it for 3 of its periods; until then `received_per_s` and `window_s` are `null` (measuring) and `expected_per_s` is what is promised. A page shows a quiet note when `received_per_s` is under half of `expected_per_s`; it is not a level (staleness is the health signal). `null` for a row with no periodic record of its own (event-driven only, structure). Counted at the host's receive time (`history.py` `rates()`), so a replay re-stamps arrivals like everything else. |
 | `claimed` | Whether some driver plugin claims the row. An OS device nobody claims (a keyboard, a mouse, a webcam, a NIC) is `false`; the page hides those by default (the Visibility control). Plugin rows, the expected setup's devices and all structure are `true`. |
+| `rerun` | Additive (2026-11-13), on an eligible node only (the host, a rig, a moteus board, a USB camera), absent elsewhere: the "Open in Rerun" link the recorder's discovery doc gives it, `{url, label, live}`, or `{absent: <why>[, start_cmd]}`. Its own section: "The `rerun` field". |
 | `children` | Child nodes, ordered: ports and groups by name, plugin entities in the order the plugin sent them. |
 
 ## `GET /api/v1/node?path=<entity path>`
@@ -1338,6 +1339,63 @@ The answer (also what the page shows in the button's title):
 
 `state`: `idle` (no beat), `starting`, `running`, `paused` (`reason`: a run uses the bus, or a person's tool holds it), `restarting`.
 `last.outcome` other than `looked` (`BusLockHeld`, `PortBusy`, ...) says why that pass did not look, with its `holders`.
+
+## The `rerun` field: "Open in Rerun" (2026-11-13; the discovery doc is a proposal)
+
+Zach, 2026-11-13, via the sprint dispatcher: each pluggable device (moteus board, D435, OBSBOT) opens a live Rerun view, plus a
+robot/cell view; reading stays passive, the recorder owns the devices. A separate recorder process writes a **discovery doc**;
+RobotDx only reads it (never opens a camera, a bus or the recorder's socket) and attaches `rerun` to the nodes the recorder can show,
+in `GET /api/v1/state` (`tree`, on a copy after the per-view cache) and in `GET /api/v1/node` (`node`). The page draws it in the entity
+header's badge line (`io_diagnostics/web/detail/d6.js` `rerunLink`). Every field name below is a constant at the top of
+`io_diagnostics/rerun_links.py`.
+
+The doc: `~/.cache/data-recorder/rerun.json`, or env `RERUN_DISCOVERY` (a file path, or an http(s) URL fetched on a background thread
+with a 1 s timeout, so a dead URL never delays a read). A file is re-read at most every 2 s.
+
+```json
+{"schema": "rerun-discovery/1", "updated": 1794260000, "viewer_url": "http://127.0.0.1:9090", "cell_url": "http://127.0.0.1:9090/?cell",
+ "start_cmd": "data-recorder serve",
+ "devices": [{"key": "usb:8086:0b07:042222070792", "label": "D435", "entity_root": "/cell/d435", "url": "http://127.0.0.1:9090/?d435",
+              "live": true, "last_t": 1794259999}]}
+```
+
+Keys (what a node is called in `devices[].key`):
+
+| node | key |
+|---|---|
+| USB device with `identity.serial_number` | `usb:<vid>:<pid>:<identity.serial_number>` (vid/pid from `hardware_id`; the serial inside a `hardware_id` can differ from the identity's: a D435's `usb:8086:0b07:037323022737` is `usb:8086:0b07:042222070792`) |
+| USB device without one | its `hardware_id` as-is (`usb:3564:fef4@1-2`) |
+| moteus board (kind `servo`, `<adapter>/can/<n>`) | `moteus:<the fdcanusb adapter's identity.serial_number>/can:<n>` |
+| rig (kind `rig`, `host/rig-<slug>`) | `rig:<name>` from the setup's rigs, else `rig:<slug>` |
+
+Eligible nodes: the host, rigs, moteus boards, USB cameras (a USB device with video4linux children, a RealSense, or an OBSBOT, vendor
+3564). The host and the rigs link to `cell_url` (their own entry in `devices`, when the doc has one, wins).
+
+The field, on an eligible node only:
+
+Listed (`url` is the recorder's, `live` its word that the stream is flowing now):
+
+```json
+{"rerun": {"url": "http://127.0.0.1:9090/?d435", "label": "D435", "live": true}}
+```
+
+No recorder:
+
+```json
+{"rerun": {"absent": "Recorder not running", "start_cmd": "data-recorder serve"}}
+```
+
+A fresh doc that does not list the node:
+
+```json
+{"rerun": {"absent": "Not in the recorder's device list"}}
+```
+
+- The doc is missing, unreadable, of another schema, or its `updated` is more than 10 s old: every eligible node gets `absent`
+  `Recorder not running`; `start_cmd` is carried only when a stale doc had one (a doc never written has no recorder to say it).
+- A fresh doc that does not list an eligible node: `absent` `Not in the recorder's device list`.
+- `live` is the recorder's word that the stream is flowing now (`last_t` is not used). The cell link's `live` is any device live.
+- A page links `url` only when it is http(s) (`webUrl`), and draws `absent` as muted text; a node without `rerun` is not eligible.
 
 ## What a page must NOT assume
 

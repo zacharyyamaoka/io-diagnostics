@@ -278,6 +278,19 @@
     const id = node.identity || {};
     return [['serial', id.serial_number], ['firmware', id.sw_version], ['model id', id.model_id]].filter(([, v]) => v);
   }
+  // "Open in Rerun" (docs/api-v1.md "The rerun field"): the host attaches `rerun` to a node the recorder can show. A link only when the
+  // URL is http(s) (webUrl, as for a datasheet); the dot is lit while the recorder says the stream is live. No recorder, or the node not
+  // in its list: the reason in muted words, and the command that starts it when the recorder's last doc carried one.
+  function rerunLink(node, h) {
+    const r = node.rerun;
+    if (!r) return '';
+    if (r.absent) {
+      return `<span class="d6-rr d6-rr-off" data-d6-rerun="absent">Rerun: ${h.esc(r.absent)}${r.start_cmd ? ` <code class="mono d6-rr-cmd">${h.esc(r.start_cmd)}</code>` : ''}</span>`;
+    }
+    if (!webUrl(r.url)) return `<span class="d6-rr d6-rr-off" data-d6-rerun="absent">Rerun: not a web address <span class="mono">${h.esc(r.url)}</span></span>`;
+    return `<span class="d6-rr" data-d6-rerun="${r.live ? 'live' : 'idle'}"><span class="d6-rr-dot${r.live ? ' on' : ''}" title="${r.live ? 'streaming now' : 'not streaming now'}"></span>`
+      + `<a class="link" href="${h.esc(String(r.url).trim())}" target="_blank" rel="noopener" title="${h.esc(r.label || '')}">Open in Rerun ↗</a></span>`;
+  }
   function headerHtml(node, detail, ctx, row) {
     const h = ctx.h;
     const title = row ? row.label : usbText(node.name);
@@ -299,7 +312,7 @@
       [node.edge === 'part_of' ? 'part of' : 'via', parent ? `<a class="link" data-go="${h.esc(parent.path)}" title="${h.esc(parent.name)}">${h.esc(usbText(parent.name))}</a>` : '']]
       .filter(([, v]) => v).map(([k, v]) => [k, /^<(span|a)/.test(String(v)) ? v : h.esc(v)]);
     return `<div class="d-head d6-head"><div class="d-title">${h.icon(node.icon)}<span class="d6-name">${h.esc(title)}</span>${showModel ? `<span class="d6-model">${h.esc(model)}</span>` : ''}${h.pill(node.level)}</div>`
-      + `<div class="d6-line">${badge}<span class="d6-heard" data-d6-heard title="when the host last received anything from this entity">${h.esc(heardText(h))}</span></div>`
+      + `<div class="d6-line">${badge}<span class="d6-heard" data-d6-heard title="when the host last received anything from this entity">${h.esc(heardText(h))}</span>${rerunLink(node, h)}</div>`
       + headMessage(node, h)
       + `<div class="d6-hw">${hw.map(([k, v]) => `<span><span class="d6-k">${h.esc(k)}</span> <span class="mono">${h.esc(v)}</span></span>`).join('')}`
       + `<button class="d6-more" data-d6-more aria-expanded="${open}">${open ? 'Less' : 'More'} ${open ? '▴' : '▾'}</button></div>`
@@ -745,6 +758,11 @@
 .d6-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 6px; font-size: 12.5px; }
 .d6-badge-c { display: inline-flex; align-items: center; padding: 1px 9px; border: 1px solid var(--io-border); border-radius: var(--io-radius-pill); font: 600 11.5px var(--io-font-ui); color: var(--io-text-strong); background: var(--io-control); }
 .d6-heard { color: var(--io-muted); font-variant-numeric: tabular-nums; }
+.d6-rr { display: inline-flex; align-items: center; gap: 6px; }
+.d6-rr-off { color: var(--io-muted); overflow-wrap: anywhere; }
+.d6-rr-cmd { font-size: 11.5px; color: var(--io-text); }
+.d6-rr-dot { width: 7px; height: 7px; border-radius: 50%; border: 1px solid var(--io-faint); box-sizing: border-box; }
+.d6-rr-dot.on { background: var(--io-ok); border-color: var(--io-ok); }
 .d6-own-sub { margin-top: 2px; font-size: 12.5px; color: var(--io-muted); }
 .d6-hw { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; margin-top: 6px; font-size: 12px; color: var(--io-muted); }
 .d6-k { color: var(--io-faint); }

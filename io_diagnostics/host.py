@@ -40,6 +40,7 @@ from io_diagnostics import host_utilities, usb_reset
 from io_diagnostics import logview as logview_module
 from io_diagnostics import not_run as not_run_module
 from io_diagnostics import probe as probe_module
+from io_diagnostics import rerun_links
 from io_diagnostics import roster as roster_module
 from io_diagnostics import settings as settings_module
 from io_diagnostics import stock_diagnostics as stock_diagnostics_module
@@ -2365,9 +2366,15 @@ class Host:
                                        memory=view.memory, live=view.live, expected_paths=view.expected_paths,
                                        rates=view.rates, answering=view.answering, activity=view.activity)}
         # WHY the clock is now and not the view's: the page's clock and every age it works out run from it
+        # WHY `rerun` on a copy, after the cache: it depends on the recorder's discovery doc, which changes with the wall clock and not with
+        # the view; the cached tree stays the view's (docs/api-v1.md "The rerun field")
         return {"api": API, "schema": SCHEMA, "record_version": RECORD_VERSION, "clock": self.clock_json(self.clock.now() if self._serving else view.now),
                 "fixture": self.fixture, "host": {"name": self.os.hostname, "sources": list(self.sources)}, **made,
+                "tree": rerun_links.attach_tree(made["tree"], self._rig_names()),
                 "runs": self.runs.json(RUNS_IN_STATE)}
+
+    def _rig_names(self) -> dict[str, str]:
+        return {expected_module.rig_path(rig): rig.name for rig in self.setup.manifest.rigs}
 
     def setup_summary(self, view: View) -> dict:
         manifest = self.setup.manifest
@@ -2398,9 +2405,16 @@ class Host:
         # WHY lazily, and the names once: the 20 it sends were picked after every event of the log had been serialized, each with the whole name table built
         # again for it: 26,867 x 93 entities, the host page's 3.8 s (2026-11-04)
         events = itertools.islice((event for event in view.events if event.path == path or event.path.startswith(below)), NODE_EVENTS)
-        return {"node": tree.node_json(path, rows, view.layer, view.faults_by_path, nested=False, memory=view.memory,
-                                       live=view.live, expected_paths=view.expected_paths, rates=view.rates,
-                                       answering=view.answering, activity=view.activity), "ancestors": ancestors,
+        # WHY `rerun` here too, on a copy: the entity page reads its header from this node, not from the state's tree
+        def entity_of(other: str):
+            entity = merged.entities.get(other)
+            return (entity.hardware_id, dict(entity.identity)) if entity else None
+
+        node = rerun_links.attach_node(
+            tree.node_json(path, rows, view.layer, view.faults_by_path, nested=False, memory=view.memory, live=view.live,
+                           expected_paths=view.expected_paths, rates=view.rates, answering=view.answering, activity=view.activity),
+            merged.children.get(path, []), entity_of, self._rig_names())
+        return {"node": node, "ancestors": ancestors,
                 "checks": [self.check_json(status, view.now) for status in rows.own.get(path, [])],
                 "actions": self.actions_json(path, view), **extra,
                 "faults": [self.fault_json(fault, view) for fault in self.faults.all() if fault.path == path],
