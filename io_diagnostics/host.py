@@ -108,6 +108,14 @@ PRESENCE_FIRST_S = 8.0
 # and longer behind another host's): a plugged adapter gets its presence process for this long, so the boards show at the first pass
 # (0.5-0.8 s after it starts) and a board powered on just after the adapter shows too; then it lapses unless a page beats
 CONNECT_PRESENCE_S = 20.0
+OWN_HOLDER_RETRY_S = 1.0  # a probe blocked only by this host's own process probes again this soon (_probed)
+OWN_HOLDER_SENTENCE = "RobotDx's own check is on the port for a moment · reading again in about a second"
+
+
+def _all_ours(blocked: probe_module.Blocked) -> bool:
+    """Every process blocking a probe is one this host started (its presence pass, another run of a plugin): it lets go within a pass."""
+
+    return bool(blocked.holders) and all(RUNNING.owner(holder.pid) is not None for holder in blocked.holders)
 STATE_HISTORY_GAP_S = 1.0  # the history keeps a state series at 1 Hz at most
 FRAME_FPS_WINDOW_S = 3.0
 RECENT = 6
@@ -1297,8 +1305,21 @@ class Host:
         # WHY a plugin's first read counts as well: it is the same "a thing was just plugged in, and the host is bringing it up" (Zach, 2026-11-10:
         # it took a while after he plugged in the CAN bus before anything showed it was happening); the periodic reads after it are not
         self._bringing_up(job, probing or job.last is None)
+        paused: list[Watch] = []
         try:
             self._presence_first(job, connecting=probing or job.last is None)
+            # WHY the presence process yields for the full read (Zach, 2026-11-13: "it takes a while ... the diagnostics or something is
+            # holding the port? what diagnostics could possibly be running right now that are more important"): both are this host's own,
+            # and on a bus where nobody answers a pass holds the port most of each 2 s, so the read found "moteus_servo.diagnostics has
+            # the port" and waited for that process to exit (~20 s), again and again (07:42-08:17 that morning). The first pass has already
+            # shown what answers; the read reports the boards itself; presence resumes when it ends, as it does for a write.
+            paused = self.pause_watches(job, frozenset({PRESENCE_REL}))
+            with self._watch_lock:
+                for watch in paused:
+                    # the connection's own window was for the first look, which this read now gives; only a page's beat brings it back
+                    watch.hold_until = 0.0
+                    if not self._presence_fresh():
+                        watch.last_beat = 0.0
             with self.lock:
                 entity = self.layer.entities.get(job.device_path)
                 connection = job.connection
@@ -1309,6 +1330,8 @@ class Host:
                 left = self.jobs.get(job.key) is not job or (connection is not None and job.connection != connection)
             self._absorb(job, outcome, left=left)
         finally:
+            if paused:
+                self.resume_watches(paused)
             self._bringing_up(job, False)
 
     def _absorb(self, job: Job, outcome: RunOutcome, follower: Follower | None = None, left: bool = False) -> None:
@@ -1382,6 +1405,10 @@ class Host:
             return None
         found.attempts = previous.attempts + 1 if previous else 1
         found.retry_at = time.monotonic() + probe_module.backoff_s(found.attempts, job.spec.period_s, self.recheck_backoff_s)
+        if _all_ours(found):
+            # WHY a moment, not "when it closes": the holder is this host's own process (a presence pass, another run of the same
+            # plugin), which lets go within a pass; waiting for it to EXIT waited out its whole life (Zach, 2026-11-13)
+            found.retry_at = min(found.retry_at, time.monotonic() + OWN_HOLDER_RETRY_S)
         job.next_due = found.retry_at  # a holder's exit makes it sooner still
         if probe_module.holders_gone(found):  # it let go while the probe ran
             self._release(job, found)
@@ -1397,8 +1424,8 @@ class Host:
             retry_s = blocked.retry_at - time.monotonic()
             values = (*status.values, KeyValue("blocked_by", ", ".join(f"{holder.program} (pid {holder.pid})"
                                                                          for holder in blocked.holders) or "unknown"))
-            return dataclasses.replace(status, level=UNKNOWN, code=blocked.code, values=values,
-                                       message=probe_module.blocked_sentence(blocked, retry_s))
+            message = (OWN_HOLDER_SENTENCE if _all_ours(blocked) else probe_module.blocked_sentence(blocked, retry_s))
+            return dataclasses.replace(status, level=UNKNOWN, code=blocked.code, values=values, message=message)
         if outcome.outcome == "ok":
             at = activity_module.iso(outcome.started + outcome.duration_s, self.utc_offset_s) or ""
             return dataclasses.replace(status, message=f"probed {at[11:19]} · {outcome.duration_s:.1f} s")
@@ -3344,7 +3371,7 @@ class Host:
             if str(watch.job.device.get("bus")) == "composite":
                 self._refresh_composite_values(watch.job)  # its plugin reads its children's latest State from this file
             if watch.paused:
-                watch.gate = {"reason": "paused while a write to this board runs", "holders": []}
+                watch.gate = {"reason": "paused while another RobotDx run uses this board", "holders": []}
                 return
             watch.gate = self._watch_gate(watch)
             if watch.gate is not None:
@@ -3397,7 +3424,7 @@ class Host:
         for watch in running:
             self._watch_step(watch)
 
-    def pause_watches(self, job: Job) -> list[Watch]:
+    def pause_watches(self, job: Job, rels: frozenset[str] | None = None) -> list[Watch]:
         """Stop every watch of this job's board and wait for its process to exit (``Follower.stop`` kills the group and
         waits), so a run that talks to the same device finds the port free. Returns what to give back to ``resume_watches``.
 
@@ -3406,7 +3433,8 @@ class Host:
         the port until its grace ran out), and a write made while the tab was open could never go through."""
 
         with self._watch_lock:
-            paused = [watch for watch in self.watches.values() if watch.job.key == job.key and not watch.stopped]
+            paused = [watch for watch in self.watches.values()
+                      if watch.job.key == job.key and not watch.stopped and (rels is None or watch.rel in rels)]
             for watch in paused:
                 watch.paused += 1
                 if watch.follower is not None:

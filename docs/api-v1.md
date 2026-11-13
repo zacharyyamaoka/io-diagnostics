@@ -1310,6 +1310,12 @@ stops each about `grace_s` (10 s) after the last beat. WHY only while a person l
 (moteus: ~0.3-0.5 s per 2 s, on the wall clock's 2 s marks so every adapter's pass shares one window), and an experiment takes that
 lock with `LOCK_NB` and refuses rather than waits.
 
+The presence process takes turns with the host's own full read of the same device (2026-11-13): once its first pass has looked, it is
+paused while the probe or diagnose runs and resumes after it while a page beats (with no page, the connection's window ends there). Before,
+on a bus where nobody answers, the passes held the port most of each 2 s and the read was refused as "moteus_servo.diagnostics has the
+port", then waited ~20 s for that process to exit, again and again. A probe that is still refused only by one of this host's own processes
+says so ("RobotDx's own check is on the port for a moment") and tries again after 1 s.
+
 What the passes change in `/state`:
 
 - a row a pass heard within `max(3 x period, 5 s)` is `presence` `{"state": "live", "text": "answers now"}`, whatever its older

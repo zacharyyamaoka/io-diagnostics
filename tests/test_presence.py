@@ -405,10 +405,10 @@ def test_a_plug_is_first_looked_at_by_presence_with_no_page_open_and_it_lapses_a
         [first] = rig.verbs("first_pass")
         [full] = rig.verbs("diagnose")
         assert first["t"] < full["t"], (first, full)
-        assert rig.presence(14) == "live" and rig.presence(1) == "live"
-        [process] = wait_for(lambda: processes(rig.host), what="the connection's presence process")
-        wait_for(lambda: process.poll() is not None, timeout=8.0, what="it lapsing with no page")
-        assert not processes(rig.host)
+        # WHY heard as well as live (2026-11-13): the presence process yields the port to the full read and, with no page, does not come
+        # back after it, so the boards it heard read as heard (a solid dot either way)
+        assert rig.presence(14) in ("live", "heard") and rig.presence(1) in ("live", "heard")
+        wait_for(lambda: not processes(rig.host), timeout=8.0, what="it lapsing with no page")
     finally:
         rig.stop()
 
@@ -524,3 +524,36 @@ def test_the_page_beats_over_http_and_only_the_page_may(tmp_path):
     finally:
         server.shutdown()
         rig.stop()
+
+
+def test_the_full_read_is_not_blocked_by_the_hosts_own_presence(tmp_path):
+    """Zach, 2026-11-13: "it takes a while ... the diagnostics or something is holding the port? what diagnostics could possibly be running
+    right now that are more important". Seen on Stable 07:42-08:17: the probe found "moteus_servo.diagnostics has the port" (the host's own
+    presence process) every ~21 s and waited for it to exit. The presence process now yields for the read: it is paused while the read runs."""
+
+    bench = Bench(tmp_path)
+    try:
+        bench.keep_beating(lambda: bench.passes(), what="presence passes")
+        with bench.host._watch_lock:
+            [watch] = [watch for watch in bench.host.watches.values() if watch.rel == host_module_presence_rel()]
+        seen: list[int] = []
+        original = bench.host._absorb
+
+        def absorb(job, outcome, follower=None, left=False):
+            if follower is None:
+                seen.append(watch.paused)
+            return original(job, outcome, follower=follower, left=left)
+
+        bench.host._absorb = absorb
+        job = next(job for job in bench.host.jobs.values() if job.spec.kind != "check")
+        bench.host._run_job(job)
+        assert seen and seen[-1] >= 1, "the presence process was paused while the full read ran"
+        assert watch.paused == 0, "and given the port back after it"
+    finally:
+        bench.stop()
+
+
+def host_module_presence_rel():
+    from io_diagnostics.host import PRESENCE_REL
+
+    return PRESENCE_REL

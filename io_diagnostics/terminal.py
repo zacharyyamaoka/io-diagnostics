@@ -60,6 +60,22 @@ BUS_SETTLE_S = 4.0  # an attempt still going this long after a wait got through 
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][A-Za-z0-9]|\x1b[=>]")
 
 
+
+# A run's records that say it did not do what it was asked: an event the plugin marked warn or error (ActionRefused, ...)
+WARN_SEVERITIES = ("warn", "warning", "error")
+
+
+def run_warning(result: dict) -> str:
+    """The plugin's own sentence when its run refused or warned ("no board answered the scan: nothing moved"), else ""."""
+
+    records = result.get("records") if isinstance(result, dict) else None
+    for record in records or []:
+        if isinstance(record, dict) and record.get("record") == "event" and str(record.get("severity", "")).lower() in WARN_SEVERITIES:
+            message = str(record.get("message") or "").strip()
+            if message:
+                return message
+    return ""
+
 class RunError(Exception):
     """A request about a run the host refuses; ``code`` is the API's ``refused`` word, ``status`` its HTTP status."""
 
@@ -808,6 +824,13 @@ class RunRegistry:
             extra = "; no stop was sent: " + str(plugin_stop["reason"])
             severity = "warn" if severity == "info" else severity
         exit_text = f" (exit {run.exit_code})" if run.exit_code is not None else ""
+        # WHY the plugin's own words (Zach, 2026-11-13, of an Identify that wiggled nothing: "after like wiggle fails, it seemed to like block
+        # future efforts?"): the run exited 0 and the log said only "done after 2 s", while the plugin had said "no board answered the scan:
+        # nothing moved". A run that refused or warned says so where people read it.
+        said = run_warning(result)
+        if said:
+            extra += f": {said}"
+            severity = "warn" if severity == "info" else severity
         self._add_event(Event(code="RunEnded", stamp=self.now(), severity=severity, path=spec.path, hardware_id=spec.hardware_id,
                               message=f"{plain_title(spec.title)} on {spec.label.split(' · ')[0]} {words} after "
                                       f"{result.get('duration_s', 0):.0f} s{exit_text}{extra}",

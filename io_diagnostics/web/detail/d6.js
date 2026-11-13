@@ -68,6 +68,20 @@
   const bytes = (n) => { const u = ['B', 'KiB', 'MiB', 'GiB', 'TiB']; let i = 0; let v = Number(n); while (v >= 1024 && i < u.length - 1) { v /= 1024; i += 1; } return `${i ? v.toFixed(v < 10 ? 2 : 1) : v} ${u[i]}`; };
   const enc = encodeURIComponent;
   // ----------------------------------------------------------------------- the ticking last-heard ----
+  // WHY a problem below leads the header (Zach, 2026-11-13: "it connects, nothing is connected ... it can say nothing detected, make sure CAN ids
+  // plugged in and power is turned on"): the fdcanusb's own check said only who held the port, while its CAN bus said "nobody ACKs this adapter's
+  // frames ... motor supply off, or CAN_H/CAN_L not connected". The worse thing below, with where it is, is the line a person needs; the row's own
+  // words follow it, quieter.
+  function headMessage(node, h) {
+    const own = node.message || '';
+    const hint = node.hint && node.hint.message ? node.hint : null;
+    if (!hint) return `<div class="d-msg" title="${h.esc(own)}">${h.esc(usbText(own || '—'))}</div>`;
+    const where = (node.rollup && node.rollup.origin_name) || '';
+    const lead = where ? `${where}: ${hint.message}` : hint.message;
+    return `<div class="d-msg d6-hint-lead" data-d6-hint title="${h.esc(lead)}">${h.esc(usbText(lead))}</div>`
+      + (own ? `<div class="d-msg d6-own-sub" title="${h.esc(own)}">${h.esc(usbText(own))}</div>` : '');
+  }
+
   function setHeard(age) {
     if (typeof age !== 'number') return;
     Heard.base = age; Heard.at = performance.now();
@@ -286,7 +300,7 @@
       .filter(([, v]) => v).map(([k, v]) => [k, /^<(span|a)/.test(String(v)) ? v : h.esc(v)]);
     return `<div class="d-head d6-head"><div class="d-title">${h.icon(node.icon)}<span class="d6-name">${h.esc(title)}</span>${showModel ? `<span class="d6-model">${h.esc(model)}</span>` : ''}${h.pill(node.level)}</div>`
       + `<div class="d6-line">${badge}<span class="d6-heard" data-d6-heard title="when the host last received anything from this entity">${h.esc(heardText(h))}</span></div>`
-      + `<div class="d-msg" title="${h.esc(node.message || '')}">${h.esc(usbText(node.message || '—'))}</div>`
+      + headMessage(node, h)
       + `<div class="d6-hw">${hw.map(([k, v]) => `<span><span class="d6-k">${h.esc(k)}</span> <span class="mono">${h.esc(v)}</span></span>`).join('')}`
       + `<button class="d6-more" data-d6-more aria-expanded="${open}">${open ? 'Less' : 'More'} ${open ? '▴' : '▾'}</button></div>`
       + (open ? `<div class="d6-hw-more">${h.kv(rest)}</div>` : '') + '</div>';
@@ -731,6 +745,7 @@
 .d6-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 6px; font-size: 12.5px; }
 .d6-badge-c { display: inline-flex; align-items: center; padding: 1px 9px; border: 1px solid var(--io-border); border-radius: var(--io-radius-pill); font: 600 11.5px var(--io-font-ui); color: var(--io-text-strong); background: var(--io-control); }
 .d6-heard { color: var(--io-muted); font-variant-numeric: tabular-nums; }
+.d6-own-sub { margin-top: 2px; font-size: 12.5px; color: var(--io-muted); }
 .d6-hw { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; margin-top: 6px; font-size: 12px; color: var(--io-muted); }
 .d6-k { color: var(--io-faint); }
 .d6-more { margin-left: auto; background: transparent; border: 0; padding: 0 2px; color: var(--io-accent-text); cursor: pointer; font-size: 12px; }
@@ -1256,6 +1271,6 @@
     },
     pause() { stopLive(); if (LogView.inst) LogView.inst.stop(); },
     // for tests and the next lane
-    internals: { Live, U, Heard, tabsFor },
+    internals: { Live, U, Heard, tabsFor, headMessage },
   };
 })(typeof window !== 'undefined' ? window : globalThis);
