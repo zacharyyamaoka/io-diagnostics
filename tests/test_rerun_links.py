@@ -272,3 +272,14 @@ def test_no_doc_at_all_still_leaves_the_state_whole(tmp_path, monkeypatch):
     host = make_host(tmp_path, [host_dict()], [])
     host.refresh()
     assert host.state()["tree"]["rerun"] == {"absent": rr.ABSENT_NO_RECORDER}
+
+
+def test_a_live_moteus_board_of_kind_node_gets_its_key():
+    """The live moteus plugin emits boards as kind "node" (Stable 2026-11-13, host/usb7/port-7-1/usb-7-1/can/14); the key comes from
+    where it sits, <adapter>/can/<id>, so it still links. A bus node itself (…/can) is not a board."""
+
+    adapter = ("usb:0483:5740:272813EF", {"serial_number": "FDA81D29", "model": "fdcanusb"})
+    of = lambda path: adapter if path == "host/usb7/port-7-1/usb-7-1" else None
+    key = rr.node_key("host/usb7/port-7-1/usb-7-1/can/14", "node", "", {"manufacturer": "mjbots", "model": "moteus-c1"}, [], of, {})
+    assert key == "moteus:FDA81D29/can:14"
+    assert rr.node_key("host/usb7/port-7-1/usb-7-1/can", "bus", "", {}, [], of, {}) is None

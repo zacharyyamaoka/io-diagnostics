@@ -49,7 +49,6 @@ HTTP_TIMEOUT_S = 1.0
 
 HOST_PATH = "host"
 RIG_KIND = "rig"
-SERVO_KIND = "servo"
 OBSBOT_VID = "3564"
 REALSENSE_WORD = "realsense"
 
@@ -90,11 +89,11 @@ def node_key(path: str, kind: str, hardware_id: str, identity: dict, child_ids: 
         return HOST_PATH
     if kind == RIG_KIND:
         return rig_key(path, rig_names)
-    if kind == SERVO_KIND:
-        adapter, _, number = path.rpartition("/can/")
-        if not number:
-            return None
-        found = entity_of(adapter) if adapter else None
+    # WHY by path, not kind: the live moteus plugin emits boards as kind "node" (Stable, 2026-11-13: host/usb7/.../can/14),
+    # fixtures as "servo"; what makes it a board on a CAN bus is sitting at <adapter>/can/<id>.
+    adapter, _, number = path.rpartition("/can/")
+    if adapter and number.isdigit():
+        found = entity_of(adapter)
         serial = (found[1] or {}).get("serial_number") if found else None
         return f"moteus:{serial}/can:{number}" if serial else None
     if hardware_id and is_usb_camera(hardware_id, identity, child_ids):
