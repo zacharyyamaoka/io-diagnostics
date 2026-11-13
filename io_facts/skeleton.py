@@ -386,7 +386,7 @@ def usb_devices(root: Path = ROOT) -> list[dict]:
     if not sys_usb.is_dir():
         return []
     names = ids_database(root, "usb.ids")
-    devices = usb.list_usb_devices(sys_usb)
+    devices = usb.list_usb_devices(sys_usb, nodes=False)  # WHY: the nodes it would look up are not used here (see the docstring)
     per_bus: dict[int, int] = {}
     for device in devices:
         bus_number = int(device.port.split("-", 1)[0])

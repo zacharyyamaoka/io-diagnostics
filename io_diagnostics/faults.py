@@ -19,6 +19,10 @@ from contract.record import CONFIRMED, PENDING, Event, Fault, FaultManager, to_d
 # The activity log groups those into one "Found at start" row (logview.py); the mark is written when the event is made,
 # because only the host that made it knows whether it was still starting.
 FOUND_AT_START_S = 30.0
+# WHY a bound (2026-11-13): every view build re-reads this list (Host._build_view logs it and overlays it on the log), and it only grew: Stable's
+# held 912 after 37 h, under flapping CPU and RAM warnings. The log keeps each event the first build after it is made, and gives the old ones
+# back; 500 is what the host's other event lists keep (runner, config_edit, terminal).
+MAX_EVENTS = 500
 
 
 class Faults:
@@ -55,14 +59,18 @@ class Faults:
                 events += self.manager.observe(status, now)
             events += self.manager.tick(now)
             events = self._marked(events, now)
-            self.events += events
+            self._keep(events)
         return events
 
     def tick(self, now: float) -> list[Event]:
         with self._lock:
             events = self._marked(self.manager.tick(now), now)
-            self.events += events
+            self._keep(events)
         return events
+
+    def _keep(self, events: list[Event]) -> None:
+        self.events += events
+        del self.events[:-MAX_EVENTS]
 
     def all(self) -> list[Fault]:
         with self._lock:

@@ -63,6 +63,12 @@ trusts one; the API stays additive; the change stays small.
   a next run is not refused by this one, and a host that dies in the ending does not read it back as interrupted. The first try held `active` alone. A client could then read `done` with
   `active: true`, and the page keeps a stream's `end` as its last word, so a finished run stayed a running one. Found by the page suites after landing; do not simplify the hold back to one field.
 - **A direct call builds.** Only threads that `reads_published` (a request, the feed, the tray, the beat) read the published view; a test or a script asking in-process gets the moment.
+- **A timer is not a person** (2026-11-13). A thread that reads on a clock of its own (the tray's 2 s chip, the stock diagnostics' beat) says `reads_published(looking=False)`. Only a
+  person's read or stream keeps the host looking (`VIEW_QUIET_S`): the builder rebuilds on every change and the refresher reads the skeleton every `REFRESH_S`. With nobody looking the
+  view is built every `VIEW_MAX_AGE_S` and the skeleton read every `REFRESH_QUIET_S`, while udev, a kernel USB line and the first look still refresh at once. Measured on Stable's tray
+  before: both timers counted as looking, so the host never went quiet, and the Computer follower's ~15 changes a second kept the builder at its cap (~20 % of a core with no window
+  open; ~1 core with the 2 s skeleton read under the agents' load). A new background reader that forgets `looking=False` brings that back; the tray's and the beat's are pinned
+  by `tests/test_idle_service.py`.
 - **`View.jobs` is a record of a moment.** It holds copies of the job caches, without their `series`, and is never run or changed. `values_json` and everything at 10 Hz reads the live job, under the lock.
 - **What a read pairs with the view comes from the view.** `View.active_runs` is why: the log pairs a run's events with whether it still runs, and read live beside a published view, a run that had just ended read "the host stopped while it ran".
 - **A gate that acts is fresh; a gate that shows is not.** `LiveOs.gate` keeps its 2 s promise and may wait for a pass. `LiveOs.peek` never waits. Only a page uses `peek`.

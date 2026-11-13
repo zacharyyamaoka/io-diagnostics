@@ -216,7 +216,8 @@ def _serve(args, *, tray: bool) -> int:
         if tray:
             from io_diagnostics.tray import run_tray
 
-            host.reads_published()
+            # WHY not looking: the chip's 2 s read is a timer, not a person; as one it kept Stable's host from ever going quiet (2026-11-13)
+            host.reads_published(looking=False)
             run_tray(lambda: host.state()["chip"])
         else:
             serving.join()
