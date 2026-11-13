@@ -166,7 +166,7 @@
         ],
         actions: () => [{ icon: 'lx-sidebar', label: 'Toggle the left pane', sub: 'Ctrl+\\', run: () => sash.toggle() }],
       });
-      const jump = ctx.iconButton({ icon: 'cmd', title: 'Jump to a device or run an action ( Ctrl K )', click: () => s.palette.open() });
+      const jump = ctx.iconButton({ icon: 'cmd', title: 'Jump to a device or run an action ( Ctrl K · Ctrl P · Ctrl O )', click: () => s.palette.open() });
       jump.dataset.l1Palette = '1';
       label(jump, 'Jump');
       ribbon.appendChild(jump);

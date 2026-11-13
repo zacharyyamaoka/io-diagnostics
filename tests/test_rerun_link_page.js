@@ -42,6 +42,7 @@ const rerunOf = (page) => page.evaluate(() => {
   try {
     const { base } = server;
     const context = await H.newContext(browser, 'light');
+    await context.route('http://127.0.0.1:9876/**', (route) => route.fulfill({ status: 200, contentType: 'text/html', body: '<title>Rerun</title>' }));
     const page = await context.newPage();
     const watch = H.watchErrors(page, base);
 
@@ -71,8 +72,39 @@ const rerunOf = (page) => page.evaluate(() => {
     const cell = await rerunOf(page);
     check('the host page links to the cell view', cell.href === CELL_URL, cell);
 
+    // ---- the palette: Ctrl+K, Ctrl+P and Ctrl+O all open it; "rerun" and "open" bring up the Rerun commands ------------------------
+    // Zach, 2026-11-13: "bind ctrl P ctrl K and ctrl O to open the search/command ... if I search for rerun or open etc than I want
+    // to see thoose commands come up"
+    const palOpen = () => page.evaluate(() => { const b = document.querySelector('.lx-pal-back'); return Boolean(b && !b.hidden); });
+    const palRows = () => page.evaluate(() => [...document.querySelectorAll('.lx-pal-i')].map((el) => el.querySelector('.lab').textContent));
+    const palSubs = () => page.evaluate(() => [...document.querySelectorAll('.lx-pal-i')].map((el) => `${el.querySelector('.lab').textContent} | ${el.querySelector('.sub').textContent}`));
+    for (const key of ['k', 'p', 'o']) {
+      await page.keyboard.press(`Control+${key}`);
+      await page.waitForTimeout(150);
+      const opened = await palOpen();
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(100);
+      check(`Ctrl+${key.toUpperCase()} opens the palette`, opened && !(await palOpen()), opened);
+    }
+    await page.keyboard.press('Control+p');
+    await page.keyboard.type('rerun');
+    await page.waitForTimeout(150);
+    const rerunRows = await palRows();
+    await page.screenshot({ path: SHOT.replace('.png', '-palette.png'), clip: { x: 300, y: 80, width: 800, height: 360 } });
+    check('typing "rerun" lists the cell and the device in Rerun, each row telling its device apart (the fixture has two D405s)', rerunRows.includes('Open the cell in Rerun') && rerunRows.some((t) => /^Open .*D405.* in Rerun$/.test(t))
+      && new Set(await palSubs()).size === rerunRows.length, await palSubs());
+    await page.fill('.lx-pal-in input', 'open');
+    await page.waitForTimeout(150);
+    const openRows = await palRows();
+    check('typing "open" lists them too', openRows.includes('Open the cell in Rerun') && openRows.some((t) => /D405.* in Rerun$/.test(t)), openRows);
+    await page.fill('.lx-pal-in input', 'rerun d405');
+    await page.waitForTimeout(150);
+    const [tab] = await Promise.all([context.waitForEvent('page', { timeout: 8000 }).catch(() => null), page.keyboard.press('Enter')]);
+    check('Enter on it opens the device\'s Rerun view in a new tab', tab && tab.url() === CAMERA_URL, tab && tab.url());
+    if (tab) await tab.close();
+
     // ---- a device the recorder does not list: muted words, no link ----------------------------------------------------------------
-    await H.goTo(page, H.BOARD);
+    await H.open(page, base, H.BOARD, 'diagnostics');
     await page.waitForSelector('.d6-line [data-d6-rerun]', { timeout: 8000 });
     const unlisted = await rerunOf(page);
     check('an unlisted board says so in muted words, with no link', unlisted.state === 'absent' && unlisted.href === null && /Not in the recorder's device list/.test(unlisted.text), unlisted);
