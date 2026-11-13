@@ -283,3 +283,9 @@ def test_a_live_moteus_board_of_kind_node_gets_its_key():
     key = rr.node_key("host/usb7/port-7-1/usb-7-1/can/14", "node", "", {"manufacturer": "mjbots", "model": "moteus-c1"}, [], of, {})
     assert key == "moteus:FDA81D29/can:14"
     assert rr.node_key("host/usb7/port-7-1/usb-7-1/can", "bus", "", {}, [], of, {}) is None
+
+
+def test_a_port_named_device_with_a_serial_is_keyed_by_its_serial():
+    """The D405 on Stable 2026-11-13: hardware id usb:8086:0b5b@1-7 (port-named), identity serial 218622274411."""
+
+    assert rr.usb_key("usb:8086:0b5b@1-7", {"serial_number": "218622274411"}) == "usb:8086:0b5b:218622274411"

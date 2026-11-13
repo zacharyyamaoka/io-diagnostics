@@ -61,7 +61,9 @@ def usb_key(hardware_id: str, identity: dict) -> str:
     serial = (identity or {}).get("serial_number")
     parts = hardware_id.split(":")
     if serial and len(parts) >= 3 and parts[0] == "usb":
-        return f"usb:{parts[1]}:{parts[2]}:{serial}"
+        # WHY strip "@<port>": a serial-less hardware id carries the port (the D405's usb:8086:0b5b@1-7) while its identity
+        # still reports a serial (218622274411); the key is usb:8086:0b5b:218622274411 (seen on Stable 2026-11-13).
+        return f"usb:{parts[1]}:{parts[2].split('@', 1)[0]}:{serial}"
     return hardware_id
 
 
