@@ -42,7 +42,9 @@ class TripwireError(PermissionError):
 def _tripwire(path: str | os.PathLike) -> None:
     if not os.environ.get(TRIPWIRE_ENV):
         return
-    if not Path(path).resolve().is_relative_to(Path(tempfile.gettempdir()).resolve()):
+    resolved = Path(path).resolve()
+    # a pseudo-terminal is no hardware: a test's fake fdcanusb console is one
+    if not (resolved.is_relative_to(Path(tempfile.gettempdir()).resolve()) or resolved.is_relative_to("/dev/pts")):
         raise TripwireError(errno.EPERM, f"hardware tripwire: refused a real {path} in a test")
 
 

@@ -48,6 +48,14 @@ def tripwire_refuses(argv, env=None) -> str:
     if "io_diagnostics.usb_reset" in words and "act" in words and "--dry-run" not in words \
             and not (env if env is not None else os.environ).get("IO_DIAGNOSTICS_USB_SYSFS"):
         return "a real USB port reset with no fake sysfs tree in IO_DIAGNOSTICS_USB_SYSFS"
+    # the reset ladder (docs/device-reset.md): Sim to Real's fdcanusb-reset only as a fake under the temp dir, and a recover / act
+    # that could reset (not a dry run, not a plan) only with a fake sysfs tree named, so no test can reset a real device
+    if words and Path(words[0]).name == "fdcanusb-reset" and not (
+            Path(words[0]).is_absolute() and Path(words[0]).resolve().is_relative_to(Path(tempfile.gettempdir()).resolve())):
+        return "the real fdcanusb-reset (only a fake under the temp dir may run)"
+    if "io_diagnostics.recovery" in words and {"recover", "act"} & set(words) and "--dry-run" not in words \
+            and not (env if env is not None else os.environ).get("IO_DIAGNOSTICS_USB_SYSFS"):
+        return "a real reset ladder with no fake sysfs tree in IO_DIAGNOSTICS_USB_SYSFS"
     host = next((index for index, word in enumerate(words) if word.endswith("io_diagnostics/cli.py") or word == "io-diagnostics"), None)
     if host is not None and any(word in HOST_VERBS for word in words[host + 1:host + 2]) \
             and not {"--plugins", "--fixture"} & set(words):
@@ -67,6 +75,10 @@ class _TripwirePopen(subprocess.Popen):
 
 if not issubclass(subprocess.Popen, _TripwirePopen):
     subprocess.Popen = _TripwirePopen  # subprocess.run and the host's runner both look Popen up on the module
+
+# WHY: the reset ladder's own writes and device opens (io_diagnostics/recovery/system.py) refuse anything outside the temp dir
+# while this is set, so an in-process test that forgets its fake tree fails instead of writing to the real /sys. Inherited.
+os.environ["IO_DIAGNOSTICS_TRIPWIRE"] = "1"
 
 # WHY: a live-mode host remembers the USB devices it saw in ~/.local/state/io-diagnostics/seen.json; a test's fake
 # devices must never land in Zach's real file (they would show as "expected" forever). Inherited by subprocesses.

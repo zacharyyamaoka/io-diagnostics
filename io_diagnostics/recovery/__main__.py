@@ -19,6 +19,7 @@ Exit: 0 it answers · 2 refused, nothing was reset · 3 a rung ran, its owner ju
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import os
 import platform
@@ -83,7 +84,7 @@ def check(seams: Seams, plugins_dir: Path | None) -> dict:
                 (devices.sysfs_root() / port / "bDeviceClass").read_text().strip() == "09":
             continue  # a hub is reset only by what is plugged into it
         if found.serial and found.vid:
-            found = devices.Device(**{**found.__dict__, "key": f"usb:{found.vid}:{found.pid}:{found.serial}"})
+            found = dataclasses.replace(found, key=f"usb:{found.vid}:{found.pid}:{found.serial}")
         profile = profile_for(found.keys())
         if profile is None:
             continue

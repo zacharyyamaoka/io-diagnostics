@@ -138,9 +138,16 @@ def _power_cycle(rung: Rung, device: devices.Device, seams: Seams) -> Outcome:
                 off.append(path)
             seams.sleep(POWER_OFF_S)
         finally:
-            # WHY every switch back on in a finally, the USB 3 peer too: a port left disabled is a robot left blind
+            # WHY every switch back on in a finally, the USB 3 peer too, each on its own: a port left disabled is a robot left
+            # blind, so one failed write must not keep the next switch off
+            failures = []
             for path in off:
-                seams.write_attr(path, "0")
+                try:
+                    seams.write_attr(path, "0")
+                except Exception as error:  # noqa: BLE001 - every switch is tried, the first failure is raised after
+                    failures.append(error)
+            if failures:
+                raise failures[0]
 
     finished, error = _in_thread(cycle, rung.timeout_s)
     if not finished:

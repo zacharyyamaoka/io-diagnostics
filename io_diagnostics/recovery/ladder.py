@@ -16,6 +16,7 @@ but only its owner can tell whether it answers (step mode, or a probe that could
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import os
 from dataclasses import dataclass, field
@@ -89,9 +90,7 @@ class Ladder:
         store = Store(found.state_key, self.seams.now)
         incident = store.current()
         if not found.present and incident and incident.last_port and not found.port:
-            found = devices.resolve(request.key, incident.last_port) if request.key else found
-            if not found.port:
-                found = devices.Device(**{**found.__dict__, "port": incident.last_port})
+            found = dataclasses.replace(found, port=incident.last_port)
         profile = profile_for(found.keys()) or (BY_NAME.get(incident.profile) if incident and incident.profile else None)
         if profile is None:
             profile = BY_NAME["usb_device"]
@@ -177,6 +176,8 @@ class Ladder:
         request = self.request
         if request.mode == UNATTENDED and not rung.unattended:
             return "PersonOnly", f"only a person runs it: {rung.attended_why}"
+        if rung.kind in request.tried_by_owner:
+            return "DoneByOwner", f"done by its owner (pid {request.owner_pid}) before it asked"
         if incident is not None and request.mode == UNATTENDED:
             if rung.kind in incident.tried:
                 return "AlreadyTried", f"already tried this incident ({incident.tried_by.get(rung.kind, 'robotdx')}, " \
@@ -184,8 +185,6 @@ class Ladder:
             same = next((other for other in profile.rungs if other.same_as == rung.kind and other.kind in incident.tried), None)
             if same is not None:
                 return "SameReset", f"the same reset as {same.title}, already tried this incident"
-        if rung.kind in request.tried_by_owner:
-            return "DoneByOwner", f"done by its owner (pid {request.owner_pid}) before it asked"
         if rung.kind in (NATIVE, *USB_KINDS[:2]) and not device.present and not device.is_can:
             return "NotOnUsb", "it is not on USB now"
         here = availability.rung_availability(rung, device, profile, self.seams, request.plugins_dir)
@@ -335,7 +334,7 @@ class Ladder:
             back = self._settle(device, profile, rung.settle_s)
         now = devices.resolve(device.key, device.port) if not device.is_can else devices.resolve(device.key)
         if not now.port:
-            now = devices.Device(**{**now.__dict__, "port": device.port})
+            now = dataclasses.replace(now, port=device.port)
         found, _others = self._holders(now)
         healthy, words = (None, "not probed: the rung did not run") if outcome.state != mechanisms.DONE else probes.probe(
             profile, now, self.seams, holders=found, probe_command=request.probe_command, plugins_dir=request.plugins_dir,
@@ -366,7 +365,9 @@ class Ladder:
         if outcome.details.get("pending"):
             return self._page(device, profile, store, incident, f"{rung.title} is still pending in the kernel: RobotDx stopped "
                               "there rather than stack another reset on it")
-        if request.step and outcome.state == mechanisms.DONE:
+        # WHY stop when the probe could not ask: the owner has it open, so only the owner can tell whether that reset cured it;
+        # stacking the next, heavier reset on a device that may already be fine is what the ladder must never do
+        if outcome.state == mechanisms.DONE and (request.step or healthy is None):
             message = f"{rung.title} ran; {words}: reopen it and call again if it still does not answer"
             return Result(NOT_JUDGED, "not_judged", message, [*self.result_records], attempts=self.attempts)
         return None
@@ -382,7 +383,7 @@ class Ladder:
         while True:
             now = devices.resolve(device.key, device.port)
             if not now.port:
-                now = devices.Device(**{**now.__dict__, "port": device.port})
+                now = dataclasses.replace(now, port=device.port)
             if devices.present_now(now, profile.expects_nodes)[0]:
                 return round(self.seams.monotonic() - start, 2)
             if self.seams.monotonic() - start >= settle_s:
@@ -391,7 +392,8 @@ class Ladder:
 
     # ----- blocked, and the page ----------------------------------------------------------------------------------------
     def _blocked(self, device, profile, store: Store, why: str, reason: str) -> Result:
-        incident = store.current()
+        # the owner says it is dead: the outage has begun even if nothing may be reset yet, so the blocked time counts
+        incident = store.current() or (store.open(self.request.detected, device.port) if self.request.detected else None)
         if incident is not None:
             if incident.blocked_since is None:
                 incident.blocked_since = self.seams.now()
