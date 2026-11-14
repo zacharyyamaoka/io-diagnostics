@@ -310,7 +310,7 @@ class Ladder:
                 return result
             before = self.attempts[-1]["after"]
         if request.mode == PERSON:
-            text = fill(profile.page_text, self._page_values(device, incident))
+            text = fill(profile.page_text, self._page_values(device, incident, profile))
             self.say(f"not cured: {text}")
             record = _event("RecoveryNotCured", "error", text, incident=incident.id)
             return Result(NEEDS_HUMAN, "not_cured", text, [*self.result_records, record], plan, self.attempts)
@@ -402,13 +402,16 @@ class Ladder:
                 return self._page(device, profile, store, incident, f"RobotDx may not reset it: {why}")
         return self._refuse(reason, why, store)
 
-    def _page_values(self, device: devices.Device, incident) -> dict:
-        tried = [kind for kind in (incident.tried if incident else {})]
+    def _page_values(self, device: devices.Device, incident, profile: RecoveryProfile | None = None) -> dict:
+        kinds = list(incident.tried if incident else {})
+        rungs = [profile.rung(kind) if profile else None for kind in kinds]
+        words = [(rung.title[0].lower() + rung.title[1:]) if rung else kind for kind, rung in zip(kinds, rungs)]
         return {"name": device.name, "port": device.port or "?", "serial": device.serial or "?", "node": device.node,
-                "tried": ", ".join(tried) if tried else "nothing (no rung could run here)"}
+                "tried": "; ".join(words) if words else "nothing (no rung could run here)"}
 
     def _page(self, device: devices.Device, profile: RecoveryProfile, store: Store, incident, because: str) -> Result:
-        text = fill(profile.page_text, self._page_values(device, incident))
+        # WHY the reason rides in the text: a person reading a page on a phone must see "tview has it open" without the ledger
+        text = f"{fill(profile.page_text, self._page_values(device, incident, profile))} Why: {because}."
         if incident.paged is not None:
             message = f"a human was already paged at {_clock(incident.paged)}: {text}"
             self.say(message)
