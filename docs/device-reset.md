@@ -36,6 +36,12 @@ is gone. Hence person-only: a loaded joint drops while it reboots, and the homed
 power-up). The driver also sends it only to a board that answers a query, so a *silent* board's ladder ends in a page: "check
 its CAN cable and 24 V; power-cycle its supply".
 
+**Detect.** "No answer" is the probe's own question on a fresh open, which it asks only when nobody else has the device open
+(a line written into someone else's open session would corrupt it). "Stale frames" can be seen only by whoever streams the camera,
+so the owner reports it with `--detected "frames stale 3 s"`. After each rung the ladder waits for the device to be back on USB
+(configured, drivers bound, its /dev nodes there), then asks again. When it cannot ask because the owner has it open, it stops and
+returns 3 rather than stack a heavier reset on a device that may already be fine.
+
 **Power cycle** uses the kernel's own per-port switch, `<hub>:1.0/<hub>-port<N>/disable` (Linux 6.0+; the interface uhubctl
 itself uses there), on the port and its USB 3 `peer`, off 2 s, back on in a `finally`. It runs only when the hub's descriptor
 says **per-port power switching**; on a ganged or non-switching hub `disable` is only a logical disconnect (which
