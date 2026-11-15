@@ -169,6 +169,12 @@ class Rig:
         if self.vanish_on == kind:
             self.vanish()
             return
+        if kind == "power_cycle" and not (self.sysfs / "9-3").is_dir() and self.cure_by == "power_cycle":
+            # a real power cycle boots the hung MCU: it enumerates again like a fresh plug-in, with a new device number
+            self.add_device("9-3", 20, "0483", "5740", "0607623A", "fdcanusb", "mjbots", nodes={"tty": "ttyACM0"}, driver="cdc_acm")
+            self.kernel_line("usb 9-3: new full-speed USB device number 20 using xhci_hcd")
+            self.answering = True
+            return
         if kind in ("authorized", "power_cycle", "native") and (self.sysfs / "9-3").is_dir():
             self.renumber()
         if self.cure_by == kind:
@@ -366,7 +372,7 @@ def test_a_power_cycle_switches_the_port_and_its_usb3_peer_and_reaches_a_device_
     writes = [call for call in rig.calls if call.startswith("write") and "disable" in call]
     assert writes[:2] == ["write 9-0:1.0/usb9-port3/disable 1", "write 9-0:1.0/usb9-port3/peer/disable 1"]
     assert writes[2:] == ["write 9-0:1.0/usb9-port3/disable 0", "write 9-0:1.0/usb9-port3/peer/disable 0"]
-    assert result.outcome in ("paged", "cured")  # the fake does not bring a vanished device back; the switches are the point
+    assert result.outcome == "cured", result.lines  # the power cycle boots it again, found at the port it vanished from
     assert (rig.sysfs / "9-0:1.0" / "usb9-port3" / "disable").read_text().strip() == "0"
 
 
@@ -909,7 +915,7 @@ def test_an_adapter_that_never_came_back_is_power_cycled_at_the_port_the_kernel_
     assert writes[:2] == ["write 9-0:1.0/usb9-port3/disable 1", "write 9-0:1.0/usb9-port3/peer/disable 1"], rig.calls
     skipped = {line.get("rung"): line.get("reason") for line in ledger_lines(rig) if line["outcome"] == "skipped"}
     assert skipped.get("usbreset") in ("SameReset", "NotOnUsb") and skipped.get("authorized") == "NotOnUsb"
-    assert result.outcome in ("paged", "cured")  # the fake does not re-create a vanished device; the switch is the point
+    assert result.outcome == "cured", result.lines
 
 
 def test_a_dry_run_leaves_no_lock_file_behind(rig):

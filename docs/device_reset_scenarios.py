@@ -32,9 +32,14 @@ class Env:
 
 
 def scenario(title: str, story: str, *, power: str, cure_by, node_writable=True, sysfs_writable=True, holder=False,
-             request: dict, later_s: float = 0.0) -> dict:
+             request: dict, later_s: float = 0.0, vanished: bool = False) -> dict:
     root = Path(tempfile.mkdtemp(prefix="device-reset-scenario-")) / "rig"
     rig = fixture.Rig(root, Env(), cure_by=cure_by, power=power, node_writable=node_writable, sysfs_writable=sysfs_writable)
+    if vanished:  # 17:44: its own reset left it off the bus; only the kernel's lines remember its port
+        rig.kernel_line("usb 9-3: SerialNumber: 0607623A")
+        rig.vanish()
+        rig.kernel_line("usb 9-3: device descriptor read/64, error -71")
+        rig.kernel_line("usb 9-3: device not accepting address 12, error -71")
     if holder:
         rig.process(4242, "tview", parent=1, holds="ttyACM0")
     runs = []
@@ -59,6 +64,12 @@ OWNER = {"owner_pid": fixture.ME, "detected": "no reply to 5 exchanges; its own 
          "tried_by_owner": ("reopen", "native")}
 
 SCENARIOS = [
+    dict(title="17:44 again: its own reset left it off the bus; after the installer, on a hub that switches each port's power",
+         story="A second process on the port hung the MCU hard. arm-hold's own fdcanusb-reset ran and the adapter never came back (error -71, "
+               "not accepting address). RobotDx finds its port in the kernel's lines and cuts its 5 V; the boards stay powered.",
+         power="individual", cure_by="power_cycle", vanished=True,
+         request={**{"owner_pid": fixture.ME, "tried_by_owner": ("reopen", "native")},
+                  "detected": "bus dead; its own fdcanusb-reset left it off USB (error -71)"}),
     dict(title="08:57 again, after the installer, on a hub that switches each port's power",
          story="arm-hold reopened (no answer) and ran its own fdcanusb-reset (back on USB, still silent), then asks RobotDx. A frozen "
                "microcontroller: only the power cycle cures it.",
