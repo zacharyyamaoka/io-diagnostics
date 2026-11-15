@@ -34,7 +34,9 @@ protocol has no reboot register, and moteus_tool 1.1.1 has no restart flag (it s
 `--restore-config`). After it the board knows its position only within one revolution, so a geared joint's output reference
 is gone. Hence person-only: a loaded joint drops while it reboots, and the homed map is void (Zach 2026-11-13: home once per
 power-up). The driver also sends it only to a board that answers a query, so a *silent* board's ladder ends in a page: "check
-its CAN cable and 24 V; power-cycle its supply".
+its CAN cable and its 24 V; restart it by hand only with the joint supported". It never suggests cutting the boards' supply
+(Zach, 2026-11-14: never power-cycle the motor boards to clear a fault, the arm would drop). The port power cycle cuts only the
+**adapter's** USB 5 V; the boards stay powered and keep holding on their timeout_mode 10 watchdog.
 
 **Detect.** "No answer" is the probe's own question on a fresh open, which it asks only when nobody else has the device open
 (a line written into someone else's open session would corrupt it). "Stale frames" can be seen only by whoever streams the camera,

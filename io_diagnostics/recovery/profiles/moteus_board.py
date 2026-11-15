@@ -39,7 +39,8 @@ PROFILE = RecoveryProfile(
                           "without a reason). Only a person who has made the joint safe runs it."),
         PAGE_HUMAN,
     ),
-    page_text="CAN {node} on fdcanusb {serial} does not answer: check its CAN cable and its 24 V. Restarting it needs a person "
-              "(a reboot drops its joint and voids the homed map); a silent board restarts only when its supply is cycled.",
+    # WHY no "cycle its supply" here (Zach, 2026-11-14: never power-cycle the motor boards to clear a fault: the arm would drop)
+    page_text="CAN {node} on fdcanusb {serial} does not answer: check its CAN cable and its 24 V. RobotDx never restarts a board "
+              "on its own (a restart drops its joint and voids the homed map); restart it by hand only with the joint supported.",
     quiet_s=600.0,
 )

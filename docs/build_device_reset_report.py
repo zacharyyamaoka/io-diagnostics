@@ -182,7 +182,8 @@ that place and what to expect.</p>
 (moteus-src 2b21a16f, <code>fw/board_debug.cc:971</code>), without the <code>MoteusEnsureOff()</code> that <code>d flash</code> runs. There is no reboot
 register, and moteus_tool 1.1.1 has no restart flag. After the reset the board knows its position only within one revolution. So this rung is
 person only: a loaded joint drops, and the homed map is void. A silent board never gets the reset, so its ladder ends with "check its cable and
-24 V".</p>
+24 V", and never with "cycle its supply" (your 11-14 rule: never power-cycle the motor boards, the arm would drop). The port power cycle
+cuts only the fdcanusb's USB 5 V; the boards stay powered and keep holding on their watchdog.</p>
 
 <h2>What this machine can run today</h2>
 <p class="muted small">Live, read-only (<code>python -m io_diagnostics.recovery check</code>; it opens no device). Kernel {esc(facts["kernel"])}, port disable
