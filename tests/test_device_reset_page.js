@@ -13,8 +13,8 @@
 //   ladder      the Run page lists the recovery module's ladder rung by rung, in its order: each rung's title, `runs` or
 //               `skipped` and why it is skipped, its why and its expect; only one POST, the dry run
 //   holders     a process with the adapter open is what pressing Run confirms ("tview (pid 4242) will lose ...")
-//   board       a board's Run page names the board on its adapter and lists the board's own rungs
-// Screenshots: reports/media/device-reset/*.png (the Run page light and dark, the board's, the menu). Exits 1 on any failed check.
+//   board       a board's Reset… is offered but greyed, with why, when no driver is declared to restart it (F1 has no moteus_servo)
+// Screenshots: reports/media/device-reset/*.png (the Run page light and dark, the menus of the adapter and a board). Exits 1 on any failed check.
 'use strict';
 
 const fs = require('fs');
@@ -199,19 +199,18 @@ async function main() {
     await shot(page, 'run-page-adapter-light.png');
     await page.click('#modal [data-util-cancel]');
 
-    // ---- a CAN board below the adapter
+    // ---- a CAN board below the adapter. F1 declares no moteus_servo driver, so the board's only reset (its own `d reset`) has nothing
+    // to run it: Reset… is offered but greyed, with that reason (2026-11-14: never a Run that could only end "not cured")
     await open(page, base, BOARD);
     await menu(page);
     const boardItem = await page.evaluate(() => { const button = document.querySelector('.ent-menu [data-util="reset"]');
-      return button ? { title: button.querySelector('.u-title').textContent, disabled: button.disabled } : null; });
-    check('offered: on a CAN board below the adapter', boardItem && boardItem.title === 'Reset…' && !boardItem.disabled, boardItem);
+      return button ? { title: button.querySelector('.u-title').textContent, disabled: button.disabled,
+        reason: (button.querySelector('.u-reason') || {}).textContent || '' } : null; });
+    check('offered: on a CAN board below the adapter, greyed with why', boardItem && boardItem.title === 'Reset…' && boardItem.disabled
+      && /moteus_servo/.test(boardItem.reason), boardItem);
+    check('board: nothing was asked of the board', posts.length === 1, posts);
+    await page.screenshot({ path: path.join(SHOTS, 'menu-board-light.png'), clip: await page.locator('#inspector').boundingBox() });
     await page.keyboard.press('Escape');
-    const board = await sheet(page);
-    check('board: the plan is the board\'s, on its adapter', ladderMatchesPlan(board) && /^Reset CAN 1 on fdcanusb 272813EF\?/.test(board.confirm)
-      && board.rungs.some((rung) => rung.kind === 'native' && /d reset/.test(rung.title)), { confirm: board.confirm, rungs: board.rungs.map((rung) => `${rung.kind}:${rung.tag}`) });
-    check('board: its node rides on the dry run', posts.length === 2 && posts[1].path === BOARD && posts[1].dry_run === true, posts[1]);
-    await shot(page, 'run-page-board-light.png');
-    await page.click('#modal [data-util-cancel]');
     await context.close();
 
     const dark = await browser.newContext({ viewport: VIEWPORT, colorScheme: 'dark' });

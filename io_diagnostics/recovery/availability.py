@@ -130,7 +130,7 @@ def _native(rung: Rung, device: devices.Device, plugins_dir: Path | None) -> Ava
     if rung.via == VIA_PLUGIN:
         spec = plugin_declared(rung.plugin, plugins_dir)
         if spec is None:
-            return Availability(False, f"no enabled {rung.plugin} driver in plugins.d", f"the {rung.plugin} plugin")
+            return Availability(False, f"no {rung.plugin} driver is enabled on this host", f"the {rung.plugin} plugin")
         return Availability(True, f"the {rung.plugin} driver's {rung.action} action")
     return Availability(False, "no native reset")
 
