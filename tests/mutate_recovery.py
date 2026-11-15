@@ -95,6 +95,12 @@ MUTATIONS = [
      'if text and not text.startswith("rcv"):', 'if text:'),
     ('tripwire: an in-process write to the real /sys is allowed in a test', SYSTEM,
      '    if not os.environ.get(TRIPWIRE_ENV):\n        return', '    return'),
+    ('nothing to run: a plan with no rung still carries a token', LADDER,
+     'token = hashlib.sha256(seed.encode()).hexdigest()[:16] if runnable else ""', 'token = hashlib.sha256(seed.encode()).hexdigest()[:16]'),
+    ('nothing to run: a real run with no rung goes ahead', LADDER,
+     'if not plan["runs"]:\n                return self._refuse("NothingToRun"', 'if False:\n                return self._refuse("NothingToRun"'),
+    ('board: a board\'s reset ignores who has its adapter open', LADDER,
+     '        if not device.port:\n            return [], []\n        # a CAN board', '        if not device.port or device.is_can:\n            return [], []\n        # a CAN board'),
     ('tripwire: the real fdcanusb-reset may run in a test', SUPPORT,
      'if words and Path(words[0]).name == "fdcanusb-reset" and not (', 'if False and not ('),
 ]

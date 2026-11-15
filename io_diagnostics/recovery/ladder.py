@@ -108,8 +108,9 @@ class Ladder:
     def _holders(self, device: devices.Device) -> tuple[list, list]:
         """``(everyone with it open, the ones who are not the owner)``, over the device and anything below it."""
 
-        if device.is_can or not device.port:
+        if not device.port:
             return [], []
+        # a CAN board's are its adapter's: its restart goes out through the adapter's port, so whoever has that open loses it
         found, _unseen = usb_reset.holders(device.port, usb_reset.own_sessions())
         family = self._family()
         return found, [holder for holder in found if holder.pid not in family]
@@ -207,7 +208,8 @@ class Ladder:
         target = device.target() if device.port and not device.is_can else None
         seed = "|".join(["reset", device.key, device.port, target.bus_dev if target else "", ",".join(runnable),
                          ",".join(str(holder.pid) for holder in sorted(others, key=lambda h: h.pid))])
-        token = hashlib.sha256(seed.encode()).hexdigest()[:16]
+        # WHY no token when nothing can run: a Run that could only end in "not cured" must not be offered at all
+        token = hashlib.sha256(seed.encode()).hexdigest()[:16] if runnable else ""
         needs = sorted({step["available"]["needs"] for step in steps if not step["available"]["usable"] and step["available"]["needs"]})
         second = None
         if others:
@@ -223,7 +225,10 @@ class Ladder:
                 "incident": incident.to_json() if incident else None,
                 "confirm": (f"Reset {device.name}? RobotDx tries, in order, until it answers: "
                             + "; ".join(step["title"] for step in steps if step["runs"] and step["kind"] != PAGE)
-                            + ". Whatever has it open loses it."),
+                            + ". Whatever has it open loses it.") if runnable else
+                           f"Nothing RobotDx may try on {device.name} here: "
+                           + "; ".join(f"{step['title']}: {step['skip_why']}" for step in steps
+                                       if not step["runs"] and step["kind"] not in (PAGE, REOPEN)) + ".",
                 "message": (f"would try {', '.join(runnable)} on {device.name}" if runnable
                             else f"no rung can run on {device.name} here: " + "; ".join(
                                 f"{step['kind']}: {step['skip_why']}" for step in steps if not step["runs"] and step["kind"] != PAGE))}
@@ -252,6 +257,8 @@ class Ladder:
         # gates that depend on who has it now
         locks = self._owner_locks(profile)
         if request.mode == PERSON:
+            if not plan["runs"]:
+                return self._refuse("NothingToRun", plan["confirm"], store)
             if request.confirm != plan["token"]:
                 return self._refuse("ConfirmMismatch", "the confirmation is not for this device and plan as they are now (a "
                                     "holder came or went, or a rung became available): ask for the dry run again", store)
@@ -441,3 +448,26 @@ def _clock(stamp) -> str:
         return dt.datetime.fromtimestamp(float(stamp)).strftime("%H:%M:%S")
     except (TypeError, ValueError, OSError):
         return "?"
+
+
+def runnable(request: Request, seams: Seams | None = None) -> tuple[bool, str]:
+    """``(a person's Reset… has a rung it may run here, plain words)``: the host's ``ladder_runnable`` precondition. Cheap and
+    read-only on purpose (the host asks it whenever it draws the row): sysfs modes and the plugin declarations, no /proc walk,
+    no lock, nothing opened. The dry run itself still re-checks everything."""
+
+    seams = seams or Seams()
+    ladder = Ladder(dataclasses.replace(request, mode=PERSON, dry_run=True), seams, say=lambda _text: None)
+    try:
+        device, profile, _store = ladder._device()
+    except devices.DeviceError as error:
+        return False, str(error)
+    titles, why = [], []
+    for rung in ladder._rungs(profile):
+        if rung.kind in (NATIVE, *USB_KINDS[:2]) and not device.present and not device.is_can:
+            why.append(f"{rung.title}: it is not on USB now")
+            continue
+        here = availability.rung_availability(rung, device, profile, seams, request.plugins_dir)
+        (titles if here.usable else why).append(rung.title if here.usable else f"{rung.title}: {here.why}")
+    if titles:
+        return True, f"{len(titles)} to try: " + "; ".join(titles)
+    return False, "nothing RobotDx may try here: " + "; ".join(why)

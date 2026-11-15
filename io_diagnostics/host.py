@@ -2908,7 +2908,19 @@ class Host:
         # WHY not os.gate: a recording or a fake machine has no real port, and says so (a blocked button), unless a test points
         # the module at a fake sysfs tree (IO_DIAGNOSTICS_USB_SYSFS), which then answers like a live one
         if replay:
-            return (False if check == "reset_privilege" else None), "this host replays a recording or a fake machine: there is no real port to reset"
+            return (False if check in ("reset_privilege", "ladder_runnable") else None), \
+                "this host replays a recording or a fake machine: there is no real port to reset"
+        if check == "ladder_runnable":
+            # WHY its own check: Reset… greys with the reasons when no rung of the device's ladder may run here (the installer not
+            # run, no driver), instead of offering a Run that could only end "not cured" (docs/device-reset.md)
+            from io_diagnostics.recovery import device as recovery_devices
+            from io_diagnostics.recovery.ladder import Request as RecoveryRequest, runnable
+
+            try:
+                key = f"can:{recovery_devices.from_skeleton(device).serial}/{_node}" if _node is not None else ""
+            except recovery_devices.DeviceError as error:
+                return False, str(error)
+            return runnable(RecoveryRequest(key=key, skeleton=None if key else device, plugins_dir=self.plugins_dir))
         peek = getattr(self.os, "peek", None)
         return peek(device, check) if peek is not None and not usb_reset.sysfs_overridden() else usb_reset_gate(device, check)
 

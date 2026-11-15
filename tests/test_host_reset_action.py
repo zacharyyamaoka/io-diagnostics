@@ -12,6 +12,7 @@ recovery module is only ever asked for a dry run or refused before it runs, and 
 from __future__ import annotations
 
 import dataclasses
+import json
 import sys
 
 import pytest
@@ -96,7 +97,10 @@ def test_a_can_board_row_below_the_adapter_offers_it_and_its_run_names_the_board
     rig_ = rig()
     path = board_path(rig_)
     offered = action(rig_, path)
-    assert offered and offered["title"] == "Reset…" and offered["state"] == "ready", offered
+    # no moteus_servo driver declared on this host: the board's only reset (its own `d reset`) has nothing to run it, so the
+    # button is greyed with that reason rather than offering a Run that could only end "not cured"
+    assert offered and offered["title"] == "Reset…" and offered["state"] == "blocked", offered
+    assert "moteus_servo" in json.dumps(offered), offered
     assert offered["confirm"].startswith(f"Reset CAN {BOARD} on {NAME}?"), offered["confirm"]
     assert action(rig_, f"{rig_.path()}/can") is None, "not on the bus row"
     answer = dry(rig_, path)
@@ -134,7 +138,9 @@ def test_a_board_whose_driver_is_declared_plans_its_restart_as_moves(rig, tmp_pa
         declare(directory, "moteus_servo", f'["{sys.executable}", "{CASES}", "--case", "healthy"]', "usb:ffff:ffff")
 
     rig_ = rig(extra_plugins=driver)
-    plan = dry(rig_, board_path(rig_))["action_result"]
+    path = board_path(rig_)
+    assert action(rig_, path)["state"] == "ready", "with its driver declared, a board's Reset… may run"
+    plan = dry(rig_, path)["action_result"]
     restart = next(step for step in plan["steps"] if step["kind"] == "native")
     assert restart["runs"] is True and "moteus_servo" in restart["available"]["why"], restart
     assert plan["danger"] == "moves", "a moteus restart drops a loaded joint: the plan says so"

@@ -148,7 +148,7 @@ def from_skeleton(device: dict) -> Device:
     if not port:
         raise DeviceError(f"{device.get('id')!r} is not a USB device with a port")
     here = _device_at(port, f"usb:{port}")
-    serial = here.serial or str(attrs.get("serial") or "")
+    serial = here.serial or str(attrs.get("serial") or device.get("serial") or "")
     vid, pid = here.vid or str(attrs.get("vid") or "").lower(), here.pid or str(attrs.get("pid") or "").lower()
     key = f"usb:{vid}:{pid}:{serial}" if serial and vid and pid else f"usb:{port}"
     return Device(key=key, port=port, vid=vid, pid=pid, serial=serial, product=here.product or str(device.get("product") or ""),

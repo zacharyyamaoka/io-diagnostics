@@ -57,6 +57,7 @@ RESET = Action(
     preconditions=(("device_present", "{name} is on USB at {port}"),
                    ("no_run_active", "No RobotDx run is active on this device"),
                    ("host_live", "This host sees the real devices"),
+                   ("ladder_runnable", "RobotDx may try at least one reset here"),
                    ("device_free", "Nothing else has it open")),
     kind=CHANGES)
 
@@ -64,7 +65,7 @@ OFFERED = (RESET_PORT, RESET)
 NAMES = tuple(action.name for action in OFFERED)
 SPECS = {RESET_PORT.name: SPEC, RESET.name: RESET_SPEC}
 # the preconditions the host evaluates itself for these utilities (Host._evaluate_utility)
-CHECKS = frozenset({"device_present", "no_run_active", "reset_privilege", "device_free", "host_live"})
+CHECKS = frozenset({"device_present", "no_run_active", "reset_privilege", "device_free", "host_live", "ladder_runnable"})
 BOARD_PATH = re.compile(r"(.+)/can/(\d+)")
 
 

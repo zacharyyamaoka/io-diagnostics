@@ -781,3 +781,38 @@ def test_the_installer_refuses_without_root_and_touches_nothing():
         pytest.skip("running as root")
     done = subprocess.run(["bash", str(ROOT / "tools" / "install_device_reset_access.sh")], capture_output=True, text=True)
     assert done.returncode == 2 and "sudo" in done.stderr
+
+
+# ----- nothing to try, a board's holders, the host's precondition -------------------------------------------------------
+def test_a_plan_with_nothing_to_run_offers_no_token_and_a_real_run_refuses(tmp_path, monkeypatch):
+    rig = Rig(tmp_path / "rig", monkeypatch, node_writable=False, sysfs_writable=False, power="ganged")
+    (rig.bin / "fdcanusb-reset").unlink()
+    plan = person(rig, dry_run=True).plan
+    assert plan["runs"] == [] and plan["token"] == "" and plan["confirm"].startswith("Nothing RobotDx may try on fdcanusb 0607623A")
+    _refused(person(rig, confirm=""), "NothingToRun", rig)
+
+
+def test_the_hosts_precondition_says_whether_any_rung_may_run_and_why_not(tmp_path, monkeypatch):
+    from io_diagnostics.recovery.ladder import runnable
+
+    rig = Rig(tmp_path / "rig", monkeypatch)
+    ok, words = runnable(Request(key=FDCANUSB), rig.seams())
+    assert ok and "fdcanusb-reset" in words
+    (rig.bin / "fdcanusb-reset").unlink()
+    for path in (rig.dev / "bus" / "usb" / "009" / "006", rig.sysfs / "9-3" / "authorized"):
+        path.chmod(0o444)
+    ok, words = runnable(Request(key=FDCANUSB), rig.seams())
+    assert not ok and "nothing RobotDx may try here" in words and "root only" in words
+    assert rig.resets() == []
+
+
+def test_a_board_s_reset_names_who_has_its_adapter_open(rig, tmp_path):
+    rig.process(4242, "tview", parent=1, holds="ttyACM0")
+    plan = person(rig, key="can:0607623A/12", dry_run=True, plugins_dir=fake_plugins(tmp_path, answering=[12])).plan
+    assert plan["others"] and plan["others"][0]["program"] == "tview" and "will lose CAN 12" in plan["second_confirm"]
+
+
+def test_a_skeleton_without_a_sysfs_serial_still_names_its_adapter(rig):
+    (rig.sysfs / "9-3" / "serial").write_text("")
+    found = devices.from_skeleton({"id": "usb:9-3", "serial": "0607623A", "attrs": {"port": "9-3"}})
+    assert found.serial == "0607623A" and found.key == FDCANUSB
