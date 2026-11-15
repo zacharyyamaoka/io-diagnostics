@@ -221,6 +221,9 @@ def test_a_replay_host_greys_it_and_refuses_a_real_run(tmp_path, tree, monkeypat
         monkeypatch.delenv("IO_DIAGNOSTICS_USB_SYSFS")  # no fake tree: this would be the real /sys
         listed = action(rig_, rig_.path())
         assert listed["state"] == "blocked" and "replays a recording" in listed["reason"], listed
+        # WHY the precondition itself: ladder_runnable greys it on a replay too, so the button alone no longer proves host_live
+        live = next(p for p in listed["preconditions"] if p["check"] == "host_live")
+        assert live["state"] == "fail", listed["preconditions"]
         refused = rig_.host.start_act(rig_.path(), "reset", confirm="any-token", interactive=True)
         assert refused[0] is None and refused[1]["refused"] == "NotLive", refused[1]
     finally:
