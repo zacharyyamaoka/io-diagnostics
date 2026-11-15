@@ -1,0 +1,17 @@
+# The conveyor belt's dora-rs node (hyper_rgb netbelt/), as a Monitoring Plugins check on the Computer: is
+# `belt_node` (on the Windows camera box, machine "hyper") live in dataflow `netbelt`, and what is the belt doing?
+# The belt is not on this computer's USB tree, so its row is the Computer's (its gateway and coordinator run here).
+# Run by hand:
+#   /usr/bin/python3 /home/bam/io-diagnostics/plugins/checks/dora_node.py --dataflow netbelt --node belt_node --unit netbelt-dataflow.service --summary mode --summary lease_holder --summary lamps -- /home/bam/hyper_rgb/netbelt/.venv/bin/belt-net status --json
+name = "dora_netbelt"
+kind = "check"
+description = "the conveyor belt's dora node (machine hyper): live, mode, lease holder, lamps"
+# WHY enabled: read-only. belt-net status only reads belt_gateway's cached status (hyper_rgb netbelt/README.md
+# "Watching never commands"); it sends no command and takes no lease.
+enabled = true
+command = ["/usr/bin/python3", "{root}/plugins/checks/dora_node.py", "--dataflow", "netbelt", "--node", "belt_node",
+           "--unit", "netbelt-dataflow.service", "--summary", "mode", "--summary", "lease_holder",
+           "--summary", "lamps", "--", "/home/bam/hyper_rgb/netbelt/.venv/bin/belt-net", "status", "--json"]
+attach = "host"
+period_s = 10
+timeout_s = 20

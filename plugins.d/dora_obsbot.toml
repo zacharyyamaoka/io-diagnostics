@@ -1,0 +1,20 @@
+# The OBSBOT's dora-rs node (bam_ws obsbot_ptz_camera dora/), as a Monitoring Plugins check on the camera's own row:
+# is `obsbot_node` live in dataflow `obsbot`, and how healthy is it (streaming, fps, who holds the stream)?
+# The driver template (robotparts docs/drivers.md): every dora-wrapped driver ships `status --json` (one object with
+# age_s; exit 0 healthy, 3 no gateway, 5 stale); plugins/checks/dora_node.py turns it into this check.
+# Run by hand:
+#   /usr/bin/python3 /home/bam/io-diagnostics/plugins/checks/dora_node.py --dataflow obsbot --node obsbot_node --unit obsbot-dataflow.service -- /home/bam/bam_ws/src/core/mdp/agent/sensors/obsbot_ptz_camera/dora/bin/obsbot-net status --json
+name = "dora_obsbot"
+kind = "check"
+description = "the OBSBOT's dora node: live, its health, its supervisor"
+# WHY enabled: read-only. `dora list`, `systemctl --user is-active`, and obsbot-net reading its gateway's CACHED
+# state and health over a unix socket: no command reaches the camera, no stream is opened.
+enabled = true
+command = ["/usr/bin/python3", "{root}/plugins/checks/dora_node.py", "--dataflow", "obsbot", "--node", "obsbot_node",
+           "--unit", "obsbot-dataflow.service", "--summary", "pan_deg", "--summary", "tilt_deg", "--summary", "zoom",
+           "--summary", "moves_seq", "--",
+           "/home/bam/bam_ws/src/core/mdp/agent/sensors/obsbot_ptz_camera/dora/bin/obsbot-net", "status", "--json"]
+# WHY this key: RobotDx's own key for the Tiny 4K (no USB serial, so by port), as data_recorder's rig config has it.
+attach = "usb:3564:fef4@1-2"
+period_s = 10
+timeout_s = 20
