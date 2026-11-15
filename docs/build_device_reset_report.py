@@ -210,22 +210,50 @@ where the hub switches each port.</li>
 Run that yourself.</li>
 </ul>
 
-<h2>Needs hardware: a hub that really cuts VBUS</h2>
-<p>For a frozen microcontroller, cutting the port's power is the only sure cure. A USB reset needs the MCU's own USB stack to still respond. At 08:57
-the adapter stayed enumerated while its data path was dead, so nobody knows yet whether a reset alone would have brought it back. The next wedge
-will tell: arm-hold now tries its reset first.</p>
+<h2>Needs you: a hub that really cuts VBUS (€31)</h2>
+<p><b>17:44 settled it: a USB reset cannot cure this adapter's hard hang.</b> A lane's repro script opened the fdcanusb beside arm-hold
+at 17:41, and the bus died at 17:42:58. <code>fdcanusb-reset</code> then reset port 7-1, and the adapter never came back. The kernel logged
+<code>device descriptor read/64, error -71</code> and <code>device not accepting address</code>: the MCU itself was hung, and only cutting
+its 5 V brings it back. That is the ladder's port power cycle rung. It cuts only the adapter's USB power: the boards stay powered and keep
+holding on their watchdog, so your "never power-cycle the motor boards" rule holds. The rung runs only on a port whose hub really switches
+VBUS per port.</p>
 <ol>
-<li><b>Check the PC's own root hub first.</b> The fdcanusb sits on root hub <code>usb7</code>, port 1, with nothing in between. The uhubctl README
-notes that quite a few modern motherboards' root hubs do switch each port's power. The installer reads this for <code>usb7</code>. If it reports
-<code>individual</code>, the power cycle already works and you need to buy nothing. Then do the uhubctl README's lamp test (a USB lamp on that
-port) to confirm VBUS really drops.</li>
-<li><b>Otherwise, buy a StarTech HB31C3A1CPD3</b> (5-port USB 3.1, <code>14b0:013a</code>). In the uhubctl table it is the only USB 3 hub with an
-explicit VBUS-cut report (issue #656: "It works (including VBUS)", charging stopped on the switched port). Put only the fdcanusb (USB 2, full speed)
-on it. The RealSense cameras stay on the PC: their own <code>hardware_reset()</code> is their cure, and on these hubs a USB 3 device's VBUS often
-drops only when every port is off (issue #601 on the HB31C2A2CB). Caveats: there is a single report, the hub is expensive, and its price and
-availability are not checked (the vendor pages refused automated reads). The long-standing alternative is the Plugable USB3-HUB7BC
-(<code>2109:0813</code>), but nothing beyond its table row confirms VBUS on it.</li>
+<li><b>Free check first: the PC's own root hub.</b> The fdcanusb sits on root hub <code>usb7</code>, port 1, with nothing in between.
+uhubctl notes that quite a few motherboard root hubs switch each port's power. The one-time installer reads it. If <code>usb7</code> says
+<code>individual</code>, the rung already works. Confirm it with a USB lamp on that port.</li>
+<li><b>Otherwise buy a UUGear MEGA4</b>: a 4-port USB 3.1 hub, €31, sold direct, "106 in stock" on
+<a href="https://www.uugear.com/product/mega4-4-port-usb-3-ppps-hub-for-raspberry-pi-4/">uugear.com</a>.
+<ul>
+<li>It is built for exactly this. In UUGear's words, "the power on each port can be turned ON or OFF separately via software", with
+"Per-Port Over Current Protection" and an optional 5 V USB-C supply (2.5 A a port).</li>
+<li>uhubctl's maintainer names it as a hub made because uhubctl exists. A 2026 survey of hubs you can still buy calls it "purpose-built …
+explicitly designed for uhubctl control" (<a href="https://github.com/mvp/uhubctl/issues/670">uhubctl #670</a>).</li>
+<li>It works on any computer, not only a Raspberry Pi.</li>
+<li>Plug only the fdcanusb (and a second adapter) into it, and give it its own 5 V supply. It is a bare board, so it needs a small enclosure on
+a robot. Do the lamp test on arrival.</li>
+<li>The RealSense cameras stay on the PC. Their own <code>hardware_reset()</code> is their cure, and on many USB 3 hubs a USB 3 device's VBUS
+drops only when every port is off (<a href="https://github.com/mvp/uhubctl/issues/601">#601</a>).</li>
+</ul></li>
+<li><b>Alternatives.</b>
+<ul>
+<li>Rosonway RSH-A10: 10 ports, about $35, the community favourite in #670. Its ports switch cleanly, but switching takes about 2.5 s and its
+per-port buttons must stay pressed in.</li>
+<li>For a deployed fleet, Acroname USBHub3+: industrial, a full API, per-port VBUS with current monitoring, $300-800. It is not uhubctl-style,
+so it would need a rung of its own.</li>
+<li>Skip the Plugable USB3-HUB7BC (its maker called it retired in 2022, #409) and the StarTech units (only single reports).</li>
+</ul></li>
 </ol>
+<p class="small muted">RobotDx's power cycle writes the kernel's own port <code>disable</code> (Linux 6.0+, the same interface uhubctl uses
+here), so any per-port power switching hub works and uhubctl need not be installed.</p>
+
+<h2>The rack bus lock (asked by the W1 dispatcher after 17:42)</h2>
+<p>Every RobotDx action that opens or resets the arm's fdcanusb now follows Sim to Real's rule (bam_ws <code>a3a12ac7d</code>,
+<code>guard_real_open</code>). There must be no other process on its port. This action, or a process above it, must hold the <b>real</b> rack bus
+lock, or a running rackq job's lease must cover its unit. Otherwise the action takes the lock itself, LOCK_EX, or refuses and names whoever
+holds it. This covers both the reset ladder (from its first fresh open to its last rung) and <code>reset_port</code> on an fdcanusb. The rule
+is restated in <code>io_diagnostics/rack_lock.py</code>, because RobotDx is stdlib only and cannot import <code>bam_rack_twin</code>. A
+redirected lock never counts on a real machine. A moteus board's restart goes through its driver, which takes the lock itself, and cameras
+never take the arm's lock.</p>
 
 <h2>How an owner calls it (for Sim to Real's arm-hold)</h2>
 <pre>python3 -m io_diagnostics.recovery recover --device usb:0483:5740:0607623A --owner-pid $PID \\

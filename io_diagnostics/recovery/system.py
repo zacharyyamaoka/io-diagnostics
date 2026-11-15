@@ -84,6 +84,28 @@ def kernel_lines(since: float, port: str) -> list[str]:
     return [line for line in lines if pattern.search(line)][-40:]
 
 
+def port_from_kernel(serial: str, days: int = 7) -> str:
+    """The USB port a serial was last enumerated at, from the kernel's own lines (``usb 7-1: SerialNumber: 0607623A``).
+
+    WHY (2026-11-14 17:44): after a reset the hung adapter never came back ("device not accepting address"), so sysfs had no trace
+    of it; only its port is left to power-cycle, and the kernel log is where that port is still written down."""
+
+    if not serial:
+        return ""
+    pattern = re.compile(rf"\busb (\d+-\d+(?:\.\d+)*): SerialNumber: {re.escape(serial)}\s*$")
+    named = os.environ.get(KERNEL_LOG_ENV)
+    if named:
+        try:
+            lines = Path(named).read_text().splitlines()
+        except OSError:
+            return ""
+    else:
+        code, out = run(["journalctl", "-k", "--no-pager", "-o", "cat", "--since", f"-{days}d"], 8.0)
+        lines = out.splitlines() if code == 0 else []
+    found = [match[1] for match in (pattern.search(line) for line in lines) if match]
+    return found[-1] if found else ""
+
+
 def querycap(node: str, timeout_s: float) -> tuple[bool, str]:
     """VIDIOC_QUERYCAP on a fresh open of a V4L2 node: shared with any running stream (it takes nothing), and it answers within
     ``timeout_s`` or the camera's control plane is wedged. In a thread, so a hung ioctl cannot hang the ladder."""
@@ -199,6 +221,7 @@ class Seams:
     querycap: Callable[[str, float], tuple[bool, str]] = querycap
     tty_ask: Callable[[str, float], tuple[bool | None, str]] = tty_ask
     lsusb_power: Callable[[int, int], str] = lsusb_power
+    port_from_kernel: Callable[[str], str] = port_from_kernel
     env: dict = field(default_factory=dict)  # extra environment for plugin and tool subprocesses
 
 

@@ -217,7 +217,8 @@ class Rig:
     def seams(self, **override) -> Seams:
         fakes = dict(write_attr=self.write_attr, run=self.run, sleep=self.sleep, now=self.now, monotonic=self.now,
                      kernel_lines=lambda since, port: system.kernel_lines(since, port), tty_ask=self.tty_ask,
-                     querycap=lambda node, timeout: (self.answering, "querycap"), lsusb_power=lambda bus, dev: "unknown")
+                     querycap=lambda node, timeout: (self.answering, "querycap"), lsusb_power=lambda bus, dev: "unknown",
+                     port_from_kernel=lambda serial: system.port_from_kernel(serial))
         return Seams(**{**fakes, **override})
 
     def resets(self) -> list[str]:
@@ -894,3 +895,23 @@ def test_reset_port_on_the_arm_s_adapter_refuses_while_another_process_holds_the
     finally:
         os.environ.pop("IO_DIAGNOSTICS_RESET_WAIT_S", None)
     assert "took the rack bus lock" in capsys.readouterr().out and log.read_text().split() == ["009/006"]
+
+
+def test_an_adapter_that_never_came_back_is_power_cycled_at_the_port_the_kernel_last_saw_it_on(tmp_path, monkeypatch):
+    # 2026-11-14 17:44: fdcanusb-reset reset 7-1 and the adapter never re-enumerated ("device not accepting address", error -71);
+    # sysfs has nothing of it, no incident remembers its port, only the kernel's own lines do
+    rig = Rig(tmp_path / "rig", monkeypatch, power="individual", cure_by="power_cycle")
+    rig.kernel_line("usb 9-3: SerialNumber: 0607623A")
+    rig.vanish()
+    rig.kernel_line("usb 9-3: device not accepting address 12, error -71")
+    result = owner_run(rig, detected="gone after its own fdcanusb-reset", tried_by_owner=("reopen", "native"))
+    writes = [call for call in rig.calls if call.startswith("write") and "disable" in call]
+    assert writes[:2] == ["write 9-0:1.0/usb9-port3/disable 1", "write 9-0:1.0/usb9-port3/peer/disable 1"], rig.calls
+    skipped = {line.get("rung"): line.get("reason") for line in ledger_lines(rig) if line["outcome"] == "skipped"}
+    assert skipped.get("usbreset") in ("SameReset", "NotOnUsb") and skipped.get("authorized") == "NotOnUsb"
+    assert result.outcome in ("paged", "cured")  # the fake does not re-create a vanished device; the switch is the point
+
+
+def test_a_dry_run_leaves_no_lock_file_behind(rig):
+    person(rig, dry_run=True)
+    assert not (state_dir() / "locks").exists()

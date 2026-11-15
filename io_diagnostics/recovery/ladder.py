@@ -89,8 +89,11 @@ class Ladder:
             raise devices.DeviceError("name a device (--device)")
         store = Store(found.state_key, self.seams.now)
         incident = store.current()
-        if not found.present and incident and incident.last_port and not found.port:
-            found = dataclasses.replace(found, port=incident.last_port)
+        if not found.present and not found.port:
+            # gone from USB: the port it was last at, from this incident, else from the kernel's own enumeration lines
+            last = (incident.last_port if incident and incident.last_port else "") or self.seams.port_from_kernel(found.serial)
+            if last:
+                found = dataclasses.replace(found, port=last)
         profile = profile_for(found.keys()) or (BY_NAME.get(incident.profile) if incident and incident.profile else None)
         if profile is None:
             profile = BY_NAME["usb_device"]
@@ -227,8 +230,10 @@ class Ladder:
         gate = self._gates(device, store)
         if gate is not None:
             return gate
+        if self.request.dry_run:
+            return self._run(device, profile, store)  # a dry run changes nothing, not even a lock file
         with store.ladder_lock() as mine:
-            if not mine and not self.request.dry_run:
+            if not mine:
                 return self._refuse("LadderRunning", f"another reset ladder is running on {device.name}", store)
             return self._run(device, profile, store)
 

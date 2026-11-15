@@ -115,6 +115,11 @@ MUTATIONS = [
      'return Path(named) if named else Path(os.environ["IO_DIAGNOSTICS_USB_SYSFS"]).parent / "rack-bus.lock"\n    return Path(os.environ.get(FAKE_LOCK_ENV) or REAL_BUS_LOCK)'),
     ('rack lock: reset_port resets the arm\'s adapter without the lock', USB,
      'if rack_lock.is_rack_adapter(target.vid, target.pid, _read(sysfs_root() / target.port / "product")):', 'if False:'),
+    ('vanished: an adapter gone from USB is not found at the port the kernel last saw it on', LADDER,
+     'or self.seams.port_from_kernel(found.serial)', 'or ""'),
+    ('dry run: a dry run takes the ladder lock and leaves its file', LADDER,
+     '        if self.request.dry_run:\n            return self._run(device, profile, store)  # a dry run changes nothing',
+     '        if False:\n            return self._run(device, profile, store)  # a dry run changes nothing'),
     ('tripwire: the real fdcanusb-reset may run in a test', SUPPORT,
      'if words and Path(words[0]).name == "fdcanusb-reset" and not (', 'if False and not ('),
 ]
