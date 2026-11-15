@@ -4,6 +4,9 @@ Zach, Daily Note 2026-10-22, listing what RobotDx should be: "Ok we can also inc
 well like to manually reset a usb port etc…". Until now RobotDx only *detected* a reset (the kernel log's `UsbReset`,
 `io_facts/kernel_log.py`). This is the button.
 
+For the device-level **Reset…** (`reset`: the device's own reset first, then these USB rungs, one at a time until it answers, and
+the same ladder unattended on a deployed robot), see `docs/device-reset.md`.
+
 `reset_port` · **Reset USB port** · danger `interrupts` (docs/actions-vocabulary-v0.1.md). It is offered on **every USB device
 row and every USB port row**, whatever driver owns the device. A port row resets the device in it; a hub resets everything
 plugged into it too, and the confirmation says so.
