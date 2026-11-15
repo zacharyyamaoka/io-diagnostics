@@ -33,8 +33,11 @@ KIND_WORDS = {"reopen": "Reopen", "native": "Its own reset", "usbreset": "USB po
               "power_cycle": "Port power cycle", "page": "Page a human"}
 
 
+FAKE_LOCK = re.compile(r"/tmp/device-reset-scenario-[^/]+/rig/bus\.lock")
+
+
 def esc(text) -> str:
-    return html.escape(TMP.sub("", str(text)))
+    return html.escape(TMP.sub("", FAKE_LOCK.sub("the rig's rack bus lock (a fake one here)", str(text))))
 
 
 def run_json(argv: list[str]) -> object:
@@ -80,18 +83,24 @@ def mechanism_table() -> str:
 
 # ----- what this machine can run today -----------------------------------------------------------------------------------
 def availability_table(report: dict) -> str:
+    head = "".join(f"<th>{KIND_WORDS[kind]}</th>" for kind in KINDS)
     rows = []
     for device in report["devices"]:
         if device["profile"] == "usb_device":
             continue  # keyboards, mice, the webcam: not the rig's; the installer never opens them
+        by_kind = {rung["kind"]: rung for rung in device["rungs"]}
         cells = []
-        for rung in device["rungs"]:
+        for kind in KINDS:  # one column per rung kind, so a class without a rung (the OBSBOT's own reset) leaves a gap, not a shift
+            rung = by_kind.get(kind)
+            if rung is None:
+                cells.append('<td class="none">—</td>')
+                continue
             mark = "yes" if rung["usable"] else "no"
             needs = f'<div class="muted small">needs {esc(rung["needs"])}</div>' if rung["needs"] else ""
             cells.append(f'<td class="{mark}"><b>{mark}</b> <span class="small">{esc(rung["why"])}</span>{needs}</td>')
         rows.append(f"<tr><th class='row'>{esc(device['name'])}<div class='muted small'>{esc(device['port'])} · "
                     f"{esc(device['profile'])}</div></th>" + "".join(cells) + "</tr>")
-    return "<div class='scroll'><table class='avail'>" + "".join(rows) + "</table></div>"
+    return f"<div class='scroll'><table class='avail'><tr><th>Device</th>{head}</tr>" + "".join(rows) + "</table></div>"
 
 
 def scenario_block(each: dict) -> str:
@@ -129,12 +138,17 @@ def main() -> None:
     scenarios = run_json([sys.executable, str(ROOT / "docs" / "device_reset_scenarios.py")])
     here = run_json([sys.executable, "-m", "io_diagnostics.recovery", "check", "--json"])
     facts = here["machine"]
-    pytest_tail = text_file("pytest.txt").strip().splitlines()[-1:] or ["(run the tests to fill this in)"]
+    pytest_tail = text_file("pytest-full.txt").strip().splitlines()[-1:] or ["(run the tests to fill this in)"]
     mutation = text_file("mutations.txt")
     caught = re.search(r"(\d+) of (\d+) mutations caught", mutation)
+    mutation_usb = text_file("mutations-usb-reset.txt")
+    caught_usb = re.search(r"(\d+) of (\d+) mutations caught", mutation_usb)
+    page_tests = [line for line in text_file("page-tests.txt").splitlines() if line.strip()]
     hero = media("hero.mp4", "video/mp4")
     gif = media("hero.gif", "image/gif")
-    stills = [(name, media(name, "image/png")) for name in sorted(os.listdir(MEDIA)) if name.endswith(".png")] if MEDIA.exists() else []
+    # the stills worth comparing, in reading order, as JPEG (the page stays under the desktop preview's ~1.9 MB)
+    order = ("run-page-light.jpg", "run-done.jpg", "run-page-dark.jpg", "menu-light.jpg", "menu-board-light.jpg")
+    stills = [(name, media(name, "image/jpeg")) for name in order]
     captions = json.loads(text_file("captions.json") or "{}")
     hero_html = ""
     if hero:
@@ -163,13 +177,14 @@ details summary{{cursor:pointer;color:var(--muted);font-size:13px}} ul{{padding-
 table.ladder td{{min-width:150px}}
 </style></head><body><main>
 <h1>Reset… and automatic recovery</h1>
-<p><b>Every device RobotDx knows now has a reset ladder: its own reset first, then the USB rungs, then a page to a human. A deployed robot runs it
-by itself, and a person runs it with one click.</b> It is on RobotDx <code>main</code> @ <code>{esc(sha)}</code>. Two rungs are not yet usable here:
-the kernel deauthorize and the port power cycle wait for your one-time sudo, and a power cycle also needs a hub that can switch each port's power.
-No live device was reset. Every run shown here is on the fake rig.</p>
+<p><b>Every device RobotDx knows now has a reset ladder: its own reset first, then the USB rungs, then a page to a human.
+A deployed robot runs it by itself, and a person runs it with one click.</b> It is on RobotDx <code>main</code> @ <code>{esc(sha)}</code>.
+Every RobotDx reset of the arm's fdcanusb now holds the real rack bus lock. At 17:44 a USB reset could not cure the adapter's hard hang, so its
+real cure is a port power cycle, which needs one sudo from you and, unless the PC's own root hub can switch port power, a €31 hub. No live
+device was reset: every run shown here is on a fake rig or a fixture host.</p>
 {hero_html}
 
-<h2>The 08:57 wedge, replayed</h2>
+<h2>The 08:57 and 17:44 wedges, replayed</h2>
 <p>Each block below is the real ladder on the test suite's fake rig: a fake sysfs, /dev and /proc, with the fdcanusb "frozen" so that only the chosen
 rung cures it. The text is what it printed and wrote. arm-hold calls it as the owner, after its own reopen and its own <code>fdcanusb-reset</code>.</p>
 {"".join(scenario_block(each) for each in scenarios)}
@@ -269,12 +284,19 @@ kernel's lines; every page goes to <code>alarms.jsonl</code>.</li>
 
 <h2>Proof</h2>
 <ul>
-<li>Tests: {esc(pytest_tail[0])} (<code>tests/test_recovery.py</code> and the host wiring's <code>tests/test_host_reset_action.py</code>). All run on fake trees.
-The tripwire refuses the real <code>fdcanusb-reset</code>, <code>usbreset</code> and <code>uhubctl</code>, any recover or act without a fake sysfs, and,
-in process, any sysfs write or device open outside the temp dir.</li>
-<li>Mutation checks of the refusal paths: <b>{esc(caught.group(0) if caught else "not run")}</b> (<code>tests/mutate_recovery.py</code>).
-<details><summary>each mutation</summary><pre>{esc(mutation)}</pre></details></li>
-<li>The rules file: <code>udevadm verify</code> passes. The installer refuses to run without root and touches nothing.</li>
+<li><b>The whole Python suite:</b> {esc(pytest_tail[0])}. The 4 failures are the suite's live-device tests: two in <code>test_integration</code>, one D405 skeleton
+test, one Computer follow-timing test. They fail the same on a clean copy of HEAD, because they read this machine's real devices.</li>
+<li><b>The ladder:</b> 60 tests in <code>tests/test_recovery.py</code> on a fake <code>/sys</code>, <code>/dev</code> and <code>/proc</code>. The fdcanusb's
+console is a pty there.</li>
+<li><b>The host wiring:</b> 14 tests in <code>tests/test_host_reset_action.py</code>.</li>
+<li><b>The tripwire</b> refuses the real <code>fdcanusb-reset</code>, <code>usbreset</code> and <code>uhubctl</code>, and any recover or act without a fake
+sysfs. In process it refuses any sysfs write or device open outside the temp dir, and the rack's real bus lock.</li>
+<li><b>Refusal-path mutations:</b> <b>{esc(caught.group(0) if caught else "not run")}</b> (<code>tests/mutate_recovery.py</code>) and
+<b>{esc(caught_usb.group(0) if caught_usb else "not run")}</b> (<code>tests/mutate_usb_reset.py</code>, which includes the host's Reset… gates).
+<details><summary>each mutation</summary><pre>{esc(mutation)}</pre><pre>{esc(mutation_usb)}</pre></details></li>
+<li><b>The real page, headless Chrome on a fixture host:</b> {esc("; ".join(page_tests))}.</li>
+<li><b>The rules file:</b> <code>udevadm verify</code> passes. The installer refuses to run without root and touches nothing.</li>
+<li><b>Nothing live was reset.</b> The only live commands were read-only (<code>check</code>, a <code>plan</code> dry run, the kernel log).</li>
 </ul>
 {('<h2>On the page</h2>' + stills_html) if stills_html else ""}
 
@@ -285,11 +307,22 @@ in process, any sysfs write or device open outside the temp dir.</li>
 <li>The power cycle uses the kernel's own port <code>disable</code> (Linux 6.0+, the same thing uhubctl does there), so uhubctl is not installed.</li>
 <li>The moteus board reboot is never automatic. The OBSBOT has no own reset, because the camera exposes none.</li>
 <li>Profiles are frozen dataclasses, one per file (Python ground truth). The rules file and these tables are generated from them.</li>
+<li>The rack bus lock rule is restated in RobotDx (<code>io_diagnostics/rack_lock.py</code>) rather than imported from <code>bam_rack_twin</code>,
+because RobotDx is stdlib only and runs under the tray's system python. The rule's source is named in that file. Only the fdcanusb ladder
+takes the lock; a board's reset goes through its driver, which takes the lock itself.</li>
+<li>Reset… is greyed, with the reasons, when no rung may run here. It is not offered as a Run that could only end "not cured".</li>
+<li>When an adapter never comes back after a reset, the ladder finds its last port in the kernel's own <code>SerialNumber:</code> lines, so it can
+still power-cycle that port.</li>
+<li>The builder renamed the v6 fixture's old driver actions <code>reset</code> → <code>reset_board</code> / <code>hardware_reset</code>, because
+<code>reset</code> is now a standard name. The live drivers use <code>reboot</code> and are unaffected.</li>
 </ul>
 <h2>Left, and deliberately not done</h2>
 <ul>
 <li>I did not reset any live device. No live trial has happened. The arm rack is Sim to Real's.</li>
-<li>arm-hold calling <code>recover</code> after its own reset is Sim to Real's change to make. The owner contract is above.</li>
+<li>arm-hold calling <code>recover</code> after its own reset is Sim to Real's change to make. The owner contract is above. Today arm-hold
+pages "needs a power cycle" itself.</li>
+<li>The moteus_servo driver's own actions (Open console, which runs tview; Stop all) live in bam_ws and take their own locks. RobotDx's rule
+here covers the resets RobotDx itself runs.</li>
 <li>The camera lock. At 13:44:50 an intel_rgbd diagnose took the rack bus lock. That plugin (on bam_ws, Sim to Real's worktree) has no lock option
 and always takes <code>bus.lock</code> shared. Giving cameras their own lock is a change in that plugin. RobotDx's own reset ladder never takes the
 rack lock for a camera.</li>

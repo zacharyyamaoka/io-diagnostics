@@ -318,7 +318,8 @@ class Ladder:
                 return result
             before = self.attempts[-1]["after"]
         if request.mode == PERSON:
-            text = fill(profile.page_text, self._page_values(device, incident, profile))
+            values = self._page_values(device, incident, profile)
+            text = fill(profile.page_text if values["tried"] else profile.page_text.replace(" after {tried}", ""), values)
             self.say(f"not cured: {text}")
             record = _event("RecoveryNotCured", "error", text, incident=incident.id)
             return Result(NEEDS_HUMAN, "not_cured", text, [*self.result_records, record], plan, self.attempts)
@@ -415,11 +416,13 @@ class Ladder:
         rungs = [profile.rung(kind) if profile else None for kind in kinds]
         words = [(rung.title[0].lower() + rung.title[1:]) if rung else kind for kind, rung in zip(kinds, rungs)]
         return {"name": device.name, "port": device.port or "?", "serial": device.serial or "?", "node": device.node,
-                "tried": "; ".join(words) if words else "nothing (no rung could run here)"}
+                "tried": "; ".join(words)}
 
     def _page(self, device: devices.Device, profile: RecoveryProfile, store: Store, incident, because: str) -> Result:
         # WHY the reason rides in the text: a person reading a page on a phone must see "tview has it open" without the ledger
-        text = f"{fill(profile.page_text, self._page_values(device, incident, profile))} Why: {because}."
+        values = self._page_values(device, incident, profile)
+        template = profile.page_text if values["tried"] else profile.page_text.replace(" after {tried}", "")  # nothing could be tried
+        text = f"{fill(template, values)} Why: {because}."
         if incident.paged is not None:
             message = f"a human was already paged at {_clock(incident.paged)}: {text}"
             self.say(message)
@@ -437,7 +440,7 @@ class Ladder:
         self.attempts.append(store.record({"incident": incident.id, "rung": PAGE, "outcome": "paged", "words": text,
                                            "because": because, "page_command": sent, "mode": self.request.mode,
                                            "caller": self._caller(), "alarm_utc": alarm["utc"]}))
-        self.say(f"NEEDS A HUMAN: {text} ({because})")
+        self.say(f"NEEDS A HUMAN: {text}")
         record = _event("RecoveryNeedsHuman", "error", text, incident=incident.id, because=because)
         return Result(NEEDS_HUMAN, "paged", text, [*self.result_records, record], attempts=self.attempts)
 
