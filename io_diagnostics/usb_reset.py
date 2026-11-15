@@ -38,6 +38,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from io_diagnostics import rack_lock
+
 NAME = "reset_port"
 TITLE = "Reset USB port"  # contract.record.STANDARD_ACTIONS["reset_port"]
 SOURCE = "io_diagnostics.usb_reset"
@@ -574,6 +576,17 @@ def act(argv: list[str]) -> int:
         return _refuse(out, "HoldersPresent", plan["second_confirm"] + ": confirm again to reset it anyway", target,
                        holders=plan["holders"])
 
+    if rack_lock.is_rack_adapter(target.vid, target.pid, _read(sysfs_root() / target.port / "product")):
+        # WHY (bam_ws a3a12ac7d, 2026-11-14): nothing resets the arm's fdcanusb without the rack bus lock; io_diagnostics/rack_lock.py
+        with rack_lock.hold({os.getpid(), *rack_lock.ancestors(os.getpid())}) as (allowed, why):
+            if not allowed:
+                return _refuse(out, "BusLockHeld", f"{why}: that process owns the arm's bus; stop it first", target)
+            _say(why)
+            return _reset_and_report(out, target, use, found, plan)
+    return _reset_and_report(out, target, use, found, plan)
+
+
+def _reset_and_report(out, target: Target, use: Method, found: list[Holder], plan: dict) -> int:
     _say(f"Resetting {target.name} at {target.port} ({target.bus_dev}) with {use.name}")
     for holder in found:
         _say(f"  {holder.text()}: it loses the device")

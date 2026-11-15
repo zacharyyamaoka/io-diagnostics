@@ -816,3 +816,81 @@ def test_a_skeleton_without_a_sysfs_serial_still_names_its_adapter(rig):
     (rig.sysfs / "9-3" / "serial").write_text("")
     found = devices.from_skeleton({"id": "usb:9-3", "serial": "0607623A", "attrs": {"port": "9-3"}})
     assert found.serial == "0607623A" and found.key == FDCANUSB
+
+
+# ----- the rack bus lock rule (bam_ws a3a12ac7d: nothing opens or resets the arm's fdcanusb without it) ----------------------
+from io_diagnostics import rack_lock, usb_reset  # noqa: E402
+
+
+def test_the_ladder_holds_the_rack_bus_lock_from_its_first_open_to_its_last_rung(rig):
+    seen = []
+
+    def run(argv, timeout_s, env=None):
+        seen.append(rack_lock.lock_is_held(rig.lock))
+        return rig.run(argv, timeout_s, env)
+
+    def ask(node, timeout_s):
+        seen.append(rack_lock.lock_is_held(rig.lock))
+        return rig.tty_ask(node, timeout_s)
+
+    result = Ladder(Request(key=FDCANUSB, mode=UNATTENDED), rig.seams(run=run, tty_ask=ask), say=lambda _: None).run()
+    assert result.outcome == "cured" and seen and all(seen), seen  # the detect probe's open and the reset, both under the lock
+    assert not rack_lock.lock_is_held(rig.lock), "let go when the ladder ends"
+
+
+def test_a_rack_bus_lock_held_by_a_process_it_cannot_name_refuses(rig):
+    fd = os.open(rig.lock, os.O_RDWR)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    try:
+        result = Ladder(Request(key=FDCANUSB, mode=UNATTENDED), rig.seams(), say=lambda _: None).run()
+        _refused(result, "OwnerLockHeld", rig)
+        assert "could not be named" in result.message and not [c for c in rig.calls if c.startswith("ask ")]
+    finally:
+        os.close(fd)
+
+
+def test_on_a_real_machine_only_the_real_lock_counts(monkeypatch, tmp_path):
+    monkeypatch.delenv("IO_DIAGNOSTICS_USB_SYSFS", raising=False)
+    monkeypatch.setenv("IO_DIAGNOSTICS_RACK_BUS_LOCK", str(tmp_path / "redirected.lock"))
+    assert rack_lock.lock_path() == rack_lock.REAL_BUS_LOCK  # a redirected lock holds nothing the rack respects
+    with pytest.raises(PermissionError):
+        with rack_lock.hold(set()):
+            pass  # the tripwire: no test ever reaches the rack's real lock
+
+
+def test_a_running_rackq_job_s_lease_on_this_unit_covers_the_ladder(rig, tmp_path, monkeypatch):
+    (rig.proc / str(ME) / "cgroup").write_text("0::/system.slice/arm-hold.service\n")
+    (tmp_path / "queue" / "running").mkdir(parents=True)
+    (tmp_path / "queue" / "running" / "job1.json").write_text(json.dumps({"lease": {"units": ["arm-hold.service"]}}))
+    monkeypatch.setenv("RACKQ_ROOT", str(tmp_path / "queue"))
+    seen = []
+
+    def run(argv, timeout_s, env=None):
+        seen.append(rack_lock.lock_is_held(rig.lock))
+        return rig.run(argv, timeout_s, env)
+
+    lines = []
+    result = Ladder(Request(key=FDCANUSB, owner_pid=ME, detected="dead", tried_by_owner=("reopen",)), rig.seams(run=run),
+                    say=lines.append).run()
+    assert result.outcome == "cured" and seen == [False] and any("lease covers the unit arm-hold" in line for line in lines)
+
+
+def test_reset_port_on_the_arm_s_adapter_refuses_while_another_process_holds_the_rack_bus_lock(rig, capsys):
+    log = rig.root / "usbreset.calls"
+    tool = rig.bin / "usbreset"
+    tool.write_text(f"#!/bin/sh\necho \"$@\" >> {log}\n")
+    tool.chmod(0o755)
+    usb_reset.act(["act", "--device", "usb:9-3", "--action", "reset_port", "--dry-run"])
+    plan = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    rig.process(5555, "experiment", parent=1)
+    rig.hold_lock(5555)
+    code = usb_reset.act(["act", "--device", "usb:9-3", "--action", "reset_port", "--confirm", plan["token"]])
+    out = capsys.readouterr().out
+    assert code == usb_reset.REFUSED and "BusLockHeld" in out and "experiment (pid 5555)" in out and not log.exists()
+    (rig.proc / "locks").write_text("")
+    os.environ["IO_DIAGNOSTICS_RESET_WAIT_S"] = "0.3"
+    try:
+        code = usb_reset.act(["act", "--device", "usb:9-3", "--action", "reset_port", "--confirm", plan["token"]])
+    finally:
+        os.environ.pop("IO_DIAGNOSTICS_RESET_WAIT_S", None)
+    assert "took the rack bus lock" in capsys.readouterr().out and log.read_text().split() == ["009/006"]

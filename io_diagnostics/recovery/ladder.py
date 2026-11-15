@@ -22,13 +22,13 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from io_diagnostics import usb_reset
+from io_diagnostics import rack_lock, usb_reset
 from io_diagnostics.recovery import availability, device as devices, mechanisms, probes
 from io_diagnostics.recovery.incident import Store, off_switch
 from io_diagnostics.recovery.profile import RecoveryProfile
 from io_diagnostics.recovery.profiles import BY_NAME, profile_for
 from io_diagnostics.recovery.rung import NATIVE, PAGE, REOPEN, USB_KINDS, Rung
-from io_diagnostics.recovery.system import (Seams, alive, ancestors, descendants, fill, lock_holders, lock_is_held, tool_paths)
+from io_diagnostics.recovery.system import Seams, alive, ancestors, descendants, fill
 
 UNATTENDED, PERSON = "unattended", "person"
 HEALTHY, REFUSED, NOT_JUDGED, NEEDS_HUMAN, BROKEN = 0, 2, 3, 4, 1
@@ -114,21 +114,6 @@ class Ladder:
         found, _unseen = usb_reset.holders(device.port, usb_reset.own_sessions())
         family = self._family()
         return found, [holder for holder in found if holder.pid not in family]
-
-    def _owner_locks(self, profile: RecoveryProfile) -> list[str]:
-        """Owner locks held by a process outside the family, in words: the rack bus lock held by an experiment."""
-
-        out, family = [], self._family()
-        for template in profile.owner_locks:
-            path = fill(template, tool_paths())
-            if not os.path.exists(path):
-                continue
-            pids = [pid for pid in lock_holders(path) if pid not in family]
-            if pids:
-                out.append(f"{path} is held by " + ", ".join(f"{usb_reset._program(pid)} (pid {pid})" for pid in pids))
-            elif not lock_holders(path) and lock_is_held(path) and not self.request.owner_pid:
-                out.append(f"{path} is held (its holder could not be named)")
-        return out
 
     # ----- the gates of every call ------------------------------------------------------------------------------------
     def _refuse(self, reason: str, message: str, store: Store | None = None, **args) -> Result:
@@ -255,7 +240,6 @@ class Ladder:
             return Result(HEALTHY, "planned", plan["message"], [plan], plan)
 
         # gates that depend on who has it now
-        locks = self._owner_locks(profile)
         if request.mode == PERSON:
             if not plan["runs"]:
                 return self._refuse("NothingToRun", plan["confirm"], store)
@@ -265,14 +249,26 @@ class Ladder:
             if others and not request.confirm_holders:
                 return self._refuse("HoldersPresent", plan["second_confirm"] + ": confirm again to reset it anyway", store,
                                     holders=plan["others"])
-            if locks:
-                return self._refuse("OwnerLockHeld", "; ".join(locks) + ": that process owns the device's bus; stop it first",
-                                    store)
-        else:
-            blocked = (f"{', '.join(h.text() for h in others)}: not the declared owner" if others else "") or "; ".join(locks)
-            if blocked:
-                return self._blocked(device, profile, store, blocked, "HeldByOther" if others else "OwnerLockHeld")
+        elif others:
+            return self._blocked(device, profile, store, f"{', '.join(h.text() for h in others)}: not the declared owner",
+                                 "HeldByOther")
+        if not profile.owner_locks:
+            return self._climb(device, profile, store, plan, found)
+        # WHY (bam_ws a3a12ac7d, the W1 dispatcher, 2026-11-14): a second opener on the fdcanusb hung its MCU hard at 17:42; nothing
+        # opens or resets the arm's adapter without holding the REAL rack bus lock (or being covered by its holder or a rackq lease).
+        # The ladder holds it from the first fresh open (the probe) to its last rung.
+        with rack_lock.hold(self._family()) as (ok, why):
+            if not ok:
+                if request.mode == PERSON:
+                    return self._refuse("OwnerLockHeld", f"{why}: that process owns the arm's bus; stop it first", store)
+                return self._blocked(device, profile, store, why, "OwnerLockHeld")
+            self.say(f"  {why}")
+            return self._climb(device, profile, store, plan, found)
 
+    def _climb(self, device: devices.Device, profile: RecoveryProfile, store: Store, plan: dict, found: list) -> Result:
+        """Detect, then each rung in order until it answers, then a human (the gates have all passed)."""
+
+        request = self.request
         # detect
         before = devices.snapshot(device, found)
         if request.detected:

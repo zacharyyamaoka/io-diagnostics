@@ -22,6 +22,8 @@ AVAIL = 'io_diagnostics/recovery/availability.py'
 SYSTEM = 'io_diagnostics/recovery/system.py'
 INCIDENT = 'io_diagnostics/recovery/incident.py'
 SUPPORT = 'tests/test_host_support.py'
+RACK = 'io_diagnostics/rack_lock.py'
+USB = 'io_diagnostics/usb_reset.py'
 MUTATIONS = [
     # (name, file, old, new)
     ('off switch: unattended recovery ignores recovery.off', LADDER,
@@ -101,6 +103,18 @@ MUTATIONS = [
      'if not plan["runs"]:\n                return self._refuse("NothingToRun"', 'if False:\n                return self._refuse("NothingToRun"'),
     ('board: a board\'s reset ignores who has its adapter open', LADDER,
      '        if not device.port:\n            return [], []\n        # a CAN board', '        if not device.port or device.is_can:\n            return [], []\n        # a CAN board'),
+    ('rack lock: the ladder resets the arm\'s adapter without the rack bus lock', LADDER,
+     'if not profile.owner_locks:\n            return self._climb(', 'if True:\n            return self._climb('),
+    ('rack lock: a lock held by another process does not refuse', RACK,
+     'others = [pid for pid in holders if pid not in family]', 'others = []'),
+    ('rack lock: a lock it cannot take is taken as held', RACK,
+     '            yield False, f"the rack bus lock ({path}) is held (its holder could not be named)"\n            return',
+     '            pass'),
+    ('rack lock: a redirected lock counts on a real machine', RACK,
+     'return Path(named) if named else Path(os.environ["IO_DIAGNOSTICS_USB_SYSFS"]).parent / "rack-bus.lock"\n    return REAL_BUS_LOCK',
+     'return Path(named) if named else Path(os.environ["IO_DIAGNOSTICS_USB_SYSFS"]).parent / "rack-bus.lock"\n    return Path(os.environ.get(FAKE_LOCK_ENV) or REAL_BUS_LOCK)'),
+    ('rack lock: reset_port resets the arm\'s adapter without the lock', USB,
+     'if rack_lock.is_rack_adapter(target.vid, target.pid, _read(sysfs_root() / target.port / "product")):', 'if False:'),
     ('tripwire: the real fdcanusb-reset may run in a test', SUPPORT,
      'if words and Path(words[0]).name == "fdcanusb-reset" and not (', 'if False and not ('),
 ]

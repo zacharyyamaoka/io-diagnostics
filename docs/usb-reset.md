@@ -143,3 +143,7 @@ the tree and a test must fail.
 ```bash
 uv run --project /home/bam/io-diagnostics --group dev pytest /home/bam/io-diagnostics/tests/test_usb_reset.py
 ```
+
+**2026-11-14: the arm's adapter.** `reset_port` on an mjbots fdcanusb also needs the rack bus lock (`io_diagnostics/rack_lock.py`, the
+rule of bam_ws a3a12ac7d): it takes the REAL lock for the reset, or refuses `BusLockHeld` naming who holds it, unless the process that
+started it already holds it. docs/device-reset.md "The rack bus lock" says why.

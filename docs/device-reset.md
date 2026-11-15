@@ -84,10 +84,18 @@ already restarted their app); person-only rungs run; it stops as soon as the dev
 | another ladder runs on this device (flock) | `LadderRunning` |
 | person: the token does not match the plan as it is now | `ConfirmMismatch` |
 | **anyone other than the owner has the device (or anything below it) open** | person: `HoldersPresent` until confirmed again; unattended: `HeldByOther` |
-| **an owner lock is held by someone other than the owner** (the fdcanusb's is the rack bus lock) | `OwnerLockHeld` |
+| **the arm's adapter: the REAL rack bus lock is held by someone other than the owner, or cannot be taken** (`io_diagnostics/rack_lock.py`, the rule of bam_ws a3a12ac7d `guard_real_open`: no other process on the port, and this action, a process above it, or a running rackq job's lease on its unit holds the lock; otherwise the ladder takes it, LOCK_EX, from its first fresh open to its last rung) | `OwnerLockHeld` |
 | unattended: the probe could not ask without disturbing its holder and the owner said nothing | `CannotTell` |
 
 A holder or an owner lock that blocks every rung for 120 s of an open incident is paged rather than waited out.
+
+**The rack bus lock (2026-11-14, after the 17:42 hard hang).** A second process on the fdcanusb's port hung its MCU so hard that a
+USB reset could not bring it back (kernel `device descriptor read/64, error -71`, `not accepting address`): it needed a power cycle.
+So every RobotDx action that opens or resets the arm's adapter (this ladder's probe and rungs, and `reset_port` on an fdcanusb) obeys
+Sim to Real's rule, restated in `io_diagnostics/rack_lock.py` (RobotDx is stdlib only and cannot import bam_rack_twin). It always
+checks the REAL lock path: a redirected lock holds nothing the rack respects. On a fake machine the lock is a fake too, and the test
+tripwire refuses the real one. A moteus board's restart and probe go through the moteus_servo driver, which takes the lock itself,
+so the ladder does not hold it for a board (the driver would then refuse with BusLockHeld). Cameras never take the arm's lock here.
 
 ### Exit codes
 

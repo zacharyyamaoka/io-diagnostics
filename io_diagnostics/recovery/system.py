@@ -254,46 +254,8 @@ def descendants(pid: int) -> set[int]:
     return out
 
 
-def lock_holders(path: str) -> list[int]:
-    """The pids /proc/locks names for a lock file (flock or POSIX), matched by its device and inode."""
-
-    try:
-        info = os.stat(path)
-    except OSError:
-        return []
-    want = f"{os.major(info.st_dev):02x}:{os.minor(info.st_dev):02x}:{info.st_ino}"
-    try:
-        lines = (proc_root() / "locks").read_text().splitlines()
-    except OSError:
-        return []
-    out = []
-    for line in lines:
-        words = line.split()
-        if "->" in words:  # a waiter, not a holder
-            continue
-        found = next((word for word in words if word.count(":") == 2), "")
-        if found.lower() == want:
-            try:
-                out.append(int(words[words.index(found) - 1]))
-            except (ValueError, IndexError):
-                continue
-    return sorted(set(out))
-
-
-def lock_is_held(path: str) -> bool:
-    """Does someone hold this lock file now (any mode)? A LOCK_EX | LOCK_NB that fails says so, and is released at once."""
-
-    try:
-        fd = os.open(path, os.O_RDONLY)
-    except OSError:
-        return False
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        return True
-    finally:
-        os.close(fd)
-    return False
+# the rack bus lock's readers live in io_diagnostics.rack_lock (shared with reset_port); kept importable here by their old names
+from io_diagnostics.rack_lock import lock_holders, lock_is_held  # noqa: E402,F401
 
 
 def fill(text: str, values: dict) -> str:
@@ -309,4 +271,6 @@ def tool_paths() -> dict:
     if not fdcanusb_reset:
         installed = Path.home() / ".local" / "bin" / "fdcanusb-reset"
         fdcanusb_reset = str(installed) if installed.exists() else (shutil.which("fdcanusb-reset") or str(installed))
-    return {"fdcanusb_reset": fdcanusb_reset, "rack_bus_lock": os.environ.get(RACK_BUS_LOCK_ENV) or DEFAULT_RACK_BUS_LOCK}
+    from io_diagnostics import rack_lock
+
+    return {"fdcanusb_reset": fdcanusb_reset, "rack_bus_lock": str(rack_lock.lock_path())}
