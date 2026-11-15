@@ -192,9 +192,9 @@ def test_actions_carry_their_gate_state_and_never_execute():
     actions = {action["name"]: action for action in host.node(can15["path"])["actions"]}
     assert actions["clear_faults"]["state"] == "blocked" and "tview" in actions["clear_faults"]["reason"]
     assert actions["update_firmware"]["state"] == "nothing_to_do" and actions["update_firmware"]["reason"].startswith("blocked") is False
-    port_free = next(item for item in actions["reset"]["preconditions"] if item["check"] == "port_free")
+    port_free = next(item for item in actions["reset_board"]["preconditions"] if item["check"] == "port_free")
     assert port_free["state"] == "fail" and "640623" in port_free["detail"]
-    assert "{" not in actions["reset"]["confirm"]  # {id} / {serial} filled by the host
+    assert "{" not in actions["reset_board"]["confirm"]  # {id} / {serial} filled by the host
 
 
 def test_chip_model_is_the_appindicator_shape():

@@ -7,8 +7,9 @@
 - a status whose cause has a checklist carries the value ``what_to_check`` (numbered lines, the moteus driver's
   checklists for its codes: docs/io_diagnostics_actions.md in moteus_servo);
 - the entities register the standard action vocabulary (docs/actions-vocabulary-v0.1.md) with the moteus and
-  RealSense drivers' texts. The recorded non-standard ``reset`` / ``run_comms_check`` of the cameras and the boards'
-  ``reset`` stay (tests/test_host_api.py pins them), so the page shows them under "More".
+  RealSense drivers' texts. The recorded non-standard ``hardware_reset`` / ``run_comms_check`` of the cameras and the
+  boards' ``reset_board`` stay (tests/test_host_api.py pins them), so the page shows them under "More". (Recorded as
+  ``reset``; renamed 2026-11-14 when ``reset`` became the host's standard Reset…, docs/device-reset.md.)
 
 Idempotent: a second run changes nothing. capture_v6_frames.py calls ``live_shape`` on a fresh capture.
 """

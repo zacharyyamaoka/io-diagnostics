@@ -190,9 +190,12 @@ def test_a_confirm_names_the_device_that_owns_the_action(tmp_path):
 
     host, adapter, _log = board_host(tmp_path)
     board = f"{adapter}/can/15"
-    confirms = {action["name"]: action["confirm"] for action in host.node(board)["actions"]}
+    actions = host.node(board)["actions"]
+    confirms = {action["name"]: action["confirm"] for action in actions if action["owner"] != "io_diagnostics"}
     assert confirms == {"calibrate": "Calibrate CAN 15 on fdcanusb W1? The rotor spins.",
                         "set_id": "Change the CAN id of CAN 15 on fdcanusb W1?"}, confirms
+    # the host's own Reset… on a board (docs/device-reset.md) names the board on its adapter the same way
+    assert next(action for action in actions if action["name"] == "reset")["confirm"].startswith("Reset CAN 15 on fdcanusb W1?")
     refused = host.act(board, "calibrate", node=15, human=True)  # the ConfirmRequired text is filled the same way
     assert refused["refused"] == "ConfirmRequired" and "Calibrate CAN 15 on fdcanusb W1?" in refused["message"], refused
     [check] = [action for action in host.node(adapter)["actions"] if action["owner"] != "io_diagnostics"]  # not the host's own reset_port

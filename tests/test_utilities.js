@@ -279,9 +279,10 @@ async function main() {
       return { groups, rows, motionBorder: style ? parseFloat(style.borderTopWidth) : 0, motionGap: motion ? motion.getBoundingClientRect().top - motion.previousElementSibling.getBoundingClientRect().bottom : 0 };
     });
     const ids = card.groups.map((group) => group.id);
-    const standardIcons = new Set(card.rows.filter((row) => row.name !== 'reset').map((row) => row.icon));
-    check('utilities: groups and order', ids.join() === 'maintenance,motion,more' && card.groups[1].names.join() === 'calibrate,identify' && card.groups[2].names.join() === 'reset'
-      && card.groups[0].names.join() === 'update_firmware,update_config,clear_faults,set_id', card.groups);
+    // the board's own recorded reset_board is non-standard (More); the host's Reset… (docs/device-reset.md) is a standard maintenance utility
+    const standardIcons = new Set(card.rows.filter((row) => row.name !== 'reset_board').map((row) => row.icon));
+    check('utilities: groups and order', ids.join() === 'maintenance,motion,more' && card.groups[1].names.join() === 'calibrate,identify' && card.groups[2].names.join() === 'reset_board'
+      && card.groups[0].names.join() === 'update_firmware,update_config,clear_faults,set_id,reset', card.groups);
     check('utilities: icon + title + description', card.rows.every((row) => row.icon && row.title && row.desc) && standardIcons.size === card.rows.length - 1, card.rows.map((row) => row.title));
     // round 3 (u0): the description is a tooltip (hidden at rest, shown on hover and on keyboard focus); danger is a word
     // (2026-10-29: on a ready utility: a greyed one is a disabled button, so it takes no keyboard focus; its why is its own line)

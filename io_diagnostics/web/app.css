@@ -513,6 +513,16 @@ table.grid td.mono.xcol { font-size: 11.5px; }
 .modal .u-how-t { margin-top: 10px; }
 .modal .u-how.open { display: block; margin-top: 6px; }
 .modal .u-how .u-steps { margin: 6px 0 0; padding-left: 18px; font-size: 12px; color: var(--io-muted); }
+/* Reset…'s ladder (app.js ladderHtml): one rung per line, in order; a rung that runs reads in the body text, a skipped one muted */
+.u-ladder { margin: 4px 0 0; padding-left: 20px; display: grid; gap: 8px; font-size: 12px; color: var(--io-text); max-height: 52vh; overflow-y: auto; }
+.u-rung.skip { color: var(--io-muted); }
+.u-r-h { display: flex; align-items: baseline; gap: 8px; }
+.u-r-t { font-weight: 600; color: var(--io-text-strong); }
+.u-rung.skip .u-r-t { font-weight: 400; color: var(--io-muted); }
+.u-r-skip { font-style: italic; }
+.u-r-l { display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 6px; }
+.u-rung code { display: block; margin-top: 2px; font-family: var(--io-font-mono); font-size: 11.5px; overflow-wrap: anywhere; color: var(--io-text); }
+.u-r-fix { margin-top: 6px; font-size: 11.5px; }
 .u-allrow { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--io-border-soft); }
 .u-all .u-title { color: var(--io-text); font-weight: 400; }
 

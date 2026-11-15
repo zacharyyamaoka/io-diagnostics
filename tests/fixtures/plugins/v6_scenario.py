@@ -47,7 +47,7 @@ def plan(action: str, serial: str, node: int | None, camera: bool, new_id: int |
         sdk = {"check_comms": "rs.context().query_devices() + camera_info (no stream)",
                "check_firmware": "camera_info: firmware_version, recommended_firmware_version",
                "calibrate": "auto_calibrated_device.run_on_chip_calibration()",
-               "reset": "RealSenseCamera.hardware_reset()",
+               "hardware_reset": "RealSenseCamera.hardware_reset()",
                "identify": "pipeline.start (one colour stream), keep the 16th frame, save a JPEG under ~/.cache/robotdx/identify/"}
         if action == "update_firmware":
             return [{"purpose": "flash the recommended image", "runs": "subprocess",
@@ -77,7 +77,7 @@ def plan(action: str, serial: str, node: int | None, camera: bool, new_id: int |
                            "argv": [tool, "--target", target, "--restore-config", f"~/.local/share/moteus-config/can-{node}.cfg", "--fdcanusb", by_id]}],
         "clear_faults": [{"purpose": f"query CAN {node}, then stop it (mode 0): a latched fault clears", "runs": "in-process", "argv": [],
                           "sends": ["query", "stop"]}],
-        "reset": [{"purpose": f"query CAN {node}, then d reset", "runs": "in-process", "argv": [], "sends": ["query", "d reset"]}],
+        "reset_board": [{"purpose": f"query CAN {node}, then d reset", "runs": "in-process", "argv": [], "sends": ["query", "d reset"]}],
         "set_id": [{"purpose": f"5 UUID reads of CAN {node}, one query of the new id, then reassign", "runs": "subprocess",
                     "argv": ["python3", "utils/moteus_reassign_id.py", "--target", target, "--new", str(new_id)]}],
         "identify": ([{"purpose": f"query: CAN {node} answers, mode 0, no fault", "runs": "in-process", "argv": [], "sends": ["query frame"]},

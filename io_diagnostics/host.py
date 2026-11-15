@@ -2205,7 +2205,7 @@ class Host:
     def _on_run_end(self, run) -> None:
         """A finished ``open_console`` run that says it launched a process (``ActionCompleted`` ``args.pid``): remember it."""
 
-        if run.spec.action == usb_reset.NAME and run.spec.plugin == host_utilities.OWNER:
+        if run.spec.action in host_utilities.NAMES and run.spec.plugin == host_utilities.OWNER:
             self._after_reset(run)
             return
         if run.spec.action != "open_console" or run.state != "done":
@@ -2221,11 +2221,12 @@ class Host:
                 return
 
     def _after_reset(self, run) -> None:
-        """A port was reset (or tried): every driver job whose device is in it is probed again, as for a new connection
-        (docs/probe-on-connect.md), whether the kernel gave it a new device number or reset it in place; and the OS side is read
-        again at once, so the plug / unplug / reset the kernel logged shows in Activity within a second, not at the next poll.
-        WHY even when the reset failed (exit 1) or was stopped: the device may have dropped without coming back, and the next
-        probe is what says so. Not for a refusal (exit 2: a gate said no, nothing happened to the device)."""
+        """A port or a device was reset (``reset_port``, ``reset``; or tried): every driver job whose device is in it is probed
+        again, as for a new connection (docs/probe-on-connect.md), whether the kernel gave it a new device number or reset it in
+        place; and the OS side is read again at once, so the plug / unplug / reset the kernel logged shows in Activity within a
+        second, not at the next poll. WHY even when the reset failed (exit 1) or was stopped: the device may have dropped without coming back, and the next
+        probe is what says so. Not for a refusal (exit 2: a gate said no, nothing happened to the device; both verbs say it so).
+        A board's reset (``reset --node N``) ran on its adapter, so the adapter's jobs are probed again: they list its boards."""
 
         if run.exit_code is None or run.exit_code == usb_reset.REFUSED:
             return
@@ -2884,24 +2885,29 @@ class Host:
         return (False, detail) if answers is False else (None, detail)
 
     def _evaluate_utility(self, check: str, path: str, view: View) -> tuple[bool | None, str]:
-        """The preconditions of the host's own utilities (``host_utilities.CHECKS``) for a USB device or port row."""
+        """The preconditions of the host's own utilities (``host_utilities.CHECKS``) for a USB device, port or CAN board row
+        (a board's are its adapter's: that is what its reset takes down)."""
 
-        found = host_utilities.usb_target(path, view.layer)
+        found = host_utilities.row_target(path, view.layer)
         if found is None:
             return None, f"{check}: not a USB device or port"
-        device, port = found
+        device, port, _node = found
+        replay = getattr(self.os, "mode", "live") != "live" and not usb_reset.sysfs_overridden()
+        if check == "host_live":
+            return (False, "this host replays a recording or a fake machine: there is no real device to reset") if replay \
+                else (True, "live")
         if check == "device_present":
             if device is None:
                 return False, f"nothing is plugged in at {port} now"
             return True, str(device.get("label") or device.get("id"))
         if check == "no_run_active":
-            busy = self._active_run_near(path, view.layer, found)
+            busy = self._active_run_near(path, view.layer, (device, port))
             return (False, busy) if busy else (True, "no run is active on it")
         if device is None:
             return None, f"nothing is plugged in at {port} now"
         # WHY not os.gate: a recording or a fake machine has no real port, and says so (a blocked button), unless a test points
         # the module at a fake sysfs tree (IO_DIAGNOSTICS_USB_SYSFS), which then answers like a live one
-        if getattr(self.os, "mode", "live") != "live" and not usb_reset.sysfs_overridden():
+        if replay:
             return (False if check == "reset_privilege" else None), "this host replays a recording or a fake machine: there is no real port to reset"
         peek = getattr(self.os, "peek", None)
         return peek(device, check) if peek is not None and not usb_reset.sysfs_overridden() else usb_reset_gate(device, check)
@@ -2930,15 +2936,19 @@ class Host:
         entity = view.merged.entities[path]
         device_path = tree.nearest_device(path, view.merged)
         device = view.merged.entities[device_path] if device_path else None
-        port = ""
-        found = host_utilities.usb_target(path, view.layer)
-        if found is not None:  # a USB device or port row: {port} is the port it sits at; a port row's {name} is the device in it
-            port = found[1]
+        port, node = "", None
+        found = host_utilities.row_target(path, view.layer)
+        # a USB device, port or board row: {port} is the port it sits at; a port row's {name} is the device in it
+        if found is not None:
+            port, node = found[1], found[2]
             if found[0] is not None and entity.kind == "port":
                 device = view.merged.entities.get(view.layer.device_paths.get(str(found[0].get("id")), "")) or device
         serial = entity.identity.get("serial_number") or (device.identity.get("serial_number", "") if device else "")
         firmware = self._firmware(path, view)
-        return _Blank(name=device.name if device else entity.name, id=path.rsplit("/", 1)[-1], serial=serial, port=port,
+        name = device.name if device else entity.name
+        # {target}: what a device-level reset takes down, "CAN 12 on fdcanusb 0607623A" for a board, else the device
+        return _Blank(name=name, id=path.rsplit("/", 1)[-1], serial=serial, port=port,
+                      target=f"CAN {node} on {name}" if node is not None else name,
                       latest=dict(firmware.values).get("latest_version", "?") if firmware else "?")
 
     def actions_json(self, path: str, view: View) -> list[dict]:
@@ -2984,7 +2994,7 @@ class Host:
                         "scope": action.scope, "kind": action.kind,
                         "confirm": string.Formatter().vformat(action.confirm, (), fill),
                         "preconditions": results, "state": state, "reason": reason, "executable": False,
-                        "owner": host_utilities.OWNER if action in host_utilities.OFFERED else entity.owner,
+                        "owner": host_utilities.OWNER if any(action is mine for mine in host_utilities.OFFERED) else entity.owner,
                         "second_confirm": second["detail"] if second else "", "confirmations": confirmations,
                         **({"fix": fix} if fix else {}), "last_run": self._last_run(path, action.name)})
         if view.composition is not None and path in view.composition.by_path:
@@ -2999,8 +3009,9 @@ class Host:
         return usb_reset.fix_text(target) if target is not None else None
 
     def _entity_actions(self, path: str, entity, view: View) -> list[Action]:
-        """The entity's registered actions, plus the host's own utilities on the rows they belong to (a USB device or port
-        row), unless the entity's driver registered that name itself or opted its devices out."""
+        """The entity's registered actions, plus the host's own utilities on the rows they belong to (``reset_port``: a USB
+        device or port row; ``reset``: a USB device or CAN board row), unless the entity's driver registered that name itself
+        or opted its devices out."""
 
         actions = list(entity.actions)
         for utility in host_utilities.OFFERED:
@@ -3009,11 +3020,11 @@ class Host:
         return actions
 
     def _offers(self, name: str, path: str, layer, view: View | None = None) -> bool:
-        """Whether the host offers its utility ``name`` on this row: a USB device or port, and no driver whose device sits at
-        or below it opted out in ``describe`` (``"opt_out": ["reset_port"]``: a device that must not be reset mid-run; a hub
-        is not reset under such a device either)."""
+        """Whether the host offers its utility ``name`` on this row (``host_utilities.target``), and no driver whose device sits
+        at or below it opted out in ``describe`` (``"opt_out": ["reset_port"]`` or ``["reset"]``: a device that must not be
+        reset mid-run; a hub is not reset under such a device either, nor a board on an adapter that opted out)."""
 
-        found = host_utilities.usb_target(path, layer)
+        found = host_utilities.target(name, path, layer)
         if found is None:
             return False
         ids = set(host_utilities.subtree_device_ids(found[1], layer))
@@ -3148,39 +3159,45 @@ class Host:
 
     def _plan_utility(self, view: View, entity, path: str, action: str, out: dict, *, confirm: str | None, dry_run: bool,
                       human: bool, extra: list[str] | None):
-        """The host's own utility (``host_utilities``) on a USB device or port row: ``(out, plan)``, or None when this row does
-        not get it (the caller then refuses as it would for any unknown action). It runs ``io_diagnostics.usb_reset`` through
-        the same dry run -> token -> run path as a driver's action; its gates are, in order: the driver did not opt out, a
-        device is there, no RobotDx run is active on it, a real run only for a person, with a confirmation, and (here and again
-        in the verb) the privilege and the holders."""
+        """The host's own utility (``host_utilities``) on its rows: ``(out, plan)``, or None when this row does not get it (the
+        caller then refuses as it would for any unknown action). It runs ``io_diagnostics.usb_reset`` (``reset_port``) or
+        ``io_diagnostics.recovery`` (``reset``; a board's with ``--node``) through the same dry run -> token -> run path as a
+        driver's action; its gates are, in order: the driver did not opt out, a device is there, no RobotDx run is active on
+        it, a real run only for a person, with a confirmation, on a live host, and (in the verb) the privilege and the holders."""
 
         def refuse(code: str, message: str):
             return {**out, "refused": code, "message": message}, None
 
         if not self._offers(action, path, view.layer):
             return None
-        device, port = host_utilities.usb_target(path, view.layer)
-        out.update(plugin=host_utilities.OWNER, registered_by="builtin", title=host_utilities.RESET_PORT.title,
-                   danger=host_utilities.RESET_PORT.danger)
+        utility, spec = host_utilities.builtin(action), host_utilities.SPECS[action]
+        device, port, node = host_utilities.target(action, path, view.layer)
+        out.update(plugin=host_utilities.OWNER, registered_by="builtin", title=utility.title, danger=utility.danger, node=node)
         if device is None:
             return refuse("NoDevice", f"nothing is plugged in at {port} now")
         out["device_id"] = str(device.get("id", ""))
         busy = self._active_run_near(path, view.layer, (device, port))
         if busy:
-            return refuse("RunActive", f"{busy}: wait for it, or stop it, before resetting the port")
-        argv = act_argv(host_utilities.SPEC, device, action, confirm=confirm, dry_run=dry_run, extra=extra)
+            return refuse("RunActive",
+                          f"{busy}: wait for it, or stop it, before resetting {'the port' if action == usb_reset.NAME else 'it'}")
+        if spec is host_utilities.RESET_SPEC:
+            # WHY the host's plugins: the ladder's own-reset rung runs a driver's action (moteus Reboot, RealSense hardware
+            # reset), and it must be the driver this host runs, not plugins.d's when the host was started with --plugins
+            extra = ["--plugins", str(self.plugins_dir), *(extra or [])]
+        argv = act_argv(spec, device, action, node=node, confirm=confirm, dry_run=dry_run, extra=extra)
         out["argv"] = argv
         if not human and not dry_run:
             return refuse("NotInteractive", "not a person (stdin is not a TTY): only --dry-run runs; agents can't click")
         if not dry_run and not confirm:
-            text = string.Formatter().vformat(host_utilities.RESET_PORT.confirm, (), self._fill(path, view))
-            return refuse("ConfirmRequired", f"{host_utilities.RESET_PORT.danger}: pass --confirm <token> after reading: {text}")
+            text = string.Formatter().vformat(host_utilities.builtin(action).confirm, (), self._fill(path, view))
+            return refuse("ConfirmRequired", f"{utility.danger}: pass --confirm <token> after reading: {text}")
         if not dry_run and getattr(self.os, "mode", "live") != "live" and not usb_reset.sysfs_overridden():
-            return refuse("NotLive", "this host replays a recording or a fake machine: there is no real port to reset")
+            return refuse("NotLive", "this host replays a recording or a fake machine: there is no real "
+                                     + ("port" if action == usb_reset.NAME else "device") + " to reset")
         device_path = self.layer.device_paths.get(str(device.get("id")), "")
         shown = view.merged.entities.get(device_path)  # WHY its row's name: the confirm, the terminal and the records say "fdcanusb 272813EF"
         device = {**device, "label": shown.name} if shown is not None and shown.name else device
-        return out, _ActPlan(Job(host_utilities.SPEC, device, device_path), argv, device_path, entity, host_utilities.RESET_PORT, None, None)
+        return out, _ActPlan(Job(spec, device, device_path), argv, device_path, entity, utility, node, None)
 
     def _describe_for(self, job: Job) -> dict | None:
         if self.describes.get(job.spec.name) is None:
@@ -3204,7 +3221,7 @@ class Host:
             # the plugin's own stop verb (docs/runs-v1.md section 6): run by the host after a moves run that did not finish
             stop_argv = [*spec.command, "stop", "--device", device_id, *(["--node", str(plan.node)] if plan.node is not None else [])]
         label = label or f"{plan.entity.name} · {terminal_module.plain_title(plan.registered.title)}"
-        builtin = spec is host_utilities.SPEC
+        builtin = host_utilities.is_builtin(spec)
         run_spec = terminal_module.RunSpec(
             plugin=spec.name, device_id=device_id, device_path=plan.device_path, path=out["path"], action=out["action"],
             title=plan.registered.title, label=label, danger=plan.registered.danger, argv=plan.argv,
@@ -3215,11 +3232,12 @@ class Host:
         return self.runs.create(run_spec, interactive=interactive)
 
     def _act_env(self, job: Job) -> dict[str, str]:
-        """``_job_env`` for an act. The host's own utility also learns whether this host is a replay, and which sessions are
-        this host's own watch / follow processes (they hold a device for a page and are not "someone else" to a reset)."""
+        """``_job_env`` for an act. The host's own utilities also learn whether this host is a replay, and which sessions are
+        this host's own watch / follow processes (they hold a device for a page and are not "someone else" to a reset). Both
+        verbs read the same two variables (``io_diagnostics.recovery`` takes them from ``usb_reset``)."""
 
         env = self._job_env(job)
-        if job.spec is host_utilities.SPEC:
+        if host_utilities.is_builtin(job.spec):
             env[usb_reset.OS_MODE_ENV] = str(getattr(self.os, "mode", "live"))
             env[usb_reset.OWN_SESSIONS_ENV] = ",".join(str(session) for session in RUNNING.passive_sessions())
         return env

@@ -1611,10 +1611,10 @@ function renderDetail(byPath) {
 // immediate utility (a query, Open console, Stop telemetry) runs on the click; any other opens the Run page (renderModal)
 // and runs on its Run button. The server still runs a real action only with a dry run's token, from this page
 // (io_diagnostics/server.py, docs/api-v1.md): the page asks for it behind the click.
-const STANDARD_ORDER = ['check_comms', 'check_firmware', 'update_firmware', 'update_config', 'clear_faults', 'set_id', 'reboot', 'reset_port',
+const STANDARD_ORDER = ['check_comms', 'check_firmware', 'update_firmware', 'update_config', 'clear_faults', 'set_id', 'reboot', 'reset', 'reset_port',
   'stop_all', 'open_console', 'calibrate', 'identify'];
 const STANDARD = new Set(STANDARD_ORDER);
-// The host's own reset_port asks twice when something else has the device open (docs/usb-reset.md): the dry run's
+// The host's own reset_port and reset ask twice when something else has the device open (docs/usb-reset.md): the dry run's
 // `second_confirm` names who loses it; the Run page states it, and its Run button confirms it (confirm_holders).
 const secondConfirmOf = (util) => String(((util && util.dry && util.dry.result && util.dry.result.action_result) || {}).second_confirm || '');
 // WHY only "ready" runs (Zach, 2026-10-29): "The utilities menu should just have 2 states: able to run: just the name of the
@@ -1639,6 +1639,7 @@ const UTIL_ICONS = {
   clear_faults: '<circle cx="12" cy="12" r="9"/><path d="m9 9 6 6M15 9l-6 6"/>',
   set_id: '<path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"/>',
   reboot: '<path d="M21 12a9 9 0 1 1-2.6-6.4L21 8"/><path d="M21 3v5h-5"/>',
+  reset: '<path d="M3 12a9 9 0 0 1 15.4-6.4L21 8M21 3v5h-5M21 12a9 9 0 0 1-15.4 6.4L3 16M3 21v-5h5"/>',
   reset_port: '<path d="M9 2v5M15 2v5M6 7h12v4a6 6 0 0 1-12 0ZM12 17v5"/>',
   stop_all: '<path d="M7.9 2h8.2L22 7.9v8.2L16.1 22H7.9L2 16.1V7.9Z"/><rect x="9" y="9" width="6" height="6" rx="1"/>',
   open_console: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 9 3 3-3 3M11 15h6"/>',
@@ -1935,10 +1936,26 @@ const commandOf = (answer) => {
 
 function stepsHtml(answer) {
   const steps = (answer && answer.steps) || [];
-  if (!steps.length) return '';
+  if (!steps.length || isLadder(answer)) return '';
   return `<ol class="u-steps">${steps.map((step) => `<li><span>${esc(step.purpose)}</span> <span class="tag recorded">${esc(step.runs || '')}</span>`
     + `${step.argv && step.argv.length ? `<code>${esc(step.argv.join(' '))}</code>` : ''}`
     + `${step.sends && step.sends.length ? `<span class="muted"> · sends ${esc(step.sends.join(', '))}</span>` : ''}</li>`).join('')}</ol>`;
+}
+
+// The host's Reset… (docs/device-reset.md) answers its dry run with a ladder: every rung of the device's profile, in order, with
+// whether it runs here and why not, why it sits at that place and what happens when it works. The Run page shows it in the open,
+// rung by rung: what pressing Run will try is the point of that page. Calm on purpose: a skipped rung is muted, never a warning.
+const isLadder = (answer) => ((answer && answer.steps) || []).some((step) => typeof step.runs === 'boolean' && 'title' in step && 'kind' in step);
+function ladderHtml(answer) {
+  if (!isLadder(answer)) return '';
+  const rows = answer.steps.map((step) => `<li class="u-rung${step.runs ? '' : ' skip'}" data-rung="${esc(step.kind)}" data-runs="${step.runs ? 'yes' : 'no'}">`
+    + `<div class="u-r-h"><span class="u-r-t">${esc(step.title)}</span><span class="tag recorded">${step.runs ? 'runs' : 'skipped'}</span></div>`
+    + (step.runs ? '' : `<div class="u-r-skip">${esc(step.skip_why || 'not here')}</div>`)
+    + `<div class="u-r-l"><span class="u-k">Why</span><span>${esc(step.why)}</span></div>`
+    + `<div class="u-r-l"><span class="u-k">Expect</span><span>${esc(step.expect)}</span></div>`
+    + (step.runs && step.available && step.available.why ? `<code>${esc(step.available.why)}</code>` : '') + '</li>').join('');
+  return `<div class="m-pre-h">What it tries, in order, until it answers</div><ol class="u-ladder" data-ladder>${rows}</ol>`
+    + (answer.fix ? `<div class="u-r-fix muted">${esc(answer.fix)}</div>` : '');
 }
 
 const FAILED_CODES = new Set(['ActionRefused', 'ConfirmationRequired', 'ConfirmRequired', 'ActionFailed']);
@@ -2108,16 +2125,20 @@ function renderModal() {
   const failed = !util.asking && !util.dry && util.refused ? `<div class="m-refused">${shape('error', 'not run')}<span><b>${esc(util.refused)}</b>${util.error ? ` · ${esc(util.error)}` : ''}</span></div>` : '';
   // a batch (all:<action> of a composite) shows its N runs in the open: what one Run starts is the point of its page
   const runs = batch ? `<div class="m-runs">${batchRunsHtml(batch)}</div>` : '';
-  const how = util.dry && !batch ? `<code class="u-cmd">${esc(commandOf(answer) || 'in-process (no command line)')}</code>${stepsHtml(answer)}` : '';
-  const html = `<div class="modal m-${esc(action.danger)}" role="dialog" aria-modal="true" aria-labelledby="m-title" data-run-page="${esc(action.name)}">`
-    + `<header>${utilIcon(action.name)}<h2 id="m-title">${esc(plainTitle(action.title))} · ${esc(label)}</h2><span class="danger ${esc(action.danger)}">${esc(action.danger)}</span></header>`
-    + `<div class="body"><div class="confirm" data-run-says>${esc(answer.confirm || action.confirm)}</div>${input}${runs}`
+  const ladder = util.dry && !batch ? ladderHtml(answer) : '';
+  const how = util.dry && !batch && !ladder ? `<code class="u-cmd">${esc(commandOf(answer) || 'in-process (no command line)')}</code>${stepsHtml(answer)}` : '';
+  // WHY the dry run's danger may raise the action's: Reset… is `interrupts` until its plan runs a moteus restart, which drops a
+  // loaded joint (`moves`, docs/device-reset.md); the page then gives it the moves treatment, never a lower one
+  const danger = answer.danger === 'moves' ? 'moves' : action.danger;
+  const html = `<div class="modal m-${esc(danger)}" role="dialog" aria-modal="true" aria-labelledby="m-title" data-run-page="${esc(action.name)}">`
+    + `<header>${utilIcon(action.name)}<h2 id="m-title">${esc(plainTitle(action.title))} · ${esc(label)}</h2><span class="danger ${esc(danger)}">${esc(danger)}</span></header>`
+    + `<div class="body"><div class="confirm" data-run-says>${esc(answer.confirm || action.confirm)}</div>${input}${runs}${ladder}`
     + (confirmations.length ? `<div class="m-pre-h">Pressing Run confirms</div><ul class="m-confirms">${confirmations.map((text) => `<li>${esc(text)}</li>`).join('')}</ul>` : '')
     + failed
     + (how ? `<button class="u-how-t" data-sheet-more aria-expanded="${S.sheetMore}">How it runs ${S.sheetMore ? '▾' : '▸'}</button><div class="u-how${S.sheetMore ? ' open' : ''}">${how}</div>` : '')
     + `</div><footer><span class="note">${util.asking ? `Asking ${esc(action.owner)} for its token…` : `${esc(action.owner)} runs it when you press Run.`}</span>`
     + `<button class="btn" data-util-cancel>Cancel</button>`
-    + `<button class="btn primary ${esc(action.danger)}" data-util-confirm${ready ? '' : ' disabled'}>Run</button></footer></div>`;
+    + `<button class="btn primary ${esc(danger)}" data-util-confirm${ready ? '' : ' disabled'}>Run</button></footer></div>`;
   if (html !== S.modalHtml) {
     const typing = document.activeElement && document.activeElement.matches && document.activeElement.matches('#modal [data-util-newid]');
     back.innerHTML = html;

@@ -107,6 +107,9 @@ STANDARD_ACTIONS = {
     "identify": "Identify",
     # host built-in (docs/usb-reset.md): offered on every USB device and port row by RobotDx itself, not by a driver
     "reset_port": "Reset USB port",
+    # host built-in (docs/device-reset.md): offered on every USB device row and every CAN board below a USB adapter; the device's
+    # own reset first, then the USB rungs, one at a time until it answers
+    "reset": "Reset…",
     # v0.2: the Configuration tab's three writes (docs/state-config-v1.md section 8), driven by its edit session, not by a menu
     "set_config": "Set configuration…",
     "persist_config": "Save configuration to the board…",

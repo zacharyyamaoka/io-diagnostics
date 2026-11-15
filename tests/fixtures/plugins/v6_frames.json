@@ -1604,7 +1604,7 @@
         ]
        },
        {
-        "name": "reset",
+        "name": "reset_board",
         "title": "Reset board…",
         "description": "Sends d reboot: the board restarts and is back on the bus in about 1 s.",
         "danger": "interrupts",
@@ -1989,7 +1989,7 @@
         ]
        },
        {
-        "name": "reset",
+        "name": "reset_board",
         "title": "Reset board…",
         "description": "Sends d reboot: the board restarts and is back on the bus in about 1 s.",
         "danger": "interrupts",
@@ -2374,7 +2374,7 @@
         ]
        },
        {
-        "name": "reset",
+        "name": "reset_board",
         "title": "Reset board…",
         "description": "Sends d reboot: the board restarts and is back on the bus in about 1 s.",
         "danger": "interrupts",
@@ -3044,7 +3044,7 @@
         ]
        },
        {
-        "name": "reset",
+        "name": "hardware_reset",
         "title": "Hardware reset…",
         "description": "RealSenseCamera.hardware_reset(): the camera re-enumerates and EVERY option reverts to its default (per the driver README).",
         "danger": "interrupts",
@@ -3323,7 +3323,7 @@
         ]
        },
        {
-        "name": "reset",
+        "name": "hardware_reset",
         "title": "Hardware reset…",
         "description": "RealSenseCamera.hardware_reset(): the camera re-enumerates and EVERY option reverts to its default (per the driver README).",
         "danger": "interrupts",
@@ -5106,7 +5106,7 @@
         ]
        },
        {
-        "name": "reset",
+        "name": "reset_board",
         "title": "Reset board…",
         "description": "Sends d reboot: the board restarts and is back on the bus in about 1 s.",
         "danger": "interrupts",
@@ -5491,7 +5491,7 @@
         ]
        },
        {
-        "name": "reset",
+        "name": "reset_board",
         "title": "Reset board…",
         "description": "Sends d reboot: the board restarts and is back on the bus in about 1 s.",
         "danger": "interrupts",
@@ -5876,7 +5876,7 @@
         ]
        },
        {
-        "name": "reset",
+        "name": "reset_board",
         "title": "Reset board…",
         "description": "Sends d reboot: the board restarts and is back on the bus in about 1 s.",
         "danger": "interrupts",
@@ -6340,7 +6340,7 @@
         ]
        },
        {
-        "name": "reset",
+        "name": "hardware_reset",
         "title": "Hardware reset…",
         "description": "RealSenseCamera.hardware_reset(): the camera re-enumerates and EVERY option reverts to its default (per the driver README).",
         "danger": "interrupts",
@@ -6619,7 +6619,7 @@
         ]
        },
        {
-        "name": "reset",
+        "name": "hardware_reset",
         "title": "Hardware reset…",
         "description": "RealSenseCamera.hardware_reset(): the camera re-enumerates and EVERY option reverts to its default (per the driver README).",
         "danger": "interrupts",
@@ -8484,7 +8484,7 @@
         ]
        },
        {
-        "name": "reset",
+        "name": "reset_board",
         "title": "Reset board…",
         "description": "Sends d reboot: the board restarts and is back on the bus in about 1 s.",
         "danger": "interrupts",
@@ -8842,7 +8842,7 @@
         ]
        },
        {
-        "name": "reset",
+        "name": "reset_board",
         "title": "Reset board…",
         "description": "Sends d reboot: the board restarts and is back on the bus in about 1 s.",
         "danger": "interrupts",
@@ -9200,7 +9200,7 @@
         ]
        },
        {
-        "name": "reset",
+        "name": "reset_board",
         "title": "Reset board…",
         "description": "Sends d reboot: the board restarts and is back on the bus in about 1 s.",
         "danger": "interrupts",
@@ -9651,7 +9651,7 @@
         ]
        },
        {
-        "name": "reset",
+        "name": "hardware_reset",
         "title": "Hardware reset…",
         "description": "RealSenseCamera.hardware_reset(): the camera re-enumerates and EVERY option reverts to its default (per the driver README).",
         "danger": "interrupts",
@@ -9930,7 +9930,7 @@
         ]
        },
        {
-        "name": "reset",
+        "name": "hardware_reset",
         "title": "Hardware reset…",
         "description": "RealSenseCamera.hardware_reset(): the camera re-enumerates and EVERY option reverts to its default (per the driver README).",
         "danger": "interrupts",

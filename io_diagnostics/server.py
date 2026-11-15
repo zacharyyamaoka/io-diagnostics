@@ -818,8 +818,8 @@ class Handler(BaseHTTPRequestHandler):
         # WHY human=True here and nowhere else in the server: the person read the dry run on the page and clicked
         # (a confirm modal for anything but a query); the plugin still checks its own token against the device.
         # The run is interactive: started from the page, so the page may type into it and stop it (docs/runs-v1.md)
-        # the host's own utility asks twice when something else has the device open (docs/usb-reset.md): the page's ticked box
-        # is the second confirmation, and this is the only flag a request may add to the command line
+        # the host's own utilities (reset_port, reset) ask twice when something else has the device open (docs/usb-reset.md,
+        # docs/device-reset.md): the page's ticked box is the second confirmation, and this is the only flag a request may add
         again = ["--confirm-holders"] if body.get("confirm_holders") is True and action in host_utilities.NAMES else None
         run, result = self.host.start_act(path, action, node=node, confirm=entry["plugin_token"], new_id=new_id,
                                           interactive=True, extra=again)

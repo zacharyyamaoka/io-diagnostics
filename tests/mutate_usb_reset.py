@@ -14,7 +14,7 @@ import tempfile
 SRC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 COPY = os.path.join(tempfile.mkdtemp(prefix='usb-reset-mutation-'), 'tree')
 PY = sys.executable
-PYTESTS = ['tests/test_usb_reset.py']
+PYTESTS = ['tests/test_usb_reset.py', 'tests/test_host_reset_action.py']  # the second: Reset…, the same gates (docs/device-reset.md)
 
 USB = 'io_diagnostics/usb_reset.py'
 HOST = 'io_diagnostics/host.py'
@@ -50,7 +50,9 @@ MUTATIONS = [
      'return not any(name in ((self.describes.get(job.spec.name) or {}).get("opt_out") or []) for job in jobs)', 'return True'),
     ('opt-out: a hub is still reset under a device that opted out', 'io_diagnostics/host_utilities.py',
      'if found == port or found.startswith(port + "."):', 'if found == port:'),
-    ('holders: something else having the device open blocks the button', HOST, 'and result is not second]', ']'),
+    # WHY retargeted (2026-11-14): 'and result is not second]' only de-duplicates the Run page's confirmations since 2026-10-29,
+    # and no test could see it; the gate is the line that makes a holder a confirmation instead of a block
+    ('holders: something else having the device open blocks the button', HOST, 'second["resolves"] = "confirm"', 'second["resolves"] = "blocks"'),
     ('person: confirmation is not required of a person', HOST, '        if not dry_run and not confirm:\n            text = string.Formatter().vformat(host_utilities',
      '        if False:\n            text = string.Formatter().vformat(host_utilities'),
     ('person: an agent may run it', HOST, 'out["argv"] = argv\n        if not human and not dry_run:', 'out["argv"] = argv\n        if False:'),
@@ -58,6 +60,13 @@ MUTATIONS = [
      'body.get("confirm_holders") is True and action in host_utilities.NAMES', 'body.get("confirm_holders") is True'),
     ('after: a refusal (nothing happened) probes the device again', HOST,
      'if run.exit_code is None or run.exit_code == usb_reset.REFUSED:', 'if run.exit_code is None:'),
+    ('reset: offered on a port row too', 'io_diagnostics/host_utilities.py',
+     'if entity is not None and entity.kind == "port":\n            return None', 'if False:\n            return None'),
+    ('reset: a board\'s run loses its --node', HOST, 'argv = act_argv(spec, device, action, node=node,', 'argv = act_argv(spec, device, action, node=None,'),
+    ('reset: a replay host leaves the button live', HOST, 'return (False, "this host replays a recording or a fake machine: there is no real device',
+     'return (True, "this host replays a recording or a fake machine: there is no real device'),
+    ('after: a reset run is not followed by a probe', HOST, 'if run.spec.action in host_utilities.NAMES and run.spec.plugin',
+     'if run.spec.action == usb_reset.NAME and run.spec.plugin'),
     ('after: the device is not probed again once the reset ended', HOST,
      '                    job.probed, job.blocked, job.next_due = False, None, 0.0\n        self.os.invalidate()',
      '                    pass\n        self.os.invalidate()'),
