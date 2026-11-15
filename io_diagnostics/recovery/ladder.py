@@ -90,8 +90,11 @@ class Ladder:
         store = Store(found.state_key, self.seams.now)
         incident = store.current()
         if not found.present and not found.port:
-            # gone from USB: the port it was last at, from this incident, else from the kernel's own enumeration lines
-            last = (incident.last_port if incident and incident.last_port else "") or self.seams.port_from_kernel(found.serial)
+            # gone from USB: the port it was last at, from this incident, else (a real run only) from the kernel's own enumeration
+            # lines. WHY not in a dry run: the host asks a dry run's cheap cousin (runnable) every time it draws a row, and a
+            # journalctl read per row stalled the host (test_presence, 2026-11-14)
+            last = (incident.last_port if incident and incident.last_port else "") or (
+                "" if request.dry_run else self.seams.port_from_kernel(found.serial))
             if last:
                 found = dataclasses.replace(found, port=last)
         profile = profile_for(found.keys()) or (BY_NAME.get(incident.profile) if incident and incident.profile else None)

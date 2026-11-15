@@ -116,6 +116,8 @@ MUTATIONS = [
      'if rack_lock.is_rack_adapter(target.vid, target.pid, _read(sysfs_root() / target.port / "product")):', 'if False:'),
     ('vanished: an adapter gone from USB is not found at the port the kernel last saw it on', LADDER,
      'or self.seams.port_from_kernel(found.serial)', 'or ""'),
+    ('cost: the host\'s row check reads the kernel log', LADDER,
+     '"" if request.dry_run else self.seams.port_from_kernel(found.serial))', 'self.seams.port_from_kernel(found.serial))'),
     ('dry run: a dry run takes the ladder lock and leaves its file', LADDER,
      '        if self.request.dry_run:\n            return self._run(device, profile, store)  # a dry run changes nothing',
      '        if False:\n            return self._run(device, profile, store)  # a dry run changes nothing'),

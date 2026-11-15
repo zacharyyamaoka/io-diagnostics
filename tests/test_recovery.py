@@ -921,3 +921,15 @@ def test_an_adapter_that_never_came_back_is_power_cycled_at_the_port_the_kernel_
 def test_a_dry_run_leaves_no_lock_file_behind(rig):
     person(rig, dry_run=True)
     assert not (state_dir() / "locks").exists()
+
+
+def test_the_hosts_precondition_and_a_dry_run_never_read_the_kernel_log(rig):
+    # WHY: the host asks runnable() every time it draws a row; a journalctl read per row stalled it (test_presence, 2026-11-14)
+    from io_diagnostics.recovery.ladder import runnable
+
+    def forbidden(serial):
+        raise AssertionError(f"read the kernel log for {serial}")
+
+    rig.vanish()
+    runnable(Request(key=FDCANUSB), rig.seams(port_from_kernel=forbidden))
+    Ladder(Request(key=FDCANUSB, mode=PERSON, dry_run=True), rig.seams(port_from_kernel=forbidden), say=lambda _: None).run()
