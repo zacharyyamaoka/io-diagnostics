@@ -461,3 +461,30 @@ def test_a_memory_only_log_keeps_the_same_history_without_a_disk():
     assert log.record([ev("BoardFault", 0, "error", seq=1)], now=T0) == 1
     assert log.record([ev("BoardFault", 0, "error", seq=1)], now=T0 + 1) == 0
     assert [event.code for event in log.events()] == ["BoardFault"] and log.files() == [] and log.note == ""
+
+
+def test_segments_past_999_still_rotate_and_the_oldest_by_number_goes_first(tmp_path):
+    # 2026-11-15: segment 1000 sorted before 997 as a string, so the host kept appending to -1000 (22 GB by 20:41, ~2 GB/h)
+    # and the pruner took -1000 for the oldest file, the one being written, and deleted nothing.
+    log = log_in(tmp_path, cap_bytes=6000, segment_bytes=1500)
+    (tmp_path / "log").mkdir(parents=True, exist_ok=True)
+    for number in (997, 998, 999):
+        (tmp_path / "log" / f"{log.prefix}-{number:03d}.jsonl").write_text("{}\n" * 600)  # full: 1800 bytes each
+    for number in range(80):
+        log.record([ev("BoardFault", number * 10, "error", seq=number, message="x" * 80)], now=T0 + number * 10 + 1)
+    names = [path.name for path in log.files()]
+    numbers = [int(name.rsplit("-", 1)[1].removesuffix(".jsonl")) for name in names]
+    assert max(numbers) >= 1001, names  # it moved past 1000
+    assert numbers == sorted(numbers), names  # numeric order, not string order
+    assert 997 not in numbers, names  # the oldest by number was pruned
+    sizes = [path.stat().st_size for path in log.files()]
+    assert max(sizes) <= 1800 + 400 and sum(sizes) <= 6000 + 1800 + 400, list(zip(names, sizes))
+
+
+def test_a_segment_never_grows_past_the_hard_limit_whatever_the_names_say(tmp_path):
+    # the backstop: even if a naming bug picks a full file again, a segment over HARD_SEGMENT_FACTOR x its limit is never
+    # appended to
+    log = log_in(tmp_path, cap_bytes=10**9, segment_bytes=1500)
+    for number in range(200):
+        log.record([ev("BoardFault", number * 10, "error", seq=number, message="x" * 80)], now=T0 + number * 10 + 1)
+    assert max(path.stat().st_size for path in log.files()) <= 1500 + 400

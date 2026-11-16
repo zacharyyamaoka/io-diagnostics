@@ -46,6 +46,7 @@ MAX_LOADED = 50_000
 MAX_FIRST_SEEN = 100_000
 SETTLE_S = 30.0  # a kernel-derived event this old can no longer be merged into a different one (journal.Coalescer's windows are < 15 s)
 SUFFIX = ".jsonl"
+HARD_SEGMENT_FACTOR = 2  # a segment past 2 x segment_bytes (10 MB by default) is never written to again
 # the sources whose events are re-derived from a log on every view (and can change shape until it has settled)
 VOLATILE_SOURCES = (activity_module.JOURNAL_SOURCE, activity_module.KERNEL_SOURCE, activity_module.UDEV_SOURCE)
 
@@ -71,6 +72,13 @@ def plain(value):
     if isinstance(value, (set, frozenset)):
         return sorted(plain(item) for item in value)
     return value
+
+
+def _segment_key(path: Path) -> tuple[str, int, str]:
+    """``(boot prefix, segment number, name)`` of ``<prefix>-<n>.jsonl``: segments of one boot in NUMBER order."""
+
+    prefix, _, tail = path.stem.rpartition("-")
+    return (prefix, int(tail), path.name) if tail.isdigit() else (path.stem, -1, path.name)
 
 
 def _order(event: Event) -> tuple[float, int]:
@@ -107,9 +115,15 @@ class EventLog:
 
     # --- reading ---------------------------------------------------------------------------------------------------
     def files(self) -> list[Path]:
+        """Every segment, oldest first: by boot prefix, then by segment NUMBER.
+
+        WHY numeric (2026-11-15): sorted as strings, "-1000" came before "-997", so the host kept appending to segment
+        1000 (22 GB by 20:41, ~2 GB/h, the disk at 99 %) and the pruner took it for the oldest file, the one being
+        written, and deleted nothing."""
+
         if self.directory is None or not self.directory.is_dir():
             return []
-        return sorted(path for path in self.directory.iterdir() if path.suffix == SUFFIX and path.is_file())
+        return sorted((path for path in self.directory.iterdir() if path.suffix == SUFFIX and path.is_file()), key=_segment_key)
 
     def load(self) -> None:
         for path in self.files():
@@ -249,8 +263,14 @@ class EventLog:
         mine = [path for path in self.files() if path.name.startswith(self.prefix)]
         if mine and mine[-1].stat().st_size < self.segment_bytes:
             return mine[-1]
-        number = int(mine[-1].stem.rsplit("-", 1)[-1]) + 1 if mine else 0
-        return self.directory / f"{self.prefix}-{number:03d}{SUFFIX}"
+        number = max(_segment_key(path)[1] for path in mine) + 1 if mine else 0
+        while True:
+            path = self.directory / f"{self.prefix}-{number:03d}{SUFFIX}"
+            # WHY the backstop: whatever a future naming bug picks, a segment already past HARD_SEGMENT_FACTOR x its limit is
+            # never appended to again, so one file can never grow without bound
+            if not path.exists() or path.stat().st_size < self.segment_bytes * HARD_SEGMENT_FACTOR:
+                return path
+            number += 1
 
     def _append(self, text: str) -> str:
         if self.directory is None:
