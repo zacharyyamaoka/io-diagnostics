@@ -110,6 +110,11 @@ class EventLog:
         self._first_seen: dict[str, float] = {}
         self._offsets: dict[str, int] = {}  # file name -> bytes of it already read
         self._sorted: list[tuple[str, Event]] | None = None
+        # WHY a floor (2026-11-15): the pruner drops old segments, the activity layer re-derives the same journal events
+        # every pass, and without this they were written again, filled a segment, pushed the next out, for ever
+        # (~550 KB/s). A journal-derived event at or below the newest one the cap already dropped is not written again:
+        # the journal still holds it, so nothing is lost.
+        self._floor = 0.0
         if load:  # WHY optional: a service answers first (cli.py), and reads this behind the socket
             self.load()
 
@@ -126,10 +131,20 @@ class EventLog:
         return sorted((path for path in self.directory.iterdir() if path.suffix == SUFFIX and path.is_file()), key=_segment_key)
 
     def load(self) -> None:
-        for path in self.files():
+        files = self.files()
+        for path in files:
             self._read_new(path)
         if len(self._index) > self.max_loaded:
             self._trim()
+        # a log at its cap has had segments pruned: the oldest journal event it still keeps is the floor after a restart
+        try:
+            total = sum(path.stat().st_size for path in files)
+        except OSError:
+            total = 0
+        if total >= self.cap_bytes - self.segment_bytes:
+            stamps = [event.stamp for event in self._index.values() if event.source in VOLATILE_SOURCES and event.stamp is not None]
+            if stamps:
+                self._floor = max(self._floor, min(stamps))
 
     def _read_new(self, path: Path) -> int:
         """Ingest what ``path`` holds beyond what was read; -> events that were new or changed."""
@@ -202,6 +217,9 @@ class EventLog:
                     continue
                 key = activity_module.event_id(event)
                 held = self._index.get(key)
+                if (held is None and event.source in VOLATILE_SOURCES and event.stamp is not None
+                        and event.stamp <= self._floor):
+                    continue  # older than what the capped log keeps: the journal has it; see self._floor
                 first = held.received if held is not None and held.received is not None else self._first_seen.setdefault(key, now)
                 out.append(dataclasses.replace(event, received=first))
             if len(self._first_seen) > MAX_FIRST_SEEN:
@@ -314,6 +332,8 @@ class EventLog:
             self._offsets.pop(path.name, None)
         if gone:
             for key in [key for key, name in self._where.items() if name in gone]:
-                self._index.pop(key, None)
+                dropped = self._index.pop(key, None)
                 del self._where[key]
+                if dropped is not None and dropped.source in VOLATILE_SOURCES and dropped.stamp is not None:
+                    self._floor = max(self._floor, dropped.stamp)
             self._touch()

@@ -488,3 +488,21 @@ def test_a_segment_never_grows_past_the_hard_limit_whatever_the_names_say(tmp_pa
     for number in range(200):
         log.record([ev("BoardFault", number * 10, "error", seq=number, message="x" * 80)], now=T0 + number * 10 + 1)
     assert max(path.stat().st_size for path in log.files()) <= 1500 + 400
+
+
+def test_events_older_than_what_the_capped_log_keeps_are_not_written_again_and_again(tmp_path):
+    # 2026-11-15: the pruner forgot the keys of the segments it deleted, the activity layer re-derives the same old journal
+    # events every pass, so they were written again, filled a segment, pushed the next out, and so on: ~550 KB/s for ever
+    log = log_in(tmp_path, cap_bytes=6000, segment_bytes=1500)
+    kernel = eventlog.activity_module.KERNEL_SOURCE  # journal-derived: re-derived on every pass, the loop's fuel
+    old = [ev("ReEnumerated", number, "info", seq=number, id=f"usb:5-1.3:{number}:add", message="x" * 80, source=kernel)
+           for number in range(200)]
+    first = sum(log.record(old[: number + 1], now=T0 + 10_000 + number) for number in range(200))  # one pass per new event
+    assert first == 200
+    again = sum(log.record(old, now=T0 + 20_000 + round_) for round_ in range(10))  # the same history, re-derived 10 times
+    assert again == 0, f"re-wrote {again} lines of events the cap had already dropped"
+    assert sum(path.stat().st_size for path in log.files()) <= 6000 + 1500 + 400
+    newer = log.record([ev("BoardFault", 9_000, "error", seq=999, id="fresh")], now=T0 + 20_020)
+    assert newer == 1  # a genuinely new event is still written
+    reloaded = log_in(tmp_path, cap_bytes=6000, segment_bytes=1500)  # a restart: the floor comes back from what is on disk
+    assert reloaded.record(old, now=T0 + 20_030) <= 40  # at most what the kept segments hold, never the whole history
