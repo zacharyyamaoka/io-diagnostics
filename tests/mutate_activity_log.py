@@ -46,6 +46,7 @@ MUTATIONS = [
     ('persistence: segments sort as strings, so -1000 comes before -997', 'io_diagnostics/eventlog.py', 'path.is_file()), key=_segment_key)', 'path.is_file()))', 'py'),
     ('persistence: an old journal event the cap dropped is written again', 'io_diagnostics/eventlog.py', '                    continue  # older than what the capped log keeps', '                    pass  # older than what the capped log keeps', 'py'),
     ('persistence: the pruner forgets what it dropped', 'io_diagnostics/eventlog.py', '                    self._floor = max(self._floor, dropped.stamp)', '                    pass', 'py'),
+    ('persistence: two facts sharing a key in one pass are both written', 'io_diagnostics/eventlog.py', '                if key not in newest or _order(event) >= _order(newest[key]):\n                    newest[key] = event', '                newest[f"{key}#{len(newest)}"] = event', 'py'),
     ('persistence: the host does not write what it sees', 'io_diagnostics/host.py', '        self.eventlog.record(events, now)\n', '', 'py'),
     ('faults: a start-up confirmation is not marked', 'io_diagnostics/faults.py', 'starting = self._first is not None and now - self._first <= self.start_window_s', 'starting = False', 'py'),
     ('record: a warn is level 40 on the stock side', 'contract/record.py', 'ROS_LOG_LEVEL = {"debug": 10, "info": 20, WARN: 30,', 'ROS_LOG_LEVEL = {"debug": 10, "info": 20, WARN: 40,', 'py'),

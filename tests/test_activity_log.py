@@ -506,3 +506,16 @@ def test_events_older_than_what_the_capped_log_keeps_are_not_written_again_and_a
     assert newer == 1  # a genuinely new event is still written
     reloaded = log_in(tmp_path, cap_bytes=6000, segment_bytes=1500)  # a restart: the floor comes back from what is on disk
     assert reloaded.record(old, now=T0 + 20_030) <= 40  # at most what the kept segments hold, never the whole history
+
+
+def test_two_facts_sharing_a_key_in_one_pass_are_written_once_not_alternately_for_ever(tmp_path):
+    # 2026-11-15: the OBSBOT re-enumerated 261 times; USB device numbers wrap, so "usb:5-1.3:25:add" named both its 08:24 and
+    # its 08:26 enumeration. Every pass re-derived both, each differed from the one written before it, and the host wrote
+    # them alternately for ever (282 copies of one key)
+    log = log_in(tmp_path)
+    kernel = eventlog.activity_module.KERNEL_SOURCE
+    early = ev("LinkSpeed", 100, "info", seq=1, id="usb:5-1.3:25:add:link", source=kernel)
+    late = ev("LinkSpeed", 232, "info", seq=2, id="usb:5-1.3:25:add:link", source=kernel)
+    written = sum(log.record([early, late], now=T0 + 1_000 + round_) for round_ in range(20))
+    assert written == 1, f"{written} lines for one key"
+    assert log.events()[0].stamp == T0 + 232  # the newest of the two is the one kept

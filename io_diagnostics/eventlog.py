@@ -112,7 +112,7 @@ class EventLog:
         self._sorted: list[tuple[str, Event]] | None = None
         # WHY a floor (2026-11-15): the pruner drops old segments, the activity layer re-derives the same journal events
         # every pass, and without this they were written again, filled a segment, pushed the next out, for ever
-        # (~550 KB/s). A journal-derived event at or below the newest one the cap already dropped is not written again:
+        # (~550 KB/s on 2026-11-15). A journal-derived event at or below the newest one the cap already dropped is not written again:
         # the journal still holds it, so nothing is lost.
         self._floor = 0.0
         if load:  # WHY optional: a service answers first (cli.py), and reads this behind the socket
@@ -244,8 +244,16 @@ class EventLog:
         with self._lock:
             self._catch_up()
             lines, fresh = [], []
+            # WHY one event per key per pass (2026-11-15): USB device numbers wrap, so one kernel id ("usb:5-1.3:25:add")
+            # can name two enumerations hours apart; both were re-derived every pass, each differed from the one written
+            # before it, and the host wrote them alternately for ever (282 copies of one key, ~450 KB/s). The newest wins,
+            # as it does on load.
+            newest: dict[str, Event] = {}
             for event in self.stamp_received([event for event in events if settled(event, now)], now):
                 key = activity_module.event_id(event)
+                if key not in newest or _order(event) >= _order(newest[key]):
+                    newest[key] = event
+            for key, event in newest.items():
                 event = dataclasses.replace(event, args=plain(event.args))
                 held = self._index.get(key)
                 # WHY the sequence is not compared: it is the order a process happened to make events in (which plugin
