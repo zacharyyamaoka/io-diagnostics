@@ -39,5 +39,15 @@ act_timeout_s = 900
 # expected_period_s, and the host marks a record stale after max(3 x period, 5 s).
 period_s = 60
 
+# WHY pause_while (2026-11-16 05:42:42Z: a pick's look on the overhead D435 got "Device or resource busy" mid arm session;
+# this plugin's 60 s diagnose enumerates the SDK and reads camera_info, its probe does the same, and a watch streams frames):
+# the rig dispatcher's rule of 2026-11-16 is that nothing outside the arm session opens the camera while an arm job runs.
+# While a rack queue job is running, or an arm grasp holds (the rack pendulum is told to keep still), RobotDx starts no
+# process of this plugin and its rows say "paused" (plugins.d/README.md, pause_while).
+pause_while = [
+  "/home/bam/.local/state/rack/queue/running/*.json",
+  "/home/bam/.cache/rack-commissioning/arm_grasp_hold",
+]
+
 # No `matches` here on purpose: the host takes them from the plugin's own `describe` (usb 8086:0b*), the build
 # plan's route, so the driver alone decides which cameras it claims.

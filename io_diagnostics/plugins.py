@@ -12,6 +12,7 @@ devices to hand it. The host never imports a driver.
     period_s = 30                      # how often to run it per matched device
     matches = ["usb:0483:5740", "by-id:*fdcanusb*"]
     exclusive = "rack-bus"             # optional: never two runs of this group at once (queued, not failed)
+    pause_while = ["~/.local/state/rack/queue/running/*.json"]  # optional: start nothing while a glob matches a path
 
 A ``kind = "check"`` declaration instead runs any Monitoring Plugins (Nagios) command and attaches its one result to
 ``attach`` (``"host"``, a hardware_id or ``"rig:<name>"``): exit code = level (runner.run_check).
@@ -23,6 +24,8 @@ A skeleton device is the frozen lane-B dict ``{"bus", "id", "path", "label", "ve
 from __future__ import annotations
 
 import fnmatch
+import glob
+import os
 import re
 import sys
 import tomllib
@@ -39,7 +42,7 @@ DEFAULT_PERIOD_S = 30.0
 DEFAULT_ACT_TIMEOUT_S = 900.0
 MATCH_KINDS = ("usb", "pci", "pci-class", "by-id", "tty", "v4l", "netdev", "host", "composite")
 KNOWN_KEYS = {"name", "command", "cwd", "timeout_s", "period_s", "timeout", "period", "matches", "enabled", "replay", "env",
-              "description", "diagnose_args", "exclusive", "act_timeout_s", "act_timeout", "kind", "attach"}
+              "description", "diagnose_args", "exclusive", "act_timeout_s", "act_timeout", "kind", "attach", "pause_while"}
 # WHY two kinds: a "driver" speaks describe | diagnose | act in JSON lines; a "check" is ANY command that speaks the
 # stock Monitoring Plugins API (exit 0/1/2/3, first stdout line, perfdata after "|"), so a simple check needs no code
 # (round 3 brief, "CLI as the seam"; https://www.monitoring-plugins.org/doc/guidelines.html). A check has no matches:
@@ -222,6 +225,10 @@ class PluginSpec:
     # a check only: the entity its result lands on: "host" (the Computer), a hardware_id (usb:<vid>:<pid>:<serial>,
     # moteus:<uuid>, ...) or "rig:<rig name>" (a rig row of the expected setup)
     attach: str = ""
+    # WHY a declared list of path globs (2026-11-16 05:42:42Z: a pick's look on the overhead D435 got "Device or resource busy"
+    # mid arm session; the rig dispatcher's rule: nothing outside the arm session opens the camera while an arm job runs):
+    # while one matches an existing path the host starts none of this plugin's processes (``paused_by``). Absolute, ``~`` expanded.
+    pause_while: tuple[str, ...] = ()
 
     def accepts(self, device: dict) -> bool:
         return self.enabled and self.kind == "driver" and any(match.accepts(device) for match in self.matches)
@@ -293,13 +300,31 @@ def load_plugin(path: Path) -> tuple[PluginSpec, list[str]]:
                                     "(it attaches to one entity, and its command is run as written)")
     elif "attach" in data:
         raise PluginConfigError(f"{path.name}: attach is for kind = \"check\"; a driver declares matches")
+    pause_while = data.get("pause_while", [])
+    if not isinstance(pause_while, list) or not all(isinstance(pattern, str) and pattern for pattern in pause_while):
+        raise PluginConfigError(f"{path.name}: pause_while must be a list of path globs")
+    pause_while = [os.path.expanduser(pattern) for pattern in pause_while]
+    relative_globs = [pattern for pattern in pause_while if not os.path.isabs(pattern)]
+    if relative_globs:
+        raise PluginConfigError(f"{path.name}: pause_while globs must be absolute (or start with ~), got {relative_globs[0]!r}")
     spec = PluginSpec(name=name, command=tuple(argv), cwd=cwd, file=path.resolve(), matches=matches,
                       enabled=data.get("enabled", True), replay=data.get("replay", False),
                       env={key: _expand(value, here) for key, value in env.items()},
                       description=str(data.get("description", "")),
                       diagnose_args=tuple(_expand(part, here) for part in diagnose_args), exclusive=exclusive, kind=kind,
-                      attach=str(attach).strip(), **numbers)
+                      attach=str(attach).strip(), pause_while=tuple(pause_while), **numbers)
     return spec, notes
+
+
+def paused_by(spec: PluginSpec) -> str:
+    """The first existing path one of the plugin's ``pause_while`` globs matches, or "" (it may run). A few ``glob`` calls:
+    cheap enough to ask before every process the host would start."""
+
+    for pattern in spec.pause_while:
+        found = sorted(glob.glob(pattern))
+        if found:
+            return found[0]
+    return ""
 
 
 # WHY these: what a plugin's ``describe`` is made of is its Python source. The newest modification time and the number of files

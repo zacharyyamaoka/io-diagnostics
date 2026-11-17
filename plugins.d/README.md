@@ -21,6 +21,7 @@ enabled = true                                 # optional, default true; `io-dia
 env = { MOTEUS_DIAGNOSTICS_QUIET = "1" }       # optional extra environment
 diagnose_args = ["--passive"]                  # optional: appended after `diagnose --device <id>` (options of the verb)
 exclusive = "rack-bus"                         # optional group: never two runs (diagnose or act) of it at once
+pause_while = ["~/.local/state/rack/queue/running/*.json"]  # optional: start nothing while a glob matches a path
 ```
 
 The two shipped declarations (`moteus_servo.toml`, `intel_rgbd.toml`) run the real drivers and are `enabled = true`
@@ -36,6 +37,17 @@ then runs at most one job of that group at a time, across plugins and across one
 periodic scheduler and for `act`. A due job whose group is busy waits its turn (oldest due first); it is never failed
 for it. WHY: both rack drivers take the rack bus lock with `flock LOCK_NB`, so two sibling runs started together
 failed each other with `BusLockHeld` (live, 2026-10-22 17:41). Their lock still guards against other processes.
+
+**`pause_while`**: path globs (absolute, or starting with `~`). While any of them matches an existing path, the host starts
+none of this plugin's processes: no diagnose or probe (the scheduler keeps its turns and skips them), no follow, watch or
+presence process (a running one is stopped within a second), and a person's `act`, its dry run and the host's own utilities on
+its rows are refused `PausedForArm` (the dry run and the row's actions show the failing precondition `not_paused_for_arm`).
+The device row's `<plugin>: plugin run` check says so at level OK, not as a failure: "paused: an arm job is running
+(~/.local/state/rack/queue/running/job1.json); RobotDx does not open this device until it ends". When no glob matches any
+more, its jobs run again on their normal schedule (the next due diagnose, the next refresh's follow, the next watch tick).
+`describe` is not paused (it never opens the device). WHY (`intel_rgbd.toml`, 2026-11-16 05:42:42Z): a pick's look on the
+overhead D435 got "Device or resource busy" mid arm session; the rule since: nothing outside the arm session opens the camera
+while an arm job runs.
 
 `{python}` (the host's interpreter), `{root}` (the io-diagnostics checkout) and `{here}` (this file's directory)
 are expanded in `command`, `cwd` and `env`. A relative executable with a `/` resolves against `cwd`. `timeout` and

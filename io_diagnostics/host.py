@@ -47,9 +47,9 @@ from io_diagnostics import stock_diagnostics as stock_diagnostics_module
 from io_diagnostics import tree
 from io_diagnostics.faults import Faults
 from io_diagnostics import terminal as terminal_module
-from io_diagnostics.plugins import load_plugins, match_devices, source_stamp
+from io_diagnostics.plugins import load_plugins, match_devices, paused_by, source_stamp
 from io_facts import open_files
-from io_diagnostics.runner import (HOST_SOURCES, RUNNER_SOURCE, RUNNING, Follower, Gates, Job, Presencer, RunOutcome, Scheduler, Watcher, absolute,
+from io_diagnostics.runner import (CHECK_SOURCE, HOST_SOURCES, RUNNER_SOURCE, RUNNING, Follower, Gates, Job, Presencer, RunOutcome, Scheduler, Watcher, absolute,
                                    _outcome, _records, act_argv, describe, follow_period, follow_status, host_status, plugin_env, rebase,
                                    relative, run_act, run_check, run_plugin)
 
@@ -111,6 +111,18 @@ PRESENCE_FIRST_S = 8.0
 CONNECT_PRESENCE_S = 20.0
 OWN_HOLDER_RETRY_S = 1.0  # a probe blocked only by this host's own process probes again this soon (_probed)
 OWN_HOLDER_SENTENCE = "RobotDx's own check is on the port for a moment · reading again in about a second"
+# A plugin's ``pause_while`` matched a path (plugins.d/README.md): none of its processes start. WHY OK and not UNKNOWN: an arm job is
+# the rig doing its work, not a fault, and UNKNOWN ranks above WARN; the row stays calm and says why in plain words.
+PAUSED_CODE = "PausedForArm"
+PAUSED_CHECK = "not_paused_for_arm"  # the failing precondition an act's dry run and the row's actions show while paused
+
+
+def paused_sentence(found: str) -> str:
+    """The row's words for a pause: the path that matched, ``~`` for the home directory."""
+
+    home = str(Path.home())
+    shown = "~" + found[len(home):] if found.startswith(home + "/") else found
+    return f"paused: an arm job is running ({shown}); RobotDx does not open this device until it ends"
 
 
 def _all_ours(blocked: probe_module.Blocked) -> bool:
@@ -1299,6 +1311,8 @@ class Host:
     def _run_job(self, job: Job) -> None:
         """Run one job; the caller holds its group (the scheduler takes it before submitting)."""
 
+        if self._mark_paused(job):
+            return  # WHY before anything starts: the probe, a presence pass and the diagnose all open the device
         if job.spec.kind == "check":
             return self._run_check(job)
         timeout_s = self._probe_timeout(job)
@@ -1334,6 +1348,42 @@ class Host:
             if paused:
                 self.resume_watches(paused)
             self._bringing_up(job, False)
+
+    def _mark_paused(self, job: Job) -> bool:
+        """True when the job's plugin is paused (its ``pause_while`` matches a path): its row's plugin-run check then says so, at level
+        OK, instead of a run. WHY the scheduler keeps its turns: the next turn after the path is gone runs as it always would."""
+
+        found = paused_by(job.spec)
+        if not found:
+            return False
+        now, sentence = self.clock.now(), paused_sentence(found)
+        if job.spec.kind == "check":
+            status = DiagnosticStatus(level=OK, name=job.spec.name, message=sentence, path="", code=PAUSED_CODE,
+                                      values=(KeyValue("paused_by", found),), stamp=now, received=now,
+                                      expected_period_s=job.spec.period_s, source=CHECK_SOURCE)
+            with self.lock:
+                self.check_results[job.spec.name] = status
+            self.notify("plugin")
+            return True
+        # WHY at least REFRESH_QUIET_S: a followed job's pause is re-said by the refresh, not by the scheduler's turns
+        period = max(job.spec.period_s, REFRESH_QUIET_S)
+        with self.lock:
+            previous = job.cache.host_status
+            # WHY re-said at most once per period while nothing changes, as a follower's heartbeat is (_absorb)
+            if previous is not None and (previous.code, previous.message) == (PAUSED_CODE, sentence) \
+                    and previous.received is not None and now - previous.received < period:
+                return True
+            hardware_id = self.layer.entities.get(job.device_path).hardware_id if job.device_path in self.layer.entities else ""
+            status = job.cache.host_status = DiagnosticStatus(
+                level=OK, name=f"{job.spec.name}: plugin run", message=sentence, hardware_id=hardware_id,
+                values=(KeyValue("paused_by", found),), path="", code=PAUSED_CODE, stamp=now, received=now,
+                expected_period_s=period, source=RUNNER_SOURCE)
+            device_path = self.layer.device_paths.get(str(job.device.get("id")), job.device_path)
+        observed = [dataclasses.replace(status, path=device_path)]
+        self.faults.observe(observed, now)
+        self.history.observe(observed, now, source=("job", *job.key))
+        self.notify("plugin")
+        return True
 
     def _absorb(self, job: Job, outcome: RunOutcome, follower: Follower | None = None, left: bool = False) -> None:
         """One diagnose run, or one follow line, into the job's cache, the fault memory and the history. ``left``: the device dropped off
@@ -1445,6 +1495,11 @@ class Host:
         while not self._stop.wait(self.recheck_poll_s):
             with self.lock:
                 jobs = list(self.jobs.values())
+            # WHY here and not only at the next refresh (up to REFRESH_QUIET_S away): a pause stops a follow process within a poll; it
+            # starts again at the refresh after the path is gone
+            for job in jobs:
+                if job.spec.pause_while and job.key in self.followers and self._mark_paused(job):
+                    self._stop_follower(job.key)
             for job in jobs:
                 blocked = job.blocked
                 if blocked is not None and not job.running and blocked.released is None and probe_module.holders_gone(blocked):
@@ -1462,6 +1517,9 @@ class Host:
             self.followers.pop(key).stop()
         for key, job in jobs.items():
             period = follow_period(self.describes.get(job.spec.name)) if job.spec.kind == "driver" else None
+            if period is not None and self._mark_paused(job):
+                self._stop_follower(key)  # its pause_while matched: the follow process lets go of the device
+                continue
             if period is None or key in self.followers or self._awaiting_probe(job):
                 continue
             entity = self.layer.entities.get(job.device_path)
@@ -1473,6 +1531,11 @@ class Host:
                                 absorb, hardware_id=entity.hardware_id if entity else "", backoff_s=self.follow_backoff_s)
             self.followers[key] = follower
             follower.start()
+
+    def _stop_follower(self, key: tuple[str, str]) -> None:
+        follower = self.followers.pop(key, None)
+        if follower is not None:
+            follower.stop()
 
     def _awaiting_probe(self, job: Job) -> bool:
         """A followed job whose plugin probes on connect: it is followed only once its probe is done and one follow
@@ -2963,12 +3026,19 @@ class Host:
                       target=f"CAN {node} on {name}" if node is not None else name,
                       latest=dict(firmware.values).get("latest_version", "?") if firmware else "?")
 
+    @staticmethod
+    def _paused_precondition(sentence: str) -> dict:
+        return {"check": PAUSED_CHECK, "text": "No arm job is running (the plugin's pause_while)", "state": "fail",
+                "detail": sentence, "resolves": "blocks"}
+
     def actions_json(self, path: str, view: View) -> list[dict]:
         entity = view.merged.entities[path]
         fill = self._fill(path, view)
+        owner = self._owning_job(path, entity, view)
+        found = paused_by(owner.spec) if owner is not None else ""
         out = []
         for action in self._entity_actions(path, entity, view):
-            results = []
+            results = [self._paused_precondition(paused_sentence(found))] if found else []
             for check, text in action.preconditions:
                 state, detail = self.evaluate(check, path, view)
                 results.append({"check": check, "text": string.Formatter().vformat(text, (), fill),
@@ -3149,6 +3219,13 @@ class Host:
         if entity is None:
             return refuse("NoSuchEntity", f"no entity at {path!r}")
         job = self._owning_job(path, entity)
+        found = paused_by(job.spec) if job is not None else ""
+        if found:
+            # WHY before the plugin's own actions and the host's utilities alike: each opens (or resets) the device the arm job is using;
+            # a dry run is refused too, and names the failing precondition, because a driver's dry run may ask its SDK
+            sentence = paused_sentence(found)
+            out.update(plugin=job.spec.name, device_id=str(job.device.get("id", "")), preconditions=[self._paused_precondition(sentence)])
+            return refuse(PAUSED_CODE, sentence)
         registered, source = self._registered(job, entity, action) if job is not None else (None, "")
         if registered is None and action in host_utilities.NAMES:
             builtin = self._plan_utility(view, entity, path, action, out, confirm=confirm, dry_run=dry_run, human=human, extra=extra)
@@ -3345,8 +3422,12 @@ class Host:
     def _gate_for(self, job: Job, checks: list[str]) -> dict | None:
         """Why this plugin may not talk to its device now, in plain words, or None: a run of its exclusive group is active, or
         one of the ``checks`` says a person's tool holds the port, the camera or the rack bus lock. WAITING (the host's own
-        check holds the lock for a few seconds) and "can't tell" never block. Shared by the watch and a configuration write."""
+        check holds the lock for a few seconds) and "can't tell" never block. Shared by the watch and a configuration write.
+        First of all: the plugin's ``pause_while`` matches a path (an arm job runs), and a running watch is stopped for it."""
 
+        found = paused_by(job.spec)
+        if found:
+            return {"reason": paused_sentence(found), "holders": []}
         group = job.spec.exclusive
         if group:
             run = next((run for run in self.runs.active() if run.spec.group == group), None)
@@ -4377,6 +4458,7 @@ class Host:
                         "timeout_s": spec.timeout_s, "act_timeout_s": spec.act_timeout_s, "period_s": spec.period_s,
                         "enabled": spec.enabled, "replay": spec.replay, "exclusive": spec.exclusive,
                         "kind": spec.kind, "attach": spec.attach or None,
+                        "pause_while": list(spec.pause_while), "paused_by": paused_by(spec) or None,
                         "matches": [match.text() for match in spec.matches], "description": spec.description,
                         "describe": self.describes.get(spec.name),
                         "jobs": [{"device_id": str(job.device.get("id")), "device_path": job.device_path,
