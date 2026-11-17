@@ -22,6 +22,10 @@ env = { MOTEUS_DIAGNOSTICS_QUIET = "1" }       # optional extra environment
 diagnose_args = ["--passive"]                  # optional: appended after `diagnose --device <id>` (options of the verb)
 exclusive = "rack-bus"                         # optional group: never two runs (diagnose or act) of it at once
 pause_while = ["~/.local/state/rack/queue/running/*.json"]  # optional: start nothing while a glob matches a path
+pause_tail_s = 180                             # optional, with pause_tail_dirs: ... nor this long after their newest file
+pause_tail_dirs = ["~/.local/state/rack/queue/running", "~/.local/state/rack/queue/done"]
+pause_while_json = [{ glob = "~/.local/state/rack/queue/pending/*.json", match = { priority = 0, ready = true },
+                      reason = "a p0 job is ready" }]  # optional: ... nor while a JSON file has all these top-level values
 ```
 
 The two shipped declarations (`moteus_servo.toml`, `intel_rgbd.toml`) run the real drivers and are `enabled = true`
@@ -45,6 +49,15 @@ its rows are refused `PausedForArm` (the dry run and the row's actions show the 
 The device row's `<plugin>: plugin run` check says so at level OK, not as a failure: "paused: an arm job is running
 (~/.local/state/rack/queue/running/job1.json); RobotDx does not open this device until it ends". When no glob matches any
 more, its jobs run again on their normal schedule (the next due diagnose, the next refresh's follow, the next watch tick).
+Two more conditions pause it the same way. **`pause_tail_s`** with **`pause_tail_dirs`** (both or neither): within that
+many seconds of the newest file's modification time in any of the directories (not recursive; the wall clock, since file
+times are wall time), "paused: within 180 s of the last arm job (ended 23:41:02)". **`pause_while_json`**: a list of
+`{glob, match, reason}` tables; a JSON file matching `glob` whose top-level values equal every `match` value pauses it, "paused:
+a p0 job is ready (1116-232325-b1e2)" (`reason`, then the file's name). Equality keeps JSON booleans and numbers apart
+(`"priority": false` is not `priority = 0`), and a file that does not parse (one being written) is skipped. While paused the
+row's headline is that sentence, not stale: the plugin's own checks are judged without their expected period until the pause
+ends (`Host._build_view`), then normal staleness applies again. `reset_port` and `reset` are refused on every row whose reset
+would take a paused plugin's device down: its own rows, its port row, and any hub above it.
 `describe` is not paused (it never opens the device). WHY (`intel_rgbd.toml`, 2026-11-16 05:42:42Z): a pick's look on the
 overhead D435 got "Device or resource busy" mid arm session; the rule since: nothing outside the arm session opens the camera
 while an arm job runs.

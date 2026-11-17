@@ -13,6 +13,10 @@ devices to hand it. The host never imports a driver.
     matches = ["usb:0483:5740", "by-id:*fdcanusb*"]
     exclusive = "rack-bus"             # optional: never two runs of this group at once (queued, not failed)
     pause_while = ["~/.local/state/rack/queue/running/*.json"]  # optional: start nothing while a glob matches a path
+    pause_tail_s = 180                 # optional, with pause_tail_dirs: ... nor this long after the newest file in them
+    pause_tail_dirs = ["~/.local/state/rack/queue/done"]
+    pause_while_json = [{glob = "~/.local/state/rack/queue/pending/*.json", match = {priority = 0, ready = true},
+                         reason = "a p0 job is ready"}]  # optional: ... nor while a JSON file has these top-level values
 
 A ``kind = "check"`` declaration instead runs any Monitoring Plugins (Nagios) command and attaches its one result to
 ``attach`` (``"host"``, a hardware_id or ``"rig:<name>"``): exit code = level (runner.run_check).
@@ -25,9 +29,11 @@ from __future__ import annotations
 
 import fnmatch
 import glob
+import json
 import os
 import re
 import sys
+import time
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -42,7 +48,8 @@ DEFAULT_PERIOD_S = 30.0
 DEFAULT_ACT_TIMEOUT_S = 900.0
 MATCH_KINDS = ("usb", "pci", "pci-class", "by-id", "tty", "v4l", "netdev", "host", "composite")
 KNOWN_KEYS = {"name", "command", "cwd", "timeout_s", "period_s", "timeout", "period", "matches", "enabled", "replay", "env",
-              "description", "diagnose_args", "exclusive", "act_timeout_s", "act_timeout", "kind", "attach", "pause_while"}
+              "description", "diagnose_args", "exclusive", "act_timeout_s", "act_timeout", "kind", "attach", "pause_while",
+              "pause_tail_s", "pause_tail_dirs", "pause_while_json"}
 # WHY two kinds: a "driver" speaks describe | diagnose | act in JSON lines; a "check" is ANY command that speaks the
 # stock Monitoring Plugins API (exit 0/1/2/3, first stdout line, perfdata after "|"), so a simple check needs no code
 # (round 3 brief, "CLI as the seam"; https://www.monitoring-plugins.org/doc/guidelines.html). A check has no matches:
@@ -227,17 +234,56 @@ class PluginSpec:
     attach: str = ""
     # WHY a declared list of path globs (2026-11-16 05:42:42Z: a pick's look on the overhead D435 got "Device or resource busy"
     # mid arm session; the rig dispatcher's rule: nothing outside the arm session opens the camera while an arm job runs):
-    # while one matches an existing path the host starts none of this plugin's processes (``paused_by``). Absolute, ``~`` expanded.
+    # while one matches an existing path the host starts none of this plugin's processes (``pause_of``). Absolute, ``~`` expanded.
     pause_while: tuple[str, ...] = ()
+    # WHY two more conditions (the rig dispatcher, 2026-11-16): a pick's look runs just BEFORE its rackq job starts, so running/
+    # alone misses the moment that matters. A tail (paused for pause_tail_s after the newest file in pause_tail_dirs, on the wall
+    # clock: file times are wall time) and JSON rules (a pending job file with priority 0 and ready true).
+    pause_tail_s: float = 0.0
+    pause_tail_dirs: tuple[str, ...] = ()
+    pause_while_json: tuple["JsonPause", ...] = ()
 
     def accepts(self, device: dict) -> bool:
         return self.enabled and self.kind == "driver" and any(match.accepts(device) for match in self.matches)
+
+
+# The code of a paused plugin's plugin-run check (host ``_mark_paused``); the tree lets it be an OK row's headline (tree.build_rows)
+PAUSED_CODE = "PausedForArm"
+
+
+@dataclass(frozen=True)
+class JsonPause:
+    """One ``pause_while_json`` rule: a JSON file matching ``glob`` whose top-level values equal every ``match`` value pauses."""
+
+    glob: str
+    match: tuple[tuple[str, Any], ...]
+    reason: str = ""  # the row's words, "a p0 job is ready"; the matching file's name follows in brackets
+
+
+@dataclass(frozen=True)
+class Pause:
+    """Why a plugin is paused now: the file that says so, and plain words for the row (``reason``)."""
+
+    path: str
+    reason: str
 
 
 def _expand(text: str, here: Path) -> str:
     # {python}: the host's own interpreter, so a stdlib-only plugin (the fixture) runs in uv's 3.14 and the tray's
     # system 3.12 alike; {root}: the io-diagnostics checkout; {here}: the declaring file's directory.
     return text.replace("{python}", sys.executable).replace("{root}", str(ROOT)).replace("{here}", str(here))
+
+
+def _absolute_paths(path: Path, key: str, values: Any) -> list[str]:
+    """A declaration's list of absolute (or ``~``) paths or globs, ``~`` expanded; raises PluginConfigError otherwise."""
+
+    if not isinstance(values, list) or not values or not all(isinstance(value, str) and value for value in values):
+        raise PluginConfigError(f"{path.name}: {key} must be a list of absolute paths, got {values!r}")
+    expanded = [os.path.expanduser(value) for value in values]
+    relative_paths = [value for value in expanded if not os.path.isabs(value)]
+    if relative_paths:
+        raise PluginConfigError(f"{path.name}: {key} must be absolute (or start with ~), got {relative_paths[0]!r}")
+    return expanded
 
 
 def load_plugin(path: Path) -> tuple[PluginSpec, list[str]]:
@@ -307,24 +353,87 @@ def load_plugin(path: Path) -> tuple[PluginSpec, list[str]]:
     relative_globs = [pattern for pattern in pause_while if not os.path.isabs(pattern)]
     if relative_globs:
         raise PluginConfigError(f"{path.name}: pause_while globs must be absolute (or start with ~), got {relative_globs[0]!r}")
+    tail_s, tail_dirs = data.get("pause_tail_s"), data.get("pause_tail_dirs")
+    if (tail_s is None) != (tail_dirs is None):
+        raise PluginConfigError(f"{path.name}: pause_tail_s and pause_tail_dirs go together")
+    if tail_s is not None:
+        if isinstance(tail_s, bool) or not isinstance(tail_s, (int, float)) or not tail_s > 0:
+            raise PluginConfigError(f"{path.name}: pause_tail_s must be a positive number, got {tail_s!r}")
+        tail_dirs = _absolute_paths(path, "pause_tail_dirs", tail_dirs)
+    json_rules = []
+    for rule in data.get("pause_while_json", []) if isinstance(data.get("pause_while_json", []), list) else [None]:
+        if not isinstance(rule, dict) or set(rule) - {"glob", "match", "reason"} or not isinstance(rule.get("match"), dict) \
+                or not rule["match"] or not all(isinstance(value, (str, int, float, bool)) for value in rule["match"].values()) \
+                or not isinstance(rule.get("reason", ""), str):
+            raise PluginConfigError(f"{path.name}: pause_while_json must be a list of {{glob = \"/abs/*.json\", match = {{key = value, ...}}, "
+                                    f"reason = \"...\"}} with plain values, got {rule!r}")
+        [glob_text] = _absolute_paths(path, "pause_while_json glob", [rule.get("glob")])
+        json_rules.append(JsonPause(glob_text, tuple(rule["match"].items()), rule.get("reason", "")))
     spec = PluginSpec(name=name, command=tuple(argv), cwd=cwd, file=path.resolve(), matches=matches,
                       enabled=data.get("enabled", True), replay=data.get("replay", False),
                       env={key: _expand(value, here) for key, value in env.items()},
                       description=str(data.get("description", "")),
                       diagnose_args=tuple(_expand(part, here) for part in diagnose_args), exclusive=exclusive, kind=kind,
-                      attach=str(attach).strip(), pause_while=tuple(pause_while), **numbers)
+                      attach=str(attach).strip(), pause_while=tuple(pause_while),
+                      pause_tail_s=float(tail_s or 0.0), pause_tail_dirs=tuple(tail_dirs or ()), pause_while_json=tuple(json_rules),
+                      **numbers)
     return spec, notes
 
 
-def paused_by(spec: PluginSpec) -> str:
-    """The first existing path one of the plugin's ``pause_while`` globs matches, or "" (it may run). A few ``glob`` calls:
-    cheap enough to ask before every process the host would start."""
+def shown_path(path: str) -> str:
+    """``path`` with ``~`` for the home directory, as a row shows it."""
+
+    home = str(Path.home())
+    return "~" + path[len(home):] if path.startswith(home + "/") else path
+
+
+def _same(value: Any, wanted: Any) -> bool:
+    """JSON equality that keeps bool and number apart: ``"priority": false`` is not priority 0, ``"ready": 1`` is not ready."""
+
+    if isinstance(value, bool) or isinstance(wanted, bool):
+        return isinstance(value, bool) and isinstance(wanted, bool) and value == wanted
+    return value == wanted
+
+
+def pause_of(spec: PluginSpec, now: float | None = None) -> Pause | None:
+    """Why the plugin must start nothing now, or None (it may run). ``now``: the wall clock (file times are wall time).
+
+    In order: a ``pause_while`` glob matches an existing path; a ``pause_while_json`` file has every ``match`` value (a file that
+    does not parse, e.g. one being written, is skipped); the newest file in ``pause_tail_dirs`` is younger than ``pause_tail_s``.
+    A few globs, small reads and one directory listing per tail directory: cheap enough to ask before every process."""
 
     for pattern in spec.pause_while:
         found = sorted(glob.glob(pattern))
         if found:
-            return found[0]
-    return ""
+            return Pause(found[0], f"an arm job is running ({shown_path(found[0])})")
+    for rule in spec.pause_while_json:
+        for found in sorted(glob.glob(rule.glob)):
+            try:
+                data = json.loads(Path(found).read_text())
+            except (OSError, ValueError):
+                continue
+            if isinstance(data, dict) and all(key in data and _same(data[key], wanted) for key, wanted in rule.match):
+                return Pause(found, f"{rule.reason or 'a job file matches'} ({Path(found).stem})")
+    if spec.pause_tail_s > 0:
+        newest, newest_path = None, ""
+        for directory in spec.pause_tail_dirs:
+            try:
+                with os.scandir(directory) as entries:
+                    for entry in entries:
+                        try:
+                            if entry.is_file():
+                                mtime = entry.stat().st_mtime
+                                if newest is None or mtime > newest:
+                                    newest, newest_path = mtime, entry.path
+                        except OSError:
+                            continue  # gone between the listing and the stat (moved from running/ to done/)
+            except OSError:
+                continue
+        now = time.time() if now is None else now
+        if newest is not None and now - newest < spec.pause_tail_s:
+            ended = time.strftime("%H:%M:%S", time.localtime(newest))
+            return Pause(newest_path, f"within {spec.pause_tail_s:g} s of the last arm job (ended {ended})")
+    return None
 
 
 # WHY these: what a plugin's ``describe`` is made of is its Python source. The newest modification time and the number of files

@@ -592,7 +592,8 @@ viewers, and what the rack session runner can read.
   "plugins": [
     {"name": "moteus_servo", "file": ".../plugins.d/moteus_servo.toml", "command": ["..."], "diagnose_args": [],
      "cwd": "...", "timeout_s": 20.0, "act_timeout_s": 900.0, "period_s": 30.0, "enabled": true, "replay": false,
-     "exclusive": "rack-bus", "kind": "driver", "attach": null, "pause_while": [], "paused_by": null,
+     "exclusive": "rack-bus", "kind": "driver", "attach": null, "pause_while": [], "pause_tail_s": null,
+     "pause_tail_dirs": [], "pause_while_json": [], "paused_by": null, "pause_reason": null,
      "description": "moteus boards",
      "matches": ["usb:0483:5740"],
      "describe": {"name": "moteus_servo", "version": "0.3.0", "schema": "diagnostics-record/0"},
@@ -614,8 +615,10 @@ host check on the device row. `follow` is `null` unless the plugin's `describe` 
 `PluginCrashed` / `PluginNotStarted` "follow exited 1: ... · restarting in 4 s". `diagnose_args` is what the declaration appends after `diagnose --device <id>`
 (e.g. a driver's `--passive`). `describe` is `null` until the plugin's `describe` verb has run (once per enabled
 plugin, all in parallel, at the host's first refresh, before the first match); a v0.1 plugin may state
-`"record_version": "0.1"` and its `expected` devices there (see "Expected, not connected"). `pause_while` is the
-declaration's path globs (`~` expanded) and `paused_by` the existing path one of them matches now, or `null`: while it is
+`"record_version": "0.1"` and its `expected` devices there (see "Expected, not connected"). `pause_while`,
+`pause_tail_s` / `pause_tail_dirs` and `pause_while_json` (`[{"glob", "match", "reason"}]`) are the declaration's pause
+conditions (`~` expanded); `paused_by` is the file that pauses it now (a job file, a ready p0 job, the newest file of the
+tail) and `pause_reason` the words for it, else both `null`: while it is
 not `null` the host starts none of the plugin's processes, its device rows' `<plugin>: plugin run` check is OK
 `PausedForArm` "paused: an arm job is running (<path>); RobotDx does not open this device until it ends", a watch reads
 `paused` with that reason, and an act (dry run included) is refused `PausedForArm` (plugins.d/README.md). `exclusive` is the

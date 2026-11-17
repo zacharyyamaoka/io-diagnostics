@@ -48,6 +48,14 @@ pause_while = [
   "/home/bam/.local/state/rack/queue/running/*.json",
   "/home/bam/.cache/rack-commissioning/arm_grasp_hold",
 ]
+# WHY two more (the rig dispatcher, 2026-11-16 follow-up): a pick's look runs just BEFORE its rackq job starts, so running/ alone
+# misses the moment that matters. Stay paused 180 s after the newest file in running/ or done/ (done/ files are rewritten when a
+# job ends), and while a pending job is p0 (priority 0) and ready.
+pause_tail_s = 180
+pause_tail_dirs = ["/home/bam/.local/state/rack/queue/running", "/home/bam/.local/state/rack/queue/done"]
+pause_while_json = [
+  { glob = "/home/bam/.local/state/rack/queue/pending/*.json", match = { priority = 0, ready = true }, reason = "a p0 job is ready" },
+]
 
 # No `matches` here on purpose: the host takes them from the plugin's own `describe` (usb 8086:0b*), the build
 # plan's route, so the driver alone decides which cameras it claims.

@@ -9,6 +9,9 @@ Fake plugins only: tests/test_host_support.py (its hardware tripwire is armed by
 
 from __future__ import annotations
 
+import json
+import os
+import time
 from pathlib import Path
 
 import pytest
@@ -163,3 +166,149 @@ def test_a_plugin_without_pause_while_is_unaffected(tmp_path):
     assert not any(pre["check"] == "not_paused_for_arm" for action in actions for pre in action["preconditions"])
     assert all(action["state"] == "ready" for action in actions if action["owner"] == "gadgets")
     assert host.plugins()["plugins"][0]["paused_by"] is None
+
+
+# ----- the tail after the last arm job, a p0 job that is ready, the port and hub rows, the headline (2026-11-16, follow-up) ---------
+# WHY (the rig dispatcher): a pick's look runs just BEFORE its rackq job starts, so running/*.json alone misses the moment that
+# matters; the camera stays paused for a while after the last job and while a p0 job is ready to start.
+HUB = usb_device("9-2", "05e3", "0610", "", kind="hub", label="Hub")
+BEHIND_HUB = usb_device("9-2.4", "1234", "abcd", "C1", label="camera", parent="usb:9-2")
+PERIODIC_PLUGIN = r'''
+import json, os, sys
+
+args = sys.argv[1:]
+verb = next(word for word in args if word in ("describe", "diagnose", "act"))
+with open(os.environ["FAKE_LOG"], "a") as log:
+    log.write(json.dumps({"plugin": "cams", "verb": verb}) + "\n")
+if verb == "describe":
+    print(json.dumps({"name": "cams", "schema": "diagnostics-record/0", "actions": []}))
+elif verb == "diagnose":
+    print(json.dumps({"schema": "diagnostics-record/0", "record": "entity", "path": "", "name": "cam", "kind": "device"}))
+    print(json.dumps({"schema": "diagnostics-record/0", "record": "status", "level": "ok", "name": "cam: streams", "path": "",
+                      "message": "color and depth configured", "expected_period_s": 30}))
+'''
+
+
+def queue_host(tmp_path: Path, extra: str, *devices: dict) -> tuple[Host, Path]:
+    """A host over ``devices`` (a widget by default) whose fake plugin's declaration ends with ``extra``; ``(host, log)``."""
+
+    log = tmp_path / "runs.jsonl"
+    toml = write_fake_plugin(tmp_path / "plugins.d", "widgets", ["usb:1234:*"], log, sleep_s=0.0)
+    toml.write_text(toml.read_text() + extra)
+    host = Host(plugins_dir=tmp_path / "plugins.d", clock=SetClock(), os_source=FakeOs(standard_skeleton(*(devices or (WIDGET,)))))
+    host.refresh()
+    return host, log
+
+
+def test_the_tail_and_json_keys_are_parsed(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    toml = tmp_path / "cam.toml"
+    toml.write_text('name = "cam"\ncommand = ["true"]\npause_tail_s = 180\npause_tail_dirs = ["~/q/running", "/q/done"]\n'
+                    'pause_while_json = [{glob = "~/q/pending/*.json", match = {priority = 0, ready = true}, reason = "a p0 job is ready"}]\n')
+    spec, notes = load_plugin(toml)
+    assert notes == [] and spec.pause_tail_s == 180.0 and spec.pause_tail_dirs == (f"{tmp_path}/home/q/running", "/q/done")
+    [rule] = spec.pause_while_json
+    assert (rule.glob, rule.match, rule.reason) == (f"{tmp_path}/home/q/pending/*.json", (("priority", 0), ("ready", True)),
+                                                   "a p0 job is ready")
+    for bad in ('pause_tail_s = 180\n', 'pause_tail_dirs = ["/q/done"]\n', 'pause_tail_s = -1\npause_tail_dirs = ["/q"]\n',
+                'pause_while_json = [{glob = "rel/*.json", match = {ready = true}}]\n',
+                'pause_while_json = [{glob = "/q/*.json"}]\n', 'pause_while_json = [{glob = "/q/*.json", match = {a = [1]}}]\n'):
+        toml.write_text('name = "cam"\ncommand = ["true"]\n' + bad)
+        with pytest.raises(PluginConfigError, match="pause_"):
+            load_plugin(toml)
+
+
+@pytest.mark.parametrize(("age_s", "paused"), [(170.0, True), (190.0, False)])
+def test_the_tail_pauses_within_180_s_of_the_newest_file_in_running_or_done(tmp_path, age_s, paused):
+    running, done = tmp_path / "running", tmp_path / "done"
+    running.mkdir()
+    done.mkdir()
+    old, newest = done / "1116-220000-aaaa.json", done / "1116-232212-850a.json"
+    for path, age in ((old, 3600.0), (newest, age_s)):
+        path.write_text("{}")
+        os.utime(path, (time.time() - age, time.time() - age))
+    host, log = queue_host(tmp_path, f'pause_tail_s = 180\npause_tail_dirs = ["{running}", "{done}"]\n')
+    host.run_all_once()
+    path = host.layer.device_paths["usb:9-1"]
+    check = plugin_run(host, path, "widgets")
+    if paused:
+        ended = time.strftime("%H:%M:%S", time.localtime(newest.stat().st_mtime))
+        assert runs(log, "widgets", "diagnose") == [] and check["code"] == "PausedForArm"
+        assert check["message"].startswith(f"paused: within 180 s of the last arm job (ended {ended})")
+        assert host.plugins()["plugins"][0]["paused_by"] == str(newest)
+    else:
+        assert len(runs(log, "widgets", "diagnose")) == 1 and check["code"] != "PausedForArm"
+
+
+@pytest.mark.parametrize(("job", "paused"), [({"priority": 0, "ready": True}, True), ({"priority": 1, "ready": True}, False),
+                                            ({"priority": 0, "ready": False}, False), ({"priority": False, "ready": 1}, False),
+                                            ({"ready": True}, False)])
+def test_a_p0_job_that_is_ready_pauses_and_nothing_else_in_pending_does(tmp_path, job, paused):
+    pending = tmp_path / "pending"
+    pending.mkdir()
+    (pending / "1116-232325-b1e2.json").write_text(json.dumps({"schema": "bam-rack-job/1", "id": "1116-232325-b1e2", **job}))
+    (pending / "1116-000000-torn.json").write_text('{"priority": 0, "ready": tr')  # a file mid-write is no reason either way
+    host, log = queue_host(tmp_path, f'pause_while_json = [{{glob = "{pending}/*.json", match = {{priority = 0, ready = true}},'
+                                     ' reason = "a p0 job is ready"}]\n')
+    host.run_all_once()
+    check = plugin_run(host, host.layer.device_paths["usb:9-1"], "widgets")
+    if paused:
+        assert runs(log, "widgets", "diagnose") == [] and check["code"] == "PausedForArm"
+        assert check["message"].startswith("paused: a p0 job is ready (1116-232325-b1e2)")
+    else:
+        assert len(runs(log, "widgets", "diagnose")) == 1 and check["code"] != "PausedForArm"
+
+
+def test_reset_port_is_refused_on_the_cameras_port_row_and_on_the_hub_above_it(tmp_path):
+    running = tmp_path / "running"
+    running.mkdir()
+    host, log = queue_host(tmp_path, f'pause_while = ["{running}/*.json"]\n', HUB, BEHIND_HUB)
+    host.run_all_once()
+    layer = host.layer
+    rows = {"camera": layer.device_paths["usb:9-2.4"], "camera port": layer.port_paths["9-2.4"],
+            "hub": layer.device_paths["usb:9-2"], "hub port": layer.port_paths["9-2"]}
+
+    def pause_preconditions(path: str) -> dict[str, list]:
+        return {action["name"]: [pre for pre in action["preconditions"] if pre["check"] == "not_paused_for_arm"]
+                for action in host.node(path)["actions"]}
+
+    for where, path in rows.items():
+        assert not any(pause_preconditions(path).values()), where  # not paused: nothing says so
+    (running / "job1.json").write_text("{}")
+    for where, path in rows.items():
+        for dry_run, human in ((True, False), (False, True)):
+            answer = host.act(path, "reset_port", confirm="TOKEN", dry_run=dry_run, human=human)
+            assert answer["refused"] == "PausedForArm" and "paused: an arm job is running" in answer["message"], (where, answer)
+        found = pause_preconditions(path)
+        assert found["reset_port"] and found["reset_port"][0]["state"] == "fail", where
+        action = next(action for action in host.node(path)["actions"] if action["name"] == "reset_port")
+        assert action["state"] == "blocked", where
+    assert host.act(rows["camera"], "reset", confirm="TOKEN", human=True)["refused"] == "PausedForArm"
+    assert host.act(rows["camera"], "reset", dry_run=True, human=False)["refused"] == "PausedForArm"
+    assert runs(log, "widgets", "act") == [] and len(runs(log, "widgets", "diagnose")) == 1  # the read before the pause only
+
+
+def test_the_headline_reads_paused_not_stale_after_four_minutes_and_stale_rules_return_after(tmp_path):
+    log, running = tmp_path / "runs.jsonl", tmp_path / "running"
+    running.mkdir()
+    directory = tmp_path / "plugins.d"
+    directory.mkdir()
+    (directory / "cams.py").write_text(PERIODIC_PLUGIN)
+    (directory / "cams.toml").write_text(f'name = "cams"\ncommand = ["{{python}}", "{{here}}/cams.py"]\nperiod_s = 30\n'
+                                         f'matches = ["usb:1234:*"]\nenv = {{ FAKE_LOG = "{log}" }}\npause_while = ["{running}/*.json"]\n')
+    clock = SetClock(1000.0)
+    host = Host(plugins_dir=directory, clock=clock, os_source=FakeOs(standard_skeleton(WIDGET)))
+    host.run_all_once()  # a normal read at t=1000: its checks promise a report every 30 s
+    path = host.layer.device_paths["usb:9-1"]
+    assert host.node(path)["node"]["level"] == "ok"
+    (running / "job1.json").write_text("{}")
+    clock.at = 1000.0 + 250  # more than four minutes paused: the 30 s checks are long overdue
+    host.run_all_once()
+    node = host.node(path)["node"]
+    assert node["level"] == "ok" and node["message"].startswith("paused: an arm job is running"), node
+    assert next(check for check in host.node(path)["checks"] if check["name"] == "cam: streams")["effective_level"] == "ok"
+    (running / "job1.json").unlink()  # the pause ends; the next read is not due yet
+    clock.at += 5
+    node = host.node(path)["node"]
+    assert node["level"] == "stale" and not node["message"].startswith("paused"), node
+    assert next(check for check in host.node(path)["checks"] if check["name"] == "cam: streams")["effective_level"] == "stale"

@@ -36,6 +36,7 @@ from typing import Callable
 from contract.record import (ERROR, OK, RANK, STALE, STALE_FACTOR, STALE_FLOOR_S, WARN, DiagnosticStatus, Entity,
                              KeyValue, Measurement, Summary, effective_level, summarize)
 from io_diagnostics.not_run import is_not_run
+from io_diagnostics.plugins import PAUSED_CODE
 
 HOST_PATH = "host"
 RECENT_PATH = f"{HOST_PATH}/recently-seen"  # devices only seen, not expected (host.py): drawn collapsed
@@ -624,6 +625,13 @@ def _summaries(merged: Merged, now: float) -> dict[str, Summary]:
 
 def build_rows(merged: Merged, now: float) -> Rows:
     summaries = _summaries(merged, now)
+    # WHY (pause_while, 2026-11-16): an OK row whose plugin is paused for an arm job says so as its headline, "paused: an arm job is
+    # running (...)", not whichever OK line came first; a real WARN or ERROR still heads it. Its other checks do not go STALE meanwhile
+    # (Host._build_view holds their freshness clock).
+    for status in merged.statuses:
+        summary = summaries.get(status.path)
+        if status.code == PAUSED_CODE and summary is not None and summary.own == OK:
+            summaries[status.path] = dataclasses.replace(summary, message=status.message)
     latest: dict[tuple[str, str], DiagnosticStatus] = {}
     for status in merged.statuses:
         latest[(status.path, status.name)] = status
