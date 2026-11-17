@@ -585,6 +585,11 @@ class Burners:
         self.count, self.processes = count, []
 
     def __enter__(self):
+        # WHY opt-in (2026-11-17): a full-suite run on the rig host spun 25 of these while the arm was powered; the arm dropped
+        # and folded under host load at 06:43Z and its return home waits for CPU pressure < 10 %. Load tests run only where
+        # nothing real depends on the CPU (a cloud VM, or the rig unpowered), with IO_DIAGNOSTICS_LOAD_TESTS=1.
+        if os.environ.get("IO_DIAGNOSTICS_LOAD_TESTS") != "1":
+            pytest.skip("busy-loop load test: opt-in with IO_DIAGNOSTICS_LOAD_TESTS=1 (never on the powered rig host)")
         self.processes = [subprocess.Popen([sys.executable, "-c", "while True: pass"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                           for _ in range(self.count)]
         return self
