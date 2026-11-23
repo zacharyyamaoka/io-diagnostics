@@ -7,16 +7,16 @@ import json
 import numpy as np
 import pytest
 
-from robotdx.diagnostics import Limits, evaluate
-from robotdx.diagnostics.record import from_record, to_record
-from robotdx.diagnostics.rollup import GateMatrixConfig, RollupConfig
-from robotdx.diagnostics.rows import ROW_COLUMNS, diff_rows, result_row, sample_rows
-from robotdx.diagnostics.stock import (BoxConfig, CoverageConfig, FaultCodesConfig, FidelityRatioConfig, FloorConfig,
+from robot_diagnostics import Limits, evaluate
+from robot_diagnostics.record import from_record, to_record
+from robot_diagnostics.rollup import GateMatrixConfig, RollupConfig
+from robot_diagnostics.rows import ROW_COLUMNS, diff_rows, result_row, sample_rows
+from robot_diagnostics.stock import (BoxConfig, CoverageConfig, FaultCodesConfig, FidelityRatioConfig, FloorConfig,
                                        KnownLoadConfig, KtConsistencyConfig, ModelErrorConfig, RateConfig, StopErrorConfig,
                                        TrackingErrorConfig)
-from robotdx.diagnostics.stock.fidelity import FidelityInput, rows_of
-from robotdx.diagnostics.stock.health import Stamps
-from robotdx.diagnostics.stock.truthfulness import KnownLoadInput, KtReadings
+from robot_diagnostics.stock.fidelity import FidelityInput, rows_of
+from robot_diagnostics.stock.health import Stamps
+from robot_diagnostics.stock.truthfulness import KnownLoadInput, KtReadings
 
 from conftest import tape
 

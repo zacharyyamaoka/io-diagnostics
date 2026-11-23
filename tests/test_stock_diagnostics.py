@@ -18,9 +18,9 @@ import pytest
 from contract.record import validate
 from io_diagnostics import stock_diagnostics as sd
 from io_diagnostics.host import Clock, Host
-from robotdx.diagnostics import registry as dx_registry
-from robotdx.diagnostics.core import Limits
-from robotdx.diagnostics.registry import Spec
+from robot_diagnostics import registry as dx_registry
+from robot_diagnostics.core import Limits
+from robot_diagnostics.registry import Spec
 
 from test_host_support import FakeOs, standard_skeleton, usb_device
 
@@ -232,15 +232,15 @@ def test_a_diagnostic_that_raises_is_a_not_run_with_its_reason_and_the_host_goes
 
 
 def test_numpy_missing_is_a_not_run_that_says_so(tmp_path, monkeypatch):
-    import robotdx.diagnostics._numpy as lazy
+    import robot_diagnostics._numpy as lazy
 
     rig = Rig(tmp_path)
     try:
         rig.ready()
         monkeypatch.setitem(__import__("sys").modules, "numpy", None)  # `import numpy` now fails as it does without the extra
         monkeypatch.setattr(lazy, "np", lazy._Numpy())  # a fresh proxy: nothing cached from the import before
-        monkeypatch.setattr("robotdx.diagnostics.stock.health.np", lazy.np)
-        monkeypatch.setattr("robotdx.diagnostics.stream.np", lazy.np)
+        monkeypatch.setattr("robot_diagnostics.stock.health.np", lazy.np)
+        monkeypatch.setattr("robot_diagnostics.stream.np", lazy.np)
         temp = rig.mine()["board temperature"]
         assert temp.level == "unknown" and temp.code == "NumpyMissing" and "diagnostics extra" in temp.message
     finally:
@@ -268,8 +268,8 @@ def test_a_broken_file_runs_nothing_and_says_why(tmp_path):
 
 
 def test_a_custom_diagnostic_registers_from_the_same_file_with_load_toml(tmp_path):
-    text = ('[[diagnostic]]\nname = "custom.box_again"\nfunction = "robotdx.diagnostics.stock.health:box"\n'
-            'config = "robotdx.diagnostics.stock.health:BoxConfig"\ntitle = "box again"\nfamily = "health"\nrole = "health"\n'
+    text = ('[[diagnostic]]\nname = "custom.box_again"\nfunction = "robot_diagnostics.stock.health:box"\n'
+            'config = "robot_diagnostics.stock.health:BoxConfig"\ntitle = "box again"\nfamily = "health"\nrole = "health"\n'
             'hint = "threshold_band"\nemits = "series"\nunit = "Cel"\n\n'
             '[[diagnostic]]\nid = "mine"\ndiagnostic = "custom.box_again"\npath = "host/*"\n')
     try:
@@ -302,7 +302,7 @@ def test_trajectory_maps_moteus_state_keys_and_converts_revolutions():
 
 
 def test_the_record_round_trips_through_the_library(rig):
-    from robotdx.diagnostics.record import from_record
+    from robot_diagnostics.record import from_record
     from contract.record import to_dict
 
     rig.ready()
@@ -319,7 +319,7 @@ from io_diagnostics.host import make_host
 host = make_host(fixture="F1", plugins_dir=Path(sys.argv[1]), once=True)
 host.run_all_once()
 found = [{"path": s.path, "name": s.name, "level": s.level, "code": s.code, "message": s.message} for s in host.run_stock_diagnostics()]
-from robotdx.diagnostics import REGISTRY
+from robot_diagnostics import REGISTRY
 print(json.dumps({"numpy": importlib.util.find_spec("numpy") is not None, "found": found, "listed": sorted(REGISTRY)}))
 """
 

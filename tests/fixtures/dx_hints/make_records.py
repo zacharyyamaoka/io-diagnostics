@@ -59,9 +59,9 @@ def jsonable(value):
 def inputs(np, frame: str) -> dict:
     """Each entry's input in frame A or B: the numbers differ between the two (B is the worse one)."""
 
-    from robotdx.diagnostics.core import FAIL, PASS, WARN, Result
-    from robotdx.diagnostics.data import Trajectory
-    from robotdx.diagnostics.stock.events import Event
+    from robot_diagnostics.core import FAIL, PASS, WARN, Result
+    from robot_diagnostics.data import Trajectory
+    from robot_diagnostics.stock.events import Event
 
     b = frame == "B"
     n, dt = 600, 0.01
@@ -118,7 +118,7 @@ def inputs(np, frame: str) -> dict:
 def build(robotdx_dir: Path, ref: str) -> dict:
     sys.path.insert(0, str(robotdx_dir))
     import numpy as np
-    from robotdx.diagnostics import catalog, record, registry
+    from robot_diagnostics import catalog, record, registry
 
     if not hasattr(catalog, "dress"):
         raise SystemExit(f"{robotdx_dir}/robotdx/diagnostics/catalog.py has no dress (it came in lane/stock-functions 14b6320): pass --robotdx")

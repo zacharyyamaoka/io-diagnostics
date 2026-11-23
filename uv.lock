@@ -195,22 +195,19 @@ wheels = [
 name = "io-diagnostics"
 version = "0.0.1"
 source = { editable = "." }
+dependencies = [
+    { name = "robot-diagnostics" },
+]
 
 [package.optional-dependencies]
 diagnostics = [
-    { name = "numpy" },
-    { name = "pillow" },
-    { name = "robot-metrics" },
-    { name = "sim2real" },
+    { name = "robot-diagnostics", extra = ["stock"] },
 ]
 
 [package.dev-dependencies]
 dev = [
-    { name = "numpy" },
-    { name = "pillow" },
     { name = "pytest" },
-    { name = "robot-metrics" },
-    { name = "sim2real" },
+    { name = "robot-diagnostics", extra = ["stock"] },
 ]
 interop = [
     { name = "foxglove-sdk" },
@@ -223,20 +220,15 @@ v4 = [
 
 [package.metadata]
 requires-dist = [
-    { name = "numpy", marker = "extra == 'diagnostics'", specifier = ">=1.26" },
-    { name = "pillow", marker = "extra == 'diagnostics'", specifier = ">=10" },
-    { name = "robot-metrics", marker = "extra == 'diagnostics'", editable = "/home/bam/robot_metrics" },
-    { name = "sim2real", marker = "extra == 'diagnostics'", editable = "/home/bam/sim2real" },
+    { name = "robot-diagnostics", editable = "/home/bam/robot_diagnostics" },
+    { name = "robot-diagnostics", extras = ["stock"], marker = "extra == 'diagnostics'", editable = "/home/bam/robot_diagnostics" },
 ]
 provides-extras = ["diagnostics"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "numpy", specifier = ">=1.26" },
-    { name = "pillow", specifier = ">=10" },
     { name = "pytest", specifier = ">=8" },
-    { name = "robot-metrics", editable = "/home/bam/robot_metrics" },
-    { name = "sim2real", editable = "/home/bam/sim2real" },
+    { name = "robot-diagnostics", extras = ["stock"], editable = "/home/bam/robot_diagnostics" },
 ]
 interop = [
     { name = "foxglove-sdk", specifier = ">=0.30" },
@@ -478,8 +470,32 @@ wheels = [
 ]
 
 [[package]]
+name = "robot-diagnostics"
+version = "0.1.0"
+source = { editable = "/home/bam/robot_diagnostics" }
+
+[package.optional-dependencies]
+stock = [
+    { name = "numpy" },
+    { name = "pillow" },
+    { name = "robot-metrics" },
+    { name = "sim2real" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "numpy", marker = "extra == 'stock'", specifier = ">=1.26" },
+    { name = "numpy", marker = "extra == 'test'", specifier = ">=1.26" },
+    { name = "pillow", marker = "extra == 'stock'", specifier = ">=10" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8" },
+    { name = "robot-metrics", marker = "extra == 'stock'", editable = "/home/bam/robot_metrics" },
+    { name = "sim2real", marker = "extra == 'stock'", editable = "/home/bam/sim2real" },
+]
+provides-extras = ["stock", "test"]
+
+[[package]]
 name = "robot-metrics"
-version = "0.0.1"
+version = "0.1.0"
 source = { editable = "/home/bam/robot_metrics" }
 dependencies = [
     { name = "numpy" },
@@ -488,19 +504,22 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "matplotlib", marker = "extra == 'site'", specifier = ">=3.8" },
     { name = "matplotlib", marker = "extra == 'test'", specifier = ">=3.8" },
     { name = "matplotlib", marker = "extra == 'viz'", specifier = ">=3.8" },
+    { name = "mujoco", marker = "extra == 'site'", specifier = ">=3.2" },
     { name = "numpy", specifier = ">=1.26" },
+    { name = "pygments", marker = "extra == 'site'", specifier = ">=2.17" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8" },
     { name = "rerun-sdk", marker = "extra == 'rerun'", specifier = "==0.40.0" },
-    { name = "robot-msgs", editable = "/home/bam/robot_msgs" },
+    { name = "robot-msgs", specifier = ">=0.3.0" },
     { name = "wandb", marker = "extra == 'wandb'", specifier = ">=0.19" },
 ]
-provides-extras = ["viz", "wandb", "rerun", "test"]
+provides-extras = ["viz", "wandb", "rerun", "test", "site"]
 
 [[package]]
 name = "robot-msgs"
-version = "0.3.0"
+version = "0.3.1"
 source = { editable = "/home/bam/robot_msgs" }
 dependencies = [
     { name = "dataclass-values" },
@@ -557,24 +576,29 @@ name = "sim2real"
 version = "0.1.0"
 source = { editable = "/home/bam/sim2real" }
 dependencies = [
+    { name = "numpy" },
     { name = "robot-msgs" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "mujoco", marker = "extra == 'sim'", specifier = "==3.11.0" },
+    { name = "numpy", specifier = ">=1.26" },
     { name = "opencv-python-headless", marker = "extra == 'vision'", specifier = "==4.11.0.86" },
+    { name = "pillow", marker = "extra == 'homing'" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8" },
     { name = "robot-models-lib", extras = ["contact"], marker = "extra == 'homing'", editable = "/home/bam/robot_models" },
     { name = "robot-models-lib", extras = ["contact"], marker = "extra == 'test'", editable = "/home/bam/robot_models" },
     { name = "robot-msgs", editable = "/home/bam/robot_msgs" },
+    { name = "robot-trajectories", marker = "extra == 'trajectories'", editable = "/home/bam/robot_trajectories" },
     { name = "scipy", marker = "extra == 'homing'", specifier = ">=1.11" },
+    { name = "scipy", marker = "extra == 'sim'", specifier = ">=1.11" },
     { name = "scipy", marker = "extra == 'test'", specifier = ">=1.11" },
     { name = "wandb", marker = "extra == 'tracking'", specifier = "==0.31.0" },
     { name = "wandb-workspaces", marker = "extra == 'tracking'", specifier = "==0.4.13" },
     { name = "weave", marker = "extra == 'tracking'", specifier = "==0.54.1" },
 ]
-provides-extras = ["sim", "vision", "tracking", "homing", "test"]
+provides-extras = ["sim", "vision", "tracking", "homing", "trajectories", "test"]
 
 [[package]]
 name = "websockets"

@@ -23,12 +23,12 @@ from pathlib import Path
 
 import numpy as np
 
-from robotdx.diagnostics import evaluate
-from robotdx.diagnostics.adapters.rack_npz import load
-from robotdx.diagnostics.data import Trajectory
-from robotdx.diagnostics.stock import FaultCodesConfig, StopErrorConfig, TrackingErrorConfig
-from robotdx.diagnostics.stock.tracking import stops
-from robotdx.diagnostics.stream import monitor
+from robot_diagnostics import evaluate
+from robot_diagnostics.adapters.rack_npz import load
+from robot_diagnostics.data import Trajectory
+from robot_diagnostics.stock import FaultCodesConfig, StopErrorConfig, TrackingErrorConfig
+from robot_diagnostics.stock.tracking import stops
+from robot_diagnostics.stream import monitor
 
 # WHY robot_metrics' private per-board split: round 8's paired files hold two boards' columns; its reader is the one rule for them
 from robot_metrics.datasets.onedof_round8 import _board_columns  # noqa: E402

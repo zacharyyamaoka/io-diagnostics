@@ -17,10 +17,10 @@ from io_diagnostics.composite import composite_path
 from io_diagnostics import stock_diagnostics as sd
 from io_diagnostics.host import Clock, Host
 from io_diagnostics.server import make_server, serve_in_thread
-from robotdx.diagnostics import catalog
-from robotdx.diagnostics.core import HINTS
-from robotdx.diagnostics.registry import config_from_dict
-from robotdx.diagnostics import REGISTRY
+from robot_diagnostics import catalog
+from robot_diagnostics.core import HINTS
+from robot_diagnostics.registry import config_from_dict
+from robot_diagnostics import REGISTRY
 
 from test_host_support import FakeOs, standard_skeleton, usb_device
 
@@ -191,8 +191,8 @@ def test_an_unwatched_camera_waits_for_its_frames_quietly_and_names_the_sources_
 def test_state_inputs_missing_names_what_is_absent():
     import numpy as np
 
-    from robotdx.diagnostics.data import Trajectory
-    from robotdx.diagnostics.stock import BoxConfig, TrackingErrorConfig
+    from robot_diagnostics.data import Trajectory
+    from robot_diagnostics.stock import BoxConfig, TrackingErrorConfig
 
     run = Trajectory(t=np.arange(5.0), q_rad=np.zeros(5), temp_c=np.full(5, 30.0), v_bus_v=np.full(5, np.nan))
     assert sd.state_inputs_missing("stock.box", BoxConfig(channel="temp_c"), run) == ""

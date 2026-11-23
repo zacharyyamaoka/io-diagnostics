@@ -15,19 +15,19 @@ UV = "/home/bam/.local/bin/uv"
 PROBE = r"""
 import importlib.util, json, sys
 out = {"numpy": importlib.util.find_spec("numpy") is not None}
-from robotdx.diagnostics import core, registry, record
-from robotdx.diagnostics import REGISTRY, Limits, evaluate
-from robotdx.diagnostics._numpy import available
-from robotdx.diagnostics.stock import BoxConfig
+from robot_diagnostics import core, registry, record
+from robot_diagnostics import REGISTRY, Limits, evaluate
+from robot_diagnostics._numpy import available
+from robot_diagnostics.stock import BoxConfig
 out["available"] = available()
 out["registered"] = sorted(REGISTRY)
-from robotdx.diagnostics.catalog import PRIMITIVES
+from robot_diagnostics.catalog import PRIMITIVES
 out["implemented"] = sorted(name for name, p in PRIMITIVES.items() if p.implemented)
 out["judge"] = core.judge(61.0, Limits.at_most(70.0, warn=60.0))
 line = record.to_record(core.result(BoxConfig(), value=None, unit="Cel", metric="max", limits=Limits(), title="t", message="m", code="NoChannel"))
 out["level"] = line["level"]
 out["config"] = registry.config_from_dict(BoxConfig, {"max": {"warn_high": 60.0, "error_high": 70.0}}).max.error_high
-from robotdx.diagnostics.data import Trajectory
+from robot_diagnostics.data import Trajectory
 try:
     evaluate("stock.box", BoxConfig(), [Trajectory(t=[0.0, 1.0], q_rad=[0.0, 0.0], temp_c=[40.0, 41.0])], subject="x")
     out["raised"] = None

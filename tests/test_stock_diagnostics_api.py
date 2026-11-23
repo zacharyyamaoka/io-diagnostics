@@ -62,7 +62,7 @@ def test_the_registry_lists_every_diagnostic_with_its_config_schema(served):
     status, body = get(served, "/api/v1/diagnostics")
     assert status == 200 and body["numpy"] is True and body["beat_s"] == 0.5 and body["file"] == str(served.file)
     by_id = {item["id"]: item for item in body["diagnostics"]}
-    from robotdx.diagnostics.catalog import PRIMITIVES
+    from robot_diagnostics.catalog import PRIMITIVES
     implemented = {name for name, primitive in PRIMITIVES.items() if primitive.implemented}
     assert set(by_id) == implemented and all(item["kind"] == "stock" for item in by_id.values())
     box = by_id["stock.box"]

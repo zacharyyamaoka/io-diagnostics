@@ -9,21 +9,21 @@ from dataclasses import replace
 
 import numpy as np
 
-from robotdx.diagnostics import NOT_RUN, REGISTRY, Limits, evaluate
-from robotdx.diagnostics.catalog import PRIMITIVES
-from robotdx.diagnostics.record import from_record, to_record
-from robotdx.diagnostics.rows import ROW_COLUMNS, result_row
-from robotdx.diagnostics.stock import (AgreementConfig, AllanConfig, DepthPlaneConfig, EventIntervalConfig, FeedbackShareConfig,
+from robot_diagnostics import NOT_RUN, REGISTRY, Limits, evaluate
+from robot_diagnostics.catalog import PRIMITIVES
+from robot_diagnostics.record import from_record, to_record
+from robot_diagnostics.rows import ROW_COLUMNS, result_row
+from robot_diagnostics.stock import (AgreementConfig, AllanConfig, DepthPlaneConfig, EventIntervalConfig, FeedbackShareConfig,
                                        HysteresisConfig, MarkerDriftConfig, PathAccuracyConfig, PoseAccuracyConfig, ReprojectionConfig,
                                        ShareConfig, SharpnessConfig, SpectralAngleConfig, SpectralQualityConfig, StalenessConfig,
                                        StampDelayConfig, StepResponseConfig)
-from robotdx.diagnostics.stock.camera import CalibrationView, DepthFrames, Frames, MarkerTrack
-from robotdx.diagnostics.stock.characteristic import RateSeries
-from robotdx.diagnostics.stock.events import Event, EventLog, EvidenceStamps
-from robotdx.diagnostics.stock.health import StampPairs
-from robotdx.diagnostics.stock.iso9283 import PathCycle, PoseSample
-from robotdx.diagnostics.stock.spectral import SpectralSamples, SpectralTargets
-from robotdx.diagnostics.stock.truthfulness import Pair
+from robot_diagnostics.stock.camera import CalibrationView, DepthFrames, Frames, MarkerTrack
+from robot_diagnostics.stock.characteristic import RateSeries
+from robot_diagnostics.stock.events import Event, EventLog, EvidenceStamps
+from robot_diagnostics.stock.health import StampPairs
+from robot_diagnostics.stock.iso9283 import PathCycle, PoseSample
+from robot_diagnostics.stock.spectral import SpectralSamples, SpectralTargets
+from robot_diagnostics.stock.truthfulness import Pair
 
 from conftest import tape
 

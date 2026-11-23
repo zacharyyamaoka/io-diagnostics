@@ -36,4 +36,28 @@ API = "io-diagnostics/1"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+
+def _find_robot_diagnostics() -> None:
+    """Put the robot-diagnostics library on the path when no environment installed it.
+
+    WHY (2026-11-23, the library split out of this repo into /home/bam/robot_diagnostics): Stable and Preview run this checkout (or its
+    snapshot) under /usr/bin/python3 with nothing installed, as contract/ and io_facts/ above. In a uv environment the package is
+    installed and this does nothing. Otherwise: $ROBOT_DIAGNOSTICS_SRC, else the sibling checkout, else ~/robot_diagnostics (a Stable
+    snapshot has no sibling)."""
+
+    import importlib.util
+    import os
+
+    if importlib.util.find_spec("robot_diagnostics") is not None:
+        return
+    candidates = [os.environ.get("ROBOT_DIAGNOSTICS_SRC", ""), str(ROOT.parent / "robot_diagnostics" / "src"),
+                  str(Path.home() / "robot_diagnostics" / "src")]
+    for candidate in candidates:
+        if candidate and (Path(candidate) / "robot_diagnostics" / "__init__.py").is_file():
+            sys.path.append(candidate)
+            return
+
+
+_find_robot_diagnostics()
+
 __all__ = ["ROOT", "PACKAGE", "WEB", "PLUGINS_DIR", "FIXTURE_PLUGINS_DIR", "API"]

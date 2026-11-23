@@ -44,7 +44,7 @@ from io_diagnostics.composite import composite_path
 from io_diagnostics.history import History
 from io_diagnostics.host import Clock, Host
 from io_diagnostics.server import make_server, serve_in_thread
-from robotdx.diagnostics import catalog
+from robot_diagnostics import catalog
 
 from test_host_support import FakeOs, standard_skeleton, usb_device
 

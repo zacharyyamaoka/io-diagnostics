@@ -66,16 +66,19 @@ from io_diagnostics.composite import toml_value
 # WHY the not-run codes live in not_run.py: tree.py rolls levels up without them and host.py marks their rows, and neither may import this module
 from io_diagnostics.not_run import (DIAGNOSTIC_RAISED, NO_DECODER, NO_STATE, NOT_ENOUGH_HISTORY, NOT_MEASURED, NOT_STREAMING, NOT_WIRED,
                                     NUMPY_MISSING_CODE, is_not_run)
-from robotdx.diagnostics import catalog as dx_catalog
-from robotdx.diagnostics import core as dx_core
-from robotdx.diagnostics import record as dx_record
-from robotdx.diagnostics import registry as dx_registry
-from robotdx.diagnostics._numpy import MISSING as NUMPY_MISSING
+from robot_diagnostics import catalog as dx_catalog
+from robot_diagnostics import core as dx_core
+from robot_diagnostics import record as dx_record
+from robot_diagnostics import registry as dx_registry
 
 DIAGNOSTICS_FILE = "diagnostics.toml"
 # WHY a directory, one file per part type: 70-odd bindings read best grouped by what they are about (servo, camera_rgbd, ...); they are
 # generated from the catalog by tools/build_default_diagnostics.py, and tests/test_default_diagnostics.py fails when they drift
 DEFAULT_DIR = Path(__file__).with_name("diagnostics_default.d")
+# WHY the host's own wording (2026-11-23, the library split into robot-diagnostics): the library's message names its own extra
+# (robot-diagnostics[stock]); a person running this host installs io-diagnostics' extra, which pulls that one in
+NUMPY_MISSING = ("numpy is not installed, so the stock diagnostics cannot compute: install the diagnostics extra "
+                 "(uv run --extra diagnostics ..., or pip install 'io-diagnostics[diagnostics]')")
 SOURCE = dx_record.SOURCE  # "robotdx.diagnostics": the status's source, which the page keys its drill-in on
 BEAT_S = 5.0
 DEFAULT_WINDOW_S = 60.0
@@ -145,7 +148,7 @@ class PartRule:
 def parse_parts(document: Mapping[str, Any]) -> list[PartRule]:
     """The ``[[part]]`` tables of a parsed diagnostics.toml. A broken one raises with its type."""
 
-    from robotdx.diagnostics.catalog import PARTS
+    from robot_diagnostics.catalog import PARTS
 
     out = []
     for number, table in enumerate(document.get("part") or [], 1):
@@ -333,9 +336,9 @@ def trajectory(series: list[dict], *, columns: Mapping[str, str], run: str, devi
     gap holds the code before it; a column that is not one of the Trajectory's own (``gyro_rad_s``, ``width_mm``) goes in its ``extra``.
     Returns ``(trajectory, first arrival)``, or ``(None, None)`` when nothing maps."""
 
-    from robotdx.diagnostics._numpy import np
-    from robotdx.diagnostics.data import COLUMNS as FIELDS
-    from robotdx.diagnostics.data import Trajectory
+    from robot_diagnostics._numpy import np
+    from robot_diagnostics.data import COLUMNS as FIELDS
+    from robot_diagnostics.data import Trajectory
 
     by_key = {item["key"]: item for item in series}
     wanted = {column: by_key[key] for column, key in columns.items() if key in by_key and by_key[key]["points"]}
@@ -369,7 +372,7 @@ def trajectory(series: list[dict], *, columns: Mapping[str, str], run: str, devi
 
 # ----- what a State history can feed ------------------------------------------------------------------------------------------
 def _target(column: str) -> str:
-    from robotdx.diagnostics.data import target_of
+    from robot_diagnostics.data import target_of
 
     return target_of(column) or f"{column} target"
 
@@ -424,7 +427,7 @@ def state_inputs_missing(name: str, config, run) -> str:
         spec = dx_registry.REGISTRY.get(name)
         what = spec.summary if spec is not None and spec.summary else "its own input"
         return f"the input of {name} ({what})"
-    from robotdx.diagnostics._numpy import np  # WHY after: "State cannot feed it" needs no numpy; only the column check does
+    from robot_diagnostics._numpy import np  # WHY after: "State cannot feed it" needs no numpy; only the column check does
 
     absent = [column for column in needs(config)
               if run is None or not run.has(column) or not np.isfinite(run.channel(column)).any()]
@@ -692,7 +695,7 @@ def _decode_jpeg(data: bytes):
     except ImportError as error:
         raise Undecodable("the frame is JPEG and Pillow is not installed here (the diagnostics extra: uv run --extra diagnostics); "
                           "with it, or a driver that writes PNG frames, it would be decoded") from error
-    from robotdx.diagnostics._numpy import np
+    from robot_diagnostics._numpy import np
 
     try:
         with Image.open(io.BytesIO(data)) as image:
@@ -708,7 +711,7 @@ def decode_image(data: bytes, format: str = "png"):
     """A frame's file as a grey ``(H, W)`` float array (ITU-R BT.601 luma, as OpenCV's cvtColor). PNG: 8- or 16-bit grey, grey + alpha, RGB
     or RGBA, not interlaced, every filter (the stdlib's zlib and numpy). JPEG: Pillow (``_decode_jpeg``); without it, ``Undecodable``."""
 
-    from robotdx.diagnostics._numpy import np
+    from robot_diagnostics._numpy import np
 
     if format in ("jpeg", "jpg") or data[:2] == b"\xff\xd8":
         return _decode_jpeg(data)
@@ -852,7 +855,7 @@ class RackArchive:
         """The newest recorded run of the joint on CAN ``can_id`` as a Trajectory (robotdx's rack_npz adapter), or None. A run whose
         sidecar names another CAN id is skipped (the file name is only the index)."""
 
-        from robotdx.diagnostics.adapters import rack_npz
+        from robot_diagnostics.adapters import rack_npz
 
         with self._lock:
             self._list()
@@ -946,7 +949,7 @@ class RackArchive:
         """The newest intel_rgbd.depth_capture/1 of RealSense ``serial`` (by its recorded_at) as ``(file, meta, depth_m)``, or None."""
 
         def load(file: Path):
-            from robotdx.diagnostics._numpy import np
+            from robot_diagnostics._numpy import np
 
             try:
                 with np.load(file) as archive:
@@ -1047,8 +1050,8 @@ def hold_events(run) -> list:
     commanded velocity is zero and the commanded position does not move, for at least HOLD_MIN_S (tracking.stops' dwell, with the tape's
     last one included: a run ends on a hold that must converge too)."""
 
-    from robotdx.diagnostics._numpy import np
-    from robotdx.diagnostics.stock.events import Event as DxEvent
+    from robot_diagnostics._numpy import np
+    from robot_diagnostics.stock.events import Event as DxEvent
 
     keep = run.rows(skip_prelude=True)
     t, q, target = run.t[keep], run.channel("q_rad")[keep], run.channel("q_target_rad")[keep]
@@ -1099,8 +1102,8 @@ def _run_window(run, binding: Binding, samples) -> dict:
 
 # ----- one feed per source kind: (data, samples) or _Missing ------------------------------------------------------------------------
 def _feed_state_stamps(binding, config, source, path, entity, inputs: Inputs, start, now):
-    from robotdx.diagnostics._numpy import np
-    from robotdx.diagnostics.stock.health import Stamps
+    from robot_diagnostics._numpy import np
+    from robot_diagnostics.stock.health import Stamps
 
     names = [binding.state] if binding.state else list(inputs.state_arrivals)
     arrivals = next((inputs.state_arrivals[name] for name in names if inputs.state_arrivals.get(name)), None)
@@ -1128,8 +1131,8 @@ def _no_frames(source, entity, inputs: Inputs, window_s) -> _Missing:
 
 
 def _feed_frame_stamps(binding, config, source, path, entity, inputs: Inputs, start, now):
-    from robotdx.diagnostics._numpy import np
-    from robotdx.diagnostics.stock.health import StampPairs
+    from robot_diagnostics._numpy import np
+    from robot_diagnostics.stock.health import StampPairs
 
     streams = {stream: [frame for frame in records if frame.stamp is not None] for stream, records in _frame_records(inputs, start, now).items()}
     pairs = [StampPairs(source=np.asarray([frame.stamp for frame in records], float), received=np.asarray([frame.received for frame in records], float),
@@ -1143,7 +1146,7 @@ IMAGE_STREAMS = ("color", "colour", "rgb", "ir", "infrared")  # the streams whos
 
 
 def _feed_frames(binding, config, source, path, entity, inputs: Inputs, start, now):
-    from robotdx.diagnostics.stock.camera import Frames
+    from robot_diagnostics.stock.camera import Frames
 
     streams = _frame_records(inputs, start, now)
     order = [name for name in IMAGE_STREAMS if streams.get(name)] + [name for name in streams if streams[name] and "depth" not in name]
@@ -1166,7 +1169,7 @@ def _feed_frames(binding, config, source, path, entity, inputs: Inputs, start, n
 
 
 def _feed_reply_counts(binding, config, source, path, entity, inputs: Inputs, start, now):
-    from robotdx.diagnostics.stock.events import Event as DxEvent
+    from robot_diagnostics.stock.events import Event as DxEvent
 
     def counts(status):
         values = {measurement.key: measurement.value for measurement in status.measurements}
@@ -1187,7 +1190,7 @@ def _feed_reply_counts(binding, config, source, path, entity, inputs: Inputs, st
 
 
 def _feed_config(binding, config, source, path, entity, inputs: Inputs, start, now):
-    from robotdx.diagnostics.stock.truthfulness import Pair
+    from robot_diagnostics.stock.truthfulness import Pair
 
     pairs = [Pair(reported=item.value, reference=item.expected, key=item.key, evidence=item.expected_source or "")
              for item in inputs.configs if item.expected is not None]
@@ -1201,8 +1204,8 @@ FAULT_CODES = ("fault", "system_fault")  # what RobotDx's fault memory confirms:
 
 
 def _feed_faults(binding, config, source, path, entity, inputs: Inputs, start, now):
-    from robotdx.diagnostics.stock.events import Event as DxEvent
-    from robotdx.diagnostics.stock.events import EventLog
+    from robot_diagnostics.stock.events import Event as DxEvent
+    from robot_diagnostics.stock.events import EventLog
 
     codes = tuple(getattr(config, "codes", ()) or ())
     known = ("fault", "system_fault") if inputs.composite else ("fault",)
@@ -1227,7 +1230,7 @@ LINK_CODES = ("Unplugged", "ReEnumerated", "Flapped", "LinkDowngraded", "NetCarr
 
 def _feed_link_events(binding, config, source, path, entity, inputs: Inputs, start, now):
     from io_diagnostics import activity
-    from robotdx.diagnostics.stock.events import Event as DxEvent
+    from robot_diagnostics.stock.events import Event as DxEvent
 
     edges = list(inputs.leaves) or [path]
     # WHY one event per edge that is not a problem: a share of nothing is not run, while a count of link problems with none is 0
@@ -1256,7 +1259,7 @@ RESET_CODES = ("Plugged", "ReEnumerated", "Restarted")  # evidence before a repl
 
 
 def _feed_evidence(binding, config, source, path, entity, inputs: Inputs, start, now):
-    from robotdx.diagnostics.stock.events import EvidenceStamps
+    from robot_diagnostics.stock.events import EvidenceStamps
 
     stamps = [(status.name, status.stamp) for status in inputs.statuses if status.stamp is not None and status.source != SOURCE]
     resets = [event.stamp for event in inputs.events if event.code in RESET_CODES and event.stamp is not None and event.stamp <= now]
@@ -1305,7 +1308,7 @@ def _feed_acceptance(binding, config, source, path, entity, inputs: Inputs, star
 
 
 def _feed_captures(binding, config, source, path, entity, inputs: Inputs, start, now):
-    from robotdx.diagnostics.adapters import rack_npz
+    from robot_diagnostics.adapters import rack_npz
 
     if inputs.archive is None:
         raise _no_source(source, entity, "this host has no rack archive (IO_DIAGNOSTICS_RACK_ARCHIVE)")
@@ -1323,7 +1326,7 @@ def _feed_captures(binding, config, source, path, entity, inputs: Inputs, start,
 
 
 def _feed_depth(binding, config, source, path, entity, inputs: Inputs, start, now):
-    from robotdx.diagnostics.stock.camera import DepthFrames
+    from robot_diagnostics.stock.camera import DepthFrames
 
     if inputs.archive is None:
         raise _no_source(source, entity, "this host has no rack archive (IO_DIAGNOSTICS_RACK_ARCHIVE)")
@@ -1346,7 +1349,7 @@ def _feed_depth(binding, config, source, path, entity, inputs: Inputs, start, no
 
 
 def _feed_action(binding, config, source, path, entity, inputs: Inputs, start, now):
-    from robotdx.diagnostics.stock.truthfulness import Pair
+    from robot_diagnostics.stock.truthfulness import Pair
 
     for run in sorted(inputs.action_runs, key=lambda item: item.get("ended") or 0.0, reverse=True):
         for record in ((run.get("result") or {}).get("records") or []):
@@ -1362,7 +1365,7 @@ def _feed_action(binding, config, source, path, entity, inputs: Inputs, start, n
 
 
 def _feed_kv(binding, config, source, path, entity, inputs: Inputs, start, now):
-    from robotdx.diagnostics.stock.truthfulness import KtReadings
+    from robot_diagnostics.stock.truthfulness import KtReadings
 
     serial = str(inputs.leaf_identity.get("serial_number") or "")
     kv = next((item.value for item in inputs.leaf_configs if item.key == "motor.Kv" and isinstance(item.value, (int, float))), None)
@@ -1380,7 +1383,7 @@ def _feed_kv(binding, config, source, path, entity, inputs: Inputs, start, now):
 
 
 def _feed_followup(binding, config, source, path, entity, inputs: Inputs, start, now):
-    from robotdx.diagnostics.stock.fidelity import FidelityInput, ModelRow
+    from robot_diagnostics.stock.fidelity import FidelityInput, ModelRow
 
     can_id = _one_can_id(source, entity, inputs)
     if inputs.archive is None:
@@ -1408,7 +1411,7 @@ WEAR_TERMS = {"coulomb": "coulomb_nm", "viscous": "viscous_nm_s_rad"}
 def _feed_wear(binding, config, source, path, entity, inputs: Inputs, start, now):
     import datetime as dt
 
-    from robotdx.diagnostics.stock.truthfulness import Pair
+    from robot_diagnostics.stock.truthfulness import Pair
 
     can_id = _one_can_id(source, entity, inputs)
     if inputs.archive is None:
@@ -1456,7 +1459,7 @@ def _sim_situations(payload: dict):
 def _floats(values):
     """A payload array as floats: traj_compare writes a non-finite sample as null."""
 
-    from robotdx.diagnostics._numpy import np
+    from robot_diagnostics._numpy import np
 
     def clean(item):
         return [clean(value) for value in item] if isinstance(item, (list, tuple)) else (np.nan if item is None else float(item))
@@ -1465,10 +1468,10 @@ def _floats(values):
 
 
 def _sim_cell_data(binding: Binding, situations, file: Path):
-    from robotdx.diagnostics._numpy import np
-    from robotdx.diagnostics.data import Trajectory
-    from robotdx.diagnostics.stock.iso9283 import PathCycle
-    from robotdx.diagnostics.stock.truthfulness import Pair
+    from robot_diagnostics._numpy import np
+    from robot_diagnostics.data import Trajectory
+    from robot_diagnostics.stock.iso9283 import PathCycle
+    from robot_diagnostics.stock.truthfulness import Pair
 
     def joints(comparison, target, judged):
         t = _floats(comparison["plot_t"])
@@ -1789,7 +1792,7 @@ class StockDiagnostics:
         return next((groups[name] for name in names if name in groups and any(item["key"] in columns.values() for item in groups[name])), None)
 
     def _monitor(self, binding: Binding, spec, config, path: str, run, first, kind: str):
-        from robotdx.diagnostics import stream as dx_stream
+        from robot_diagnostics import stream as dx_stream
 
         pairs = dx_stream.monitor(binding.diagnostic, config, run, subject=path, window_s=binding.window_s, step_s=self.beat_s,
                                   wall_start=first)
@@ -1836,7 +1839,7 @@ class StockDiagnostics:
     def about(self) -> dict:
         """Where the bindings come from and where a change goes: ``file`` (read), ``writes`` (the person's file, or None), ``problem``."""
 
-        from robotdx.diagnostics._numpy import available
+        from robot_diagnostics._numpy import available
 
         with self._lock:
             return {"file": self.source, "writes": str(self.path) if self.path is not None else None, "problem": self.problem,
@@ -1929,7 +1932,7 @@ def config_doc(config_type: type) -> str:
 
 
 def kind_of(name: str) -> str:
-    from robotdx.diagnostics.stock import STOCK
+    from robot_diagnostics.stock import STOCK
 
     spec = dx_registry.REGISTRY.get(name)
     return "stock" if spec is not None and any(spec is stock for stock in STOCK) else "custom"
@@ -1950,13 +1953,13 @@ def registry_json() -> list[dict]:
 def catalog_parts(name: str) -> list[str]:
     """The catalog's part types that use the primitive ``name`` (robotdx/diagnostics/catalog.py)."""
 
-    from robotdx.diagnostics.catalog import ENTRIES
+    from robot_diagnostics.catalog import ENTRIES
 
     return sorted({entry.part for entry in ENTRIES if entry.primitive == name})
 
 
 def catalog_entry(binding_id: str):
-    from robotdx.diagnostics.catalog import ENTRIES
+    from robot_diagnostics.catalog import ENTRIES
 
     return next((entry for entry in ENTRIES if entry.id == binding_id), None)
 

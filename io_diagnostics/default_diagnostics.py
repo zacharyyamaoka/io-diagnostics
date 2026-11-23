@@ -19,8 +19,8 @@ from pathlib import Path
 
 from io_diagnostics.composite import toml_value
 from io_diagnostics.stock_diagnostics import DEFAULT_DIR, _key, _plain
-from robotdx.diagnostics import catalog
-from robotdx.diagnostics.core import config_dict
+from robot_diagnostics import catalog
+from robot_diagnostics.core import config_dict
 
 WINDOW_S = 60
 LIVE = ("robotdx", "both")

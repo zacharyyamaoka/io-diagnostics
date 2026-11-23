@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from robotdx.diagnostics.data import Trajectory
+from robot_diagnostics.data import Trajectory
 
 RACK = Path("/archive/datasets/bam_rig")
 RACK_PROBE = RACK / "rack_2026-10-24" / "analysis" / "floors.json"
